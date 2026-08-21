@@ -1,10 +1,14 @@
 {
   "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
   "contentVersion": "1.0.0.0",
-  "_comment": "LCC Create Outlook Draft \u2014 org-sanctioned outbound email path. LCC (api/_shared/outlook-draft.js) POSTs a rendered draft here; this flow creates a DRAFT in Outlook under the user's M365 connection. IT NEVER SENDS \u2014 there is no Send action anywhere in this definition, and test/draft-assist.test.mjs asserts that. P124: the flow now BRANCHES on in_reply_to. When present, it resolves the Graph message id from the RFC internetMessageId and calls POST /me/messages/{id}/createReply, which creates a draft reply INSIDE the existing thread (correct conversationId + In-Reply-To/References headers), then PATCHes the body. CreateDraftMessageV3 cannot thread \u2014 it has no header or conversation input \u2014 so a standalone draft is used only when in_reply_to is empty (a genuine new thread). createReply CREATES and does not transmit. The connector's reply/send operations DO transmit and are forbidden here \u2014 test/draft-assist.test.mjs walks every operationId + Uri in this file and fails on any transmitting operation. \u26a0\ufe0f UNVERIFIED AGAINST A LIVE TENANT: operationIds (CreateDraftMessageV3 / HttpRequest) and the $connections reference resolve only on import. Follow docs/architecture/flows/outlook-draft-reply-executor.md and run its acceptance test before flipping DRAFT_ASSIST on.",
+  "_comment": "LCC Create Outlook Draft — org-sanctioned outbound email path. LCC (api/_shared/outlook-draft.js) POSTs a rendered draft here; this flow creates a DRAFT in Outlook under the user's M365 connection. IT NEVER SENDS — there is no Send action anywhere in this definition, and test/draft-assist.test.mjs asserts that. P124: the flow now BRANCHES on in_reply_to. When present, it resolves the Graph message id from the RFC internetMessageId and calls POST /me/messages/{id}/createReply, which creates a draft reply INSIDE the existing thread (correct conversationId + In-Reply-To/References headers), then PATCHes the body. CreateDraftMessageV3 cannot thread — it has no header or conversation input — so a standalone draft is used only when in_reply_to is empty (a genuine new thread). createReply CREATES and does not transmit. The connector's reply/send operations DO transmit and are forbidden here — test/draft-assist.test.mjs walks every operationId + Uri in this file and fails on any transmitting operation. P125 fixes three defects found when the first real save landed a STANDALONE draft on a thread that had resolved correctly: (1) DOUBLE RESPONSE — Respond_Success ran after Is_Reply on BOTH branches, so the reply path answered twice and the second read body('Create_draft'), which is null there; each branch now has exactly one responder. (2) Set_reply_body PATCHed toRecipients onto a reply draft that already carries the thread's recipients — removed; the PATCH now touches body only. (3) An empty $filter result built /me/messages//createReply; a Thread_Message_Found guard now falls back to a standalone draft and reports threaded:false + thread_note. Every response now echoes `threaded` (and conversationId on the reply path) so LCC can compare it against reply_to.conversation_id — previously nothing at the seam distinguished a threaded draft from a fresh one. ⚠️ UNVERIFIED AGAINST A LIVE TENANT: operationIds (CreateDraftMessageV3 / HttpRequest) and the $connections reference resolve only on import. Follow docs/architecture/flows/outlook-draft-reply-executor.md and run its acceptance test after re-importing. It also reconciles the definition with what was actually imported on 2026-08-21: `$authentication` is declared and referenced by every OpenApiConnection action, every HttpRequest carrying a Body sets ContentType: application/json (Graph 400s 'Empty Content-Type provided' without it), and the standalone-draft actions use the Graph POST /me/messages passthrough because CreateDraftMessageV3 is not available in this tenant. Keeping the repo definition equal to the tenant build is the point — a definition that only describes a flow nobody runs cannot be reasoned about.",
   "parameters": {
     "$connections": {
       "type": "Object",
+      "defaultValue": {}
+    },
+    "$authentication": {
+      "type": "SecureObject",
       "defaultValue": {}
     },
     "LCC_FLOW_SHARED_SECRET": {
@@ -99,7 +103,7 @@
             "Find_thread_message": {
               "runAfter": {},
               "type": "OpenApiConnection",
-              "_comment": "Graph passthrough under the user's own O365 connection \u2014 no app registration. Resolves the RFC internetMessageId to the Graph message id. The id is wrapped in angle brackets in the header and MUST be single-quote-escaped for $filter.",
+              "_comment": "Graph passthrough under the user's own O365 connection — no app registration. Resolves the RFC internetMessageId to the Graph message id. The id is wrapped in angle brackets in the header and MUST be single-quote-escaped for $filter.",
               "inputs": {
                 "host": {
                   "connectionName": "shared_office365",
@@ -109,75 +113,151 @@
                 "parameters": {
                   "Uri": "@{concat('https://graph.microsoft.com/v1.0/me/messages?$select=id,conversationId&$top=1&$filter=internetMessageId eq ''', replace(triggerBody()?['in_reply_to'],'''',''''''), '''')}",
                   "Method": "GET"
-                }
+                },
+                "authentication": "@parameters('$authentication')"
               }
             },
-            "Create_draft_reply": {
+            "Thread_Message_Found": {
               "runAfter": {
                 "Find_thread_message": [
                   "Succeeded"
                 ]
               },
-              "type": "OpenApiConnection",
-              "_comment": "POST /createReply CREATES A DRAFT REPLY and does not transmit it. This is the only Graph call that threads correctly. Never swap it for the transmitting variant.",
-              "inputs": {
-                "host": {
-                  "connectionName": "shared_office365",
-                  "operationId": "HttpRequest",
-                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
-                },
-                "parameters": {
-                  "Uri": "@{concat('https://graph.microsoft.com/v1.0/me/messages/', body('Find_thread_message')?['value'][0]?['id'], '/createReply')}",
-                  "Method": "POST",
-                  "Body": {}
-                }
-              }
-            },
-            "Set_reply_body": {
-              "runAfter": {
-                "Create_draft_reply": [
-                  "Succeeded"
+              "type": "If",
+              "_comment": "P125: $filter can legitimately return zero rows (the message was moved, purged, or lives in a mailbox this connection cannot see). Before, that produced a null id, a malformed /me/messages//createReply URI and an opaque failure. Now it falls back to a standalone draft and SAYS SO (threaded:false + thread_note), because a draft that quietly starts a new conversation is exactly the failure that looks like success.",
+              "expression": {
+                "and": [
+                  {
+                    "greater": [
+                      "@length(coalesce(body('Find_thread_message')?['value'], json('[]')))",
+                      0
+                    ]
+                  }
                 ]
               },
-              "type": "OpenApiConnection",
-              "_comment": "createReply seeds the draft with the quoted original; PATCH replaces the body with LCC's rendered HTML and pins the recipient. Still a draft after this.",
-              "inputs": {
-                "host": {
-                  "connectionName": "shared_office365",
-                  "operationId": "HttpRequest",
-                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
-                },
-                "parameters": {
-                  "Uri": "@{concat('https://graph.microsoft.com/v1.0/me/messages/', body('Create_draft_reply')?['id'])}",
-                  "Method": "PATCH",
-                  "Body": {
-                    "body": {
-                      "contentType": "HTML",
-                      "content": "@{triggerBody()?['body_html']}"
+              "actions": {
+                "Create_draft_reply": {
+                  "runAfter": {},
+                  "type": "OpenApiConnection",
+                  "_comment": "POST /createReply CREATES A DRAFT REPLY and does not transmit it. This is the only Graph call that threads correctly. Never swap it for the transmitting variant.",
+                  "inputs": {
+                    "host": {
+                      "connectionName": "shared_office365",
+                      "operationId": "HttpRequest",
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
                     },
-                    "toRecipients": "@json(concat('[{\"emailAddress\":{\"address\":\"', triggerBody()?['to'], '\"}}]'))"
+                    "parameters": {
+                      "Uri": "@{concat('https://graph.microsoft.com/v1.0/me/messages/', body('Find_thread_message')?['value'][0]?['id'], '/createReply')}",
+                      "Method": "POST",
+                      "ContentType": "application/json",
+                      "Body": {}
+                    },
+                    "authentication": "@parameters('$authentication')"
+                  }
+                },
+                "Set_reply_body": {
+                  "runAfter": {
+                    "Create_draft_reply": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "OpenApiConnection",
+                  "_comment": "createReply seeds the draft with the quoted original; PATCH replaces the body with LCC's rendered HTML. Still a draft after this. P125: toRecipients is NO LONGER PATCHed — a draft reply already carries the original thread's recipients, so re-asserting them from the flow input added nothing and is the one field a PATCH on a reply draft can be rejected for. If the To needs to differ from the thread, that is a NEW message, not a reply.",
+                  "inputs": {
+                    "host": {
+                      "connectionName": "shared_office365",
+                      "operationId": "HttpRequest",
+                      "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+                    },
+                    "parameters": {
+                      "Uri": "@{concat('https://graph.microsoft.com/v1.0/me/messages/', body('Create_draft_reply')?['id'])}",
+                      "Method": "PATCH",
+                      "ContentType": "application/json",
+                      "Body": {
+                        "body": {
+                          "contentType": "HTML",
+                          "content": "@{triggerBody()?['body_html']}"
+                        }
+                      }
+                    },
+                    "authentication": "@parameters('$authentication')"
+                  }
+                },
+                "Respond_Reply_Created": {
+                  "runAfter": {
+                    "Set_reply_body": [
+                      "Succeeded"
+                    ]
+                  },
+                  "type": "Response",
+                  "kind": "Http",
+                  "inputs": {
+                    "statusCode": 200,
+                    "headers": {
+                      "Content-Type": "application/json"
+                    },
+                    "body": {
+                      "ok": true,
+                      "draft_id": "@{body('Create_draft_reply')?['id']}",
+                      "web_link": "@{body('Create_draft_reply')?['webLink']}",
+                      "threaded": true,
+                      "conversation_id": "@{body('Create_draft_reply')?['conversationId']}"
+                    }
                   }
                 }
-              }
-            },
-            "Respond_Reply_Created": {
-              "runAfter": {
-                "Set_reply_body": [
-                  "Succeeded"
-                ]
               },
-              "type": "Response",
-              "kind": "Http",
-              "inputs": {
-                "statusCode": 200,
-                "headers": {
-                  "Content-Type": "application/json"
-                },
-                "body": {
-                  "ok": true,
-                  "draft_id": "@{body('Create_draft_reply')?['id']}",
-                  "web_link": "@{body('Create_draft_reply')?['webLink']}",
-                  "threaded": true
+              "else": {
+                "actions": {
+                  "Create_draft_unthreaded": {
+                    "runAfter": {},
+                    "type": "OpenApiConnection",
+                    "_comment": "Fallback: in_reply_to did not resolve to a message in this mailbox, so create a standalone draft rather than failing the save. POST /me/messages CREATES A DRAFT and does not transmit — the Graph equivalent of the connector's 'Create draft (V3)'. P125: the connector action `CreateDraftMessageV3` DOES NOT EXIST in this tenant (found during the 2026-08-21 hand-package), so the repo definition now uses the same Graph passthrough that actually imported. Never swap this for /sendMail.",
+                    "inputs": {
+                      "host": {
+                        "connectionName": "shared_office365",
+                        "operationId": "HttpRequest",
+                        "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+                      },
+                      "parameters": {
+                        "Uri": "https://graph.microsoft.com/v1.0/me/messages",
+                        "Method": "POST",
+                        "ContentType": "application/json",
+                        "Body": {
+                          "subject": "@{triggerBody()?['subject']}",
+                          "body": {
+                            "contentType": "HTML",
+                            "content": "@{triggerBody()?['body_html']}"
+                          },
+                          "toRecipients": "@if(empty(triggerBody()?['to']), json('[]'), json(concat('[{\"emailAddress\":{\"address\":\"', replace(triggerBody()?['to'], ';', '\"}},{\"emailAddress\":{\"address\":\"'), '\"}}]')))",
+                          "ccRecipients": "@if(empty(triggerBody()?['cc']), json('[]'), json(concat('[{\"emailAddress\":{\"address\":\"', replace(triggerBody()?['cc'], ';', '\"}},{\"emailAddress\":{\"address\":\"'), '\"}}]')))",
+                          "bccRecipients": "@if(empty(triggerBody()?['bcc']), json('[]'), json(concat('[{\"emailAddress\":{\"address\":\"', replace(triggerBody()?['bcc'], ';', '\"}},{\"emailAddress\":{\"address\":\"'), '\"}}]')))"
+                        }
+                      },
+                      "authentication": "@parameters('$authentication')"
+                    }
+                  },
+                  "Respond_Unthreaded_Fallback": {
+                    "runAfter": {
+                      "Create_draft_unthreaded": [
+                        "Succeeded"
+                      ]
+                    },
+                    "type": "Response",
+                    "kind": "Http",
+                    "inputs": {
+                      "statusCode": 200,
+                      "headers": {
+                        "Content-Type": "application/json"
+                      },
+                      "body": {
+                        "ok": true,
+                        "draft_id": "@{body('Create_draft_unthreaded')?['id']}",
+                        "web_link": "@{body('Create_draft_unthreaded')?['webLink']}",
+                        "threaded": false,
+                        "thread_note": "in_reply_to did not resolve to a message in this mailbox — created a standalone draft."
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -187,43 +267,52 @@
               "Create_draft": {
                 "runAfter": {},
                 "type": "OpenApiConnection",
-                "_comment": "Office 365 Outlook \u2192 'Create draft (V3)'. Confirm operationId in designer; map the parameters below to the action's fields. If your tenant's connector exposes 'Create event' style naming, re-select in the UI.",
+                "_comment": "POST /me/messages CREATES A DRAFT and does not transmit — the Graph equivalent of the connector's 'Create draft (V3)'. P125: the connector action `CreateDraftMessageV3` DOES NOT EXIST in this tenant (found during the 2026-08-21 hand-package), so the repo definition now uses the same Graph passthrough that actually imported. Never swap this for /sendMail.",
                 "inputs": {
                   "host": {
                     "connectionName": "shared_office365",
-                    "operationId": "CreateDraftMessageV3",
+                    "operationId": "HttpRequest",
                     "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
                   },
                   "parameters": {
-                    "emailMessage/To": "@triggerBody()?['to']",
-                    "emailMessage/Cc": "@triggerBody()?['cc']",
-                    "emailMessage/Subject": "@triggerBody()?['subject']",
-                    "emailMessage/Body": "@triggerBody()?['body_html']",
-                    "emailMessage/Importance": "Normal",
-                    "emailMessage/Bcc": "@triggerBody()?['bcc']"
+                    "Uri": "https://graph.microsoft.com/v1.0/me/messages",
+                    "Method": "POST",
+                    "ContentType": "application/json",
+                    "Body": {
+                      "subject": "@{triggerBody()?['subject']}",
+                      "body": {
+                        "contentType": "HTML",
+                        "content": "@{triggerBody()?['body_html']}"
+                      },
+                      "toRecipients": "@if(empty(triggerBody()?['to']), json('[]'), json(concat('[{\"emailAddress\":{\"address\":\"', replace(triggerBody()?['to'], ';', '\"}},{\"emailAddress\":{\"address\":\"'), '\"}}]')))",
+                      "ccRecipients": "@if(empty(triggerBody()?['cc']), json('[]'), json(concat('[{\"emailAddress\":{\"address\":\"', replace(triggerBody()?['cc'], ';', '\"}},{\"emailAddress\":{\"address\":\"'), '\"}}]')))",
+                      "bccRecipients": "@if(empty(triggerBody()?['bcc']), json('[]'), json(concat('[{\"emailAddress\":{\"address\":\"', replace(triggerBody()?['bcc'], ';', '\"}},{\"emailAddress\":{\"address\":\"'), '\"}}]')))"
+                    }
+                  },
+                  "authentication": "@parameters('$authentication')"
+                }
+              },
+              "Respond_Success": {
+                "runAfter": {
+                  "Create_draft": [
+                    "Succeeded"
+                  ]
+                },
+                "type": "Response",
+                "kind": "Http",
+                "inputs": {
+                  "statusCode": 200,
+                  "headers": {
+                    "Content-Type": "application/json"
+                  },
+                  "body": {
+                    "ok": true,
+                    "draft_id": "@{body('Create_draft')?['id']}",
+                    "web_link": "@{body('Create_draft')?['webLink']}",
+                    "threaded": false
                   }
                 }
               }
-            }
-          }
-        },
-        "Respond_Success": {
-          "runAfter": {
-            "Is_Reply": [
-              "Succeeded"
-            ]
-          },
-          "type": "Response",
-          "kind": "Http",
-          "inputs": {
-            "statusCode": 200,
-            "headers": {
-              "Content-Type": "application/json"
-            },
-            "body": {
-              "ok": true,
-              "draft_id": "@{body('Create_draft')?['id']}",
-              "web_link": "@{body('Create_draft')?['webLink']}"
             }
           }
         },

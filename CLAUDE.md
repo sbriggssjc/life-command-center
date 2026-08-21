@@ -689,6 +689,61 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
     Ordering the union `src ASC` puts `'ae'` first, so every ~255-char preview wins its key:
     **866 rows / 0 full bodies** versus **614 / 614** correct. Both look like a healthy non-zero
     corpus. Assert on `n_full_body`, never `n`.
+- **⚠️ A PROXY FOR A FACT YOU ALREADY HOLD IS NOT A MEASUREMENT — and "short" is not "truncated"
+  (P125, 2026-08-21).** draft-assist decided whether an exemplar was a real captured body or an old
+  ~255-char Graph preview by its LENGTH (`FULL_BODY_MIN_CHARS = 300`). Scott's voice is *"extremely
+  short and punchy"* — the profile's own first rule — so the metric contradicted the trait it was
+  measuring. Live over the 777 Scott-authored rows carrying a real `body_html`, after the cleaner
+  strips the quoted chain and signature: **438 clean to 12–299 chars**, 268 to ≥300, 71 to under 12
+  (correctly dropped as boilerplate — `"AWESOME!"`, `"Just did!"`). **Median cleaned prose: 160
+  chars**, so the heuristic misfiled **62% of the genuine full bodies** and `voice_confidence`
+  faithfully reported *"preview-era OPENINGS only"* over a corpus that was nothing of the kind.
+  Provenance is a fact held at load time — WHICH BODY COLUMN the text came from — so carry it
+  (`exemplar.full_body`) instead of re-deriving it; the length test survives only as a fallback that
+  announces itself (`exemplarBodyCoverage().basis`). Same class as the P124 `else`-branch bucket and
+  the P159a `drillthrough: 37`: plausible, non-zero, and wrong.
+  - **⚠️ A WEIGHT THAT CAN LOSE IS INDISTINGUISHABLE FROM ONE THAT IS NOT THERE.**
+    `rankExemplarsByEmbedding` scored cosine + a 0.02 bucket nudge and nothing else — it ACCEPTED
+    `target.recipientEmail` and ignored it, while `rankExemplarsDeterministic` weighted recipient
+    (+2) *below* bucket (+3). So what "relevance" meant depended on **whether Ollama answered**, and
+    backfilling 55 full-body emails to the exact recipient changed the retrieved set by **nothing**.
+    Two rankers behind one seam must read ONE judgement (`recipientMatchLevel`), and a guarantee you
+    actually mean must be a **partition, not a score term**: `selectExemplars` tiers
+    `full body + exact recipient` → `full body` → `preview + exact recipient` → `preview`, applied
+    around whichever ranker won. **A domain-only match is deliberately NOT a tier** — a colleague at
+    the same firm is a different person (cf. the `dup-pair-planner` fuzzy-vs-identity split). And read
+    `cc`: 3 of the 55 live rows were cc-only and scored as if the party were not on the message.
+  - **A corpus loader must filter at the DB, or the page budget buys someone else's mail.**
+    `loadCorpus` paged the newest 3,000 rows of the WHOLE store and applied the author gate in JS
+    afterwards: `email_bodies` holds 28,090 body-bearing rows of which 1,188 are Scott's, so the
+    window held **565**. Push the author predicate into PostgREST; keep the JS gate as the authority.
+    And report `corpus_full_bodies`, never just `corpus_size` — the P124 dedup lesson applies to the
+    loader identically.
+  - **"It returned nothing" and "nothing ever asked" are different facts.** draft-assist reported
+    `facts.source: no_entity_relational` for a live, named, in-progress deal because facts loaded only
+    `if (entityId)` and the caller passed none — resolution did not fail, it did not exist. It now
+    reads the hourly deal-matcher's OWN verdict (`activity_events.source_type='lcc:deal_match'`,
+    `external_id` = the RFC `internetMessageId`, `entity_id` = the deal) rather than inventing a
+    second matching heuristic, and it is **thread-scoped** (`conversation_id`) because that matcher is
+    budget-bounded and skips already-attributed mail — the exact message being replied to usually
+    carries no row while its siblings do. An empty result names the rung
+    (`thread_not_attributed_to_a_deal` ≠ "no deal exists").
+  - **An outcome nobody can observe will be wrong for as long as it takes someone to look.** The
+    Outlook draft seam returned `{ok, draft_id, web_link}` — **byte-identical for a threaded reply and
+    a brand-new message** — so the first real save (2026-08-21) landed a STANDALONE draft on a
+    correctly-resolved thread and read as a clean success. Every flow response now echoes `threaded`
+    (+ `conversationId`), the seam surfaces `conversation_matches_thread`, and `threaded: null` is
+    kept distinct from `false` ("an older import" ≠ "it did not thread"). Three flow defects were
+    behind it: a **second `Response` running after the If on BOTH branches** (so the reply path
+    answered twice, the second reading a null `body('Create_draft')`), a PATCH of `toRecipients` onto
+    a reply draft that already carries the thread's recipients, and an unguarded empty `$filter`
+    building `/me/messages//createReply`.
+  - **⚠️ THE COMMITTED FLOW DEFINITION HAD DRIFTED FROM THE TENANT.** `CreateDraftMessageV3` does not
+    exist in this tenant (found while hand-packaging the import), `$authentication` must be declared
+    and referenced by every `OpenApiConnection`, and every `HttpRequest` carrying a Body needs
+    `ContentType: application/json` or Graph 400s *"Empty Content-Type provided"*. All three are now
+    in `flow-lcc-create-outlook-draft.json`. **A definition that only describes a flow nobody can
+    import cannot be reasoned about** — when an operator hand-fixes an import, fold the fix back.
 - **Web-search enrichment proxy (`owner-contact-websearch`) is PAUSED — do not activate.** Contact acquisition
   goes through the public-records chain (cross-reference resolver → SOS-direct → address reverse-lookup → deed).
 - **"Owner is reachable" has FOUR definitions — quote `reachable_hero_qualified` (P161, 2026-08-21).** The owner-panel hero
