@@ -655,6 +655,40 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
     `action_items`, so **0 of 103** staged messages have any, and 27 had an untriaged `inbox_item` too.
     A completed To Do would have flipped the row to `filed` with nothing ever publishing the move. Hence
     the `todo_completed` arm. A gate that admits rows no arm can ever close is a silent stall.
+- **A CATCH-ALL BUCKET IS NOT A CLASSIFICATION — and a voice corpus is where that bites hardest
+  (P124, 2026-08-21).** `classifyDraftType()` routed EVERY external non-reply into
+  `cold_bd_outreach`, a label earned by nothing. Measured live: **28 of 29 rows were personal/family
+  mail** — ten "Bunk Note" messages to Scott's kids at summer camp, "Meal Plan: Week of June 16",
+  "Scrimmage", "Football email", plus self-notes to his personal address ("Prompt", "Error",
+  "Calendar fix prompt"). **Zero were cold BD outreach.** That is the bucket `/api/draft-assist`
+  retrieves its voice from for `purpose=cold_bd`, and `DRAFT_ASSIST` had been ON since 2026-08-14 —
+  so a save would have written an Outlook draft to an institutional owner in the voice of a note to
+  a nine-year-old, while every surface read healthy (29 exemplars, 100% full bodies,
+  `voice_confidence` green). Same shape as the P112 bare-SF-identity cadence gate: **the positive
+  case must be EARNED by a signal, never defaulted into by an `else` branch.**
+  - **⚠️ The obvious guard was the destructive one.** "Exclude consumer-domain recipients" looks
+    obviously right and would have deleted the corpus's BEST BD exemplars — *"RE: Following up on
+    the DaVita in Banning, CA"*, *"…in Succasunna, NJ"*, *"Re: Needs List — 1050 Old Camp Road"*,
+    all to gmail addresses. Real BD mail to a consumer address is almost always a REPLY, so it lands
+    in `external_follow_up` and is untouched. The domain now decides only whether a NON-reply has
+    earned the cold-BD label, never whether a message is excluded. (Cf. P158a: `&` in an owner name
+    is a married couple, not a firm.)
+  - **Filter the residue at LOAD time, not rank time.** `retrieveExemplars` falls back to the WHOLE
+    corpus whenever the target bucket is thin — and the thin buckets are exactly the ones that
+    trigger the fallback — so a rank-time filter still leaks. `personal_or_unclassified` is dropped
+    in `loadCorpus` and the count surfaced as `retrieval.excluded_personal_or_unclassified`.
+  - **A distilled "voice profile" inherits every bucketing defect, invisibly.** The ollama-distilled
+    attributes for cold-BD read as a family newsletter (*"Good Morning, Claire Bear"*, *"Mom
+    continues her full-time job of checking the Kanakuk app"*) and would have been folded into the
+    canonical profile as house style. **The verbatim-citation guard cannot catch this** — those
+    quotes ARE verbatim; they are just from the wrong corpus. It also covers excerpts ONLY, not the
+    model's free-text fields, which carry real garbage (`avg_sentence_words: 323.9` where 323.9 is
+    the bucket's *avg_words*; `0` for another bucket). **Fold numbers from the deterministic `shape`
+    block only, and re-verify a bucket's MEMBERSHIP before trusting its distilled attributes.**
+  - **The `email_bodies`-before-`activity_events` dedup is one character from silent total failure.**
+    Ordering the union `src ASC` puts `'ae'` first, so every ~255-char preview wins its key:
+    **866 rows / 0 full bodies** versus **614 / 614** correct. Both look like a healthy non-zero
+    corpus. Assert on `n_full_body`, never `n`.
 - **Web-search enrichment proxy (`owner-contact-websearch`) is PAUSED — do not activate.** Contact acquisition
   goes through the public-records chain (cross-reference resolver → SOS-direct → address reverse-lookup → deed).
 - **"Owner is reachable" has THREE definitions — quote `reachable_hero_effective`.** The owner-panel hero

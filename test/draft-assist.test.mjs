@@ -18,6 +18,7 @@ import {
   exemplarBodyCoverage, FULL_BODY_MIN_CHARS,
   parseDraftJson, SCOTT_FROM, PURPOSE_TO_BUCKET, VALID_PURPOSES, NOT_ON_FILE,
 } from '../api/_shared/draft-assist-core.js';
+import { classifyDraftType } from '../api/_shared/voice-corpus-clean.js';
 
 const root = process.cwd();
 const read = (p) => readFileSync(join(root, p), 'utf8');
@@ -305,5 +306,141 @@ describe('purpose vocabulary + helpers', () => {
     assert.deepEqual(parseDraftJson('{"subject":"Hi","body":"On it."}'), { subject: 'Hi', body: 'On it.', parsed: true });
     const loose = parseDraftJson('here you go: {"subject":"S","body":"B"} thanks');
     assert.equal(loose.subject, 'S');
+  });
+});
+
+// ============================================================================
+// Prompt 124 — activation gates: bucket integrity, reply threading, and a
+// send-guard that reads the PA flow's real operations rather than its prose.
+// ============================================================================
+
+describe('P124 — cold_bd bucket integrity (the personal-mail sump)', () => {
+  it('an external non-reply to a CONSUMER address is NOT cold BD', () => {
+    // Live 2026-08-21: 28 of 29 rows in this bucket were family/personal mail.
+    for (const [subject, to] of [
+      ['Claire - Bunk Note', ['camp@outlook.com']],
+      ['Meal Plan: Week of June 16', ['spouse@outlook.com', 'kid@yahoo.com']],
+      ['Prompt', ['scott.personal@outlook.com']],
+      ['Scrimmage', ['coach@gmail.com']],
+    ]) {
+      const r = classifyDraftType({ subject, toEmails: to, cleaned: 'x'.repeat(60) });
+      assert.equal(r.bucket, 'personal_or_unclassified', `${subject} must not be cold_bd`);
+      assert.equal(r.excludeFromCorpus, true, `${subject} must be dropped from the corpus`);
+    }
+  });
+
+  it('a real cold-BD email to an ORGANISATION address still classifies as cold_bd', () => {
+    const r = classifyDraftType({
+      subject: 'New-construction DaVita opportunity',
+      toEmails: ['acquisitions@somerealtyco.com'], cleaned: 'x'.repeat(60),
+    });
+    assert.equal(r.bucket, 'cold_bd_outreach');
+    assert.notEqual(r.excludeFromCorpus, true);
+  });
+
+  it('⚠️ the guard NEVER excludes business mail merely for a consumer domain', () => {
+    // These are the corpus's best BD exemplars and all go to gmail. A blanket
+    // consumer-domain exclusion would have deleted them (cf. P158a).
+    for (const subject of [
+      'RE: Following up on the DaVita in Banning, CA',
+      'RE: Following up on the DaVita in Succasunna, NJ',
+      'Re: Needs List - 1050 Old Camp Road BLD 130',
+    ]) {
+      const r = classifyDraftType({ subject, toEmails: ['owner@gmail.com'], cleaned: 'x'.repeat(60) });
+      assert.equal(r.bucket, 'external_follow_up', `${subject} must stay a usable exemplar`);
+      assert.notEqual(r.excludeFromCorpus, true);
+    }
+  });
+
+  it('the loader drops the residue BEFORE ranking, and reports an honest count', () => {
+    const src = read('api/draft-assist.js');
+    // Must be dropped at load: retrieveExemplars falls back to the WHOLE corpus
+    // when a bucket is thin, so a rank-time filter would leak personal mail in.
+    assert.match(src, /excludeFromCorpus/);
+    assert.match(src, /if \(excludeFromCorpus\)[\s\S]{0,60}return;/);
+    assert.match(src, /excluded_personal_or_unclassified/);
+    const loader = src.slice(src.indexOf('async function loadCorpus'), src.indexOf('async function retrieveExemplars'));
+    assert.ok(loader.indexOf('excludeFromCorpus') < loader.indexOf('rows.push'),
+      'the exclusion must precede the push into the exemplar pool');
+  });
+});
+
+describe('P124 — the saved draft threads into the live conversation', () => {
+  it('draft-assist resolves a reply target and passes it to the seam', () => {
+    const src = read('api/draft-assist.js');
+    assert.match(src, /async function findReplyTarget/);
+    assert.match(src, /in_reply_to:\s*replyTarget \? replyTarget\.internet_message_id : ''/);
+    assert.match(src, /reply_to:\s*replyTarget \?/, 'the dry-run must report what it would thread into');
+  });
+
+  it('no prior correspondence ⇒ no reply target (a cold email is a NEW thread)', () => {
+    const src = read('api/draft-assist.js');
+    const fn = src.slice(src.indexOf('async function findReplyTarget'), src.indexOf('async function retrieveExemplars'));
+    assert.match(fn, /if \(!addr \|\| !addr\.includes\('@'\)\) return null;/);
+    assert.match(fn, /catch \{\s*return null;/, 'threading must fail soft — an unthreaded draft is still usable');
+  });
+
+  it('the seam forwards in_reply_to to the flow', () => {
+    const seam = read('api/_shared/outlook-draft.js');
+    assert.match(seam, /in_reply_to:\s*draft\.in_reply_to \|\| ''/);
+  });
+});
+
+describe('P124 — the PA flow creates a draft reply and never transmits', () => {
+  const flow = JSON.parse(read('flow-lcc-create-outlook-draft.json'));
+  const collect = (node, key, out = []) => {
+    if (Array.isArray(node)) node.forEach((n) => collect(n, key, out));
+    else if (node && typeof node === 'object') {
+      for (const [k, v] of Object.entries(node)) {
+        if (k === key && typeof v === 'string') out.push(v);
+        collect(v, key, out);
+      }
+    }
+    return out;
+  };
+
+  it('every operationId is a create/read op — none transmits', () => {
+    const ops = collect(flow, 'operationId');
+    assert.ok(ops.length > 0, 'flow must declare operations');
+    for (const op of ops) {
+      assert.equal(/send|^Reply/i.test(op), false, `operationId ${op} transmits — forbidden on this path`);
+    }
+    assert.deepEqual([...new Set(ops)].sort(), ['CreateDraftMessageV3', 'HttpRequest']);
+  });
+
+  it('every Graph URI targets createReply/messages — never /send or /reply', () => {
+    const uris = collect(flow, 'Uri');
+    assert.ok(uris.some((u) => /createReply/.test(u)), 'the reply path must use createReply (creates a DRAFT)');
+    for (const u of uris) {
+      assert.equal(/\/send|\/reply(?!\w)/i.test(u), false, `URI transmits: ${u}`);
+    }
+  });
+
+  it('it branches on in_reply_to: threaded reply when present, standalone when not', () => {
+    const branch = flow.actions.Check_Shared_Secret.actions.Is_Reply;
+    assert.ok(branch, 'flow must branch on in_reply_to');
+    assert.deepEqual(Object.keys(branch.else.actions), ['Create_draft']);
+    assert.ok(Object.keys(branch.actions).includes('Create_draft_reply'));
+  });
+
+  it('the trigger accepts every field the seam sends', () => {
+    const props = flow.triggers.manual.inputs.schema.properties;
+    for (const f of ['to', 'cc', 'bcc', 'subject', 'body_html', 'in_reply_to']) {
+      assert.ok(props[f], `flow trigger must accept ${f} — the seam sends it`);
+    }
+  });
+});
+
+describe('P124 — the voice profile is v3 and carries the contamination warning', () => {
+  const profile = read('BRIGGS-WRITING-VOICE.md');
+  it('is version 3.x', () => assert.match(profile, /\*\*Version:\*\* 3\.\d+\.\d+/));
+  it('withdraws the contaminated cold-BD guidance instead of carrying it forward', () => {
+    assert.match(profile, /BUCKET INTEGRITY/);
+    assert.match(profile, /NO USABLE EVIDENCE/);
+    assert.equal(/Claire Bear|Kanakuk/.test(profile.split('## Per-context variants')[1] || ''), false,
+      'contaminated phrasing must never appear as guidance');
+  });
+  it('carries the corrected LOI sign-off rate (v2 had it backwards)', () => {
+    assert.match(profile, /69\.8%/);
   });
 });

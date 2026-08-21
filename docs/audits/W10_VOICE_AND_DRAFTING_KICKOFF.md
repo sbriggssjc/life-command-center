@@ -166,3 +166,91 @@ resort — the profile+RAG approach likely suffices and is fully reversible.
   real lengths (full / mixed / preview-only), instead of asserting the retired corpus-wide 255-char cap.
   **Scott's step:** run the on-prem distill on GaryBuilt, then read v2 — "does this sound like me now,
   sign-offs and all?" — before it becomes the default voice source. Prompt → `done/`.
+
+---
+
+## P124 (2026-08-21) — activation gates: the corpus is ready, two defects were not
+
+**Premise correction first, because it changes the risk:** the prompt assumed `DRAFT_ASSIST` was
+"still gated off." **It has been `on` since 2026-08-14 20:26 UTC** (`off_since` NULL). So
+`POST /api/draft-assist?save=true` was already ungated, and both defects below were **live, not
+latent**. P124 did **not** flip it off — that is Scott's call — but the fixes ship on the next
+Railway redeploy and materially de-risk the ON state. Classic dated-blocker trap; one query caught it.
+
+### 1. The corpus is genuinely ready (re-measured live 2026-08-21)
+
+| | v2 (2026-08-18) | v3 (2026-08-21) |
+|---|---|---|
+| Usable Scott-authored exemplars | 609 | **614** |
+| — with a full body | 399 (65%) | **614 (100%)** |
+| — preview-only openings | 210 | **0** |
+| Full-body window | 2026-05-04 → 08-17 | **2026-02-17 → 08-21** |
+
+`activity_events` now contributes **zero** net exemplars — all 947 of its Scott rows are shadowed by
+an `email_bodies` row, and its 267 remaining preview rows are *empty*. The `~255-char opening`
+caveat that shaped v1 and half of v2 is retired: `voice_confidence` should claim full-body grounding
+on essentially every draft now, and a preview-era caveat is a regression signal.
+
+> **The `email_bodies`-first dedup is one character from failing.** A verification query here ordered
+> the union `src ASC` — and `'ae' < 'eb'` — so every preview won its key: **866 rows / 0 full bodies**
+> versus **614 / 614** correct. Both outcomes report a healthy non-zero count. Check `n_full_body`,
+> never `n`.
+
+### 2. ⚠️ `cold_bd_outreach` was a personal-mail sump (BLOCKER — fixed)
+
+`classifyDraftType()` routed **every** external non-reply into `cold_bd_outreach`, a bucket earned by
+nothing. Live, it held **28 personal emails out of 29**: ten "Bunk Note" messages to his kids at
+camp, "Meal Plan: Week of June 16", "Scrimmage", "Football email", plus self-notes to his personal
+address ("Prompt", "Error", "Calendar fix prompt"). **Zero were cold BD outreach.** With the flag on,
+a `purpose=cold_bd` save would have written an Outlook draft to an institutional owner in the voice of
+a note to a nine-year-old — while every surface reported healthy (29 exemplars, 100% full bodies,
+`voice_confidence` green).
+
+**The obvious guard was the wrong one.** "Exclude consumer-domain recipients" would have deleted the
+corpus's *best* BD exemplars — *"RE: Following up on the DaVita in Banning, CA"*, *"…in Succasunna,
+NJ"*, *"Re: Needs List — 1050 Old Camp Road"*, all to gmail. Same class as P158a (`&` = a married
+couple, not a firm). **Fix:** cold_bd must be *earned* by ≥1 organisation-domain recipient; the
+residue is `personal_or_unclassified` and is dropped at **load** time (not rank time — `retrieveExemplars`
+falls back to the whole corpus when a bucket is thin, which is exactly when it would have leaked).
+Reroutes 28 of 29; the one business email lost ("BOV: CVS - Fallbrook, CA", a client at outlook.com)
+keeps its five `Re:` replies in `external_follow_up`. Count surfaced per request as
+`retrieval.excluded_personal_or_unclassified`.
+
+### 3. ⚠️ Saved drafts did not thread (fixed)
+
+`draft-assist` never passed `in_reply_to`, **and** the PA flow's `Create_draft` ignored it (along with
+`bcc` and attachments). Every saved draft was a standalone new message. `Create draft (V3)` structurally
+cannot thread — no conversation or header input — so the flow now branches to Graph
+`POST /me/messages/{id}/createReply`, which creates a **draft** reply on the real thread.
+`findReplyTarget()` prefers the recipient's most recent inbound message and fails soft (no prior
+correspondence ⇒ a cold email correctly stays a new thread). Verified against five live counterparties
+on the active Villages/DaVita deal — all five resolve a reply target dated within ten days.
+
+### 4. Voice profile → **v3.0.0**
+
+Folded the 760-sample distilled attributes (`briggs-voice-attributes.json`, on-prem qwen2.5:14b).
+Biggest correction: **LOI/offer mail signs off 69.8% of the time** — v2 measured 31.3% and taught
+drafters to default to no closer. Overall sign-off 27.2% (v2: 13.3%); external follow-up 45%, internal
+6.2%; length is the strongest predictor (42.5% of long-form vs 27.2% overall). Also corrected: he
+**does not enumerate** (≤3% of mail uses a list, at any length) — v2 taught `1)` `2)` as the
+multi-point default. The contaminated cold-BD guidance is **withdrawn**, not carried forward, and
+`listing_announcement` is flagged thin + self-contradictory (the model reports "never use informal
+greetings" while citing "Hi Paul," on 7 bodies).
+
+> **The verbatim guard covers excerpts only.** The model's free-text numeric fields contain garbage —
+> cold-BD reported `avg_sentence_words: 323.9` (that is *avg_words*), listing reported `0`. Fold
+> numbers from the deterministic `shape` block only.
+
+### 5. Still open — the two things this session could not do
+
+- **Generation dry-run (ask #4).** `invokeOnPremGeneration` is on-prem-only and **fails closed by
+  design**; the GaryBuilt Ollama is not reachable from a cloud session, and Railway/Supabase are not
+  reachable over HTTP either. **No draft prose was generated, and none is quoted here** — fabricating
+  sample output for a voice-fidelity review would defeat the review. The pre-flight that does not need
+  the LLM (corpus, buckets, retrieval targets, reply targets) is complete and green; the runnable
+  harness is in `docs/architecture/flows/outlook-draft-reply-executor.md`.
+- **The PA flow is unverified against a live tenant.** Definition updated and structurally tested
+  (`operationId` set pinned to `CreateDraftMessageV3` + `HttpRequest`; every Graph URI asserted
+  non-transmitting), but import/binding and `PA_OUTLOOK_DRAFT_URL` are operator steps.
+  `PA_OUTLOOK_DRAFT_FLOW` is now registered in `feature_flags_registry` so its OFF state shows up in
+  the daily Dormant Capabilities digest instead of being invisible.
