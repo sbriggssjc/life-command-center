@@ -316,3 +316,84 @@ test('P123: the cursor WRAPS so a later run comes back round to deal 0', async (
   assert.equal(out.body.cursor_end, 0, 'cursor wraps modulo the eligible-deal count');
   assert.equal(out.body.budget_stopped, false, 'a full pass is not a budget stop');
 });
+
+test('P123b: a core tenant containing a COMMA is double-quoted, not left to split the logic tree', async () => {
+  // Live-caught 2026-08-21. PostgREST parses the and()/or() logic tree AFTER percent-decoding,
+  // so encodeURIComponent does NOT protect a comma: it decodes back to `,` and splits the
+  // argument list. All 5 address-named deals whose core carries a comma returned HTTP 400 on
+  // BOTH the nested filter and v2.1's core-only shape — i.e. v2.1 had been silently skipping
+  // them as "this deal has no mail". Exact partition live: 5 comma cores fail, 32 clean pass.
+  const recorder = [];
+  const list = (arr) => ({ ok: true, status: 200, text: async () => JSON.stringify(arr),
+    headers: { get: (h) => (h === 'content-range' ? `0-${Math.max(0, arr.length - 1)}/${arr.length}` : null) } });
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    recorder.push({ u, method: opts?.method || 'GET' });
+    if (u.includes('lcc_users')) return list([{ lcc_user_id: 'u1' }]);
+    if (u.includes('bd_opportunities')) return list([{ entity_id: DEAL, sf_opp_id: 'sf1', owner_user_id: 'u1', metadata: {} }]);
+    if (u.includes('entities?id=in')) return list([
+      { id: DEAL, name: '2155 Main Street East, Snellville, GA', city: 'Snellville', state: 'GA' }]);
+    if (u.includes('source_type=eq.lcc%3Adeal_match') && u.includes('select=external_id')) return list([]);
+    if (u.includes('entity_relationships') && u.includes('from_entity_id=in.')) return list([]);
+    if (u.includes('source_type=eq.outlook')) return list([]);
+    if (u.includes('lcc_deal_match_run_log')) return list([{ run_id: 77, cursor_end: 0 }]);
+    return list([]);
+  };
+  const { handleDealEmailMatchCron } = await import('../api/_handlers/deal-email-match-cron.js');
+  let out = null;
+  const res = { status(c) { this._s = c; return this; }, json(p) { out = { status: this._s || 200, body: p }; return this; } };
+  await handleDealEmailMatchCron({ query: {}, body: {} }, res);
+
+  const cand = recorder.find(c => c.u.includes('source_type=eq.outlook'));
+  assert.ok(cand, 'a candidate query ran for the comma-bearing deal');
+  const decoded = decodeURIComponent(cand.u);
+  // The core is "Main Street East, Snellville, GA" (the leading number is dropped as generic).
+  assert.ok(decoded.includes('title.ilike."*Main Street East, Snellville, GA*"'),
+    `the comma-bearing value must be double-quoted, got: ${decoded}`);
+  assert.equal(out.body.ok, true, 'and the run is clean — no 400, no fallback');
+  assert.equal(out.body.deals_scanned, 1, 'the deal is actually scanned, not skipped');
+});
+
+test('P123b: a CLEAN core keeps the unquoted shape proven to work live', async () => {
+  // Zero-regression guard: quoting is applied ONLY when a reserved character is present, so the
+  // 32 deals whose cores are clean keep byte-for-byte the query shape that works today.
+  const recorder = [];
+  installBulkFetch({ matchCount: 1, recorder });
+  const { handleDealEmailMatchCron } = await import('../api/_handlers/deal-email-match-cron.js');
+  const res = { status(c) { this._s = c; return this; }, json() { return this; } };
+  await handleDealEmailMatchCron({ query: {}, body: {} }, res);
+  const cand = recorder.find(c => c.u.includes('source_type=eq.outlook'));
+  const decoded = decodeURIComponent(cand.u);
+  assert.ok(decoded.includes('title.ilike.*DaVita*'), `clean core stays unquoted, got: ${decoded}`);
+  assert.ok(!decoded.includes('"*DaVita*"'), 'no quotes added where none are needed');
+});
+
+test('P123b: a failed read records the REAL PostgREST error, not an empty array', async () => {
+  // The shim blanks a non-array `data` to [] so `for…of` can never throw, stashing the original
+  // on `_nonArrayData`. Reading `data` logged `detail: []` and discarded the message naming the
+  // cause — which is why the comma 400s took a live run to diagnose.
+  const list = (arr) => ({ ok: true, status: 200, text: async () => JSON.stringify(arr),
+    headers: { get: (h) => (h === 'content-range' ? `0-0/${arr.length}` : null) } });
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('lcc_users')) return list([{ lcc_user_id: 'u1' }]);
+    if (u.includes('bd_opportunities')) return list([{ entity_id: DEAL, sf_opp_id: 'sf1', owner_user_id: 'u1', metadata: {} }]);
+    if (u.includes('entities?id=in')) return list([{ id: DEAL, name: 'DaVita Dialysis - Queens - NY', city: 'Queens', state: 'NY' }]);
+    if (u.includes('source_type=eq.lcc%3Adeal_match') && u.includes('select=external_id')) return list([]);
+    if (u.includes('entity_relationships') && u.includes('from_entity_id=in.')) return list([]);
+    if (u.includes('source_type=eq.outlook')) return { ok: false, status: 400,
+      text: async () => JSON.stringify({ code: 'PGRST100', message: 'unexpected "," expecting letter' }),
+      headers: { get: () => null } };
+    if (u.includes('lcc_deal_match_run_log')) return list([{ run_id: 78, cursor_end: 0 }]);
+    return list([]);
+  };
+  const { handleDealEmailMatchCron } = await import('../api/_handlers/deal-email-match-cron.js');
+  let out = null;
+  const res = { status(c) { this._s = c; return this; }, json(p) { out = { status: this._s || 200, body: p }; return this; } };
+  await handleDealEmailMatchCron({ query: {}, body: {} }, res);
+
+  assert.equal(out.body.ok, false);
+  const blob = JSON.stringify(out.body.errors);
+  assert.ok(blob.includes('PGRST100') && blob.includes('unexpected'),
+    `the recorded error must name the cause, got: ${blob}`);
+});

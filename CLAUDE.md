@@ -880,6 +880,14 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   **`net._http_response` is pruned to a ~6-hour window**, so "6 `no_response` in 24h" was not a 25%
   failure rate — it was **100% of the retained sample**. Join `lcc_cron_post_log` → `net._http_response`
   and read `timed_out` + `error_msg` before you believe any per-day count off that table.
+  - **⚠️ `enc()` DOES NOT PROTECT A VALUE INSIDE A PostgREST LOGIC TREE (P123b, live).** PostgREST
+    parses the `and()`/`or()` tree **after** percent-decoding, so a `,` encoded as `%2C` decodes back
+    to a delimiter and splits the argument list → HTTP 400 on the whole request. Measured: the 5
+    address-named deals whose core tenant carries a comma (`2155 Main Street East, Snellville, GA`)
+    400'd, while all 32 clean cores passed — an exact partition. They had been failing since they were
+    created, invisibly, because the caller swallowed the read as `cand.data || []` = "no mail".
+    **Double-quote the value** (`col.ilike."*a, b*"`, backslash-escaping `"` and `\`) whenever it can
+    contain `, ( ) " \` — and quote ONLY then, so values with a proven-working shape are untouched.
   - **The bottleneck is almost never the SQL — count the ROUND TRIPS.** The matcher's per-deal
     candidate query profiled at **99 ms** (36 deals ≈ 3.6 s of a ~80 s run). The other ~75 s was
     **~680 sequential PostgREST calls**: one idempotency GET and one edge-existence GET *per matched

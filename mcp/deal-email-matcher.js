@@ -90,6 +90,22 @@ function coreTenantOf(tenantSeg) {
   const core = kept.join(' ').trim();
   return core.length >= 4 ? core : tenantSeg;   // fall back rather than strip to noise
 }
+// ⚠️ PostgREST parses the and()/or() LOGIC TREE **after** percent-decoding, so `enc()` does
+// NOT protect a value: a comma inside it decodes back to `,` and splits the argument list,
+// 400ing the whole request. Proven live 2026-08-21 (P123b) — the 5 address-named deals whose
+// core tenant carries a comma ("2155 Main Street East, Snellville, GA") returned HTTP 400 on
+// the nested filter AND on v2.1's core-only shape, which means v2.1 had been silently skipping
+// those 5 deals as "this deal has no mail" for as long as they have existed. Double-quoting
+// makes reserved characters literal.
+// Quote ONLY when a reserved character is present: the 32 deals whose cores are clean keep the
+// exact query shape that is proven to work live, so this cannot regress them.
+const LOGIC_TREE_RESERVED = /[,()"\\]/;
+function likeArg(enc, term) {
+  const pat = '*' + String(term) + '*';
+  if (!LOGIC_TREE_RESERVED.test(pat)) return enc(pat);
+  return enc('"' + pat.replace(/([\\"])/g, '\\$1') + '"');
+}
+
 const reEsc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Whole-word (bounded) presence test, case-insensitive. Fixes "Essentia" ⊂ "Essential".
 function hasWord(text, term) {
@@ -113,7 +129,13 @@ export function makeDealEmailMatcherRoute({ opsQuery, enc, WORKSPACE_ID }) {
     for (;;) {
       const sep = ordered.includes('?') ? '&' : '?';
       const r = await opsQuery('GET', `${ordered}${sep}limit=${PAGE}&offset=${offset}`);
-      if (r && r.ok === false) return { ok: false, status: r.status, data: r.data, rows, truncated: false };
+      if (r && r.ok === false) {
+        // The cron wrapper's shim blanks a non-array `data` to [] and stashes the original on
+        // `_nonArrayData`. Reading `data` here logged `detail: []` and threw away the PostgREST
+        // message naming the cause — which is what made the comma 400s above take a live run to
+        // diagnose instead of one glance at the run log.
+        return { ok: false, status: r.status, data: r._nonArrayData ?? r.data, rows, truncated: false };
+      }
       const page = Array.isArray(r && r.data) ? r.data : [];
       rows.push(...page);
       if (page.length < PAGE) return { ok: true, rows, truncated: false };
@@ -260,8 +282,8 @@ export function makeDealEmailMatcherRoute({ opsQuery, enc, WORKSPACE_ID }) {
           // past the cap. Both terms now go to the DB (substring ⊇ the word-boundary
           // test applied below, so this cannot lose a match the in-memory filter
           // would have kept) — the candidate set collapses and the cap stops binding.
-          const coreLike = enc('*' + core + '*');
-          const cityLike = enc('*' + cityBase + '*');
+          const coreLike = likeArg(enc, core);
+          const cityLike = likeArg(enc, cityBase);
           const selectCols = '&select=id,entity_id,title,body,occurred_at,external_id,domain';
           let cand = await fetchAllPages(
             `activity_events?source_type=eq.outlook` +

@@ -233,6 +233,48 @@ select l.request_id, r.timed_out, r.status_code
    and l.created > now() - interval '6 hours';               -- expect timed_out = false
 ```
 
+## P123b (2026-08-21) — the fix worked, and it exposed a comma bug v2.1 had been hiding
+
+**First two post-deploy runs (LCC Opps, verified live):**
+
+| run | duration_ms | pg_net `timed_out` | emails_attributed | already_attributed |
+|---|---|---|---|---|
+| 384 (pre-deploy) | — | **true** (60,000 ms) | 0 | 341 |
+| 385 (18:17) | 33,848 | **false** / 200 | **205** | 574 |
+| 386 (19:17) | 11,220 | **false** / 200 | 0 | 779 |
+
+`no_response` is gone: 100% of calls → 0. Runtime ~80 s → 11 s steady state, well inside the 60 s
+window. `v_lcc_deal_match_stalled_runs` = 0.
+
+**The unexpected win: 205 real attributions that v2.1 was silently dropping.** `CAND_LIMIT = 1200`
+was returning PostgREST's 1000-row cap on a core-only, unordered query, so matches past that page
+were never seen. With city pushed into the query the candidate set collapses and
+`candidates_truncated` is 0. Precision is unchanged — the in-memory word+city+digest filter is
+untouched and the DB filter is a strict superset of it.
+
+**But both runs came back `ok=false`, `error_count: 10` — and the cause is a v2.1 bug, not a P123 one.**
+Five deals returned HTTP 400 on the nested filter **and** on the v2.1 core-only fallback. All five are
+address-named deals whose core tenant contains a **comma**:
+`2155 Main Street East, Snellville, GA`, `100 Midland Ave, Glenwood Springs, CO 81601`,
+`301 Alcide Dominique Dr, Lafayette, LA 70506`, `4775 N Green Bay Ave, Milwaukee, WI 53209`,
+`2860 S US Highway 83, Zapata, TX 78076`. The partition is exact: **5 comma cores fail, 32 clean
+cores pass.**
+
+**⚠️ `enc()` does NOT protect a value inside a PostgREST logic tree.** PostgREST parses the
+`and()`/`or()` tree **after** percent-decoding, so `%2C` becomes a real `,` and splits the argument
+list. Those 5 deals have therefore been returning 400 since they were created — and v2.1's
+`cand.data || []` swallowed it as *"this deal has no mail."* P123's "a failed read is an ERROR" is
+exactly what surfaced them; the run before the deploy reported `ok=true` over the same 5 failures.
+
+**Fix (P123b):** double-quote the ilike value — `title.ilike."*Main Street East, Snellville, GA*"` —
+**only when it carries a reserved character** (`, ( ) " \`). The 32 clean cores keep byte-for-byte the
+query shape proven to work live, so the change cannot regress them; the 5 broken ones can only improve.
+Also: `fetchAllPages` now reports the shim's stashed `_nonArrayData`, because logging `detail: []`
+discarded the PostgREST message that names the cause — that omission is why this took a live run to
+diagnose instead of one glance at the run log.
+
+Guards: 3 new tests (comma quoted, clean core left unquoted, real error text recorded) — 12/12.
+
 ## P122 (2026-08-21) — `cm-gov-packet-refresh` fixed: the gov CM packet had refreshed ZERO times in 7 days
 
 **Migration `20260821120000_p122_cm_packet_refresh_cursor.sql` — APPLIED LIVE to LCC Opps
