@@ -1,6 +1,6 @@
 # Flow 7 — LCC Move Queue Executor (the leg that actually moves the email)
 
-Last updated: 2026-08-20 (P120)
+Last updated: 2026-08-20 (P120; ordering hazard resolved by P121)
 Owner: LCC architecture/audit track (Scott Briggs)
 Part of: `closing-the-loop-overview.md` (mailbox mechanics)
 Connector: Office 365 Outlook (Scott's mailbox) · Microsoft Graph
@@ -199,21 +199,54 @@ job, and only from `Processed/Duplicates` after 30 days.
    Staged, Not Completed" with `move_outcome='moved'`; completing its To Do
    moves it to `Processed/*`.
 
-## ⚠️ Known ordering hazard downstream (surfaced, not fixed by P120)
+## ✅ Known ordering hazard downstream — RESOLVED by P121 (2026-08-20)
 
-Once staging is populated, **two things react to a completed To Do**:
+Once staging was populated, **two things reacted to a completed To Do**, and both
+keyed on the same transient `processing_log.outcome='staged'`:
 
-- **Flow 6** (`todo-completion-poll`) flips `processing_log` `staged → filed` and
-  stamps `move_status='moved'` — but it only *records*; its comment says "PA
-  already moved the email there".
+- **Flow 6** (`todo-completion-poll`) flipped `staged → filed` and stamped
+  `move_status='moved'` — but it only *records*; it performs no Graph move.
 - **The W7.6 mirror** actually performs the staging → `Processed/*` move, and its
-  worklist is gated on `processing_log.outcome='staged'`.
+  worklist was gated on `outcome='staged'`.
 
-So if Flow 6 wins the race, the row is no longer `outcome='staged'`, the mirror's
-worklist **drops it, and the message sits in staging forever** while the DB reads
-`filed`/`moved` — the exact "looks like success" failure mode this codebase keeps
-hitting. This was latent and invisible while staging was empty; populating
-staging makes it reachable. **Fix before or with the mirror rollout:** either
-gate Flow 6 behind the mirror's ack, or widen the mirror's worklist to include
-rows Flow 6 flipped but the mirror never moved (e.g. anchor on the mirror ledger
-rather than on the current `outcome`). Track alongside `MAILBOX_MIRROR`.
+If Flow 6 won the race the row stopped being `staged`, the mirror's worklist
+dropped it, and the message sat in staging forever while the DB read
+`filed`/`moved`. **P121 closes it** — migration
+`20260820160000_lcc_p121_staging_processed_single_owner.sql`, applied live:
+
+1. **`processing_log.staged_at`** — the durable placement anchor, stamped by
+   `lcc_move_queue_ack` on a genuine move into `lcc_staging_folder_name()`, and
+   never by an `already_out` ack (that proves the message left the Inbox, not that
+   it reached staging). The mirror's worklist anchors on it, so an `outcome` flip
+   can no longer drop a message that is still in staging.
+2. **Flow 6 stops asserting a move.** It routes through
+   `rpc/lcc_todo_completion_mark_filed`, which flips the outcome + stamps
+   `todo_completed_at` and never touches `move_status` / `moved_at` /
+   `move_outcome`. Three dispositions: `mirror_owns_move` (already in staging — the
+   mirror moves it), `retargeted_to_final` (never staged and still queued — the row's
+   `target_folder` is retargeted to `final_target_folder` so THIS executor delivers
+   it straight to Processed, keeping one owner for Inbox → \*), and
+   `no_move_state_change`.
+3. **A stale ledger verdict no longer excludes.** An ack recorded before the current
+   `staged_at` describes a prior state of the mailbox.
+4. **A `todo_completed` closure arm on the mirror worklist** — mandatory, because the
+   native-Flagged-email model creates no `action_items` (0 of 103 staged messages
+   have any), so `todos_done` can never fire for this population and a completed
+   To Do would otherwise flip the row to `filed` with nothing publishing the move.
+
+**Both interleavings are safe by construction.** If this executor is mid-flight when
+Flow 6 retargets, an ack naming the staging destination still stamps `staged_at`, so
+the mirror picks the message up on that arm; an ack naming the retargeted destination
+means the message went straight to `Processed/*` and the mirror correctly never
+publishes it. Proven by self-rolling-back synthetic gates (A/B/C, 0 residue).
+
+Measured live at the fix: 81 messages in staging, **61 of them already invisible to
+the mirror** (pre-placement `parked` verdicts from 2026-08-07..09); mirror worklist
+**0 → 61**; stranded detector `v_lcc_mailbox_mirror_stranded` **61 → 0** after the
+re-enqueue sweep, with 25 already moved out by the live mirror within the hour.
+
+**Remaining operator step:** the Flow 6 PA flow still has its own Move + Flag-clear
+actions. LCC now publishes `move:false` / `clear_flag:false` / a `contract` note on
+that worklist, but cannot stop a PA action it does not own. Until that edit lands the
+two movers race **benignly** — the loser acks `ErrorItemNotFound` → `already_out` →
+terminal success. A redundant Graph call, not a stranded message.

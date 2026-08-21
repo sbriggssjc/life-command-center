@@ -2524,10 +2524,21 @@ async function handleProcessingComplete(req, res) {
 //          (PA must NOT subject-match when true), target_folder (= the
 //          Processed/{category} to file to), clear_flag }.
 //   POST = the REPORT-BACK (a pure DB write). Body { completed: [ {
-//          internet_message_id } | "<imid>", … ] } (the ids PA moved + filed).
-//          Flips each row staged→filed, guarded on outcome=staged so a
-//          re-report / concurrent poll flips it at most once (idempotent). The
-//          email was ALREADY moved by PA, so this is bookkeeping only.
+//          internet_message_id } | "<imid>", … ] } (the ids whose To Do PA found
+//          completed). Routes to rpc/lcc_todo_completion_mark_filed, which flips
+//          each row staged→filed + stamps todo_completed_at, guarded on
+//          outcome=staged so a re-report / concurrent poll flips it at most once.
+//
+// ⚠️ P121 — ONE OWNER PER FOLDER TRANSITION. Flow 6 does NOT own a mailbox move.
+//   Inbox → staging / Inbox → Processed  : the P120 move queue.
+//   staging → Processed/*                : the W7.6 mailbox mirror, ONLY.
+//   This route is INFORMATIONAL: it records that the To Do closed and hands that
+//   fact to the mirror through processing_log.todo_completed_at (the mirror's
+//   `todo_completed` closure arm), which is what actually publishes the move.
+//   It used to stamp move_status='moved' + moved_at — asserting a move it never
+//   performed, which dropped the row off the mirror's worklist and left the
+//   message in staging forever while every surface read filed/moved.
+//   The response's `dispositions` tally is the honest read of what each flip did.
 // ============================================================================
 async function handleTodoCompletionPoll(req, res) {
   // Auth: PA webhook secret OR an authenticated user (mirrors the other webhooks).
@@ -2593,22 +2604,22 @@ async function handleTodoCompletionPoll(req, res) {
           );
           return r.ok && Array.isArray(r.data) ? r.data : [];
         },
-        // Flip staged→filed, guarded on outcome=staged so the flip is idempotent.
-        // return=representation → a 0-row result means a concurrent poll already
-        // flipped it, so we did NOT win the flip. Records the final destination
-        // (PA already moved the email there) + moved_at.
+        // P121 — the flip is a DISPOSITION record, never a claim of a mailbox
+        // action. Flow 6 performs no Graph move, so it must not stamp
+        // move_status/moved_at/move_outcome: doing so is what let a message sit
+        // in staging forever while the DB read filed/moved. The whole decision
+        // (idempotent guard, and whether the row is already in staging, still
+        // queued, or neither) lives in ONE place — the SQL RPC — because it is
+        // state-dependent and a JS read-then-write would race the move queue.
         markFiled: async (row) => {
-          const patch = await opsQuery(
-            'PATCH',
-            `processing_log?id=eq.${pgFilterVal(row.id)}&outcome=eq.staged`,
-            {
-              outcome: 'filed',
-              target_folder: row.final_target_folder,
-              move_status: 'moved',
-              moved_at: new Date().toISOString(),
-            },
-          );
-          return patch.ok && Array.isArray(patch.data) && patch.data.length > 0;
+          const r = await opsQuery('POST', 'rpc/lcc_todo_completion_mark_filed', {
+            p_processing_log_id: row.id,
+          });
+          const out = Array.isArray(r.data) ? r.data[0] : r.data;
+          if (!r.ok || !out) return { filed: false, disposition: 'rpc_failed' };
+          // filed=false means a concurrent poll already flipped it (or the row
+          // was never staged) — an idempotent no-op, not an error.
+          return { filed: out.filed === true, disposition: out.disposition || null };
         },
       });
       return res.status(200).json({ ok: true, ...result });
