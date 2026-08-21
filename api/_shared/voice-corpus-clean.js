@@ -437,6 +437,59 @@ export function redactExcerpt(text) {
 // than re-declaring it. NorthMarq + the legacy Stan Johnson Co domain.
 export const INTERNAL_DOMAINS = ['northmarq.com', 'stanjohnsonco.com'];
 
+// ============================================================================
+// P124 — CONSUMER-MAIL DOMAINS (the cold_bd contamination guard)
+//
+// ⚠️ WHY THIS EXISTS. `classifyDraftType` used to route EVERY external
+// non-reply into `cold_bd_outreach` — a pure catch-all, earned by nothing. That
+// bucket is what `purpose=cold_bd` retrieves its voice exemplars from, and
+// measured live on LCC Opps 2026-08-21 it held **28 personal emails out of 29**:
+// "Claire - Bunk Note" / "Graham - Bunk Note" (×10, to a summer camp),
+// "Meal Plan: Week of June 16", "Scrimmage", "METRO CHRISTIAN*", "Football
+// email", plus Scott's own self-notes to his personal outlook.com ("Prompt",
+// "Error", "Calendar fix prompt"). ZERO were cold BD outreach. Left alone,
+// draft-assist would have quoted a bunk note to a nine-year-old at camp as the
+// house style for a prospecting letter to an institutional owner — and every
+// surface would have reported healthy (29 exemplars, 100% full bodies).
+//
+// ⚠️ THE OBVIOUS GUARD IS THE WRONG ONE. "Exclude consumer-domain recipients"
+// looks right and is destructive: the corpus's BEST BD exemplars go to consumer
+// addresses — "RE: Following up on the DaVita in Banning, CA"
+// (pacificstrandre@gmail.com), "...in Succasunna, NJ" (capklein10@gmail.com),
+// "Re: Needs List - 1050 Old Camp Road" (jdehorty@gmail.com). Same class as the
+// CLAUDE.md P158a finding that `&` in an owner name is a married couple, not a
+// firm. So the domain is NEVER used to exclude a message — only to decide
+// whether an external non-reply has EARNED the `cold_bd_outreach` label.
+//
+// The rule: cold_bd requires >=1 recipient at an ORGANISATION domain (neither a
+// consumer-mail host nor an internal NM domain). Business mail to a consumer
+// address is virtually always a REPLY on an existing thread, so it still lands in
+// `external_follow_up` and is untouched.
+//
+// Measured cost, stated not hidden: 28 of 29 reroute; the one business email lost
+// is "BOV: CVS - Fallbrook, CA" (a client at outlook.com) — and its own five
+// `Re:` replies remain in `external_follow_up`, so that thread's voice survives.
+// One personal row still survives as cold_bd ("Statement", andrea@p3-payroll.com,
+// a payroll administrator at an org domain). Deliberately not chased: narrowing
+// further would start misclassifying real one-person LLC owners, which is the
+// exact over-fit this comment warns about.
+// ============================================================================
+const CONSUMER_MAIL_DOMAINS = [
+  'outlook.com', 'gmail.com', 'yahoo.com', 'hotmail.com', 'icloud.com',
+  'aol.com', 'me.com', 'comcast.net', 'msn.com', 'live.com', 'mac.com', 'ymail.com',
+];
+
+/** True when the address sits at a domain that is neither consumer-mail nor own-firm. */
+export function isOrganisationRecipient(email) {
+  const addr = String(email || '').toLowerCase().trim();
+  const at = addr.lastIndexOf('@');
+  if (at < 0) return false;
+  const domain = addr.slice(at + 1);
+  if (!domain) return false;
+  if (CONSUMER_MAIL_DOMAINS.includes(domain)) return false;
+  return !INTERNAL_DOMAINS.some((d) => domain === d || domain.endsWith('.' + d));
+}
+
 /**
  * Deterministic draft-type bucketing from cheap signals (subject prefix,
  * recipient domain, keyword cues). A light LLM classify can refine the
@@ -464,7 +517,10 @@ export function classifyDraftType({ cleaned = '', subject = '', toEmails = [], f
   } else if (audience === 'internal') {
     bucket = 'internal_coordination';
   } else if (!isReply && audience === 'external') {
-    bucket = 'cold_bd_outreach';
+    // P124: cold_bd must be EARNED by an organisation-domain recipient. Without
+    // this the branch is a catch-all that swallowed Scott's family mail whole
+    // (see the CONSUMER_MAIL_DOMAINS note above).
+    bucket = recips.some(isOrganisationRecipient) ? 'cold_bd_outreach' : 'personal_or_unclassified';
   } else if (isReply && audience === 'external') {
     bucket = 'external_follow_up';
   } else {
@@ -473,10 +529,14 @@ export function classifyDraftType({ cleaned = '', subject = '', toEmails = [], f
   // Confidence is high for the keyword-driven buckets, medium for the
   // audience/thread-shape residue that a light classify could still refine.
   const confidence = bucket === 'loi_offer' || bucket === 'listing_announcement' ? 'high' : 'medium';
+  // P124: `personal_or_unclassified` is NOT a voice bucket — it is the honest
+  // residue label. Consumers MUST drop it from the retrieval corpus rather than
+  // treat it as a thin bucket to fall back on.
+  if (bucket === 'personal_or_unclassified') return { bucket, audience, confidence, excludeFromCorpus: true };
   return { bucket, audience, confidence };
 }
 
 export const _internals = {
   REPLY_MARKERS, SIGNATURE_ANCHORS, DISCLAIMER_MARKERS, INTERNAL_DOMAINS,
-  MIN_LEAD_CHARS, QUOTE_BOUNDARY_TAGS, QUOTE_SENTINEL_TOKEN, MACHINE_SUBJECT, ADDRESSED_TO_SCOTT, SIGNOFF_FORMS,
+  MIN_LEAD_CHARS, QUOTE_BOUNDARY_TAGS, CONSUMER_MAIL_DOMAINS, QUOTE_SENTINEL_TOKEN, MACHINE_SUBJECT, ADDRESSED_TO_SCOTT, SIGNOFF_FORMS,
 };

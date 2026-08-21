@@ -102,6 +102,7 @@ async function loadCorpus() {
 
   const seen = new Set();
   const rows = [];
+  let excludedPersonal = 0;
   const push = (id, imid, raw, subject, from, toEmails, ccEmails, ts) => {
     if (!SCOTT_FROM.has(String(from || '').toLowerCase())) return;   // outbound-only gate
     const key = imid || `body:${String(raw).slice(0, 80)}`;
@@ -112,7 +113,13 @@ async function loadCorpus() {
     // retrieval could quote the app's OWN generated briefing, or inbound mail filed
     // under Scott's address, back at him as an exemplar of his voice.
     if (voiceCorpusExclusion({ cleaned, subject, toEmails, ccEmails, fromEmail: from })) return;
-    const { bucket } = classifyDraftType({ cleaned, subject, toEmails, fromEmail: from });
+    const { bucket, excludeFromCorpus } = classifyDraftType({ cleaned, subject, toEmails, fromEmail: from });
+    // P124: drop the personal/unclassified residue BEFORE it reaches the pool.
+    // Doing it here (not at rank time) is load-bearing: retrieveExemplars falls
+    // back to the WHOLE corpus whenever the target bucket is thin, and the thin
+    // buckets are exactly the ones that trigger that fallback — so a rank-time
+    // filter would still have let a bunk note become a cold-BD exemplar.
+    if (excludeFromCorpus) { excludedPersonal += 1; return; }
     rows.push({ id: imid || String(id), cleaned, subject: subject || '', bucket, toEmails: toEmails || [], ts });
   };
   // P117 ORDER MATTERS: dedup is first-wins on internet_message_id and the stores
@@ -132,7 +139,50 @@ async function loadCorpus() {
     const raw = pickBestBody({ body_text: m.body_text, body_html: m.body_html, body: r.body });
     push(r.id, m.internet_message_id, raw, r.title, m.from_email, m.to_emails || [], m.cc_emails || [], r.occurred_at);
   }
+  rows.excludedPersonal = excludedPersonal;   // honest count — reported, never silent
   return rows;
+}
+
+/**
+ * P124 — find the message this draft should REPLY to, so the Outlook draft lands
+ * INSIDE the live thread rather than as a new standalone message.
+ *
+ * Prefers the most recent message the RECIPIENT sent us (replying to their note is
+ * what threads correctly in Outlook); falls back to the newest message on any
+ * thread with them. Returns null when there is no prior correspondence — a genuine
+ * cold email SHOULD be a fresh thread, so "no target" is a valid answer, not a
+ * failure. Never guesses across parties: the address must match exactly.
+ */
+async function findReplyTarget(recipient) {
+  const addr = String(recipient || '').toLowerCase().trim();
+  if (!addr || !addr.includes('@')) return null;
+  const enc = encodeURIComponent(addr);
+  const sel = 'select=internet_message_id,conversation_id,subject,from_email,received_at,sent_at';
+  const pick = (rows) => {
+    const r = Array.isArray(rows) ? rows.find((x) => x && x.internet_message_id) : null;
+    return r ? {
+      internet_message_id: r.internet_message_id,
+      conversation_id: r.conversation_id || null,
+      subject: r.subject || null,
+      matched_on: r.from_email && String(r.from_email).toLowerCase() === addr ? 'inbound_from_recipient' : 'thread_with_recipient',
+    } : null;
+  };
+  try {
+    // 1. Their most recent message to us — the correct thing to reply to.
+    const inbound = await opsQuery('GET',
+      `email_bodies?${sel}&from_email=eq.${enc}&internet_message_id=not.is.null` +
+      `&order=received_at.desc.nullslast&limit=5`, null, { countMode: 'none', timeoutMs: 8000 });
+    const hit = pick(inbound && inbound.ok ? inbound.data : null);
+    if (hit) return hit;
+
+    // 2. Otherwise the newest message on any thread that includes them.
+    const any = await opsQuery('GET',
+      `email_bodies?${sel}&to_emails=cs.{"${addr}"}&internet_message_id=not.is.null` +
+      `&order=received_at.desc.nullslast&limit=5`, null, { countMode: 'none', timeoutMs: 8000 });
+    return pick(any && any.ok ? any.data : null);
+  } catch {
+    return null;   // fail-soft: an un-threaded draft is still a usable draft
+  }
 }
 
 /**
@@ -211,6 +261,8 @@ export default async function draftAssistHandler(req, res) {
   const corpus = await loadCorpus();
   const target = { bucket, recipientEmail: recipient };
   const { exemplars, method: retrievalMethod } = await retrieveExemplars(corpus, target, intent, 5);
+  // P124: resolve the thread to reply into (null ⇒ legitimately a new thread).
+  const replyTarget = await findReplyTarget(recipient);
   const exemplarIds = exemplars.map((e) => e.id);
 
   // 3. Generate — ON-PREM ONLY, fail closed (no cloud fallback for this surface).
@@ -257,6 +309,8 @@ export default async function draftAssistHandler(req, res) {
       exemplar_ids: exemplarIds,
       exemplar_count: exemplars.length,
       corpus_size: corpus.length,
+      // P124 honest count: personal/unclassified mail removed from the pool.
+      excluded_personal_or_unclassified: corpus.excludedPersonal || 0,
       exemplars: exemplars.map((e) => ({ id: e.id, bucket: e.bucket, opening: e.cleaned.slice(0, 220) })),
     },
     facts: { source: factsSource, used: factsUsed, not_on_file: notOnFile },
@@ -266,6 +320,14 @@ export default async function draftAssistHandler(req, res) {
       note: flagged.length ? 'Ungrounded numbers/dates were STRIPPED (→ "[Not on file]"); proper names flagged for review.' : 'No fabricated facts detected.',
     },
     voice_confidence,
+    // P124: what the saved draft will thread into. `null` means no prior
+    // correspondence with this address ⇒ the draft is correctly a NEW thread.
+    reply_to: replyTarget ? {
+      internet_message_id: replyTarget.internet_message_id,
+      conversation_id: replyTarget.conversation_id,
+      in_reply_to_subject: replyTarget.subject,
+      matched_on: replyTarget.matched_on,
+    } : null,
     model: gen.model || null,
     // U4 self-measurement hook — the caller records draft-vs-sent edit distance
     // when Scott later sends an edited version. Send-side capture is a separate
@@ -301,7 +363,14 @@ export default async function draftAssistHandler(req, res) {
 
   // SAVE-NOT-SEND: createOutlookDraftViaPA creates a DRAFT. There is no send.
   const bodyHtml = `<div>${String(draft.body).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')}</div>`;
-  const saveRes = await createOutlookDraftViaPA({ to: recipient, subject: draft.subject, body_html: bodyHtml });
+  const saveRes = await createOutlookDraftViaPA({
+    to: recipient,
+    subject: draft.subject,
+    body_html: bodyHtml,
+    // P124: thread the draft into the live conversation. The PA flow replies to
+    // this message id when present and creates a standalone draft when it is ''.
+    in_reply_to: replyTarget ? replyTarget.internet_message_id : '',
+  });
 
   res.status(saveRes.ok ? 200 : 502).json({
     ...payload,
