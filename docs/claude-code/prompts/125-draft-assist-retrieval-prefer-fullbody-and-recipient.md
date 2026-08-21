@@ -40,6 +40,30 @@ caveat when the corpus is full-body means retrieval regressed.
    that are full-body AND from Susan's thread, and `voice_confidence` claims full-body grounding. Assert on the
    actual exemplar rows' body lengths, not a tally.
 
+## Also observed in the same live save (2026-08-21) — fix these too
+
+The first real save succeeded end-to-end (`saved:true`, draft in Drafts, right contact, Sent empty), but two
+defects showed:
+
+5. **The draft was a FRESH email, not a threaded reply.** draft-assist DID resolve `reply_to.internet_message_id`
+   (`<MN2PR07MB6623…@namprd07…>`, the Villages "First Amendment to PSA" thread) and the seam
+   (`createOutlookDraftViaPA`) is supposed to pass `in_reply_to`. Yet the created draft (`draft_id
+   …AAUc9a1DAAA=`) opened as a standalone message, not a reply on that conversation. Trace whether the seam
+   actually sends `in_reply_to`, and whether the PA flow's `Is_Reply` branch runs `createReply` — the earlier
+   failing runs erred *inside* `Create_draft_reply`, so the reply branch WAS taken; determine why the resulting
+   draft isn't threaded (createReply id vs the PATCH, or `Set_reply_body` PATCHing `toRecipients` onto a reply,
+   which Graph can reject/mangle — a reply draft already carries its recipient, so likely PATCH **only** `body`,
+   not `toRecipients`). The flow definition is `flow-lcc-create-outlook-draft.json`; a fix there means a
+   re-import (Cowork will re-package + walk Scott through it). Verify: the saved draft's `conversationId`
+   matches the source thread's.
+6. **No deal context.** `facts.source` was `no_entity_relational` and `facts.used` empty — draft-assist
+   attached NO deal/property facts, so the body couldn't reference the actual deal (it stayed generic). It
+   should resolve the deal/property behind the thread (the Villages / 1050 Old Camp Road asset) and ground the
+   draft in real, on-file facts (status, next step, open items) — never fabricated (strip to "[Not on file]",
+   as it already does). Determine why entity/deal resolution returned nothing for a known active deal and wire
+   the grounding.
+
 ## Close-out
-- Handler changes ship on the Railway redeploy of merged `main` → `npm run verify:deploy`. Update STATUS +
-  the draft-assist design doc + `W10_VOICE_AND_DRAFTING_KICKOFF.md`. No `field_source_priority` change.
+- Handler changes ship on the Railway redeploy of merged `main` → `npm run verify:deploy`. A flow-definition
+  fix (item 5) is a re-import, coordinated by Cowork. Update STATUS + the draft-assist design doc +
+  `W10_VOICE_AND_DRAFTING_KICKOFF.md`. No `field_source_priority` change.

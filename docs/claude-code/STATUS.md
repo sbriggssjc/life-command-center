@@ -126,6 +126,23 @@ action it does not own. Until that edit lands the two movers race **benignly** �
 message.
 
 ---
+## 🎉 2026-08-21 — draft-assist is LIVE end-to-end: the app drafted an email in Scott's voice, in Outlook
+
+First real save succeeded through the whole chain: captured history → v3 voice profile → `/api/draft-assist?save=true`
+→ the imported `LCC Create Outlook Draft` PA flow → **a draft in Outlook Drafts**, to the right contact
+(Susan Holdsworth), **Sent empty** (save-not-send held). `saved:true`, real `draft_id` + `web_link`, no error.
+The PA flow was hand-packaged by Cowork from the bare definition (PA import needs a package .zip, not a bare
+Logic App def): three import blockers fixed in sequence — (1) declare `$authentication` + add the auth ref to
+every OpenApiConnection action; (2) `CreateDraftMessageV3` isn't in this tenant → converted to a Graph
+`POST /me/messages` passthrough (draft, never sends); (3) every `HttpRequest` with a Body needs
+`ContentType: application/json` or Graph 400s "Empty Content-Type provided". Final gotcha: the flow was toggled
+OFF — a disabled flow's HTTP trigger returns 400/502.
+
+**Two refinements from the live save → folded into prompt 125:** the draft came out as a FRESH email, not a
+threaded reply (createReply/seam `in_reply_to` path), and it lacked deal context (`facts.source=no_entity_relational`).
+Plus the retrieval-grounding gap already in 125 (drafting from 5 preview openings, not the 55 full-body Susan
+emails now in the corpus). 125 now covers all three.
+
 ## 2026-08-21 Cowork reconcile — P122/P123/P124 verified; ⚠️ REDEPLOY PENDING (draft-assist safety)
 
 All three landed and each corrected my prompt's premise. **DB layers verified live on LCC Opps:** P122 crons
