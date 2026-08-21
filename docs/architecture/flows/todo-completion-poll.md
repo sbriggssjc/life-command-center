@@ -94,6 +94,56 @@ LCC code change is required.**
 > so it will **not auto-file**. It stays staged (still flagged, in the folder) and
 > is a rare manual case. This is by design; never guess which task/email it is.
 
+## ⚠️ P121 (2026-08-20) — Flow 6 owns NO folder transition
+
+**One owner per folder transition.** Flow 6 performs no Graph move and must never
+claim one:
+
+| transition | owner |
+|---|---|
+| Inbox → staging, Inbox → `Processed/*` | Flow 7, the move-queue executor |
+| staging → `Processed/*` (+ unflag) | the W7.6 mailbox mirror |
+| **Flow 6 (this flow)** | **records that the To Do closed. Nothing else.** |
+
+`markFiled` used to `PATCH processing_log` with `move_status='moved'` + `moved_at`
++ `target_folder=final_target_folder`, on the assumption that "PA already moved the
+email there". Once P120 started actually filling the staging folder that became a
+stranding bug: the mirror's worklist was gated on `outcome='staged'`, so Flow 6
+winning the race dropped the row off it and the message sat in staging forever
+while every surface read `filed`/`moved` — this codebase's signature failure mode.
+
+**What changed:**
+
+- The flip routes through **`rpc/lcc_todo_completion_mark_filed`** — the single
+  owner of the decision, in SQL because it is state-dependent and a JS
+  read-then-write would race the move queue. It flips `staged → filed` (guarded, so
+  idempotent), stamps `todo_completed_at`, and returns a `disposition`:
+  - `mirror_owns_move` — already in staging; the mirror performs the move.
+  - `retargeted_to_final` — never placed in staging and the move is still queued, so
+    the queue row is retargeted to `final_target_folder` and Flow 7 delivers it
+    straight to `Processed/*`. `move_status` stays `pending`: a destination changed,
+    no move was asserted.
+  - `no_move_state_change` / `already_resolved`.
+- `todo_completed_at` is how Flow 6 hands its knowledge to the mirror: it is the
+  mirror's **`todo_completed` closure arm**, and the only arm this population can
+  satisfy (the native-list model creates no `action_items` — 0 of 103 staged
+  messages have any, so `todos_done` is structurally dead here).
+- The POST response carries a **`dispositions`** tally. `filed` counts *flips*, never
+  emails moved — Flow 6 moves nothing.
+- The GET worklist now publishes **`move: false`**, `move_owner: 'mailbox_mirror'`,
+  **`clear_flag: false`** and a top-level `contract` note.
+
+### Required PA edit (operator step)
+
+**Delete the Move and Flag-clear actions from this flow.** It should list the native
+Flagged-email tasks, match completed ones back to the worklist, and POST the
+`internet_message_id`s — nothing else. Until that edit lands the two movers race
+**benignly**: whichever moves first wins, the loser acks `ErrorItemNotFound`, and
+P119 records that as terminal success (`already_out`). A redundant Graph call, not a
+stranded message.
+
+---
+
 ## The two LCC endpoints — `GET` + `POST /api/webhooks/todo-completion-poll` (SHIPPED)
 
 Both are pure DB operations on `api/sync.js` `?_route=todo-completion-poll`

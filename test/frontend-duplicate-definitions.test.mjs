@@ -107,9 +107,29 @@ const KNOWN = [
   // editor shows live-looking code that cannot execute. Worth cleaning when
   // someone touches these files; left alone here because deleting them is a
   // behaviour change, not a refactor.
-  'loadMergeQueue|app.js|contacts-ui.js',   // app.js 2,403b dead under 303b
-  'openContactDetail|detail-openers.js|contacts-ui.js', // dead before Unit 7 too
+  // ⚠️ RECLASSIFIED 2026-08-20 — NOT dead code, and NOT confirmed broken either.
+  //    Both implementations open the SAME elements (#detailPanel / #detailOverlay
+  //    / #detailHeader / #detailTabs / #detailBody) — two builds of one contact
+  //    slide-over. contacts-ui.js loads last and wins; detail.js (10784, 10849,
+  //    13956) and detail-openers.js (152, 157, 321, 329) all reach the winner.
+  //    Whether that is harmful depends on ID-SPACE COMPATIBILITY: the winner
+  //    fetches via contactsApi('GET','get',{id}) (unified-contact ids), while
+  //    detail.js passes ct.unified_id || ct.sf_contact_id and detail-openers
+  //    passes contacts[0].id. That cannot be settled by reading definitions —
+  //    it needs a live check on a property whose contact came from Salesforce.
+  //    LEFT AS A KNOWN DUPLICATE DELIBERATELY: unlike the three fixed today,
+  //    there is no signature or render-target mismatch proving harm, and
+  //    renaming on suspicion could break the working path. OPEN QUESTION, not
+  //    dead code — do not re-label it dead without checking the call sites.
+  'openContactDetail|detail-openers.js|contacts-ui.js',
 
+  // ── (D) was: loadMergeQueue|app.js|contacts-ui.js — ALSO MISCLASSIFIED as
+  //    dead (C). app.js's 2,403-byte version was not dead, it was SHADOWED:
+  //    contacts-ui.js loads later and its 303-byte version won. Because that one
+  //    renders into #contactsContent (a different PAGE), the Marketing → Unified
+  //    Contacts "Merge Queue / Click to review" card was a DEAD BUTTON, and the
+  //    whole ucMerge/ucDismissMerge UI beneath it was unreachable. Fixed by
+  //    renaming app.js's to ucLoadMergeQueue. Entry removed — duplicate is gone.
   // ── (D) was: buildResearchAssistantPrompt|detail.js|ops.js — MISCLASSIFIED
   //    AS DEAD CODE (C) and it was actually a SECOND LIVE BUG, found 2026-08-20
   //    while extracting the ops research block. detail.js:10541 called it with a
