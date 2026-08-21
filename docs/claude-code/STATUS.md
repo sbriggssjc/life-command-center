@@ -132,12 +132,58 @@ Deploy live + git-pinned (`/version` = `527d78f9b05c`). **Email-orchestration lo
 fully drained (`move_outcome` 329 moved + 15 already_out, 0 pending), mirror worklist 0, stranded detector 0,
 jobs clean (433 extract + 14 doc-text, 0 failed). Open alerts back to **29** (from the 3,987 park storm). Two
 NON-email items worth a look, neither urgent, neither ours from this week:
-- **`cm-gov-packet-refresh` cron failing** (09:15Z) — the one CC left open in P118; recurring, capital-markets
-  gov packet lane. Candidate for its own prompt.
+- ~~**`cm-gov-packet-refresh` cron failing** (09:15Z) — the one CC left open in P118; recurring,
+  capital-markets gov packet lane. Candidate for its own prompt.~~ **FIXED in P122 (2026-08-21)** —
+  in-transaction `pg_sleep` blew the statement timeout AND rolled back every queued pg_net request,
+  so the gov packet had refreshed zero times in 7 days. See the P122 entry below.
 - **`/api/pipeline/match-deal-emails-cron` — 6 `no_response` in 24h** — consistent, smells like a timeout
   (same class as the P118 correlated-subplan cron timeouts); worth profiling the handler's real query shape.
 - Transient (self-heal): `SF→LCC Retry&Dead-letter` flow_failure, `cre-owner-backfill` 502, `dup-pair-tick`
   no_response — single occurrences.
+
+## P122 (2026-08-21) — `cm-gov-packet-refresh` fixed: the gov CM packet had refreshed ZERO times in 7 days
+
+**Migration `20260821120000_p122_cm_packet_refresh_cursor.sql` — APPLIED LIVE to LCC Opps
+(`xengecqvemvfknjvbvrq`). Data/cron layer only, no Railway deploy.** Runbook:
+`docs/capital-markets/CM_PACKET_REFRESH_RUNBOOK.md`.
+
+**The break.** `cm_gov_packet_refresh_chunked(p_batch 4, p_sleep 50)` looped the gov chart catalog
+firing `net.http_post` per batch with `PERFORM pg_sleep(50)` — **fifty seconds** — between them, all
+inside ONE statement. Live: 31 gov charts ÷ 4 = 8 batches × 50s = **400s of in-transaction sleep
+against a 120s `statement_timeout`**. Cancelled on every run, 7/7 from 08-15 to 08-21.
+
+**⚠️ And it delivered NOTHING — not "some batches got through".** `net.http_post` is async but its
+queue insert is **transactional** (pg_net 0.20.0 INSERTs into `net.http_request_queue`; the worker
+only reads *committed* rows). The statement timeout aborts the transaction, so every already-"fired"
+request rolled back with it. Proven two ways: a `DO` block that http_posts then `RAISE`s left 0 rows
+in the queue and produced 0 responses; and the **state delta** — the gov Q2-2026 row in gov
+`cm_report_snapshots` sat at `updated_at = 2026-08-14 20:00:12` across all 7 runs. A single delivered
+batch would have bumped it. **Durable rule: a rolled-back `net.http_post` is a silent no-op — never
+assume partial delivery from a mid-loop abort.**
+
+**The fix — cursor across invocations.** The serialization intent was right (`mergeRefreshPacket` is a
+read-modify-write on one snapshot row, so overlapping merges lose charts); doing it with a multi-minute
+sleep in one statement was not. Now `cm_packet_refresh_start('gov')` (daily 09:15, same job name so
+the alert `source` stays stable) freezes the catalog into `cm_packet_refresh_cursor`, and
+`cm_packet_refresh_tick('gov')` (new job, every minute) fires ONE batch and advances — milliseconds
+per tick, no sleep, statement timeout never approached. Idles instantly once covered. Per-batch ledger
+`cm_packet_refresh_log` + `v_cm_packet_refresh_health`.
+
+**⚠️ Caught live on the first cycle — A TIMED-OUT pg_net RESPONSE IS NOT COMPLETION, IT IS THE
+OPPOSITE.** The first guard advanced as soon as a response row existed. Batch 1 fired 17:00:00.78 at
+the inherited `timeout_milliseconds=55000`; pg_net gave up at 17:00:55; the tick read that as "done"
+and fired batch 2 at 17:01:00 — but batch 1's merge only upserted at **17:01:09.90, nine seconds
+later**. Batch 2 had already read the pre-batch-1 packet, so its merge would have written back stale
+copies of batch 1's charts — precisely the lost update the serialization exists to prevent. A 4-chart
+gov subset merge measures **~69s**, so 55s was abandoning a request the server was still working on.
+Corrected: timeout → 170s, and completion now requires a response that is **NOT `timed_out`**
+(fail-forward past `p_max_wait_sec` 300 so a lost response can't stall a cycle).
+
+**Verified by state delta, not return values:** gov Q2-2026 `updated_at` **2026-08-14 20:00:12 →
+2026-08-21** (first movement in 7 days), 45 charts / 41 populated preserved (the merge is
+non-regressing). Synthetic/composed + `DataTable`/`kpi_block` templates stay excluded — documented
+residual, not a failure. The 7 stale `cron_failure` alerts for this source were resolved with a P122
+note. `cm_gov_packet_refresh_chunked` is dropped; reversal runbook in the migration foot.
 
 ## P120 (2026-08-20) — the app now MOVES emails: move-queue executor built (was: nothing ever drained it)
 
