@@ -307,7 +307,15 @@ DROP FUNCTION IF EXISTS public.cm_gov_packet_refresh_chunked(int,int);
 
 -- ---------------------------------------------------------------- reschedule
 -- Same job name kept so the cron-health alert `source` stays stable.
-SELECT cron.unschedule('cm-gov-packet-refresh');
+-- Guarded: a bare cron.unschedule() raises if the job is absent, which would break a
+-- replay on a fresh database. cron.schedule() is already upsert-by-name.
+DO $do$
+BEGIN
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'cm-gov-packet-refresh') THEN
+    PERFORM cron.unschedule('cm-gov-packet-refresh');
+  END IF;
+END $do$;
+
 SELECT cron.schedule('cm-gov-packet-refresh', '15 9 * * *',
                      $$SELECT public.cm_packet_refresh_start('gov')$$);
 SELECT cron.schedule('cm-gov-packet-refresh-tick', '* * * * *',
