@@ -55,12 +55,11 @@ changes ship on the next Railway redeploy of merged `main` → then run `npm run
 **Cowork reconcile-verified live 2026-08-20 (PR #1764 merged):** `staged_at` + `todo_completed_at` columns
 present, `lcc_todo_completion_mark_filed` RPC live, **stranded detector = 0** (was 61), mirror worklist
 drained to **0**. And the P120 backlog fully cleared through the executor — `move_outcome` now **329 moved +
-15 already_out**. **⏭ TWO Scott-side items remain:** (1) **Deploy gate** — until `main` is redeployed +
-`verify:deploy`, the *deployed* Flow-6 code still writes `move_status='moved'`, so the DB layer prevents NEW
-stranding but stranded/filed rows still look alike; merge-to-deploy promptly. (2) **Flow 6 PA edit (non-block)**
-— that PA flow still runs its own Move + Flag-clear; LCC now publishes `move:false`/`clear_flag:false` but can't
-stop a PA action it doesn't own, so the movers race benignly (loser acks `ErrorItemNotFound → already_out`).
-Delete those two actions from the Flow-6 PA flow to end the redundant Graph call. **Judgment call to note:** the
+15 already_out**. **✅ Both Scott-side items now DONE (2026-08-21):** (1) `main` redeployed + git-pinned
+(`/version` 527d78f9b05c) — the P121 JS is live, so Flow 6 no longer asserts a move it didn't make. (2) The
+Flow-6 PA flow (`LCC To Do Completion Poll`) had its `Move_email_(V2)` + `Flag_email_(V2)` actions deleted
+(inside `Condition_Match`→If-yes) — the move queue is now the SINGLE owner of the mailbox move; Flow 6 only
+records completion via `lcc_todo_completion_mark_filed`. Single-owner email-orchestration loop COMPLETE. **Judgment call to note:** the
 61 re-queued messages all qualify via the `inbox_triaged` arm (P119's bulk-archive smell) — CC let them drain
 (reversible); a one-line predicate parks them instead if preferred.
 
@@ -127,6 +126,19 @@ action it does not own. Until that edit lands the two movers race **benignly** �
 message.
 
 ---
+## 2026-08-21 runs review — email loop healthy; 2 unrelated lanes to watch
+
+Deploy live + git-pinned (`/version` = `527d78f9b05c`). **Email-orchestration loop all green:** move queue
+fully drained (`move_outcome` 329 moved + 15 already_out, 0 pending), mirror worklist 0, stranded detector 0,
+jobs clean (433 extract + 14 doc-text, 0 failed). Open alerts back to **29** (from the 3,987 park storm). Two
+NON-email items worth a look, neither urgent, neither ours from this week:
+- **`cm-gov-packet-refresh` cron failing** (09:15Z) — the one CC left open in P118; recurring, capital-markets
+  gov packet lane. Candidate for its own prompt.
+- **`/api/pipeline/match-deal-emails-cron` — 6 `no_response` in 24h** — consistent, smells like a timeout
+  (same class as the P118 correlated-subplan cron timeouts); worth profiling the handler's real query shape.
+- Transient (self-heal): `SF→LCC Retry&Dead-letter` flow_failure, `cre-owner-backfill` 502, `dup-pair-tick`
+  no_response — single occurrences.
+
 ## P120 (2026-08-20) — the app now MOVES emails: move-queue executor built (was: nothing ever drained it)
 
 **Migration `20260820140000_lcc_p120_move_queue_executor.sql` — APPLIED LIVE to LCC Opps
