@@ -3924,7 +3924,7 @@ function renderUnifiedContacts() {
     html += '<div class="stat-card" style="cursor:pointer" onclick="loadHotLeads()"><div class="stat-label">Hot Leads</div><div class="stat-value" style="color:var(--red)">' + (ucDataQuality.hot_leads || 0) + '</div><div class="stat-sub">Score &ge; 60</div></div>';
     html += '<div class="stat-card"><div class="stat-label">WebEx Linked</div><div class="stat-value" style="color:var(--green)">' + (ucDataQuality.webex_linked || 0) + '</div></div>';
     html += '<div class="stat-card"><div class="stat-label">Stale Data</div><div class="stat-value" style="color:' + (((ucDataQuality.stale_emails || 0) + (ucDataQuality.stale_phones || 0)) > 0 ? 'var(--orange)' : 'var(--green)') + '">' + ((ucDataQuality.stale_emails || 0) + (ucDataQuality.stale_phones || 0)) + '</div><div class="stat-sub">' + (ucDataQuality.stale_emails || 0) + ' email · ' + (ucDataQuality.stale_phones || 0) + ' phone</div></div>';
-    html += '<div class="stat-card" style="cursor:pointer" onclick="loadMergeQueue()"><div class="stat-label">Merge Queue</div><div class="stat-value" style="color:' + (ucDataQuality.pending_merges > 0 ? 'var(--red)' : 'var(--green)') + '">' + (ucDataQuality.pending_merges || 0) + '</div><div class="stat-sub">Click to review</div></div>';
+    html += '<div class="stat-card" style="cursor:pointer" onclick="ucLoadMergeQueue()"><div class="stat-label">Merge Queue</div><div class="stat-value" style="color:' + (ucDataQuality.pending_merges > 0 ? 'var(--red)' : 'var(--green)') + '">' + (ucDataQuality.pending_merges || 0) + '</div><div class="stat-sub">Click to review</div></div>';
     html += '</div>';
     // Sync action buttons
     html += '<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
@@ -4291,7 +4291,28 @@ async function runDuplicateDetection() {
 }
 
 // Placeholder for merge queue viewer
-async function loadMergeQueue() {
+// WARNING - RENAMED 2026-08-20 (W6.5 Stage 4). This function previously shared a
+// top-level name with a DIFFERENT function in contacts-ui.js (~1078) that loads
+// _cui.mergeQueue and calls renderContactsPage(). contacts-ui.js loads AFTER
+// app.js in index.html, so in the shared global scope IT SILENTLY WON and this
+// 2,403-byte implementation never ran.
+//
+// The symptom was a DEAD BUTTON. renderContactsPage() writes into
+// #contactsContent, which lives on #pageContacts - a different page from the
+// #bizPageInner this function renders into. So on Marketing -> Unified Contacts,
+// clicking the "Merge Queue / Click to review" stat card (~3927) fetched the
+// queue, re-rendered a HIDDEN page, and showed the user nothing at all. The
+// whole app.js merge UI below - ucMerge (~4379) and ucDismissMerge (~4393) - was
+// unreachable, and their own post-action refresh calls landed on contacts-ui's
+// loader too, so a merge never refreshed this list either.
+//
+// Third instance of this class found on 2026-08-20 (after _opsSparkline and
+// buildResearchAssistantPrompt). See test/frontend-duplicate-definitions.test.mjs.
+//
+// NOTE FOR PRODUCT (not decided here): LCC now has TWO merge-queue surfaces -
+// this one and the Contacts page's merge_queue tab. Restoring this one is the
+// reversible fix; consolidating them is a separate call.
+async function ucLoadMergeQueue() {
   const el = document.getElementById('bizPageInner');
   if (!el) return;
   el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading merge queue...</p></div>';
@@ -4386,7 +4407,7 @@ async function ucMerge(keepId, mergeId, queueId) {
     });
     if (!r.ok) { showToast('Merge failed (HTTP ' + r.status + ')', 'error'); return; }
     showToast('Contacts merged', 'success');
-    loadMergeQueue();
+    ucLoadMergeQueue();
   } catch (e) { showToast('Merge error: ' + e.message, 'error'); }
 }
 
@@ -4399,7 +4420,7 @@ async function ucDismissMerge(queueId) {
       body: JSON.stringify({ queue_id: queueId })
     });
     if (!r.ok) { showToast('Dismiss failed (HTTP ' + r.status + ')', 'error'); return; }
-    loadMergeQueue();
+    ucLoadMergeQueue();
   } catch (e) { showToast('Dismiss error: ' + e.message, 'error'); }
 }
 
