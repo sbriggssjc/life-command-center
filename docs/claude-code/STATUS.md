@@ -136,10 +136,75 @@ NON-email items worth a look, neither urgent, neither ours from this week:
   capital-markets gov packet lane. Candidate for its own prompt.~~ **FIXED in P122 (2026-08-21)** —
   in-transaction `pg_sleep` blew the statement timeout AND rolled back every queued pg_net request,
   so the gov packet had refreshed zero times in 7 days. See the P122 entry below.
-- **`/api/pipeline/match-deal-emails-cron` — 6 `no_response` in 24h** — consistent, smells like a timeout
-  (same class as the P118 correlated-subplan cron timeouts); worth profiling the handler's real query shape.
+- ~~**`/api/pipeline/match-deal-emails-cron` — 6 `no_response` in 24h**~~ **FIXED in P123 (2026-08-21).**
+  Not the same class as the P118 subplan timeouts, and **not 6 of 24** — `net._http_response` is pruned to a
+  ~6-hour window, so 6 was the whole retained sample: **100% of hourly calls timed out**, every one at exactly
+  60,000 ms (`lcc_cron_post`'s `timeout_milliseconds`). The DB was never the bottleneck (~100 ms per deal);
+  the handler was making ~680 sequential PostgREST round trips per run to rediscover already-done work, and
+  Railway kept finishing at ~80 s and writing an `ok=true` run-log row after pg_net had already given up.
+  See the P123 entry below.
 - Transient (self-heal): `SF→LCC Retry&Dead-letter` flow_failure, `cre-owner-backfill` 502, `dup-pair-tick`
   no_response — single occurrences.
+
+## P123 (2026-08-21) — `match-deal-emails-cron` `no_response`: a 60 s wall, not a crash
+
+**Migration `20260821180000_lcc_p123_deal_match_run_log_observability.sql` — APPLIED LIVE to LCC Opps
+(`xengecqvemvfknjvbvrq`).** Handler + engine changes ship on the next Railway redeploy of merged `main`
+(then `npm run verify:deploy`).
+
+**The diagnosis inverted the premise, twice.**
+1. **It was never broken.** `DEAL_EMAIL_MATCH_CRON` is on, and `lcc_deal_match_run_log` has a complete
+   `ok=true`, `error_count=0` row for **every** hour. The P122-era count=exact fix held.
+2. **It was never a DB timeout.** `lcc_cron_post` posts with `timeout_milliseconds := 60000`; the handler
+   took ~75–90 s (cron fires :17:00, the log row lands :18:15–:18:30). pg_net gave up at exactly
+   60,000 ms — `net._http_response.timed_out = true`, *"Timeout of 60000 ms reached"* — on **every**
+   retained call. "6 in 24h" was the retention window (~6 h), not a 25% failure rate.
+3. **The real cost was round trips, not SQL.** Profiled with the handler's actual query shape (P118
+   method): the per-deal candidate scan is an index scan at **~99 ms**, so all 36 deals ≈ 3.6 s. The other
+   ~75 s was **~680 sequential PostgREST calls** — one idempotency GET plus one roster-edge GET *per matched
+   email* — spent rediscovering that all 341 matches were already attributed, every hour.
+   **Not a dead worker, and worth stating precisely:** 282 real attributions landed in the last 14 days
+   and mail is flowing (692 Outlook events in 7 days). The defect was the CONSTANT re-discovery cost —
+   paid in full hourly however little was new — and `already_attributed: 341` reading like throughput
+   when it is a re-scan tally. P159a applied to cost rather than output.
+
+**The fix (engine v2.2 + handler + migration).**
+- **Bulk pre-fetch** of the attributed-key set and the existing `deal_party` edge set (two paged reads)
+  turns both per-email probes into in-memory Set hits. Fails **closed** — a failed prefetch aborts the run
+  rather than assuming nothing is attributed and re-POSTing hundreds of rows against the unique index.
+- **Candidate query carries core tenant AND city to the DB.** Substring ⊇ the word-boundary test applied in
+  memory, so no match can be lost; the candidate set and its payload of full email bodies collapse.
+- **Every multi-row read pages at 1000.** PostgREST caps a response at 1000 rows regardless of `limit=`, so
+  the old `CAND_LIMIT = 1200` silently returned 1000 and dropped real matches. Truncation is now counted
+  (`candidates_truncated`), never silent.
+- **Work budget** — `deadline_ms` (default 40 s, inside the 60 s window), `max_writes`, and a deal `cursor`.
+  A run stops on a deal *boundary* and hands the next run `cursor_end`, so no backlog can push one
+  invocation past the response window. `budget_stopped` reports it out loud.
+- **The run-log row is OPENED before the work** (`status='started'`) and PATCHed closed with
+  `duration_ms`/stats. Previously the row could only be written on the way out, so a run that genuinely died
+  mid-flight left *nothing* and looked identical to one that never fired. A row stuck at `started` is now
+  the signature of a dropped run (`v_lcc_deal_match_stalled_runs`); `v_lcc_deal_match_run_health` is the
+  per-run line.
+- **A failed candidate READ is now an ERROR, not "this deal has no mail"** — the old `cand.data || []`
+  swallow made a broken query indistinguishable from a quiet inbox. This is a deliberate behavior change;
+  the test that asserted the old swallow was rewritten to assert the new contract.
+
+**Matching logic is untouched** — core-tenant + city + word-boundary + digest exclusion are byte-for-byte
+v2.1. Guards: `test/deal-email-match-cron.test.mjs` (9 tests) pins zero per-email round trips, the
+fail-closed prefetch, open-before-work ordering, both budget stops, cursor wrap, and the city push-down.
+
+**Verify after the redeploy** (the honest check is the delta, not the tally):
+```sql
+-- no_response must go to 0, and duration_ms must sit well under 60000
+select run_id, status, ok, duration_ms, deals_scanned, deals_total,
+       cursor_start, cursor_end, budget_stopped, emails_attributed, already_attributed
+  from v_lcc_deal_match_run_health limit 12;
+select count(*) from v_lcc_deal_match_stalled_runs;          -- expect 0
+select l.request_id, r.timed_out, r.status_code
+  from lcc_cron_post_log l left join net._http_response r on r.id = l.request_id
+ where l.endpoint = '/api/pipeline/match-deal-emails-cron'
+   and l.created > now() - interval '6 hours';               -- expect timed_out = false
+```
 
 ## P122 (2026-08-21) — `cm-gov-packet-refresh` fixed: the gov CM packet had refreshed ZERO times in 7 days
 

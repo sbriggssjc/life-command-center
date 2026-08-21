@@ -871,6 +871,37 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
     re-qualified and re-drilled every tick, forever. Only the STATE DELTA exposed it: queue 752→746 (−6)
     against `find_person_at_manager` 45→47 (+2), i.e. 35 of 37 were repeats. **Never judge a worker by its
     tally; judge it by the delta in the population it is supposed to drain.**
+- **⚠️ `pg_net:no_response` DOES NOT MEAN THE WORK FAILED — and the count you are shown is a
+  RETENTION ARTIFACT (P123, 2026-08-21).** `lcc_cron_post` posts every Railway cron with
+  `timeout_milliseconds := 60000`. A handler that takes longer still runs to completion and still
+  writes its own success row; pg_net just stops listening and records
+  `net._http_response.timed_out = true`. So the health surface says `no_response` while
+  `lcc_deal_match_run_log` says `ok=true` for the same hour, and both are telling the truth.
+  **`net._http_response` is pruned to a ~6-hour window**, so "6 `no_response` in 24h" was not a 25%
+  failure rate — it was **100% of the retained sample**. Join `lcc_cron_post_log` → `net._http_response`
+  and read `timed_out` + `error_msg` before you believe any per-day count off that table.
+  - **The bottleneck is almost never the SQL — count the ROUND TRIPS.** The matcher's per-deal
+    candidate query profiled at **99 ms** (36 deals ≈ 3.6 s of a ~80 s run). The other ~75 s was
+    **~680 sequential PostgREST calls**: one idempotency GET and one edge-existence GET *per matched
+    email*, 341 matches, every hour, all of them rediscovering already-done work
+    (`already_attributed: 341` on every single run). **Be precise about what was wrong here:** the
+    matcher is NOT a dead worker — it wrote 282 genuine attributions in 14 days and mail is flowing
+    (692 Outlook events in 7 days). What was pathological was the CONSTANT re-discovery cost, paid in
+    full every hour regardless of how little was new. That is the P159a lesson applied to COST rather
+    than output: `already_attributed` is a re-scan tally, so never read it as throughput, and never
+    let the price of confirming "nothing changed" scale with history.
+    An existence check inside a per-row loop is an N+1 over HTTP; hoist it to ONE paged prefetch and
+    make the check a Set hit. Fail that prefetch **closed** — assuming "nothing is attributed"
+    re-POSTs the whole set and reports a fabricated delta.
+  - **A recurring worker must be BOUNDED, not just fast.** Give it a deadline inside the 60 s window,
+    a write cap, and a cursor it hands to the next run — stopping on an item BOUNDARY so no partial
+    state is left. Report the stop (`budget_stopped`), never cap silently.
+  - **Open the run-log row BEFORE the work, close it after.** A row written only on the way out cannot
+    record a run that died mid-flight: the dropped run leaves nothing and is indistinguishable from one
+    that never fired. A row stuck at `status='started'` is the signature of a drop.
+  - **And `CAND_LIMIT = 1200` was always a lie** — PostgREST caps a response at 1000 rows regardless of
+    `limit=`, so that read silently returned 1000 and dropped real matches. Page at exactly 1000 and
+    count the truncation.
 - **A value-ranked queue must EXCLUDE its terminal states, or the highest-value rows jam the head forever
   (P159).** `v_owner_contact_enrich_queue` orders `rank_value DESC NULLS LAST, updated_at ASC`. Once
   value-ranking was added (20260729120000), `updated_at` became a mere TIEBREAK — so the rotation the
