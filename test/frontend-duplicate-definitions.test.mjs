@@ -186,4 +186,65 @@ describe('W6.5 — no NEW cross-file duplicate function definitions', () => {
     assert.deepEqual(offenders, [],
       `detail.js and a sibling both define: ${offenders.join(', ')} — an extraction copied instead of moving`);
   });
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FULL AUDIT OF THE ALLOWLIST — 2026-08-20
+//
+// Every one of the 33 catalogued duplicates was checked by CALL SITE, not by
+// reading definitions. Result:
+//   • 26  genuine stub -> real   (app.js ships an inert placeholder; gov.js /
+//                                 dialysis.js / ops.js override with the real one)
+//   •  2  dead but harmless      renderGovTab / renderDiaTab — app.js ships a
+//                                 COMPLETE simpler dispatcher, not a stub; the
+//                                 winner is a strict SUPERSET of its cases
+//                                 (guarded below).
+//   •  1  equivalent in practice _py (gov.js vs dialysis.js). Genuinely
+//                                 different code: gov's accepts a raw scalar,
+//                                 dialysis's returns null for one. dialysis.js
+//                                 loads last and wins, so gov's 6 call sites run
+//                                 dialysis's version. NOT a bug, because every
+//                                 value reaching it comes from
+//                                 `window._govFormDraft[id] = el.value` and
+//                                 el.value is ALWAYS a string, which both handle
+//                                 identically. The scalar branch never fires.
+//   •  1  OPEN QUESTION          openContactDetail (see its note above)
+//   •  3  WERE LIVE BUGS, all fixed 2026-08-20:
+//         _opsSparkline                — dialysis Ops census chart read "no trend"
+//         buildResearchAssistantPrompt — property export copied a property-less brief
+//         loadMergeQueue               — Marketing merge-queue card was a dead button
+//
+// Three of the four entries I had personally labelled "dead code" were wrong,
+// and all three were user-visible. The label was never evidence.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('dead-but-harmless duplicates stay harmless', () => {
+  // renderGovTab / renderDiaTab: app.js's version is a COMPLETE dispatcher that
+  // gov.js / dialysis.js override. That is safe only while the winner handles
+  // every tab the loser does. If someone adds a case to app.js's dead version
+  // (thinking it is live) or drops one from the winner, a tab silently renders
+  // nothing — so assert the superset rather than trusting the comment.
+  function sliceFn(src, name) {
+    const m = new RegExp(`^function\\s+${name}\\s*\\(`, 'm').exec(src);
+    assert.ok(m, `${name} not found`);
+    const b = src.indexOf('{', m.index + m[0].length);
+    let d = 0;
+    for (let i = b; i < src.length; i++) {
+      if (src[i] === '{') d++;
+      else if (src[i] === '}') { d--; if (!d) return src.slice(m.index, i + 1); }
+    }
+    throw new Error(`could not balance ${name}`);
+  }
+  const cases = (src) => new Set([...src.matchAll(/case\s+'([^']+)'/g)].map((m) => m[1]));
+
+  for (const [fn, winnerFile] of [['renderGovTab', 'gov.js'], ['renderDiaTab', 'dialysis.js']]) {
+    it(`${winnerFile}'s ${fn} handles every tab app.js's dead version does`, () => {
+      const loser = cases(sliceFn(readFileSync(join(root, 'app.js'), 'utf8'), fn));
+      const winner = cases(sliceFn(readFileSync(join(root, winnerFile), 'utf8'), fn));
+      const orphaned = [...loser].filter((c) => !winner.has(c));
+      assert.deepEqual(orphaned, [],
+        `${winnerFile} overrides app.js's ${fn} but does NOT handle: ${orphaned.join(', ')} — `
+        + 'those tabs would render nothing');
+    });
+  }
 });
