@@ -1252,6 +1252,24 @@ function _nextActionForContact(c) {
   //    already carries one. Before Prompt 114 this branch fired even then, so 47
   //    owners that the graph could reach read "Find a contact" and the operator
   //    was sent to acquire a contact we already held.
+  // 2b. P161 — GATED. We DO know a human at this company, but the only edge we
+  //     have is a weak association (works_at / associated_with — in practice the
+  //     Salesforce-account org edge), and the deal is either above the $500k
+  //     floor or unsized. That proves the person is connected to the org, never
+  //     that they control the decision, and Scott's doctrine targets the
+  //     individual in control. So this is NOT "Reach via X" — it is a research
+  //     task, and it must read as one. Note it deliberately still NAMES the
+  //     person: they are a real lead into the org, just not someone to pitch.
+  if (!email && !phone && via && via.gated) {
+    const who = via.withheld_name ? String(via.withheld_name) : 'someone';
+    return { key: 'find_decision_maker', tone: 'warn',
+      label: 'Find the decision-maker',
+      sub: who + ' is listed at this company but their role is unconfirmed'
+        + (via.gate_reason === 'value_unknown'
+            ? ' — and we have no rent on file to size the deal, so an unverified contact is not enough.'
+            : ' — too large a position to approach through an unverified contact.'),
+      cta: 'Select contact →', onclick: '_entityAcquireContact()' };
+  }
   if (!email && !phone && via) {
     const whoRole = via.role ? ' (' + String(via.role).replace(/_/g, ' ') + ')' : '';
     const chan = via.email || via.phone || '';

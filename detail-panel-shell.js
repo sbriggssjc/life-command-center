@@ -724,7 +724,19 @@ function _renderCompanionEntity(c360, entityId) {
     html += '<div class="detail-section"><div class="detail-section-title">Contact</div>';
     if (email) html += '<div style="font-size:12px"><a href="mailto:' + esc(email) + '" style="color:var(--accent)">' + esc(email) + '</a></div>';
     if (phone) html += '<div style="font-size:12px;margin-top:3px"><a href="tel:' + esc(phone) + '" style="color:var(--accent)">' + esc(phone) + '</a></div>';
-    if (dockVia) {
+    // P161 — a GATED route is truthy but deliberately carries no name/email/phone
+    // (see owner-reachable-via.js). Rendering it unguarded printed "Reach via "
+    // with an empty bold tag. Say what is actually true instead: we know someone
+    // at the org, they are not established as the decision-maker, and on a deal
+    // this size that is not good enough to call.
+    if (dockVia && dockVia.gated) {
+      html += '<div style="font-size:11px;color:var(--text3);margin-top:' + (email || phone ? '6px' : '0') + '">'
+        + 'No confirmed decision-maker'
+        + (dockVia.withheld_name
+            ? ' <span style="opacity:.75">(' + esc(dockVia.withheld_name) + ' is listed at this company, role unconfirmed)</span>'
+            : '')
+        + '</div>';
+    } else if (dockVia) {
       html += '<div style="font-size:11px;color:var(--text3);margin-top:' + (email || phone ? '6' : '0') + 'px">Reach via '
         + '<b style="color:var(--text2)">' + esc(dockVia.name) + '</b>'
         + (dockVia.role ? ' <span style="opacity:.75">(' + esc(String(dockVia.role).replace(/_/g, ' ')) + ')</span>' : '') + '</div>';

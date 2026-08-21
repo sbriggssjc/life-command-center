@@ -76,6 +76,38 @@ export const ROLE_RANK = {
 };
 export const UNKNOWN_ROLE_RANK = 90;
 
+// ---------------------------------------------------------------------------
+// WEAK ASSOCIATION (P161, 2026-08-21).
+//
+// These roles prove a person is CONNECTED to the org. They never prove the
+// person CONTROLS the decision. `works_at` is the Salesforce-account org edge —
+// 8,506 of them — i.e. the same bare-SF signal class P112 disqualified as a BD
+// signal for cadences. Measured live: 158 owners were being called "reachable"
+// on nothing but one of these edges, 48 of them carrying $153.8M of annual rent.
+//
+// Distinct from NON_REACHABLE_ROLES above. A broker is excluded OUTRIGHT — it is
+// the wrong human, at any deal size. A weak association is the RIGHT
+// organisation and an unproven human, so it is VALUE-GATED instead: acceptable
+// for a small LLC/SPE (where the SF contact is plausibly the principal), not for
+// a $24M owner (where they are an employee).
+//
+// ⚠️ THE GATE ITSELF IS NOT EVALUATED HERE, DELIBERATELY. Re-implementing the
+// rent rule in JS would be exactly the normaliser drift this codebase keeps
+// getting bitten by (lcc_normalize_entity_name, _opsSparkline, gov_owner_strict_core).
+// The single definition lives in SQL — `v_lcc_weak_reach_worklist`, built on
+// `lcc_is_weak_association_role` + `lcc_weak_role_value_floor` — and the caller
+// passes the DB's verdict in as `opts.weakAssociationGated`. One rule, one place.
+// ---------------------------------------------------------------------------
+export const WEAK_ASSOCIATION_ROLES = new Set(['works_at', 'associated_with', 'contact']);
+
+/** True for a role that proves association but not control over the decision. */
+export function isWeakAssociationRole(role) {
+  const r = String(role || '').trim().toLowerCase();
+  // An ABSENT role is weak, never strong — unknown is not a promotion.
+  if (!r) return true;
+  return WEAK_ASSOCIATION_ROLES.has(r);
+}
+
 export function roleRank(role) {
   const r = String(role || '').trim().toLowerCase();
   if (!r) return UNKNOWN_ROLE_RANK;
@@ -195,9 +227,36 @@ export function pickReachableVia(candidates) {
  * see the header note. `via_count` lets the UI say "…and 2 others" without a
  * second query, and keeps the count honest.
  */
-export function buildReachableVia(candidates) {
+export function buildReachableVia(candidates, opts = {}) {
   const { winner, considered, others } = pickReachableVia(candidates);
   if (!winner) return null;
+
+  // P161 — the weak-association value gate. `opts.weakAssociationGated` is the
+  // DB's verdict (membership in v_lcc_weak_reach_worklist), never a rule
+  // re-derived here. It only bites when the winner is ALSO weak: an owner with a
+  // manager or institution_decision_maker edge is never in that worklist, so the
+  // two conditions agree by construction and the redundancy is a cheap guard
+  // against a caller passing the flag for the wrong entity.
+  //
+  // Returns a GATED descriptor rather than null on purpose. null means "we found
+  // nobody", which is a different fact and would send the panel's next-action to
+  // a generic "Find a contact". This says: we found someone, they are not
+  // established as the decision-maker, and here is who we withheld — so the
+  // operator can judge, and the contact-acquisition engine has a target.
+  if (opts.weakAssociationGated === true && isWeakAssociationRole(winner.role)) {
+    return {
+      gated: true,
+      gate_reason: opts.gateReason || 'weak_association_unqualified',
+      withheld_name: winner.name,
+      withheld_role: winner.role || 'associated_with',
+      via_count: considered,
+      // No person_id / email / phone. A gated route must not be dialable by
+      // accident — that is the whole point of the gate.
+      person_id: null, name: null, role: null, email: null, phone: null,
+      source: winner.source || null, is_primary: false, other_people: [],
+    };
+  }
+
   return {
     person_id: winner.person_id,
     name: winner.name,

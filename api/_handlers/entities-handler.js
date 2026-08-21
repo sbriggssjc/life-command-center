@@ -3344,7 +3344,27 @@ async function fetchReachableVia(entityId, workspaceId) {
         relationship_id: r.id,
       });
     }
-    return buildReachableVia(candidates);
+    // P161 — ask the DB whether this owner's only route is a weak-association
+    // edge on a deal too big (or too unsized) to accept an employee as the
+    // contact. `v_lcc_weak_reach_worklist` is the SINGLE definition of that rule;
+    // re-deriving the rent threshold here would be the normaliser drift this repo
+    // keeps paying for. Best-effort: a failed lookup leaves the gate OFF rather
+    // than hiding a contact we do have, because a false "unreachable" is a
+    // silently lost prospect. The count in v_lcc_owner_reachability stays honest
+    // regardless — it reads the view directly.
+    let weakAssociationGated = false;
+    let gateReason = null;
+    try {
+      const gateRes = await opsQuery('GET',
+        `v_lcc_weak_reach_worklist?owner_entity_id=eq.${encodeURIComponent(entityId)}` +
+        `&select=reason&limit=1`);
+      if (gateRes.ok && Array.isArray(gateRes.data) && gateRes.data.length) {
+        weakAssociationGated = true;
+        gateReason = gateRes.data[0].reason || null;
+      }
+    } catch (_gateErr) { /* fail OPEN — see note above */ }
+
+    return buildReachableVia(candidates, { weakAssociationGated, gateReason });
   } catch (_e) {
     return null;
   }

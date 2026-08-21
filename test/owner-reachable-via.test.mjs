@@ -14,15 +14,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-import {
-  pickReachableVia,
-  buildReachableVia,
-  normalizeReachableCandidate,
-  roleRank,
-  isNonReachableRole,
-  NON_REACHABLE_ROLES,
-} from '../api/_shared/owner-reachable-via.js';
+import { pickReachableVia, buildReachableVia, normalizeReachableCandidate, roleRank, isNonReachableRole, NON_REACHABLE_ROLES, isWeakAssociationRole, WEAK_ASSOCIATION_ROLES } from '../api/_shared/owner-reachable-via.js';
 
 import {
   classifyLaneRow,
@@ -271,3 +268,87 @@ test('relationship role is conservative — never invents authority', () => {
   assert.equal(relationshipRoleForContactType(null), 'prospecting_contact');
   assert.equal(relationshipRoleForContactType('buyer'), 'prospecting_contact');
 });
+
+
+// ───────────────────────────────────────────────────────────────────────────
+// P161 — weak-association value gate.
+const weakEdge = [{
+  person_id: 'p1', name: 'Dana Employee', email: 'dana@bigreit.com',
+  role: 'works_at', updated_at: '2026-08-01',
+}];
+const strongEdge = [{
+  person_id: 'p2', name: 'Sam Principal', email: 'sam@smallco.com',
+  role: 'manager', updated_at: '2026-08-01',
+}];
+
+test('P161: classifies weak vs control roles', () => {
+  for (const r of ['works_at', 'associated_with', 'contact']) {
+    assert.equal(isWeakAssociationRole(r), true, `${r} is weak`);
+  }
+  for (const r of ['manager', 'principal', 'managing_member', 'institution_decision_maker']) {
+    assert.equal(isWeakAssociationRole(r), false, `${r} proves control`);
+  }
+});
+
+test('P161: an ABSENT role is weak, never strong — unknown is not a promotion', () => {
+  assert.equal(isWeakAssociationRole(''), true);
+  assert.equal(isWeakAssociationRole(null), true);
+  assert.equal(isWeakAssociationRole(undefined), true);
+});
+
+test('P161: ungated behaviour is UNCHANGED when the caller passes no verdict', () => {
+  // Backward compatibility: existing callers that never learned about the gate
+  // must keep getting a normal descriptor, not a silently gated one.
+  const out = buildReachableVia(weakEdge);
+  assert.equal(out.gated, undefined);
+  assert.equal(out.name, 'Dana Employee');
+  assert.equal(out.email, 'dana@bigreit.com');
+});
+
+test('P161: gates a weak winner when the DB says the owner is unqualified', () => {
+  const out = buildReachableVia(weakEdge, { weakAssociationGated: true, gateReason: 'above_floor' });
+  assert.equal(out.gated, true);
+  assert.equal(out.gate_reason, 'above_floor');
+  // ⚠️ THE POINT OF THE GATE: nothing dialable survives it.
+  assert.equal(out.person_id, null);
+  assert.equal(out.name, null);
+  assert.equal(out.email, null);
+  assert.equal(out.phone, null);
+  // …but the person is still NAMED, so the operator and the acquisition
+  // engine know who we withheld and why.
+  assert.equal(out.withheld_name, 'Dana Employee');
+  assert.equal(out.withheld_role, 'works_at');
+});
+
+test('P161: does NOT gate a control-role winner even if the flag is passed', () => {
+  // Belt-and-braces: an owner with a manager edge is never in the worklist, so
+  // the two conditions agree by construction. This guards a caller passing the
+  // flag for the wrong entity.
+  const out = buildReachableVia(strongEdge, { weakAssociationGated: true });
+  assert.equal(out.gated, undefined);
+  assert.equal(out.name, 'Sam Principal');
+  assert.equal(out.email, 'sam@smallco.com');
+});
+
+test('P161: returns a GATED DESCRIPTOR, not null — the two are different facts', () => {
+  // null means "we found nobody" and routes the panel to a generic
+  // "Find a contact". Gated means "we found someone unqualified" and must
+  // route to "Find the decision-maker". Collapsing them loses the lead.
+  assert.equal(buildReachableVia([], { weakAssociationGated: true }), null);
+  assert.notEqual(buildReachableVia(weakEdge, { weakAssociationGated: true }), null);
+});
+
+test('P161: REGRESSION: a gated descriptor is truthy but must never render a name', () => {
+  // detail-panel-shell.js did `if (dockVia)` then printed dockVia.name in a
+  // <b>. A gated object is truthy with name === null, so it printed
+  // "Reach via " with an empty bold tag. Both renderers now branch on .gated.
+  const out = buildReachableVia(weakEdge, { weakAssociationGated: true });
+  assert.ok(out, 'gated descriptor is truthy');
+  assert.equal(out.name, null, 'and carries no name — renderers MUST check .gated first');
+  const shell = readFileSync(join(root, 'detail-panel-shell.js'), 'utf8');
+  assert.match(shell, /dockVia && dockVia\.gated/, 'the dock branches on .gated before rendering');
+  const tabs = readFileSync(join(root, 'detail-entity-tabs.js'), 'utf8');
+  assert.match(tabs, /via && via\.gated/, 'the hero branches on .gated before "Reach via"');
+  assert.match(tabs, /find_decision_maker/, 'and offers a decision-maker action instead');
+});
+
