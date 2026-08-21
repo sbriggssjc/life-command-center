@@ -691,7 +691,7 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
     corpus. Assert on `n_full_body`, never `n`.
 - **Web-search enrichment proxy (`owner-contact-websearch`) is PAUSED — do not activate.** Contact acquisition
   goes through the public-records chain (cross-reference resolver → SOS-direct → address reverse-lookup → deed).
-- **"Owner is reachable" has THREE definitions — quote `reachable_hero_effective`.** The owner-panel hero
+- **"Owner is reachable" has FOUR definitions — quote `reachable_hero_qualified` (P161, 2026-08-21).** The owner-panel hero
   (`_nextActionForContact`, detail.js) used to show "Find a contact" unless `buildContact360` produced a
   `subject.email` / `entity.phone`, and c360 never walked `entity_relationships` — so an owner with a
   linked person carrying an email read as unreachable, and attaching a person+edge (the doctrinally
@@ -699,10 +699,32 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   by `api/_shared/owner-reachable-via.js`; hero renders "Reach via <name> (<role>)"). Read
   `v_lcc_owner_reachability`, which now reports all three side by side:
   `reachable_hero` = the PRE-114 definition, retained ONLY as the before/after yardstick;
-  **`reachable_hero_effective`** = what the hero reads today (org routes ∪ a linked person surviving the
-  guards) — **quote this one**; `reachable_graph` = any linked person INCLUDING brokers, which
-  OVERSTATES what the panel can show. `hero_gap` is the UI-defect residue (47 → 0 on 2026-08-15).
-  `v_lcc_owner_unreachable_worklist` is the value-ranked population.
+  `reachable_hero_effective` = org routes ∪ a linked person surviving the ROLE guards — **no longer the
+  number to quote** (see P161 below); `reachable_graph` = any linked person INCLUDING brokers, which
+  OVERSTATES what the panel can show; **`reachable_hero_qualified`** = effective MINUS the weak-association
+  owners P161 gates out — **quote this one**. `v_lcc_owner_unreachable_worklist` is the value-ranked population.
+  - **⚠️ `hero_gap` IS NOT A DEFECT COUNT — the previous sentence here was WRONG and dangerously so.**
+    It read "`hero_gap` is the UI-defect residue (47 → 0 on 2026-08-15)", which invites someone to
+    drive it back to zero. Read the view: `hero_gap = reachable_hero_effective − reachable_hero`, i.e.
+    the **GAIN** delivered by the P114 linked-person route. It measured 274 on 2026-08-21. Driving it
+    to 0 would mean destroying 274 owners' only contact route. This is the dated-claim trap the
+    doctrine section warns about, caught on a metric rather than a blocker.
+  - **P161 — a WEAK-ASSOCIATION edge does not make an owner reachable at scale.** `reachable_hero_effective`
+    counted **158** owners whose ONLY route was a `works_at` edge with no contact on the org itself.
+    `works_at` is the **Salesforce-account org edge** (8,506 of them, created 2026-07-16..08-20) — the same
+    bare-SF signal class **P112** disqualified as a BD signal for cadences, here underwriting the
+    reachability claim instead. It proves association, never control, and Scott's doctrine targets *the
+    individual in control of the decision*. Gate (`lcc_is_weak_association_role` +
+    `lcc_weak_role_value_floor()` = the same **$500k** knob as the gov asset-mint and
+    `CADENCE_SIGNAL_MIN_VALUE` — one number, not three): rent **< $500k** ⇒ accepted (65 owners; a small
+    LLC/SPE's SF contact is plausibly the principal); **≥ $500k** ⇒ gated (48 owners, **$153.8M** of annual
+    rent); **rent unknown ⇒ gated — UNKNOWN IS NOT SMALL** (45). Reachable **389 → 296**; the 93 land in
+    **`v_lcc_weak_reach_worklist`** (`reason` = `above_floor` | `value_unknown`) for the
+    contact-acquisition engine. **⚠️ Asset COUNT is the wrong knob and was measured to be so** — at
+    `assets_held = 1` the list holds Trammell Crow Co ($24.1M), Gba Associates LP ($27.2M), The Claremont
+    Group ($13.5M), GI Partners ($8.6M): asset count measures **LCC's coverage**, not the owner's size.
+    Brokers remain excluded OUTRIGHT (never value-gated); live check confirms **zero** broker edges exist
+    on resolved owners today, so that guard is correct and simply has nothing to catch.
   - **`reachable_via` is NEVER merged into `subject.email`.** That field means "the ORG's own contact
     detail"; a linked person's address is a different claim. Merging them would assert the org has an
     address it does not and re-commit the person/org conflation `sf-account-link.js` guards against.
