@@ -1,0 +1,42 @@
+-- ============================================================================
+-- P164 — clear the 168 phantom owner-contacts (reversibly) AND stop the worker
+--        minting new ones (2026-08-21). Applied live to LCC Opps.
+--
+-- P162 surfaced them; P163 unblocked them in the queue; P163b stopped EXISTING
+-- phantoms re-attaching. This does the two remaining halves:
+--
+--   1. CLEAR the stored pointer. The worker's reclassification made the STATUS
+--      honest but left the DATA wrong: 168 owners still stored and displayed
+--      their own company name as their decision-maker.
+--   2. CLOSE THE TAP. The hourly tick was minting ~5 NEW phantoms per hour
+--      (measured: pivot updated_at 19:25:13-19:25:30 on 2026-08-21 — five rows,
+--      then nothing until 18:25). Clearing without this regrows the population
+--      at ~120/day. The producer-side guard is `isOwnerNameRestated` in
+--      api/_shared/entity-link.js, wired into BOTH name-shaped branches of
+--      owner-contact-enrich.js (attach AND manager-drill).
+--
+-- SCOPE IS DELIBERATELY NARROW: only `phantom_no_contact_detail` (no email AND
+-- no phone) — 168 owners, $242.5M of annual rent. The 208+ phantoms that DO
+-- carry contact details are NEVER touched, because a founder-named firm is a
+-- real principal whose name legitimately sits inside the company name. Verified
+-- against 25 live attached pairs: ZERO false positives, including
+-- "Sadiki Cole @ Cole Capital Partners", "Cole Abdie @ Velocity Capital" and
+-- "Robert Parsekian @ Parsada Ventures".
+--
+-- ROUND TRIP PROVEN ON A NAMED ROW BEFORE THE BATCH: Boyd Watterson Asset
+-- Management (LCC's largest owner by rent, $179.8M, 198 assets) was cleared
+-- singly (worklist 168->167, pointer nulled), reverted (pointer restored to
+-- "Boyd Watterson", worklist back to 168, ledger stamped), and only then was the
+-- full batch run.
+--
+-- The phantom PERSON ENTITIES are left alone — soft, never destructive.
+-- Junk-entity retirement is a separate reviewed path.
+--
+-- VERIFICATION GATE (asserted after apply, all PASS):
+--   phantom worklist (no contact detail)  168 -> 0
+--   phantom worklist (has detail)         untouched
+--   owners w/ active_contact_entity_id    1361 -> 1193  (exactly -168)
+--   reversal ledger rows                  168
+--
+-- REVERSAL: select * from lcc_unclear_phantom_owner_contacts('p164-phantom-clear-20260821');
+-- ============================================================================

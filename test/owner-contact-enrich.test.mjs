@@ -8,6 +8,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { isOwnerNameRestated } from '../api/_shared/entity-link.js';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -408,9 +409,66 @@ describe('P163 — a phantom must not be re-attached to itself', () => {
     // phantom check keeps it out. Drilling would mint the owner's OWN name as a
     // manager org.
     const src = readFileSync(join(root, 'api/_handlers/owner-contact-enrich.js'), 'utf8');
-    assert.match(src, /!row\.active_contact_is_phantom\s*\n?\s*&& Number\(row\.active_authority_level\)/,
+    // Format-tolerant (see the note on the isPerson assertion above): P164
+    // inserted `&& !restatesOwner` between these two anchors and broke the
+    // original strict-whitespace regex.
+    assert.match(src, /!row\.active_contact_is_phantom[\s\S]{0,120}?&& Number\(row\.active_authority_level\)/,
       'the manager-drill branch must exclude phantoms');
-    assert.match(src, /looksPerson\(personName\)\) && !row\.active_contact_is_phantom/,
+    // Format-tolerant on purpose: this assertion originally pinned the exact
+    // single-line shape of the isPerson expression and broke the moment P164
+    // split it across three lines — the same "assert the relationship, not the
+    // address" lesson, here applied to source shape rather than file location.
+    assert.match(src, /const isPerson =[\s\S]{0,200}?!row\.active_contact_is_phantom/,
       'the isPerson test must exclude phantoms');
+  });
+});
+
+
+// ───────────────────────────────────────────────────────────────────────────
+describe('P164 — never mint the owner\'s own name as its decision-maker', () => {
+  // The PRODUCER-side fix. P163b stopped existing phantoms re-attaching; the
+  // hourly tick was still minting ~5 NEW ones per hour (measured live: pivot
+  // updated_at 19:25:13-19:25:30 on 2026-08-21), so clearing the 168 historical
+  // phantoms without this would have regrown the population at ~120/day.
+  it('blocks a contact whose every token is already in the owner name', () => {
+    for (const [person, owner] of [
+      ['Boyd Watterson', 'Boyd Watterson Asset Management, LLC'], // LCC's largest owner, $179.8M
+      ['Trammell Crow', 'Trammell Crow Co'],
+      ['Molasky Group', 'Molasky Group'],
+    ]) {
+      assert.equal(isOwnerNameRestated(person, owner), true, `${person} @ ${owner} must be blocked`);
+    }
+  });
+
+  it('⚠️ does NOT block a real principal at a founder-named firm', () => {
+    // The destructive false positive. These are REAL contacts on live owners —
+    // blocking them would delete exactly the people worth the most. A genuine
+    // principal almost always carries a given name the firm does not.
+    for (const [person, owner] of [
+      ['Sadiki Cole', 'Cole Capital Partners'],
+      ['Cole Abdie', 'Velocity Capital'],
+      ['Robert Parsekian', 'Parsada Ventures'],
+      ['Sam Zell', 'Zell Group'],
+      ['John Smith', 'Smith Properties LLC'],
+    ]) {
+      assert.equal(isOwnerNameRestated(person, owner), false, `${person} @ ${owner} must NOT be blocked`);
+    }
+  });
+
+  it('requires real material on both sides — a single token is not evidence', () => {
+    assert.equal(isOwnerNameRestated('Watterson', 'Boyd Watterson LLC'), false);
+    assert.equal(isOwnerNameRestated('Boyd Watterson', 'LLC'), false);
+    assert.equal(isOwnerNameRestated('', 'Anything LLC'), false);
+    assert.equal(isOwnerNameRestated(null, null), false);
+  });
+
+  it('is wired into BOTH name-shaped branches of the worker', () => {
+    // Attach would mint the phantom; manager-drill would mint the owner's own
+    // name as a manager org. Same defect, two hats.
+    const src = readFileSync(join(root, 'api/_handlers/owner-contact-enrich.js'), 'utf8');
+    assert.match(src, /const restatesOwner = /, 'the guard is evaluated');
+    assert.match(src, /&& !restatesOwner;/, 'the ATTACH branch excludes it');
+    assert.match(src, /!row\.active_contact_is_phantom && !restatesOwner/, 'the DRILL branch excludes it');
+    assert.match(src, /isOwnerNameRestated/, 'imported from the shared guard module, not re-implemented');
   });
 });

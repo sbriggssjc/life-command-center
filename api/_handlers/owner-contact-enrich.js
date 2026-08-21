@@ -32,7 +32,7 @@
 
 import { authenticate } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
-import { ensureEntityLink, looksLikePersonName } from '../_shared/entity-link.js';
+import { ensureEntityLink, looksLikePersonName, isOwnerNameRestated } from '../_shared/entity-link.js';
 import { linkPersonToEntity, stampContactOnActiveCadence } from '../_shared/contact-attach.js';
 import { buildDeedParseAdapter, isDeedAdapterConfigured } from '../_shared/deed-signatory.js';
 import { buildSosLookupAdapter, isSosAdapterConfigured } from '../_shared/sos-lookup.js';
@@ -310,7 +310,20 @@ export async function processOwnerEnrichmentRow(row, deps) {
   // and not a manager — it is an owner with NO contact, so it belongs in the
   // external-enrichment chain (c), which is what the public-records path exists
   // for.
-  const isPerson = !!(personName && looksPerson(personName)) && !row.active_contact_is_phantom;
+  // P164 — close the TAP, not just the drain. P163b stopped EXISTING phantoms
+  // re-attaching; this stops NEW ones being minted. Measured 2026-08-21: the
+  // hourly tick created 5 fresh phantoms in a single hour (pivot updated_at
+  // 19:25:13-19:25:30), so clearing the 168 historical ones without this would
+  // have regrown the population at ~120/day.
+  //
+  // `looksLikePersonName` cannot catch this class — "Boyd Watterson" is shaped
+  // exactly like a person. The tell is that every token of it already appears in
+  // the OWNER's name. Rejected candidates fall through to research rather than
+  // being written, so the guard fails in the safe direction.
+  const restatesOwner = !!(personName && isOwnerNameRestated(personName, row.owner_name));
+  const isPerson = !!(personName && looksPerson(personName))
+    && !row.active_contact_is_phantom
+    && !restatesOwner;
   let out;
 
   if (isPerson) {
@@ -323,7 +336,7 @@ export async function processOwnerEnrichmentRow(row, deps) {
       out.disposition = { enrichment_action: 'manual_research',
         active_source: 'attach_failed:' + (r.reason || r.outcome || 'unknown') };
     }
-  } else if (row.active_contact_name && !row.active_contact_is_phantom
+  } else if (row.active_contact_name && !row.active_contact_is_phantom && !restatesOwner
              && Number(row.active_authority_level) <= 2) {
     // (b) MANAGER-ENTITY DRILL-THROUGH: the pick is a FIRM, not a person.
     out = await runManagerDrillthrough(row, deps);

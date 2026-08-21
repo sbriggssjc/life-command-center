@@ -526,6 +526,58 @@ const DEAL_STRING_RE =
 
 // True only for a plausible human name: a first + last (+ optional middle/
 // initial/suffix), all alpha tokens, no digits, no firm/deal tokens.
+/**
+ * TRUE when `personName` is just the OWNER'S OWN NAME restated — the company
+ * wearing a person's shape.
+ *
+ * ⚠️ THIS IS THE PRODUCER-SIDE FIX FOR THE PHANTOM-CONTACT DEFECT (P164).
+ * Measured 2026-08-21: 372 owners had their "decision-maker" recorded as their
+ * own company name, 306 of them minted as PERSON entities, 169 with no email —
+ * headed by LCC's largest owner by rent, Boyd Watterson Asset Management
+ * ($179.8M, 198 assets), whose contact was a person entity named
+ * "Boyd Watterson". `looksLikePersonName` cannot catch this: "Boyd Watterson"
+ * IS shaped exactly like a person. The tell is not the shape of the name, it is
+ * that every token of it already appears in the owner's name.
+ *
+ * The old population was cleared reversibly, but the enrich tick was still
+ * MINTING ~5 NEW ONES PER HOUR, so clearing alone would have regrown it. This
+ * guard closes the tap.
+ *
+ * DIRECTION OF FAILURE IS DELIBERATE. A rejected candidate is routed to
+ * research, never written — so a false positive costs one research task, while
+ * a false negative writes a fake decision-maker onto a live prospect. It
+ * therefore only fires on the unambiguous case: EVERY token of the person name
+ * present in the owner name, after stripping legal forms.
+ *
+ * ⚠️ It must NOT fire on a founder-named firm where the person is real:
+ *   "Sam Zell"        @ "Zell Group"            -> {sam,zell} ⊄ {zell,group}    OK
+ *   "John Smith"      @ "Smith Properties"      -> {john,smith} ⊄ {smith}       OK
+ *   "Boyd Watterson"  @ "Boyd Watterson Asset Management, LLC" -> subset -> BLOCKED
+ * A genuine principal almost always carries a given name the firm does not.
+ */
+const _OWNER_LEGAL_FORMS = new Set([
+  'llc', 'l', 'c', 'inc', 'incorporated', 'corp', 'corporation', 'ltd', 'limited',
+  'lp', 'llp', 'lllp', 'plc', 'pllc', 'pc', 'pa', 'trust', 'trustee', 'dst', 'reit',
+  'company', 'co', 'the', 'and', 'of',
+]);
+
+function _ownerNameTokens(v) {
+  return String(v || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t && !_OWNER_LEGAL_FORMS.has(t));
+}
+
+export function isOwnerNameRestated(personName, ownerName) {
+  const person = _ownerNameTokens(personName);
+  const owner = new Set(_ownerNameTokens(ownerName));
+  // Need real material on both sides; a one-token "person" is not evidence
+  // either way and is handled by the other guards.
+  if (person.length < 2 || owner.size < 2) return false;
+  return person.every((t) => owner.has(t));
+}
+
 export function looksLikePersonName(name) {
   if (typeof name !== 'string') return false;
   const t = name.trim();
