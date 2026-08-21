@@ -379,7 +379,7 @@ the shared header makes newly dangerous.
 | 1 | ~~Performance dashboard~~ | **6766–7144** | ✅ **SHIPPED 2026-08-20** — the map's first correct range |
 | 2 | ~~Sync health~~ | **6346–6538** | ✅ **SHIPPED 2026-08-20** |
 | 3 | ~~Domain health summary~~ | **6185–6344** (split) | ✅ **SHIPPED 2026-08-20** — "self-contained" was wrong; see below |
-| 4 | Metrics | 6025–6144 | reads shared state, no writers elsewhere |
+| 4 | ~~Metrics~~ | **6025–6135** (split) | ✅ **SHIPPED 2026-08-20** |
 | 5 | Research (**not** the banner's range) | 5225–~5860 **+ 261** | non-contiguous; fix the orphaned banner in the same change |
 | 6 | Comp reconciliation review lane | 4976–~5220 | W3.4; sits under the wrong banner today |
 
@@ -497,3 +497,45 @@ mis-filing this unit refused); a second `_opsSparkline` (**2 suites**); drag
 after ops.js.
 
 **Running tally — the map's "self-contained"/range claims: 1 correct, 6 wrong.**
+
+
+### Stage 4, Unit 4 — `ops-metrics.js` (SHIPPED 2026-08-20)
+
+ops.js 6025–6135 (sha256 `e2958100472c528c`, byte-identical). `ops.js` 6,463 → 6,358.
+`renderMetricsPage`. Entry point: `app.js:1133`, `case 'pageMetrics'`.
+
+**`metricCardHTML` did not come along**, even though the map's range included it and this
+page is its single heaviest consumer. Measured: **12 calls inside the region, 16 outside**.
+
+> **The majority-of-callers rule.** A helper whose majority of call sites live *outside* the
+> region is shared infrastructure, not part of the feature. Moving it would leave 16 call
+> sites depending on a file named "metrics". Being the biggest single consumer is not the
+> same as being the owner.
+
+Five mutations, all fail correctly: drag `metricCardHTML` across (**2 suites**); a copy of
+`renderMetricsPage` left behind (**2 suites**); `app.js` stops dispatching `pageMetrics`;
+eval-time statement; load after ops.js.
+
+---
+
+## 3b. An emerging shape — the orphaned shared helpers (flagged, NOT yet acted on)
+
+Three consecutive units have now had to leave a shared helper behind, and the leftovers are
+accumulating in `ops.js` between pointer comments with no section of their own:
+
+| helper | callers | why it stayed |
+|---|---|---|
+| `_opsSparkline` | 1 ops + **7 detail.js** | cross-file; draws the dialysis census chart |
+| `metricCardHTML` | **16** ops (after Unit 4) | majority of callers outside any one feature |
+| `jsStringArg` | scattered | generic escaper |
+| `_opsBtnGuard` | inline onclicks across regions | generic button guard |
+
+That is a real module wanting to exist — `ops-shared-ui.js`, loaded before every other ops
+sibling. **Deliberately not done yet.** It is a different and riskier kind of change from
+everything in W6.5 so far: the units to date move code *nothing else depends on across
+files*, whereas this one moves the code *everything* depends on, including `detail.js`.
+It deserves its own unit, its own mutation set, and a decision about whether `detail.js`
+should depend on an `ops-*` filename at all — arguably `_opsSparkline` belongs in a neutral
+`ui-sparkline.js` that both sides can own without either implying the other.
+
+Recording it here so the accumulation is a **noticed** pattern rather than drift.

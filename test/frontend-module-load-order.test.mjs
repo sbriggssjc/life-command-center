@@ -608,6 +608,44 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
       `ops-domain-health.js must declare only functions; found: ${offenders.join(' | ')}`);
   });
 
+  // ── Stage 4, Unit 4: ops-metrics.js ──────────────────────────────────────
+  it('ops-metrics.js is a CLASSIC script loaded BEFORE ops.js', () => {
+    const x = scriptIndex('ops-metrics.js');
+    assert.ok(x >= 0, 'index.html must load ops-metrics.js');
+    assert.ok(x < scriptIndex('ops.js'), 'ops-metrics.js must appear before ops.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="ops-metrics\.js/i,
+      'ops-metrics.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'ops-metrics.js')]),
+      'ops-metrics.js must be syntactically valid');
+  });
+
+  it('metrics moved but metricCardHTML stayed — majority of callers rule', () => {
+    const mSrc = readFileSync(join(root, 'ops-metrics.js'), 'utf8');
+    const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
+    assert.match(mSrc, /async function\s+renderMetricsPage\b/, 'ops-metrics.js defines renderMetricsPage');
+    assert.doesNotMatch(opsSrc, /function\s+renderMetricsPage\b/, 'ops.js must NOT redefine it');
+    // metricCardHTML: 12 calls were in the moved region, 16 remain in ops.js.
+    // A helper whose MAJORITY of callers sit outside the region is shared
+    // infrastructure, not part of the feature.
+    assert.match(opsSrc, /function\s+metricCardHTML\b/,
+      'metricCardHTML must stay in ops.js — most of its call sites are outside metrics');
+    assert.doesNotMatch(mSrc, /function\s+metricCardHTML\b/, 'ops-metrics.js must NOT take metricCardHTML');
+    const remaining = (opsSrc.match(/metricCardHTML\(/g) || []).length;
+    assert.ok(remaining >= 10,
+      `ops.js should still hold the bulk of metricCardHTML call sites; found ${remaining}`);
+    assert.match(readFileSync(join(root, 'app.js'), 'utf8'), /case 'pageMetrics':/,
+      'app.js still dispatches pageMetrics');
+    assert.match(opsSrc, /MOVED to ops-metrics\.js/, 'ops.js keeps a pointer comment');
+  });
+
+  it('STAGE 4 RULE holds for ops-metrics.js (functions only)', () => {
+    const mSrc = readFileSync(join(root, 'ops-metrics.js'), 'utf8');
+    const offenders = mSrc.split('\n')
+      .filter((l) => /^[^\s/}]/.test(l))
+      .filter((l) => !/^(async\s+)?function\s/.test(l));
+    assert.deepEqual(offenders, [], `ops-metrics.js must declare only functions; found: ${offenders.join(' | ')}`);
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
