@@ -10492,7 +10492,22 @@ function _udResearchLinks() {
   return html;
 }
 
-function buildResearchAssistantPrompt(provider = 'chatgpt') {
+// ⚠️ RENAMED 2026-08-20 (W6.5 Stage 4). This was `buildResearchAssistantPrompt`,
+// the SAME top-level name ops.js uses at ~5777 for a completely different
+// function — `buildResearchAssistantPrompt(item)`, which builds a research-TASK
+// brief. ops.js loads AFTER detail.js in index.html, so in the shared global
+// scope OPS.JS SILENTLY WON and this implementation never ran.
+//
+// The symptom looked like success: exportResearchToAssistant passes a provider
+// STRING ('chatgpt'), ops.js's version treats it as an `item` object, every
+// field defaults, and it returns a NON-EMPTY 476-char prompt reading
+// "Title: Untitled / Domain: Unknown / Assignee: Unassigned" with no property
+// data at all. Non-empty means the `if (!prompt)` guard below never fired, so
+// all three entry points — the Export to ChatGPT/Claude button (~9664) and the
+// ChatGPT/Claude Brief quick-links (~10488/10489) — copied a useless generic
+// prompt to the clipboard, opened the assistant, and toasted "Research brief
+// copied." Same class as the _opsSparkline "no trend" bug fixed earlier today.
+function _udBuildResearchAssistantPrompt(provider = 'chatgpt') {
   if (!_udCache || !_udCache.property) return '';
 
   const p = _udCache.property || {};
@@ -10538,7 +10553,7 @@ function buildResearchAssistantPrompt(provider = 'chatgpt') {
 }
 
 async function exportResearchToAssistant(provider) {
-  const prompt = buildResearchAssistantPrompt(provider);
+  const prompt = _udBuildResearchAssistantPrompt(provider);
   if (!prompt) {
     showToast('No property loaded', 'error');
     return;

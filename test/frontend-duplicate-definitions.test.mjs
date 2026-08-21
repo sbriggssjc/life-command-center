@@ -107,10 +107,20 @@ const KNOWN = [
   // editor shows live-looking code that cannot execute. Worth cleaning when
   // someone touches these files; left alone here because deleting them is a
   // behaviour change, not a refactor.
-  'buildResearchAssistantPrompt|detail.js|ops.js',
   'loadMergeQueue|app.js|contacts-ui.js',   // app.js 2,403b dead under 303b
   'openContactDetail|detail-openers.js|contacts-ui.js', // dead before Unit 7 too
 
+  // ── (D) was: buildResearchAssistantPrompt|detail.js|ops.js — MISCLASSIFIED
+  //    AS DEAD CODE (C) and it was actually a SECOND LIVE BUG, found 2026-08-20
+  //    while extracting the ops research block. detail.js:10541 called it with a
+  //    provider STRING; ops.js loads later and its (item) version won, defaulting
+  //    every field and returning a NON-EMPTY generic prompt — so the `if (!prompt)`
+  //    guard never fired and all three property-panel export buttons silently
+  //    copied a property-less brief. Fixed by renaming detail.js's to
+  //    _udBuildResearchAssistantPrompt. Entry removed because the duplicate is gone.
+  //    LESSON: "both definitions exist" does not tell you whether the loser is
+  //    dead — only the CALL SITES do. Two of the three (C) entries have now turned
+  //    out to be live bugs on inspection. Re-check the remaining ones the same way.
   // ── (D) was: _opsSparkline|detail.js|ops.js — the LIVE BUG. FIXED 2026-08-20:
   // the dead detail.js definition was removed and the two call sites now pass
   // numbers to ops.js's surviving implementation. The duplicate is gone, so it
