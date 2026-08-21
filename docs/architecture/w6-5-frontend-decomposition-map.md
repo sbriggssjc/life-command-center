@@ -378,7 +378,7 @@ the shared header makes newly dangerous.
 |---|---|---|---|
 | 1 | ~~Performance dashboard~~ | **6766–7144** | ✅ **SHIPPED 2026-08-20** — the map's first correct range |
 | 2 | ~~Sync health~~ | **6346–6538** | ✅ **SHIPPED 2026-08-20** |
-| 3 | Domain health summary | 6145–6345 | self-contained |
+| 3 | ~~Domain health summary~~ | **6185–6344** (split) | ✅ **SHIPPED 2026-08-20** — "self-contained" was wrong; see below |
 | 4 | Metrics | 6025–6144 | reads shared state, no writers elsewhere |
 | 5 | Research (**not** the banner's range) | 5225–~5860 **+ 261** | non-contiguous; fix the orphaned banner in the same change |
 | 6 | Comp reconciliation review lane | 4976–~5220 | W3.4; sits under the wrong banner today |
@@ -459,3 +459,41 @@ Six mutations, all fail correctly: drop the explicit export; break the bare-iden
 onclick; delete the perf graft (**2 suites** — the re-based Unit 1 guard and the Unit 2
 seam guard); eval-time statement (Stage-4 rule); `app.js` stops dispatching `pageSyncHealth`;
 load after ops.js.
+
+
+### Stage 4, Unit 3 — `ops-domain-health.js` (SHIPPED 2026-08-20)
+
+ops.js 6185–6344 (sha256 `d8d83fc07cf68225`, byte-identical). `ops.js` 6,617 → 6,463.
+`_opsTrendSeries` + `renderDomainHealthSummary`.
+
+**The map called this region "self-contained". It is not.** Three helpers sit under the B8
+banner and only one is B8 code — so the region was **split on purpose**, and the two shared
+helpers stayed:
+
+| helper | refs | verdict |
+|---|---|---|
+| `_opsSparkline` (~6157) | 1 in-region + **7 in `detail.js`** | **STAYS** — cross-file shared |
+| `metricCardHTML` (~6137) | **28** across ops.js from line 1724 | **STAYS** — shared, and above the banner |
+| `_opsTrendSeries` (6188) | 2, both B8 | travels |
+
+`_opsSparkline` draws the **dialysis Ops tab's patient-census chart** in `detail.js`. Filing
+it under "domain health" would make a dialysis property panel depend on a module named for
+an unrelated admin view. It has also already caused one silent production bug — `detail.js`
+used to define a rival `_opsSparkline(history)` that `ops.js` silently overrode in the
+shared scope, so the census chart printed the literal string **"no trend" on every property
+for months**. A function with that history does not get tucked into a feature module.
+
+The guard now asserts `_opsSparkline` is defined in **exactly one file across the whole
+front end** — mutation B (a second definition returning `"no trend"`, the original bug's
+literal shape) fails **two suites**: this assertion and the duplicate detector,
+independently.
+
+**The B8 banner stays in ops.js, where it now heads a shared helper.** That is honest about
+where the code is rather than tidy about where a banner is.
+
+Five mutations, all fail correctly: drag `_opsSparkline` into the feature module (the
+mis-filing this unit refused); a second `_opsSparkline` (**2 suites**); drag
+`metricCardHTML` along (28 call sites orphaned); eval-time statement (Stage-4 rule); load
+after ops.js.
+
+**Running tally — the map's "self-contained"/range claims: 1 correct, 6 wrong.**

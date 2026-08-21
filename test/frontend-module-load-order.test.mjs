@@ -552,6 +552,62 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
       `ops-sync-health.js must declare only functions/window exports; found: ${offenders.join(' | ')}`);
   });
 
+  // ── Stage 4, Unit 3: ops-domain-health.js ────────────────────────────────
+  it('ops-domain-health.js is a CLASSIC script loaded BEFORE ops.js', () => {
+    const x = scriptIndex('ops-domain-health.js');
+    assert.ok(x >= 0, 'index.html must load ops-domain-health.js');
+    assert.ok(x < scriptIndex('ops.js'), 'ops-domain-health.js must appear before ops.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="ops-domain-health\.js/i,
+      'ops-domain-health.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'ops-domain-health.js')]),
+      'ops-domain-health.js must be syntactically valid');
+  });
+
+  it('⚠️ the SHARED helpers under the B8 banner did NOT travel with it', () => {
+    const dhSrc = readFileSync(join(root, 'ops-domain-health.js'), 'utf8');
+    const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
+    const detailSrc = readFileSync(join(root, 'detail.js'), 'utf8');
+
+    // B8-only code moved.
+    for (const fn of ['_opsTrendSeries', 'renderDomainHealthSummary']) {
+      assert.match(dhSrc, new RegExp(`function\\s+${fn}\\b`), `ops-domain-health.js defines ${fn}`);
+      assert.doesNotMatch(opsSrc, new RegExp(`function\\s+${fn}\\b`), `ops.js must NOT redefine ${fn}`);
+    }
+
+    // _opsSparkline is CROSS-FILE SHARED and must stay put. detail.js draws the
+    // dialysis Ops-tab census chart with it. This function already caused one
+    // silent production bug (a rival detail.js definition that ops.js overrode,
+    // so the chart printed "no trend" on every property for months) — it does
+    // not get tucked into a feature module.
+    assert.match(opsSrc, /function\s+_opsSparkline\b/,
+      '_opsSparkline must stay in ops.js — it is shared, not domain-health code');
+    assert.doesNotMatch(dhSrc, /function\s+_opsSparkline\b/,
+      'ops-domain-health.js must NOT take _opsSparkline');
+    assert.ok(/_opsSparkline\(/.test(detailSrc),
+      'detail.js still calls _opsSparkline — that is why it stays shared');
+    // Exactly ONE definition must exist across the whole front end.
+    const defs = readdirSync(root)
+      .filter((f) => /\.js$/.test(f))
+      .filter((f) => /function\s+_opsSparkline\b/.test(readFileSync(join(root, f), 'utf8')));
+    assert.deepEqual(defs, ['ops.js'],
+      `_opsSparkline must be defined in exactly one file; found in: ${defs.join(', ')}`);
+
+    // metricCardHTML: 28 call sites in ops.js, also shared, also stays.
+    assert.match(opsSrc, /function\s+metricCardHTML\b/, 'metricCardHTML stays in ops.js');
+    assert.doesNotMatch(dhSrc, /function\s+metricCardHTML\b/, 'ops-domain-health.js must NOT take metricCardHTML');
+
+    assert.match(opsSrc, /MOVED to ops-domain-health\.js/, 'ops.js keeps a pointer comment');
+  });
+
+  it('STAGE 4 RULE holds for ops-domain-health.js (functions only)', () => {
+    const dhSrc = readFileSync(join(root, 'ops-domain-health.js'), 'utf8');
+    const offenders = dhSrc.split('\n')
+      .filter((l) => /^[^\s/}]/.test(l))
+      .filter((l) => !/^(async\s+)?function\s/.test(l));
+    assert.deepEqual(offenders, [],
+      `ops-domain-health.js must declare only functions; found: ${offenders.join(' | ')}`);
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
