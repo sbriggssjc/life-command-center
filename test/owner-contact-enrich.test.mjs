@@ -374,3 +374,43 @@ describe('P163 — a phantom contact is not a link', () => {
       + 'stamping only one leaves the phantom gate live on one path and dead on the other');
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+describe('P163 — a phantom must not be re-attached to itself', () => {
+  // ⚠️ THE LOOP THIS ALMOST SHIPPED. Getting a phantom PAST the already_linked
+  // guard is only half the job. The phantom's name IS the company's own name and
+  // is shaped like a person ("Boyd Watterson"), so looksLikePersonName says yes
+  // and the ATTACH branch would re-link the same phantom, PATCH
+  // active_contact_entity_id back to the same id, and return `attached` — a
+  // fabricated success and a self-healing loop that would make P162+P163 look
+  // like they worked while changing nothing.
+  const phantom = {
+    entity_id: 'e9', owner_name: 'Boyd Watterson Asset Management, LLC',
+    active_contact_name: 'Boyd Watterson', active_contact_entity_id: 'p9',
+    active_contact_is_phantom: true, active_authority_level: 1,
+  };
+
+  it('never routes a phantom to the ATTACH branch', async () => {
+    let attachCalled = false;
+    const deps = {
+      looksLikePersonName: () => true,        // the phantom DOES look like a person
+      normalizePersonName: (n) => n,
+      ensureEntityLink: async () => { attachCalled = true; return { entity_id: 'p9' }; },
+      runExternalEnrichment: async () => ({ outcome: 'external_attempted' }),
+    };
+    try { await processOwnerEnrichmentRow(phantom, deps); } catch (_e) { /* deps are partial */ }
+    assert.equal(attachCalled, false,
+      'attachPersonToOwner must never be reached for a phantom — that is the re-attach loop');
+  });
+
+  it('never routes a phantom to the MANAGER-DRILL branch either', () => {
+    // authority_level 1 satisfies the drill condition, so only the explicit
+    // phantom check keeps it out. Drilling would mint the owner's OWN name as a
+    // manager org.
+    const src = readFileSync(join(root, 'api/_handlers/owner-contact-enrich.js'), 'utf8');
+    assert.match(src, /!row\.active_contact_is_phantom\s*\n?\s*&& Number\(row\.active_authority_level\)/,
+      'the manager-drill branch must exclude phantoms');
+    assert.match(src, /looksPerson\(personName\)\) && !row\.active_contact_is_phantom/,
+      'the isPerson test must exclude phantoms');
+  });
+});

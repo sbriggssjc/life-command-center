@@ -293,7 +293,24 @@ export async function processOwnerEnrichmentRow(row, deps) {
   }
 
   const personName = row.active_contact_name ? normalize(row.active_contact_name) : null;
-  const isPerson = !!(personName && looksPerson(personName));
+  // P163 — ⚠️ A PHANTOM'S NAME MUST NEVER TAKE THE ATTACH BRANCH.
+  //
+  // The phantom name IS the company's own name ("Boyd Watterson" for Boyd
+  // Watterson Asset Management, LLC), and it is shaped exactly like a person, so
+  // looksLikePersonName says yes. Letting it through would call
+  // attachPersonToOwner with that name and RE-ATTACH THE VERY PHANTOM the queue
+  // change just unblocked — PATCHing active_contact_entity_id back to the same
+  // id and returning `attached`. A fabricated success, and a self-healing loop
+  // that would have made the whole of P162/P163 look like it worked while
+  // changing nothing. Caught before the first tick ran, by asking what the
+  // worker does AFTER the guard rather than assuming the guard was the fix.
+  //
+  // Branch (b) is wrong for the same reason: drilling the phantom as a "manager
+  // firm" just mints the owner's own name as an org. A phantom is not a person
+  // and not a manager — it is an owner with NO contact, so it belongs in the
+  // external-enrichment chain (c), which is what the public-records path exists
+  // for.
+  const isPerson = !!(personName && looksPerson(personName)) && !row.active_contact_is_phantom;
   let out;
 
   if (isPerson) {
@@ -306,7 +323,8 @@ export async function processOwnerEnrichmentRow(row, deps) {
       out.disposition = { enrichment_action: 'manual_research',
         active_source: 'attach_failed:' + (r.reason || r.outcome || 'unknown') };
     }
-  } else if (row.active_contact_name && Number(row.active_authority_level) <= 2) {
+  } else if (row.active_contact_name && !row.active_contact_is_phantom
+             && Number(row.active_authority_level) <= 2) {
     // (b) MANAGER-ENTITY DRILL-THROUGH: the pick is a FIRM, not a person.
     out = await runManagerDrillthrough(row, deps);
     if (out.outcome !== 'manager_drillthrough') {
