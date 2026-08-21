@@ -126,6 +126,33 @@ action it does not own. Until that edit lands the two movers race **benignly** �
 message.
 
 ---
+## 2026-08-21 Cowork reconcile — P122/P123/P124 verified; ⚠️ REDEPLOY PENDING (draft-assist safety)
+
+All three landed and each corrected my prompt's premise. **DB layers verified live on LCC Opps:** P122 crons
+`cm-gov-packet-refresh` (start) + `cm_packet_refresh_tick` (per-min) armed, 0 open alerts for that source (gov
+packet updated_at moved 2026-08-14 → 2026-08-21, 41→45/45 charts); P123 `v_lcc_deal_match_run_health` +
+`duration_ms` present; P124 `PA_OUTLOOK_DRAFT_FLOW` registered, profile → v3.0.0.
+
+**⚠️ THE JS HALVES OF P123 + P124 ARE NOT DEPLOYED.** `/version` = `527d78f9b05c`, unchanged since P121 — the
+P123/P124 merges (PR #1767 / #1765) have NOT redeployed. Consequences until a Railway redeploy of `main` +
+`verify:deploy`:
+- **P124 (safety):** `DRAFT_ASSIST` is **ON** (since 2026-08-14) with the **old contaminated classifier** live —
+  `purpose=cold_bd` still draws from the personal-mail sump (89.7% of `cold_bd_outreach` was bunk-notes/meal-
+  plans/football, 0 cold BD). A save to an institutional owner would be in the wrong register. **Action: redeploy
+  promptly, OR flip `DRAFT_ASSIST` off until then; and check Outlook Drafts for anything created this past week
+  (depends on `PA_OUTLOOK_DRAFT_URL` being set on Railway).**
+- **P123 (benign):** matcher keeps completing (~80s) but pg_net keeps timing out at 60s → `no_response` alerts
+  persist until the v2.2 engine (bulk pre-fetch, work budget, run-log-opened-first) deploys.
+
+**Premise corrections worth carrying:** P122 — pg_net queue inserts are TRANSACTIONAL, so the statement-timeout
+abort rolled back every fired request: 0 HTTP calls delivered in 7 runs, and the gov packet lives in the DOMAIN
+DB (gov), not LCC Opps `cm_report_snapshots` (empty). P123 — not broken/not a matcher timeout: `no_response` is
+a pg_net 60s cap while Railway finishes+logs ok; "6 in 24h" was a ~6h retention artifact = 100% of calls; the
+cost was ~680 sequential N+1 round-trips, not the DB. P124 — `DRAFT_ASSIST` was already ON (not gated off), and
+`email_bodies`-first dedup is one sort-direction from silent total failure (866/0 vs 614/614). Dry-run is
+Scott's on-box step (GaryBuilt Ollama unreachable from cloud); build sheet
+`docs/architecture/flows/outlook-draft-reply-executor.md`.
+
 ## 2026-08-21 runs review — email loop healthy; 2 unrelated lanes to watch
 
 Deploy live + git-pinned (`/version` = `527d78f9b05c`). **Email-orchestration loop all green:** move queue
