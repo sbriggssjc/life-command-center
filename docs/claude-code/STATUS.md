@@ -52,6 +52,18 @@ dispatcher and the shared completeness-rail / Next-Step chrome stay in `detail.j
 (`xengecqvemvfknjvbvrq`), so the data layer is live now. The `api/sync.js` + `api/_shared/todo-completion.js`
 changes ship on the next Railway redeploy of merged `main` → then run `npm run verify:deploy`.**
 
+**Cowork reconcile-verified live 2026-08-20 (PR #1764 merged):** `staged_at` + `todo_completed_at` columns
+present, `lcc_todo_completion_mark_filed` RPC live, **stranded detector = 0** (was 61), mirror worklist
+drained to **0**. And the P120 backlog fully cleared through the executor — `move_outcome` now **329 moved +
+15 already_out**. **⏭ TWO Scott-side items remain:** (1) **Deploy gate** — until `main` is redeployed +
+`verify:deploy`, the *deployed* Flow-6 code still writes `move_status='moved'`, so the DB layer prevents NEW
+stranding but stranded/filed rows still look alike; merge-to-deploy promptly. (2) **Flow 6 PA edit (non-block)**
+— that PA flow still runs its own Move + Flag-clear; LCC now publishes `move:false`/`clear_flag:false` but can't
+stop a PA action it doesn't own, so the movers race benignly (loser acks `ErrorItemNotFound → already_out`).
+Delete those two actions from the Flow-6 PA flow to end the redundant Graph call. **Judgment call to note:** the
+61 re-queued messages all qualify via the `inbox_triaged` arm (P119's bulk-archive smell) — CC let them drain
+(reversible); a one-line predicate parks them instead if preferred.
+
 P120's own §"Known ordering hazard" went from latent to REACHABLE the moment its executor started filling the
 staging folder (first placements **2026-08-20 19:42–20:15Z, 81 messages**, with 240 more still draining at
 25/run × 4 runs/hr). Two consumers reacted to one event — a staged email's To Do completing — and **both keyed
