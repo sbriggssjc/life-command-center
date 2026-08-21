@@ -254,3 +254,79 @@ greetings" while citing "Hi Paul," on 7 bodies).
   non-transmitting), but import/binding and `PA_OUTLOOK_DRAFT_URL` are operator steps.
   `PA_OUTLOOK_DRAFT_FLOW` is now registered in `feature_flags_registry` so its OFF state shows up in
   the daily Dormant Capabilities digest instead of being invisible.
+
+---
+
+## P125 (2026-08-21) — retrieval was grounding drafts in the wrong exemplars, and every surface read green
+
+Diagnosed live during the P124 acceptance dry-run. After the contact-history pull backfilled 55
+full-body emails Scott had written to `susan.holdsworth@davita.com`, a draft *to Susan* returned the
+**same five preview-only exemplars as before the pull**, none of them to her, and `voice_confidence`
+still claimed *"preview-era OPENINGS only (~255-char cap)"*. Four independent defects, each measured.
+
+### 1. The loader was buying the wrong rows
+
+`loadCorpus` paged the newest 3,000 rows of the **whole store** and applied the `SCOTT_FROM` gate
+afterwards, in JS. `email_bodies` holds 28,090 body-bearing rows of which 1,188 are Scott's, so that
+window contained **565 of them**. The author filter is now a PostgREST predicate on both stores; the
+JS gate stays as the authority. Corpus 565 → the full 2,139 source rows, and the payload reports
+`corpus_full_bodies` separately — a corpus that halves in real bodies still looks fine by row count.
+
+### 2. ⚠️ "Full body" was inferred from LENGTH, and Scott writes short on purpose
+
+This is the finding worth carrying forward. `FULL_BODY_MIN_CHARS = 300` treats a short body as a
+truncated preview. Measured over the 777 Scott-authored rows carrying a real `body_html`, after the
+cleaner strips the quoted chain and signature: **438 clean to 12–299 characters**, 268 to ≥300, and
+71 to under 12 (correctly dropped — `"AWESOME!"`, `"Just did!"`). **Median cleaned prose: 160
+characters.**
+
+So the heuristic misfiled **62% of the genuine full bodies**, and `voice_confidence` faithfully
+reported the wrong thing. The profile's own first rule is *"extremely short and punchy"* — the
+metric was contradicting the very trait it was measuring. Provenance is a fact held at load time
+(which body column the text came from); it is now carried on every exemplar, and the length test is
+a fallback that announces itself (`coverage.basis`).
+
+> **The general form:** a proxy for a fact you already hold is not a measurement. The same shape as
+> P124's `else`-branch bucket and P159a's `drillthrough: 37` — plausible, non-zero, and wrong.
+
+### 3. The two rankers disagreed about what relevance means
+
+`rankExemplarsByEmbedding` scored cosine + a 0.02 bucket nudge and **nothing else** — it accepted
+`target.recipientEmail` and ignored it. `rankExemplarsDeterministic` weighted recipient at +2 but put
+bucket *above* it at +3. So which notion of relevance applied depended on whether Ollama answered,
+and neither expressed the intent. Both now read one `recipientMatchLevel` (to 2 / cc 1.5 / domain 1;
+**cc was previously invisible**, and 3 of Susan's 55 rows are cc-only).
+
+**A weight that can lose is indistinguishable from one that is not there**, so full-body and
+exact-recipient are now a hard ordered partition (`selectExemplars`) rather than score terms:
+
+| tier | | |
+|---|---|---|
+| 1 | real body + exact recipient | both signals — the best exemplar there is |
+| 2 | real body | voice evidenced, context generic |
+| 3 | preview + exact recipient | context only |
+| 4 | preview | last resort |
+
+A **domain-only** match is deliberately not a tier — a colleague at the same firm is a different
+person, so that stays a tiebreak inside a tier. Lower tiers only fill slots a higher tier could not.
+
+### 4. Deal resolution did not fail — it had never been attempted
+
+`facts.source: no_entity_relational` reads as "no deal on file". The truth was that facts loaded only
+`if (entityId)` and the dry-run passed none, so nothing looked. `resolveDealEntity` reads the hourly
+deal-email matcher's **existing verdict** (`activity_events.source_type='lcc:deal_match'`,
+`external_id` = the RFC internetMessageId) — no new heuristic on a path where a wrong deal would be
+worse than none. Thread-scoped because the matcher skips already-attributed mail: verified live, the
+exact reply target had no row of its own and its conversation resolved to
+`DaVita Dialysis - The Villages - FL`. An empty result now names the rung
+(`thread_not_attributed_to_a_deal` ≠ "no deal exists").
+
+### Superseded from the P124 entry above
+
+- *"The PA flow is unverified against a live tenant … `operationId` set pinned to `CreateDraftMessageV3`
+  + `HttpRequest`"* — **both halves are now out of date.** A build was imported and a real draft saved
+  on 2026-08-21; and `CreateDraftMessageV3` **does not exist in this tenant**, so the committed
+  definition now uses the Graph `POST /me/messages` passthrough throughout, with `$authentication`
+  declared and `ContentType: application/json` on every Body-carrying request. What remains unverified
+  is narrower and stated in the flow doc: **the P125 definition has not been re-imported**, so
+  threading is still unproven and `outlook_draft.threaded` will read `null` until it is.

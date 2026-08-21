@@ -143,6 +143,81 @@ threaded reply (createReply/seam `in_reply_to` path), and it lacked deal context
 Plus the retrieval-grounding gap already in 125 (drafting from 5 preview openings, not the 55 full-body Susan
 emails now in the corpus). 125 now covers all three.
 
+---
+## 2026-08-21 (P125) — draft-assist retrieval: four defects, all measured live, all root-caused
+
+**JS-only + a flow re-import. Ships on the next Railway redeploy of merged `main` → `npm run verify:deploy`.**
+No migration, no `field_source_priority` change. Full suite 4,258 tests, 0 new failures (2 pre-existing on
+`main`, both in `auto-scrape-listings`, unrelated).
+
+**1. The corpus loader spent its whole page budget on other people's mail.** `loadCorpus` paged the newest
+3,000 rows of the WHOLE store and only then dropped everything not authored by Scott. Live: `email_bodies`
+holds **28,090** body-bearing rows of which **1,188** are his — so that window contained just **565**, and
+`retrieval.corpus_size` reported a number far below the corpus that exists. `SCOTT_FROM` is now a PostgREST
+filter on both stores (`from_email=in.(…)` / `metadata->>from_email=in.(…)`); the JS gate stays as the
+authority. The whole outbound corpus (1,188 + 951 `activity_events` = 2,139) now fits in one cap with headroom,
+and the payload reports `corpus_full_bodies` + `corpus_truncated` — **assert on full bodies, never row count.**
+
+**2. ⚠️ THE FULL-BODY TEST WAS A LENGTH HEURISTIC, AND IT WAS WRONG ABOUT 62% OF SCOTT'S REAL EMAILS.**
+`FULL_BODY_MIN_CHARS = 300` infers provenance from size — and Scott's voice is short *by design* (the profile's
+own first rule). Measured over the 777 Scott-authored rows carrying a real `body_html`, after the cleaner strips
+the quoted chain and signature:
+
+| cleaned prose | rows | |
+|---|---|---|
+| < 12 chars | 71 | correctly dropped as boilerplate — `"AWESOME!"`, `"Just did!"` |
+| **12–299 chars** | **438** | **genuine full bodies the heuristic called "preview-era openings"** |
+| ≥ 300 chars | 268 | |
+
+Median cleaned prose is **160 characters**. That is why `voice_confidence` kept reporting *"preview-era OPENINGS
+only (~255-char cap)"* over a corpus that is nothing of the kind — it was measuring length, not provenance.
+Provenance is a fact held at load time (which body column the text came from), so it is now carried
+(`exemplar.full_body`) and the length test survives only as a fallback for callers that supply none.
+`exemplarBodyCoverage` reports its `basis` so the fallback can never be mistaken for a real read.
+
+**3. The embedding ranker was entirely recipient-blind — and that is invisible from outside.** It scored cosine
+plus a 0.02 bucket nudge and nothing else, so `target.recipientEmail` was accepted and discarded: backfilling
+Susan Holdsworth's 55 full-body emails changed the retrieved set by **nothing**, because no term could see them.
+The deterministic ranker *did* weight recipient (+2) — so the two rankers disagreed about what relevance means,
+and which one ran depended only on whether Ollama answered. Both now read one `recipientMatchLevel` (to 2 / cc
+1.5 / domain 1 — **cc was never read at all before**, and 3 of Susan's 55 rows are cc-only).
+
+**A weight that can lose is indistinguishable from one that is not there.** So the two guarantees are a hard
+ordered PARTITION (`selectExemplars`), not score terms: `full body + exact recipient` → `full body` →
+`preview + exact recipient` → `preview`. Full-body is the outer key (a preview evidences a greeting and nothing
+else); exact recipient is the inner one. **A domain-only match is deliberately NOT a tier** — a colleague at the
+same firm is a different person. Lower tiers only ever fill slots a higher tier could not, so a thin corpus is
+never starved. Applied around *whichever* ranker won, so the guarantee no longer depends on Ollama.
+
+**4. Deal resolution did not fail — it did not exist.** Facts were loaded only `if (entityId)`, so a dry-run
+supplying just a recipient reported `facts.source: no_entity_relational` for a live, named, in-progress deal.
+Nobody had asked. `resolveDealEntity` now reads the verdict the hourly deal-email matcher **already records**
+(`activity_events.source_type='lcc:deal_match'`, `external_id` = the RFC internetMessageId, `entity_id` = the
+deal) — no new matching heuristic. Thread-scoped, not message-scoped, because the matcher is budget-bounded and
+skips already-attributed mail: **verified live** — the exact reply target draft-assist picked for Susan had no
+row of its own, and its conversation resolved to `DaVita Dialysis - The Villages - FL` (`17218fd0-…`, stage
+`non_refundable`, expected close 2026-08-21). An unresolved deal now names the rung that came up empty
+(`thread_not_attributed_to_a_deal` ≠ "no deal exists").
+
+**5. The threading outcome was unobservable, which is why a live save was needed to notice it.**
+`{ok, draft_id, web_link}` is identical for a threaded reply and a fresh message. Three real defects in the flow
+definition: `Respond_Success` ran `runAfter: Is_Reply: [Succeeded]` — after **both** branches — so the reply path
+**responded twice** and the second read a null `body('Create_draft')`; `Set_reply_body` PATCHed `toRecipients`
+onto a reply draft that already carries the thread's recipients; and an empty `$filter` result built
+`/me/messages//createReply`. Fixed: one responder per path, body-only PATCH, a `Thread_Message_Found` guard that
+falls back to a standalone draft **and says so**. Every response now echoes `threaded` (+ `conversationId`), the
+seam surfaces `conversation_matches_thread`, and a requested-but-unthreaded save returns a `threading_warning`.
+`threaded: null` ≠ `false` — "an older import" and "it did not thread" are different facts.
+
+**The repo definition had also drifted from the tenant.** Per the hand-package notes above, `CreateDraftMessageV3`
+does not exist in this tenant, `$authentication` must be declared and referenced, and every `HttpRequest` with a
+Body needs `ContentType: application/json`. All three are now in the committed definition — a definition that only
+describes a flow nobody can import cannot be reasoned about.
+
+**⚠️ REMAINING GATE (Scott/Cowork, live):** re-import `flow-lcc-create-outlook-draft.json` and re-run the
+acceptance test in `docs/architecture/flows/outlook-draft-reply-executor.md`. Until then `outlook_draft.threaded`
+will read `null` and threading stays unverified.
+
 ## 2026-08-21 Cowork reconcile — P122/P123/P124 verified; ⚠️ REDEPLOY PENDING (draft-assist safety)
 
 All three landed and each corrected my prompt's premise. **DB layers verified live on LCC Opps:** P122 crons

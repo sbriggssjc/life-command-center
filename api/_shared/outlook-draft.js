@@ -100,6 +100,17 @@ export async function createOutlookDraftViaPA(draft = {}, opts = {}) {
       ok: parsed.ok !== false,
       draft_id: parsed.draft_id || parsed.id || null,
       web_link: parsed.web_link || parsed.webLink || null,
+      // P125: THE THREADING OUTCOME MUST BE OBSERVABLE.
+      // The flow branches on in_reply_to, but the response carried nothing that
+      // distinguished a threaded reply draft from a fresh standalone one — so a
+      // draft that silently landed OUTSIDE the conversation looked byte-identical
+      // to a correct one at this seam, and did on 2026-08-21. The flow now echoes
+      // `threaded` + the created draft's `conversation_id`; `threaded` is null (not
+      // false) when an older flow build answers without it, because "the flow did
+      // not say" and "the flow said no" are different facts.
+      threaded: typeof parsed.threaded === 'boolean' ? parsed.threaded : null,
+      conversation_id: parsed.conversation_id || parsed.conversationId || null,
+      thread_note: parsed.thread_note || null,
     };
   } catch (err) {
     const aborted = err && err.name === 'AbortError';

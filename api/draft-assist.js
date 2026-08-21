@@ -48,6 +48,7 @@ import { flagEnabled, fetchFeatureFlag } from './_shared/feature-flag.js';
 import {
   SCOTT_FROM, VALID_PURPOSES,
   bucketForPurpose, extractDealFacts, rankExemplarsDeterministic, rankExemplarsByEmbedding,
+  selectExemplars, exemplarBodyCoverage, recipientMatchLevel,
   buildGenerationPrompt, parseDraftJson, validateDraftFacts, voiceConfidenceNote,
 } from './_shared/draft-assist-core.js';
 
@@ -66,18 +67,43 @@ function loadVoiceProfile() {
   return _voiceCache;
 }
 
+// Page budget. Scott's whole outbound corpus is ~2,139 rows live (2026-08-21), so
+// this leaves years of headroom; `truncated` reports it honestly if it ever binds.
+const CORPUS_PAGE_CAP = 6000;
+
 // PostgREST caps at 1000 rows/page (CLAUDE.md footgun) — stride 1000.
-async function pageAll(build, cap = 3000) {
+// P125: `truncated` is set when the cap stopped a still-producing scan, so a
+// silently-clipped corpus can never read as a complete one.
+async function pageAll(build, cap = CORPUS_PAGE_CAP) {
   const out = [];
+  let truncated = false;
   for (let offset = 0; out.length < cap; offset += 1000) {
     const res = await opsQuery('GET', build(offset, 1000), null, { countMode: 'none', timeoutMs: 12000 });
     const rows = res && res.ok && Array.isArray(res.data) ? res.data : [];
     if (rows.length === 0) break;
     out.push(...rows);
     if (rows.length < 1000) break;
+    if (out.length >= cap) { truncated = true; break; }
   }
+  out.truncated = truncated;
   return out;
 }
+
+// ⚠️ P125 — FILTER THE AUTHOR AT THE DATABASE, NOT IN JS.
+//
+// Both queries used to page the newest `CORPUS_PAGE_CAP` rows of the WHOLE store
+// and only then drop everything not authored by Scott. Since the stores hold every
+// message in the mailbox, that spent the entire page budget on inbound mail:
+// measured live on LCC Opps 2026-08-21, `email_bodies` holds 28,090 body-bearing
+// rows of which 1,188 are Scott's — so the newest-3,000 window contained just
+// **565 of them**, and `retrieval.corpus_size` reported a number far below the
+// corpus that exists. Worse, the shortfall is invisible: a smaller corpus still
+// returns five exemplars and every field reads healthy.
+//
+// Pushing SCOTT_FROM into the PostgREST filter makes the page budget buy only
+// usable rows — Scott's whole outbound corpus (1,188 + 951 = 2,139 live) now fits
+// inside one cap with headroom, so `corpus_size` reconciles with the DB.
+const SCOTT_FROM_FILTER = [...SCOTT_FROM].join(',');   // verified all-lowercase live
 
 /**
  * Load + clean Scott's authored SENT corpus (outbound only) from both stores,
@@ -89,7 +115,12 @@ async function loadCorpus() {
     pageAll((o, l) =>
       `activity_events?select=id,body,title,metadata,occurred_at` +
       `&source_type=in.(outlook,outlook_sent,outlook_tagged)` +
-      `&body=not.is.null&order=occurred_at.desc&offset=${o}&limit=${l}`),
+      `&body=not.is.null` +
+      // P125: author-filter at the DB (see the SCOTT_FROM_FILTER note). The JS
+      // SCOTT_FROM.has() gate below is KEPT as the authority — this only stops the
+      // page budget being spent on mail we are about to discard.
+      `&metadata->>from_email=in.(${SCOTT_FROM_FILTER})` +
+      `&order=occurred_at.desc&offset=${o}&limit=${l}`),
     pageAll((o, l) =>
       `email_bodies?select=id,body_preview,body_text,body_html,subject,from_email,to_emails,cc_emails,sent_at,received_at,internet_message_id` +
       // P117: gate on ANY body column, not `body_preview` alone — a body-only row
@@ -97,13 +128,15 @@ async function loadCorpus() {
       // filter would have made it invisible. Harmless today (0 such rows live),
       // latent tomorrow.
       `&or=(body_preview.not.is.null,body_text.not.is.null,body_html.not.is.null)` +
+      `&from_email=in.(${SCOTT_FROM_FILTER})` +
       `&order=received_at.desc&offset=${o}&limit=${l}`),
   ]);
 
   const seen = new Set();
   const rows = [];
   let excludedPersonal = 0;
-  const push = (id, imid, raw, subject, from, toEmails, ccEmails, ts) => {
+  let fullBodyRows = 0;
+  const push = (id, imid, raw, subject, from, toEmails, ccEmails, ts, fullBody) => {
     if (!SCOTT_FROM.has(String(from || '').toLowerCase())) return;   // outbound-only gate
     const key = imid || `body:${String(raw).slice(0, 80)}`;
     if (seen.has(key)) return;
@@ -120,26 +153,46 @@ async function loadCorpus() {
     // buckets are exactly the ones that trigger that fallback — so a rank-time
     // filter would still have let a bunk note become a cold-BD exemplar.
     if (excludeFromCorpus) { excludedPersonal += 1; return; }
-    rows.push({ id: imid || String(id), cleaned, subject: subject || '', bucket, toEmails: toEmails || [], ts });
+    if (fullBody) fullBodyRows += 1;
+    rows.push({
+      id: imid || String(id), cleaned, subject: subject || '', bucket,
+      toEmails: toEmails || [],
+      // P125: cc was never carried, so a thread where the counterparty sits on cc
+      // scored as if they were not on the message at all.
+      ccEmails: ccEmails || [],
+      // P125: PROVENANCE, not a length guess — true iff the text came from a real
+      // body column. See FULL_BODY_MIN_CHARS in draft-assist-core.js for why the
+      // length heuristic it replaces was wrong on 62% of Scott's real full bodies.
+      full_body: !!fullBody,
+      ts,
+    });
   };
   // P117 ORDER MATTERS: dedup is first-wins on internet_message_id and the stores
   // OVERLAP, so `email_bodies` (which holds the real bodies) must be drained FIRST
   // or a message's ~255-char activity_events preview claims the key and its own
   // full body is dropped as a duplicate — silently starving retrieval of exactly
   // the full-body exemplars voice_confidence now reports on.
+  const hasFullBody = (o) => !!(String(o.body_text || '').trim() || String(o.body_html || '').trim());
   for (const r of eb) {
     // Prompt 110: full body_text → tag-stripped body_html → capped body_preview.
     const raw = pickBestBody({ body_text: r.body_text, body_html: r.body_html, body_preview: r.body_preview });
-    push(r.id, r.internet_message_id, raw, r.subject, r.from_email, r.to_emails || [], r.cc_emails || [], r.sent_at || r.received_at);
+    push(r.id, r.internet_message_id, raw, r.subject, r.from_email, r.to_emails || [], r.cc_emails || [],
+      r.sent_at || r.received_at, hasFullBody(r));
   }
   for (const r of ae) {
     const m = r.metadata || {};
     // Prompt 110: prefer a full body when the flow forwarded one into metadata
     // (body_text / body_html); fall back to the ~255-char body snippet.
     const raw = pickBestBody({ body_text: m.body_text, body_html: m.body_html, body: r.body });
-    push(r.id, m.internet_message_id, raw, r.title, m.from_email, m.to_emails || [], m.cc_emails || [], r.occurred_at);
+    // Live 2026-08-21: 0 of 951 Scott-authored activity_events rows carry a body in
+    // metadata, so this store contributes preview-only exemplars — which is exactly
+    // why the full-body partition must be provenance-driven and not a length guess.
+    push(r.id, m.internet_message_id, raw, r.title, m.from_email, m.to_emails || [], m.cc_emails || [],
+      r.occurred_at, hasFullBody(m));
   }
   rows.excludedPersonal = excludedPersonal;   // honest count — reported, never silent
+  rows.fullBodyRows = fullBodyRows;           // P125: assert on this, never on rows.length
+  rows.truncated = !!(eb.truncated || ae.truncated);
   return rows;
 }
 
@@ -196,6 +249,7 @@ async function retrieveExemplars(corpus, target, intent, k = 5) {
   const candidates = pool.length >= 2 ? pool : corpus;   // fall back to full corpus if bucket is thin
 
   let method = 'deterministic';
+  let rank = rankExemplarsDeterministic;
   try {
     const queryText = `${target.bucket} :: ${intent}`;
     const embeds = await invokeOnPremEmbeddings([queryText, ...candidates.map((c) => c.cleaned)]);
@@ -203,11 +257,78 @@ async function retrieveExemplars(corpus, target, intent, k = 5) {
       const queryVec = embeds[0];
       candidates.forEach((c, i) => { c.vec = embeds[i + 1]; });
       method = 'embedding_knn';
-      return { exemplars: rankExemplarsByEmbedding(candidates, queryVec, target, k), method };
+      rank = (cands, tgt, n) => rankExemplarsByEmbedding(cands, queryVec, tgt, n);
     }
   } catch { /* fall through to deterministic */ }
 
-  return { exemplars: rankExemplarsDeterministic(candidates, target, k), method };
+  // P125: selectExemplars applies the full-body-first PARTITION around whichever
+  // ranker won, so the "preview only as a last resort" guarantee cannot depend on
+  // whether Ollama happened to answer.
+  return { exemplars: selectExemplars(candidates, target, k, rank), method, pool_size: candidates.length };
+}
+
+/**
+ * P125 — resolve the DEAL behind this draft when the caller did not name one.
+ *
+ * ⚠️ Be precise about what was wrong before: deal resolution did not FAIL, it did
+ * not EXIST. `facts` were loaded only `if (entityId)`, so a dry-run that supplied
+ * just a recipient reported `facts.source: 'no_entity_relational'` and attached no
+ * deal context — for a live, named, in-progress deal. That reads as "no deal on
+ * file" when the truth was "nobody asked".
+ *
+ * The ladder below invents NO matching heuristic of its own. It reads the verdict
+ * the hourly deal-email matcher already recorded: that worker writes an
+ * `activity_events` row with `source_type='lcc:deal_match'`, `entity_id` = the deal
+ * and `external_id` = the source message's RFC internetMessageId. So the thread we
+ * are replying into names its own deal, by exact id equality.
+ *
+ * Thread-scoped, not message-scoped, deliberately: the matcher is budget-bounded and
+ * skips already-attributed mail, so the specific message we reply to often carries no
+ * row while its siblings on the same `conversation_id` do (verified live 2026-08-21 —
+ * the exact reply target draft-assist picked for susan.holdsworth@davita.com had no
+ * row of its own, and the conversation resolved to "DaVita Dialysis - The Villages -
+ * FL"). A conversation is one deal; that is what the matcher's own unit of work means.
+ *
+ * Returns { entityId, source } — `entityId` null when nothing resolves, with a
+ * `source` naming WHICH rung came up empty. Fails soft: a draft with no deal facts
+ * is still a valid relational note, and asserting a WRONG deal would be worse.
+ */
+async function resolveDealEntity(replyTarget) {
+  if (!replyTarget || !replyTarget.internet_message_id) return { entityId: null, source: 'no_thread' };
+  const enc = (v) => encodeURIComponent(String(v));
+  const attributedDeal = async (imids) => {
+    if (!imids.length) return null;
+    // PostgREST `in.(...)`: each value double-quoted (message ids carry `<`, `@`
+    // and `.`), then percent-encoded individually so the commas stay separators.
+    const inList = imids.slice(0, 100)
+      .map((m) => enc(`"${String(m).replace(/"/g, '')}"`)).join(',');
+    const r = await opsQuery('GET',
+      `activity_events?select=entity_id,occurred_at&source_type=eq.${enc('lcc:deal_match')}` +
+      `&external_id=in.(${inList})&entity_id=not.is.null` +
+      `&order=occurred_at.desc&limit=25`, null, { countMode: 'none', timeoutMs: 8000 });
+    const rows = r && r.ok && Array.isArray(r.data) ? r.data : [];
+    return rows.length ? rows[0].entity_id : null;
+  };
+  try {
+    // Rung 1 — the exact message we are replying to.
+    const direct = await attributedDeal([replyTarget.internet_message_id]);
+    if (direct) return { entityId: direct, source: 'deal_match_message' };
+
+    // Rung 2 — any message on the same conversation.
+    if (!replyTarget.conversation_id) return { entityId: null, source: 'no_deal_match_and_no_conversation' };
+    const thread = await opsQuery('GET',
+      `email_bodies?select=internet_message_id&conversation_id=eq.${enc(replyTarget.conversation_id)}` +
+      `&internet_message_id=not.is.null&order=received_at.desc&limit=100`,
+      null, { countMode: 'none', timeoutMs: 8000 });
+    const imids = (thread && thread.ok && Array.isArray(thread.data) ? thread.data : [])
+      .map((x) => x.internet_message_id).filter(Boolean);
+    const viaThread = await attributedDeal(imids);
+    if (viaThread) return { entityId: viaThread, source: 'deal_match_thread' };
+    return { entityId: null, source: 'thread_not_attributed_to_a_deal' };
+  } catch (e) {
+    // Fail soft AND fail LOUD in the payload — never silently "no deal".
+    return { entityId: null, source: `deal_resolution_error:${(e && e.message) || 'unknown'}` };
+  }
 }
 
 export default async function draftAssistHandler(req, res) {
@@ -240,32 +361,48 @@ export default async function draftAssistHandler(req, res) {
   const workspaceId = req.headers['x-lcc-workspace'] || user.memberships?.[0]?.workspace_id;
   const bucket = bucketForPurpose(purpose, { toEmails: recipient ? [recipient] : [] });
 
-  // 1. Facts — from the deal spine, never invented.
+  // 1. Thread — resolve what we are replying into FIRST. P125: the thread is also
+  //    how the deal is resolved when the caller did not name one, so it can no
+  //    longer be looked up after the facts are already decided.
+  // P124: null ⇒ no prior correspondence ⇒ legitimately a NEW thread.
+  const replyTarget = await findReplyTarget(recipient);
+
+  // 2. Facts — from the deal spine, never invented.
   let facts;
   let factsSource = 'none';
-  if (entityId) {
+  let resolvedEntityId = entityId;
+  let dealResolution = entityId ? { entityId, source: 'caller_supplied' } : null;
+  if (!resolvedEntityId) {
+    // P125: derive the deal from the thread's own deal-match attribution rather
+    // than reporting "no deal" for a live deal nobody thought to name.
+    dealResolution = await resolveDealEntity(replyTarget);
+    resolvedEntityId = dealResolution.entityId || '';
+  }
+  if (resolvedEntityId) {
     try {
-      const packet = await buildDealPacket(entityId, workspaceId);
+      const packet = await buildDealPacket(resolvedEntityId, workspaceId);
       facts = extractDealFacts(packet);
-      factsSource = 'deal_spine';
+      factsSource = dealResolution && dealResolution.source !== 'caller_supplied'
+        ? `deal_spine_via_${dealResolution.source}` : 'deal_spine';
     } catch (e) {
       facts = extractDealFacts(null);
       factsSource = `deal_spine_error:${(e && e.message) || 'unknown'}`;
     }
   } else {
     facts = {};   // no deal id ⇒ relational voice, ZERO specific facts asserted
-    factsSource = 'no_entity_relational';
+    // P125: name the rung that came up empty. "no_entity_relational" alone hid the
+    // fact that no resolution had even been attempted.
+    factsSource = `no_entity_relational:${(dealResolution && dealResolution.source) || 'not_attempted'}`;
   }
 
-  // 2. Retrieve — Scott-authored outbound exemplars, bucketed + ranked.
+  // 3. Retrieve — Scott-authored outbound exemplars, bucketed + ranked.
   const corpus = await loadCorpus();
   const target = { bucket, recipientEmail: recipient };
-  const { exemplars, method: retrievalMethod } = await retrieveExemplars(corpus, target, intent, 5);
-  // P124: resolve the thread to reply into (null ⇒ legitimately a new thread).
-  const replyTarget = await findReplyTarget(recipient);
+  const { exemplars, method: retrievalMethod, pool_size: poolSize } = await retrieveExemplars(corpus, target, intent, 5);
   const exemplarIds = exemplars.map((e) => e.id);
+  const coverage = exemplarBodyCoverage(exemplars);
 
-  // 3. Generate — ON-PREM ONLY, fail closed (no cloud fallback for this surface).
+  // 4. Generate — ON-PREM ONLY, fail closed (no cloud fallback for this surface).
   const voiceProfile = loadVoiceProfile();
   const prompt = buildGenerationPrompt({
     voiceProfile, exemplars, facts, purpose, intent, recipientLabel: recipient,
@@ -281,7 +418,7 @@ export default async function draftAssistHandler(req, res) {
     return;
   }
 
-  // 4. Validate — strip any fabricated number/date; flag ungrounded names.
+  // 5. Validate — strip any fabricated number/date; flag ungrounded names.
   const parsed = parseDraftJson(gen.text);
   const bodyCheck = validateDraftFacts(parsed.body, { facts, exemplars, extra: `${intent} ${recipient}` });
   const subjCheck = validateDraftFacts(parsed.subject, { facts, exemplars, extra: `${intent} ${recipient}` });
@@ -309,11 +446,39 @@ export default async function draftAssistHandler(req, res) {
       exemplar_ids: exemplarIds,
       exemplar_count: exemplars.length,
       corpus_size: corpus.length,
+      // P125: assert on THIS, not corpus_size. The P124 lesson ("a preview row and
+      // a full-body row both count as 1") applies to the corpus exactly as it did
+      // to the dedup — a corpus that halved in full bodies still looks healthy by
+      // row count alone.
+      corpus_full_bodies: corpus.fullBodyRows || 0,
+      corpus_truncated: !!corpus.truncated,
+      bucket_pool_size: poolSize,
       // P124 honest count: personal/unclassified mail removed from the pool.
       excluded_personal_or_unclassified: corpus.excludedPersonal || 0,
-      exemplars: exemplars.map((e) => ({ id: e.id, bucket: e.bucket, opening: e.cleaned.slice(0, 220) })),
+      // P125: what the returned exemplars actually are, so "it retrieved 5" can
+      // never stand in for "it retrieved 5 usable ones".
+      full_body_exemplars: coverage.full_body,
+      preview_only_exemplars: coverage.preview_only,
+      recipient_matched_exemplars: recipient
+        ? exemplars.filter((e) => recipientMatchLevel(e, recipient) >= 1.5).length : null,
+      exemplars: exemplars.map((e) => ({
+        id: e.id,
+        bucket: e.bucket,
+        full_body: !!e.full_body,
+        cleaned_chars: String(e.cleaned || '').length,
+        to_recipient: recipient ? recipientMatchLevel(e, recipient) >= 1.5 : null,
+        opening: e.cleaned.slice(0, 220),
+      })),
     },
-    facts: { source: factsSource, used: factsUsed, not_on_file: notOnFile },
+    facts: {
+      source: factsSource,
+      // P125: how the deal was resolved (or which rung came up empty) — an empty
+      // `used` must never be ambiguous between "no deal" and "never looked".
+      deal_resolution: dealResolution || { entityId: entityId || null, source: 'caller_supplied' },
+      entity_id: resolvedEntityId || null,
+      used: factsUsed,
+      not_on_file: notOnFile,
+    },
     fact_validation: {
       clean: flagged.length === 0,
       flagged,   // fabricated numbers/dates were stripped from `draft`; names reported
@@ -372,10 +537,35 @@ export default async function draftAssistHandler(req, res) {
     in_reply_to: replyTarget ? replyTarget.internet_message_id : '',
   });
 
+  // P125: report whether the draft actually landed in the thread, and say so
+  // loudly when we asked for a reply and did not get one. A standalone draft is
+  // still a usable draft, so this is a WARNING on a successful save — never a
+  // failure — but it must never again be silent.
+  const wantedThread = !!(replyTarget && replyTarget.internet_message_id);
+  const threadingWarning = saveRes.ok && wantedThread && saveRes.threaded === false
+    ? 'Asked for a reply on the resolved thread and the flow created a STANDALONE draft — '
+      + 'the draft is fine to send but will start a new conversation. Check the flow import '
+      + '(docs/architecture/flows/outlook-draft-reply-executor.md).'
+    : (saveRes.ok && wantedThread && saveRes.threaded == null
+      ? 'The flow did not report a threading outcome — it is likely an older import that predates '
+        + 'the P125 response fields. Re-import flow-lcc-create-outlook-draft.json to make threading verifiable.'
+      : null);
+
   res.status(saveRes.ok ? 200 : 502).json({
     ...payload,
     saved: !!saveRes.ok,
-    outlook_draft: saveRes.ok ? { draft_id: saveRes.draft_id, web_link: saveRes.web_link } : null,
+    outlook_draft: saveRes.ok ? {
+      draft_id: saveRes.draft_id,
+      web_link: saveRes.web_link,
+      // Verify by comparing this to reply_to.conversation_id — that comparison is
+      // the acceptance test for a threaded save.
+      threaded: saveRes.threaded,
+      conversation_id: saveRes.conversation_id,
+      conversation_matches_thread: (saveRes.conversation_id && replyTarget && replyTarget.conversation_id)
+        ? saveRes.conversation_id === replyTarget.conversation_id : null,
+      thread_note: saveRes.thread_note || null,
+    } : null,
+    threading_warning: threadingWarning,
     save_error: saveRes.ok ? null : (saveRes.error || 'Outlook draft save failed'),
   });
 }

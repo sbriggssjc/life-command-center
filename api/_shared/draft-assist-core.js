@@ -53,31 +53,64 @@ export function emailDomain(email) {
 }
 
 /**
- * Deterministic exemplar ranker — used when on-prem embeddings are unavailable
- * (opening-length text ranks fine on these signals). Scores each candidate:
- *   +3 same draft-type bucket
- *   +2 exact recipient email match, else +1 same recipient domain
- *   + recency (newest first; small, breaks ties without dominating relevance)
- * Returns the top `k` cleaned exemplars, newest-preferred within equal scores.
+ * Every address an exemplar was sent to — `to` first, then `cc`. P125: `cc` was
+ * previously invisible to the ranker, so a thread where Scott moved the
+ * counterparty to cc (3 of Susan Holdsworth's 55 live rows) scored as if she were
+ * not on the message at all. A cc recipient is a weaker signal than a to
+ * recipient and is scored as such — but never zero.
+ */
+export function exemplarRecipients(c) {
+  const norm = (v) => (Array.isArray(v) ? v : (v ? [v] : []))
+    .filter(Boolean).map((e) => String(e).toLowerCase().trim()).filter(Boolean);
+  return { to: norm(c && c.toEmails), cc: norm(c && c.ccEmails) };
+}
+
+/**
+ * P125 — how strongly this exemplar matches the draft's recipient.
+ *   2 = exact address on To      1.5 = exact address on Cc
+ *   1 = same organisation domain  0 = unrelated
+ * Returned as a level (not a raw score) so the deterministic and embedding
+ * rankers weight the SAME judgement on their own scales instead of each
+ * inventing one — the embedding ranker previously had no recipient signal at all.
+ */
+export function recipientMatchLevel(c, recipientEmail) {
+  const wantEmail = String(recipientEmail || '').toLowerCase().trim();
+  if (!wantEmail) return 0;
+  const { to, cc } = exemplarRecipients(c);
+  if (to.includes(wantEmail)) return 2;
+  if (cc.includes(wantEmail)) return 1.5;
+  const wantDomain = emailDomain(wantEmail);
+  if (wantDomain && [...to, ...cc].some((e) => emailDomain(e) === wantDomain)) return 1;
+  return 0;
+}
+
+/**
+ * Deterministic exemplar ranker — used when on-prem embeddings are unavailable.
+ * Scores each candidate:
+ *   +5 / +3.75 / +2.5  exact recipient on To / on Cc / same recipient domain
+ *   +3                 same draft-type bucket
+ *   + recency          (newest first; < 1pt, breaks ties without dominating)
  *
- * @param {Array<{id,cleaned,bucket,toEmails,ts}>} candidates  Scott-authored, cleaned
+ * P125 — RECIPIENT NOW OUTRANKS BUCKET, deliberately. Scott's own past mail to
+ * THIS counterparty is simultaneously the best voice sample and the best
+ * relationship-context sample; a generic same-bucket note to a different party is
+ * neither. Under the old weights (bucket 3 > recipient 2) a same-bucket stranger
+ * outranked a slightly-off-bucket email to the actual recipient, which is how a
+ * draft to Susan Holdsworth retrieved five Villages notes to the title company
+ * instead of any of the 55 Scott had written to her.
+ *
+ * @param {Array<{id,cleaned,bucket,toEmails,ccEmails,ts}>} candidates  Scott-authored, cleaned
  * @param {{bucket:string, recipientEmail?:string}} target
  * @param {number} k
  */
 export function rankExemplarsDeterministic(candidates, target, k = 5) {
   const wantBucket = String(target.bucket || '');
-  const wantEmail = String(target.recipientEmail || '').toLowerCase();
-  const wantDomain = emailDomain(wantEmail);
   // Newest-first baseline so recency is a stable tiebreaker.
   const withTs = candidates.map((c) => ({ c, t: Date.parse(c.ts || '') || 0 }));
   const maxT = withTs.reduce((m, x) => Math.max(m, x.t), 1);
   const scored = withTs.map(({ c, t }) => {
-    let s = 0;
+    let s = recipientMatchLevel(c, target.recipientEmail) * 2.5;
     if (c.bucket === wantBucket) s += 3;
-    const recips = (Array.isArray(c.toEmails) ? c.toEmails : [c.toEmails])
-      .filter(Boolean).map((e) => String(e).toLowerCase());
-    if (wantEmail && recips.includes(wantEmail)) s += 2;
-    else if (wantDomain && recips.some((e) => emailDomain(e) === wantDomain)) s += 1;
     // Recency worth < 1 point so it never outranks a relevance signal.
     s += (t / maxT) * 0.9;
     return { c, s };
@@ -99,14 +132,96 @@ export function cosineSim(a, b) {
  * Embedding-KNN ranker. Candidates carry a `vec`; the query carries `queryVec`.
  * Falls to bucket-first ordering among equal similarity (stable). The handler
  * only calls this when on-prem embeddings succeeded for BOTH sides.
+ *
+ * ⚠️ P125 — THIS RANKER WAS ENTIRELY RECIPIENT-BLIND, and that is invisible from
+ * the outside. It scored cosine + a 0.02 bucket nudge and nothing else, so
+ * `target.recipientEmail` was accepted and then ignored: backfilling 55 full-body
+ * emails Scott had written to the exact recipient changed the retrieved set by
+ * nothing at all, because no term in the score could see them. The deterministic
+ * ranker did weight recipient (+2), so the two rankers disagreed about what
+ * relevance MEANS — and which one ran depended only on whether Ollama answered.
+ * Both now read the same `recipientMatchLevel`.
+ *
+ * The bonus is on the cosine scale (similarity ∈ [-1,1]): 0.25/level puts an
+ * exact-recipient exemplar (level 2 ⇒ +0.50) decisively ahead of a semantically
+ * similar note to a stranger, which is the intended judgement, without collapsing
+ * the ranking into "recipient only" — among recipient-matched candidates cosine
+ * still decides the order.
  */
+export const EMBEDDING_RECIPIENT_WEIGHT = 0.25;
+
 export function rankExemplarsByEmbedding(candidates, queryVec, target, k = 5) {
   const wantBucket = String(target.bucket || '');
   const scored = candidates
     .filter((c) => Array.isArray(c.vec))
-    .map((c) => ({ c, s: cosineSim(c.vec, queryVec) + (c.bucket === wantBucket ? 0.02 : 0) }));
+    .map((c) => ({
+      c,
+      s: cosineSim(c.vec, queryVec)
+        + (c.bucket === wantBucket ? 0.02 : 0)
+        + recipientMatchLevel(c, target && target.recipientEmail) * EMBEDDING_RECIPIENT_WEIGHT,
+    }));
   scored.sort((a, b) => b.s - a.s);
   return scored.slice(0, Math.max(0, k)).map((x) => x.c);
+}
+
+/**
+ * P125 — FULL-BODY AND EXACT-RECIPIENT ARE HARD PREFERENCES, NOT WEIGHTS.
+ *
+ * Both were expressible as score terms, and both were then outvotable by an
+ * unrelated signal — which is exactly how the live defect presented. A score term
+ * that CAN lose is indistinguishable, from the outside, from one that is not there:
+ * the embedding ranker accepted `recipientEmail` and ignored it, and 55 backfilled
+ * emails to the actual recipient moved the retrieved set by nothing.
+ *
+ * So the two guarantees are expressed as an ordered PARTITION and the ranker only
+ * orders WITHIN a tier:
+ *
+ *   tier 1  real body  +  exact recipient (to/cc)   ← both signals; the best exemplar there is
+ *   tier 2  real body                               ← voice is evidenced, context is generic
+ *   tier 3  preview    +  exact recipient           ← context only; opening/tone at best
+ *   tier 4  preview                                 ← last resort
+ *
+ * Full-body is the OUTER key because a preview can evidence a greeting and nothing
+ * else — no sign-off, no paragraph shape, no long-form structure — so it is the
+ * harder constraint on the thing being generated. Exact recipient is the inner key.
+ *
+ * DOMAIN-only matches are deliberately NOT a tier: someone.else@davita.com is a
+ * different person, not this relationship. That stays a score weight inside the
+ * tier, where it belongs.
+ *
+ * Lower tiers only ever FILL SLOTS a higher tier could not, so a thin corpus still
+ * returns k exemplars rather than being starved by the guarantee. `rank` is
+ * whichever ranker the handler resolved, so both paths behave identically.
+ */
+export const EXEMPLAR_TIERS = [
+  { full_body: true, recipient: true },
+  { full_body: true, recipient: false },
+  { full_body: false, recipient: true },
+  { full_body: false, recipient: false },
+];
+
+/** Which tier (0-based) this candidate belongs to, given the draft's recipient. */
+export function exemplarTier(c, recipientEmail) {
+  const isFull = isFullBodyExemplar(c);
+  const isRecip = recipientMatchLevel(c, recipientEmail) >= 1.5;   // exact to/cc only
+  return (isFull ? 0 : 2) + (isRecip ? 0 : 1);
+}
+
+export function selectExemplars(candidates, target, k, rank) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  const want = target && target.recipientEmail;
+  const picked = [];
+  const chosen = new Set();
+  for (let tier = 0; tier < EXEMPLAR_TIERS.length && picked.length < k; tier += 1) {
+    const bucket = list.filter((c) => !chosen.has(c) && exemplarTier(c, want) === tier);
+    if (!bucket.length) continue;
+    for (const c of rank(bucket, target, k - picked.length)) {
+      if (chosen.has(c)) continue;
+      chosen.add(c);
+      picked.push(c);
+    }
+  }
+  return picked.slice(0, k);
 }
 
 /**
@@ -182,18 +297,60 @@ export function extractDealFacts(packet) {
 // Graph `bodyPreview` — it is a real captured body, so a draft grounded in it can
 // honestly claim full-body precedent (sign-off + paragraph shape included). Set
 // above the 255 cap with headroom for the cleaner's trimming.
+//
+// ⚠️ P125 — THIS LENGTH TEST IS A FALLBACK, NOT THE MEASUREMENT, AND IT WAS WRONG
+// AT SCALE. It infers provenance from size, and Scott's voice is short by design
+// ("extremely short and punchy" — the profile's own first rule). Measured live on
+// LCC Opps 2026-08-21 over the 777 Scott-authored rows that carry a real
+// `body_html`, after the cleaner strips the quoted chain and signature:
+//
+//     cleaned <12 chars  ................  71   (dropped as boilerplate: "AWESOME!", "Just did!")
+//     cleaned 12–299 chars  .............  438  ← GENUINE full bodies, called "preview-era openings"
+//     cleaned >=300 chars  ..............  268
+//     median cleaned prose  .............  160 chars
+//
+// So the heuristic mislabelled **62% of the real full bodies** and `voice_confidence`
+// kept reporting "preview-era OPENINGS only (~255-char cap)" over a corpus that is
+// nothing of the kind. Provenance is a FACT we hold at load time — which body column
+// the text came from — so carry it (`exemplar.full_body`) rather than re-deriving it
+// from a proxy. The length test survives only for callers that supply no provenance.
 export const FULL_BODY_MIN_CHARS = 300;
 
-/** How many of the retrieved exemplars are genuine full bodies vs old previews. */
+/**
+ * Is this exemplar grounded in a real captured body? Provenance-first: the loader
+ * sets `full_body` from the SOURCE COLUMN (`body_text`/`body_html` present ⇒ true;
+ * only `body_preview`/`activity_events.body` ⇒ false). Falls back to the length
+ * heuristic ONLY when the caller supplied no provenance.
+ */
+export function isFullBodyExemplar(e) {
+  if (e && typeof e.full_body === 'boolean') return e.full_body;
+  return String((e && e.cleaned) || '').length >= FULL_BODY_MIN_CHARS;
+}
+
+/**
+ * How many of the retrieved exemplars are genuine full bodies vs old previews.
+ * `basis` reports HOW that was decided, so a caller can never mistake the
+ * length-heuristic fallback for a provenance read (see the P125 note above).
+ */
 export function exemplarBodyCoverage(exemplars) {
   const list = Array.isArray(exemplars) ? exemplars : [];
   const lengths = list.map((e) => String((e && e.cleaned) || '').length);
-  const full = lengths.filter((n) => n >= FULL_BODY_MIN_CHARS).length;
+  const full = list.filter(isFullBodyExemplar).length;
+  const withProv = list.filter((e) => e && typeof e.full_body === 'boolean').length;
+  const basis = list.length === 0 ? 'none'
+    : withProv === list.length ? 'provenance'
+      : withProv === 0 ? 'length_heuristic' : 'mixed';
   return {
     total: list.length,
     full_body: full,
     preview_only: list.length - full,
     max_chars: lengths.length ? Math.max(...lengths) : 0,
+    // P125: a full body whose cleaned prose is under the heuristic's threshold —
+    // the population the old length test silently misfiled. Reported so the
+    // "short == preview" mistake cannot quietly come back.
+    short_full_bodies: list.filter((e) => isFullBodyExemplar(e)
+      && String((e && e.cleaned) || '').length < FULL_BODY_MIN_CHARS).length,
+    basis,
   };
 }
 
@@ -225,6 +382,12 @@ export function voiceConfidenceNote(bucket, exemplarsOrCount) {
   if (cov && cov.full_body === cov.total) {
     base = `Voice is grounded in ${cov.full_body} FULL past email bod(ies) of Scott's — sign-off, paragraph shape and `
       + 'long-form structure are corpus-evidenced here, not inferred from the profile.';
+    // P125: a short full body is still a full body. Say so explicitly, because the
+    // reader's instinct (and the retired length heuristic) is to read "short" as
+    // "truncated preview" — here it means Scott genuinely wrote three lines.
+    if (cov.basis !== 'length_heuristic' && cov.short_full_bodies > 0) {
+      base += ` ${cov.short_full_bodies} of them are SHORT by choice, not truncated — that brevity is the voice, not a capture limit.`;
+    }
   } else if (cov && cov.full_body > 0) {
     base = `Voice is grounded in ${cov.total} past exemplar(s), ${cov.full_body} of them FULL bodies and `
       + `${cov.preview_only} still preview-era openings (~255-char cap) — opening/tone is well-supported throughout, `
