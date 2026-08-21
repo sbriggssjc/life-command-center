@@ -7,6 +7,10 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 import { processOwnerEnrichmentRow, classifyEnrichRow, normalizePersonName, summarizeResolution } from '../api/_handlers/owner-contact-enrich.js';
 
 function recordingDeps(overrides = {}) {
@@ -317,5 +321,56 @@ describe('ORE Build 2 — reconcile-on-write + address-dimension adapter feed', 
       { ...ownerBase, active_contact_name: null, active_contact_entity_id: null, enrichment_action: 'address_reverse_lookup' }, deps);
     assert.equal(sawRow.notice_address, undefined);   // never sourced → adapter no-ops
     assert.notEqual(out.outcome, 'attached');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+describe('P163 — a phantom contact is not a link', () => {
+  // The owner's own name minted as a person, no email, no phone. Measured live
+  // 2026-08-21: 168 such owners holding $242.7M of annual rent, headed by LCC's
+  // single largest owner (Boyd Watterson Asset Management, 198 assets, $179.8M),
+  // whose "decision-maker" was a person entity named "Boyd Watterson".
+  const linked = { entity_id: 'e1', owner_name: 'Acme Holdings LLC',
+    active_contact_name: 'Jane Real', active_contact_entity_id: 'p1' };
+  const phantom = { entity_id: 'e2', owner_name: 'Boyd Watterson Asset Management, LLC',
+    active_contact_name: 'Boyd Watterson', active_contact_entity_id: 'p2',
+    active_contact_is_phantom: true };
+
+  it('a genuine link still short-circuits to already_linked', async () => {
+    const out = await processOwnerEnrichmentRow(linked, {});
+    assert.equal(out.outcome, 'already_linked');
+  });
+
+  it('a PHANTOM link does NOT short-circuit — it goes on to be worked', async () => {
+    // It must get past the guard. What it resolves to depends on injected deps;
+    // the assertion is only that it is no longer dismissed as already-linked.
+    let out;
+    try { out = await processOwnerEnrichmentRow(phantom, {}); }
+    catch (e) { out = { outcome: 'threw:' + (e && e.message) }; }
+    assert.notEqual(out.outcome, 'already_linked',
+      'a phantom must not be reported as already linked — that is what hid $242.7M');
+  });
+
+  it('classifyEnrichRow mirrors the same rule (dry-run must not disagree)', () => {
+    assert.equal(classifyEnrichRow(linked), 'already_linked');
+    assert.notEqual(classifyEnrichRow(phantom), 'already_linked');
+  });
+
+  it('the flag is FETCHED, not assumed — COLS selects it and the null-filter is gone', async () => {
+    // ⚠️ THE INERT-FIX TRAP THIS UNIT NEARLY SHIPPED. The batch path filtered
+    // `&active_contact_entity_id=is.null` at query time, so phantoms (which HAVE
+    // a contact id) were never fetched at all — the guard above would have been
+    // correct and completely unreachable, while measuring as shipped. The view
+    // now owns that predicate, so the handler must NOT repeat it, and must select
+    // the phantom column or the guard reads undefined.
+    const src = readFileSync(join(root, 'api/_handlers/owner-contact-enrich.js'), 'utf8');
+    assert.match(src, /active_contact_is_phantom'/, 'COLS must select active_contact_is_phantom');
+    assert.doesNotMatch(src, /'&active_contact_entity_id=is\.null'/,
+      'the handler must not re-exclude phantoms; v_owner_contact_enrich_queue owns that rule');
+    // Both single-owner paths stamp the flag, since the pivot TABLE lacks it.
+    assert.match(src, /const stampPhantom = async \(row\) =>/, 'stampPhantom is defined once');
+    assert.equal((src.match(/await stampPhantom\(/g) || []).length, 2,
+      'stampPhantom must be applied on BOTH single-owner paths (GET preview and POST run) — '
+      + 'stamping only one leaves the phantom gate live on one path and dead on the other');
   });
 });
