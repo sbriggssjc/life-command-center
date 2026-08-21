@@ -103,6 +103,29 @@ select batch_no, batch_ids, request_id, fired_at, response_status, response_erro
  order by cycle_started_at desc, batch_no;
 ```
 
+## First verified cycle (2026-08-21)
+
+Driven end-to-end by the production cron, 17:03:10 → 17:20:00:
+
+| | |
+|---|---|
+| batches fired / total | 8 / 8 (0 unreconciled) |
+| pg_net outcomes | 7 × 200, 1 × 502 (batch 3) |
+| tick job runs | 23 succeeded, 0 failed |
+| gov Q2-2026 `updated_at` | 2026-08-14 20:00:12 → **2026-08-21 17:19:16** |
+| populated charts | 41 → **45 of 45** |
+
+Batch 3's 502 (`cap_rate_ttm_by_quarter, case_for_renewal, cash_leveraged_returns,
+core_cap_rate_dot_plot`) is the intended failure behaviour: it is **recorded in the ledger**, those
+charts kept their existing rows (`cap_rate_ttm_by_quarter` still 354), and they retry on the next
+cycle. One heavy batch occasionally exceeding Railway's gateway window is expected; a batch that
+fails *every* cycle is the signal to shrink `batch_size`.
+
+**Cost of the per-minute tick:** ~1,440 extra `cron.job_run_details` rows/day against ~5,774/day
+already, bounded by the existing `cleanup-cron-history` job (7-day prune, jobid 8) — roughly +3 MB
+steady state. Worth knowing given this project's documented disk-pressure sensitivity, but not a
+concern at that scale.
+
 ## Manual run
 
 ```sql

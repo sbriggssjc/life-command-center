@@ -179,11 +179,22 @@ gov subset merge measures **~69s**, so 55s was abandoning a request the server w
 Corrected: timeout → 170s, and completion now requires a response that is **NOT `timed_out`**
 (fail-forward past `p_max_wait_sec` 300 so a lost response can't stall a cycle).
 
-**Verified by state delta, not return values:** gov Q2-2026 `updated_at` **2026-08-14 20:00:12 →
-2026-08-21** (first movement in 7 days), 45 charts / 41 populated preserved (the merge is
-non-regressing). Synthetic/composed + `DataTable`/`kpi_block` templates stay excluded — documented
-residual, not a failure. The 7 stale `cron_failure` alerts for this source were resolved with a P122
-note. `cm_gov_packet_refresh_chunked` is dropped; reversal runbook in the migration foot.
+**Verified by state delta, not return values.** A full clean cycle was driven end-to-end by the
+production cron (17:03:10 → 17:20:00): **8/8 batches fired, 0 unreconciled, tick job 23/23 succeeded,
+0 failures.** Gov Q2-2026 `cm_report_snapshots.updated_at` **2026-08-14 20:00:12 → 2026-08-21
+17:19:16** — first movement in 7 days — and populated charts **41 → 45 of 45**.
+
+**Batch 3 returned a 502** (`cap_rate_ttm_by_quarter, case_for_renewal, cash_leveraged_returns,
+core_cap_rate_dot_plot`) — surfaced in the ledger, not silent. Because the merge is non-regressing
+those charts kept their existing rows (`cap_rate_ttm_by_quarter` still 354) and simply retry next
+cycle. `batches_ok` counts pg_net 2xx and is **not** proof the packet changed — always confirm with
+the domain `updated_at` delta.
+
+Synthetic/composed + `DataTable`/`kpi_block` templates stay excluded — documented residual, not a
+failure. The 7 stale `cron_failure` alerts for this source resolved with a P122 note (open alerts
+30 → 23, 0 for this source). `cm_gov_packet_refresh_chunked` is dropped; reversal runbook in the
+migration foot. Cost of the per-minute tick: +1,440 `cron.job_run_details` rows/day on ~5,774/day,
+bounded by the existing `cleanup-cron-history` 7-day prune — ~+3 MB steady state.
 
 ## P120 (2026-08-20) — the app now MOVES emails: move-queue executor built (was: nothing ever drained it)
 
