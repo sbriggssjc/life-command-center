@@ -126,6 +126,29 @@ action it does not own. Until that edit lands the two movers race **benignly** �
 message.
 
 ---
+## P125 (2026-08-21) — draft-assist retrieval + threading + deal-context, all six items fixed
+
+Reviewed + reconciled. **#1768 merged, local main at `6b33e7e7`, `/version`=`6b33e7e75f06` — the JS half is LIVE.**
+CC found the root causes deeper than the prompt framed:
+- **"Full-body" was a length heuristic wrong about 62% of Scott's mail.** `FULL_BODY_MIN_CHARS=300` inferred
+  provenance from size; measured over 777 body_html rows, median cleaned prose is **160 chars** (his voice is
+  "short and punchy"), so 438 genuine full bodies were mislabeled "preview-era." Now provenance is carried from
+  WHICH body column at load, not re-derived by length.
+- **corpus_size 395**: `loadCorpus` paged the newest 3,000 of the whole 28,090-row store then filtered to Scott
+  in JS → only 565 of his 1,188 seen. Author filter pushed into PostgREST.
+- **Recipient-blind ranker**: the embedding ranker accepted `recipientEmail` and ignored it (so Susan's 55
+  backfilled emails changed nothing); deterministic weighted recipient below bucket. Now full-body + exact-
+  recipient are a hard PARTITION, not score terms; `cc` now read (3 of Susan's 55 are cc-only).
+- **Deal context never attempted** (item 6): facts loaded only `if(entityId)`; now reads the hourly
+  deal-matcher's verdict, thread-scoped — Susan's thread resolves to *DaVita Dialysis – The Villages – FL*,
+  stage non_refundable.
+- **Threading (item 5): 3 flow defects fixed** — double Response on both branches, `toRecipients` PATCHed onto
+  a reply, unguarded empty `$filter`; every response now echoes `threaded`+`conversationId` (the seam couldn't
+  distinguish a threaded reply from a fresh draft before). Flow def reconciled to the tenant (Graph passthrough,
+  `$authentication`, ContentType). **⏭ threading UNPROVEN until re-import** — Cowork re-packaged as
+  `LCC-CreateOutlookDraft-import-v5.zip`; `outlook_draft.threaded` reads `null` until then.
+- Tests 47→76; suite 4,258 (4 pre-existing failures). PR #1768.
+
 ## 🎉 2026-08-21 — draft-assist is LIVE end-to-end: the app drafted an email in Scott's voice, in Outlook
 
 First real save succeeded through the whole chain: captured history → v3 voice profile → `/api/draft-assist?save=true`
