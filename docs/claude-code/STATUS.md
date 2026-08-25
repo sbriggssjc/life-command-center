@@ -149,6 +149,14 @@ CC found the root causes deeper than the prompt framed:
   `LCC-CreateOutlookDraft-import-v5.zip`; `outlook_draft.threaded` reads `null` until then.
 - Tests 47→76; suite 4,258 (4 pre-existing failures). PR #1768.
 
+**✅ VERIFIED LIVE 2026-08-21 (2nd real save, after v5 re-import):** all six upgrades confirmed in one response —
+`corpus_size` **773** (full_bodies 517), **full_body_exemplars 5 / preview_only 0 / recipient_matched 5**,
+`voice_confidence` now "5 FULL past email bodies … SHORT by choice, not truncated," `facts.source
+=deal_spine_via_deal_match_thread` (entity 17218fd0…, DaVita–The Villages), `fact_validation.clean=true`,
+deal-aware subject, and **`outlook_draft.threaded=true`** (v5 re-import took). Draft saved, Sent untouched.
+Minor observability nit: `conversation_matches_thread` came back blank (the flow echoes `threaded` but not
+`conversationId` for the seam to compare) — cosmetic, not functional; optional tiny follow-up.
+
 ## 🎉 2026-08-21 — draft-assist is LIVE end-to-end: the app drafted an email in Scott's voice, in Outlook
 
 First real save succeeded through the whole chain: captured history → v3 voice profile → `/api/draft-assist?save=true`
