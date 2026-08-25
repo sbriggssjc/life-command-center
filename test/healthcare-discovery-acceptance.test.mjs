@@ -24,7 +24,7 @@ test('A4 produces a passing deterministic aggregate-only acceptance receipt', as
 test('A4 streams generated secondary volume within the resource envelope', async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'healthcare-volume-'));
   const generated = path.join(temp, 'secondary.csv');
-  const header = await readFile(path.join(fixtureRoot, 'nppes-secondary-synthetic.csv'), 'utf8').then((value) => value.split('\n')[0]);
+  const header = await readFile(path.join(fixtureRoot, 'nppes-secondary-synthetic.csv'), 'utf8').then((value) => value.split(/\r?\n/, 1)[0]);
   const rows = Array.from({ length: 20_000 }, (_, index) => `9000000001,${200 + index} Generated Road,,Testville,OK,74102,US`);
   await writeFile(generated, `${header}\n${rows.join('\n')}\n`);
   const before = process.memoryUsage().heapUsed;

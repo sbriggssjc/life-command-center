@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstat, readFile } from 'node:fs/promises';
+import { lstat, readFile, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import { assertReleasePacketTemplate } from './release-packet-preflight.mjs';
@@ -38,6 +38,11 @@ function safeArtifactPath(root, localPath) {
   return resolved;
 }
 
+function assertInsideRoot(root, candidate) {
+  const rel = relative(root, candidate);
+  if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('Artifact canonical path escapes or aliases the approved staging root');
+}
+
 function firstHeader(bytes) {
   const firstLine = bytes.toString('utf8').split(/\r?\n/, 1)[0];
   if (!firstLine.trim()) throw new Error('Artifact header must be a non-empty first line');
@@ -62,14 +67,18 @@ export async function stageAscArtifacts({ template, approvedRoot, artifacts, ver
   assertExactKeys(new Set(artifacts.map((artifact) => artifact.source_key)));
   assertExactKeys(new Set(verifierAttestations.map((artifact) => artifact.source_key)));
 
+  const resolvedRoot = resolve(approvedRoot);
+  const canonicalRoot = await realpath(resolvedRoot);
   const frozen = [];
   for (const artifact of artifacts) {
     if (!/^https:\/\/(?:www\.|data\.|download\.)?cms\.gov\//.test(artifact.artifact_url)) throw new Error(`${artifact.source_key}.artifact_url must be an official CMS HTTPS artifact`);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(artifact.release_date)) throw new Error(`${artifact.source_key}.release_date is invalid`);
-    const localPath = safeArtifactPath(resolve(approvedRoot), artifact.local_path);
+    const localPath = safeArtifactPath(resolvedRoot, artifact.local_path);
     const fileStat = await lstat(localPath);
     if (fileStat.isSymbolicLink() || !fileStat.isFile() || fileStat.size <= 0) throw new Error(`${artifact.source_key} must resolve to a non-empty, non-symlink regular file`);
-    const bytes = await readFile(localPath);
+    const canonicalPath = await realpath(localPath);
+    assertInsideRoot(canonicalRoot, canonicalPath);
+    const bytes = await readFile(canonicalPath);
     const computed = { byte_size: bytes.byteLength, sha256: sha256(bytes), header_sha256: firstHeader(bytes) };
     assertVerifier(verifierAttestations.find((item) => item.source_key === artifact.source_key), artifact.source_key, computed);
     frozen.push({

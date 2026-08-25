@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
@@ -21,6 +22,18 @@ test('fixed-site IDTF synthetic manifest validates with the exact reviewed sourc
   assert.equal(receipt.status, 'pass');
   assert.equal(receipt.lane, 'idtf_fixed_site');
   assert.equal(receipt.source_fingerprints.length, 4);
+});
+
+test('lane validation canonicalizes CRLF only inside an explicit synthetic fixture root', async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'healthcare-lane-crlf-'));
+  const manifest = await load('asc-manifest.valid.json');
+  await writeFile(path.join(tempRoot, 'manifest.json'), JSON.stringify(manifest));
+  for (const source of manifest.sources) {
+    const original = await readFile(path.join(fixtureRoot, source.object_path), 'utf8');
+    await writeFile(path.join(tempRoot, source.object_path), original.replace(/\n/g, '\r\n'));
+  }
+  const receipt = await validateLaneManifestFile(path.join(tempRoot, 'manifest.json'), { fixtureRoot: tempRoot });
+  assert.equal(receipt.status, 'pass');
 });
 
 test('IDTF manifests fail closed without the fixed/mobile evidence rules', async () => {

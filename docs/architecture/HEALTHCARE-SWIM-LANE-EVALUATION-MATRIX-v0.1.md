@@ -132,8 +132,24 @@ stage one lane's exact official artifacts, independently verify release metadata
 resulting packet `draft_unapproved`. Do not draw either 50-property sample until its packet receives separate
 execution authorization.
 
-The ASC-first staging contract is now implemented and tested without a downloader or storage integration. It
-validates files already present inside an explicitly approved private root, requires a matching independent
-attestation for all four artifacts, and emits only an aggregate `staged_verified_draft_only` receipt. The next
-checkpoint is an authorized ASC staging run that supplies the exact official releases and private storage
-boundary. IDTF staging, sample selection, database writes, and CRM promotion remain out of scope.
+The ASC-first staging contract and network-free run harness are now implemented and tested without a downloader
+or storage integration. The harness validates files already present inside an explicitly approved private
+root, requires a matching independent attestation for all four artifacts, writes the private packet only inside
+that root, and emits only an aggregate `staged_verified_draft_only` receipt. The next checkpoint is the
+operator-run ASC staging procedure defined in `HEALTHCARE-ASC-FIRST-STAGING-RUNBOOK-v0.1.md`; it requires the
+exact official releases, approved private root, identified run operator, and different verifier. Successful
+staging still produces `draft_unapproved`, not sample authority. IDTF staging, sample selection, database
+writes, and CRM promotion remain out of scope.
+
+The post-staging execution-boundary validator is also implemented synthetically. It binds the private packet to
+the verified staged release, includes header digests and privacy receipt in packet identity, requires two
+distinct people in the release-owner and privacy-reviewer roles, and emits an aggregate authorization receipt.
+The next real-world checkpoint remains selection of the private coordinates and separated reviewers, followed
+by the official ASC staging run; repository implementation does not substitute for those approvals.
+
+The ASC-only sample-execution harness is also implemented synthetically. It requires the exact authorized
+packet and bound aggregate authorization receipt before the frozen 50-property contract can run, keeps all
+row-level inputs and the selected frame inside the approved private root, and emits only an aggregate selection
+receipt. This removes any code path that could draw the official sample from a staged or draft packet. The
+operational next step remains the separately authorized official ASC staging and approval sequence; only then
+may this harness freeze the private review frame.

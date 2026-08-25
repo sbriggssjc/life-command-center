@@ -50,6 +50,27 @@ isn't send-ready as-is; Scott would hand-add his signature every time, which def
 5. **Verify:** a saved reply ends with Scott's real signature block once, the quoted thread remains beneath it,
    `threaded=true`, nothing fabricated, Sent empty.
 
+## Canonical signatures — use the REAL branded HTML assets (not plain text)
+
+Scott's signature is branded HTML (Futura PT font, Northmarq blue `rgb(0,61,165)`, styled D/E/A layout), NOT
+plain text — extracted verbatim from his own sent `.eml`s and saved to the repo:
+
+- **`docs/os/voice/signatures/signature-reply.html`** — the COMPACT reply signature. **Self-contained, NO logo
+  image** (no `cid:`), so it renders correctly appended to any generated draft with zero image dependency.
+  ⚠️ This file was extracted with a loose lower boundary (~9.7 KB) — **trim it to the signature block only**
+  (ends after the `sabriggs@northmarq.com` line; drop any trailing quoted content) before using.
+- **`docs/os/voice/signatures/signature-full.html`** — the FULL new-email signature. Branded, and it carries
+  the Northmarq **logo as a `cid:` inline image** — that reference BREAKS in a generated draft. To use it,
+  host `docs/os/voice/signatures/northmarq-logo.png` at a stable public URL and replace the `cid:…` `src` with
+  that `https://` URL; if no host is available, strip the `<img>` and keep the styled text.
+- **`docs/os/voice/signatures/northmarq-logo.png`** — the logo bytes (4.2 KB) for hosting.
+
+**Rule (matches Scott's practice):** replies (`in_reply_to != ''` — external_follow_up / internal_coordination
+/ loi_offer) → **signature-reply.html**; new/cold (`in_reply_to == ''` — cold_bd_outreach /
+listing_announcement) → **signature-full.html**. Ambiguous → default to the reply block. Store the chosen HTML
+as an asset/config draft-assist reads; append it verbatim (item 3: once, above the quote). Never re-type or
+fabricate the contact details — the phone/address/title must come from these files exactly.
+
 ## Close-out
 - Handler change ships on the Railway redeploy of merged `main` → `npm run verify:deploy`. If a stored
   signature asset/config is added, register it. Update STATUS + the draft-assist design doc. Provide the

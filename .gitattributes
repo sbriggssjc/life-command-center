@@ -33,3 +33,6 @@
 *.woff  binary
 *.woff2 binary
 *.zip   binary
+
+# Checksum-bearing healthcare fixtures must retain repository bytes on Windows.
+test/fixtures/healthcare-discovery/*.csv -text
