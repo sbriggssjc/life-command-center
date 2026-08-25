@@ -27,6 +27,9 @@ supabase/.temp/
 /private/power-automate/
 /private/healthcare-discovery/
 
+# Healthcare tests create and delete these manifests during each run.
+test/fixtures/healthcare-discovery/*.tmp.json
+
 
 # QA-32: prevent truncation-investigation artifacts from leaking back
 audit/lcc-*-test*.txt

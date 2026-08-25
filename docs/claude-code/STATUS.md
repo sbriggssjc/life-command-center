@@ -126,6 +126,84 @@ action it does not own. Until that edit lands the two movers race **benignly** �
 message.
 
 ---
+## P126 (2026-08-25) — draft-assist appends Scott's real branded signature; the draft is send-ready
+
+Closes the P125 v6 follow-up ("no signature block"). The generated draft ended at the model's sign-off
+("…Thanks.") with no name/title/company/phone, so Scott hand-added his block on every save.
+
+**Two variants, selected the way he actually signs** (`api/_shared/email-signature.js`):
+`in_reply_to != ''` ⇒ **`docs/os/voice/signatures/signature-reply.html`** (compact, self-contained, no logo);
+`in_reply_to == ''` ⇒ **`signature-full.html`** (service line, D/E/A rows, address, service-line tagline,
+northmarq.com). Ambiguous ⇒ the reply block (it asserts strictly less). The variant is chosen from the SAME
+`inReplyTo` const handed to the flow, so the block can never disagree with the shape of the draft created.
+
+**⚠️ The prompt named two repo files that do not exist in the repo or on any remote branch** — that
+extraction lived in a local Cowork session and was never pushed (checked every `refs/remotes/*`). Rather than
+block, both blocks were re-extracted **verbatim from the same authoritative source an `.eml` extraction reads**:
+Scott's own top-posted HTML in LCC Opps `email_bodies.body_html`. Nothing was transcribed from a doc.
+
+**⚠️ And the docs would have been wrong.** `docs/os/skills/offer-submission-SKILL.md` + the offer-submission
+design doc describe ONE block carrying the Tulsa address. Measured over his **592** signature-bearing sent
+messages of the last 120 days, the top-posted **reply** block carries the street address **0 times** and the
+service line in 9% — the address belongs to the **new-email** block and otherwise appears only inside quoted
+history. Following the docs would have stamped an address on every reply his real replies do not carry. The
+docs' *"service-line tagline"* placeholder also never resolved to a literal anywhere in the repo; the real
+string is **"Commercial Real Estate | Debt + Equity | Investment Sales | Loan Servicing | Fund Management"**,
+now captured rather than invented. (Another instance of the dated-doc trap in the CLAUDE.md doctrine section.)
+
+**The `cid:` logo is deliberately absent.** His full block opens with `<img src="cid:2d92bd11-…" width="84"
+height="75">` (4,221 bytes — the 4.2 KB `northmarq-logo.png`), a reference to an attachment part of *that*
+message. A generated draft has no such part, so it would render broken on every send. Per the prompt's stated
+fallback the `<img>` is stripped and the styled text kept. To restore it, host the PNG at a stable public
+`https://` URL (a `data:` URI is not a substitute — Outlook desktop blocks them); note that also turns every
+send into a read receipt for the recipient, so it is Scott's call, not a default.
+
+**Doctrine held.** Never fabricate AND never re-type — both blocks are stored assets, and there is NO runtime
+path that parses a signature out of sent mail (the corpus carries a Stan Johnson era block and a Team Briggs
+block; parsing at request time would silently pick a stale title). Nothing configured ⇒ append NOTHING and
+report `signature.status = "not_configured"`, never a guess. **Never double-sign** — detection reuses the
+corpus cleaner's `SIGNATURE_ANCHORS` rather than forking a second "what a signature looks like" (the
+normaliser drift CLAUDE.md warns about), and fails CONSERVATIVE: a false positive skips the append (the
+pre-P126 status quo), a false negative would ship a doubly-signed draft. **Above the quote by construction** —
+the flow composes `concat(body_html, <createReply quote>)`, so end-of-our-html IS above the quote; a test pins
+that order. And the appended block cannot poison the voice corpus: `cleanEmailBody` cuts it with the same
+anchors used to detect it (tested).
+
+**One refactor worth noting:** `body_html` is now built ONCE, before the dry-run response, instead of only
+inside the save branch. The GET used to describe a body no code had rendered, so the signature would have been
+verifiable only by actually saving; now `draft.body_html` on the dry run is byte-identical to what a save
+posts. `test/draft-assist.test.mjs`'s P124 assertion was updated to the hoisted shape (same property guarded).
+
+Files: `api/_shared/email-signature.js` (new), `docs/os/voice/signatures/signature-{reply,full}.html` (new),
+`api/draft-assist.js`, `test/draft-assist-signature.test.mjs` (new, 28 tests). Full suite 4,283 pass / 4 fail —
+the 4 are **pre-existing** (verified on a clean tree: `auto-scrape-listings`, `folder-feed-enrich-mode`,
+`ollama-clean-assist`, `w8-u3-conflict-card`). Ships on the Railway redeploy of merged `main` →
+`npm run verify:deploy`. **Open for Scott: confirm both blocks before they are the default** (below), and
+decide the logo question.
+
+---
+## P126 (2026-08-24) — signature append shipped; ⚠️ Cowork caught DIRTY runtime assets (fixed) → prompt 127
+
+Reviewed + reconciled. PR #1769 merged (local `57329e58`). CC built the context-aware signature append
+(`api/_shared/email-signature.js`: reply vs full variant, conservative already-signed detection reusing the
+corpus `SIGNATURE_ANCHORS`, `body_html` now rendered once so the dry-run equals the save, 28 tests). It also
+correctly stripped the `cid:` logo (a `cid:` ref renders broken in a generated draft, and a hosted remote image
+would turn every send into a read-receipt) and corrected a real offer-submission doc error (the Tulsa address
+lives in the FULL block only — 0 of 592 recent reply blocks carry it).
+
+**⚠️ Cowork catch — the committed signature ASSETS draft-assist reads at runtime were DIRTY.**
+`docs/os/voice/signatures/signature-reply.html` merged at **12.7 KB carrying a LinkedIn notification email + 4
+tracking-pixel `<img>`s + a broken `cid:` logo** below the real signature; `signature-full.html` similar.
+`loadSignatureHtml` only strips HTML comments, so `appendSignature` would have stapled a LinkedIn email +
+tracking pixels onto **every reply** — invisible in the JSON, visible only on open. CC's tests passed because
+they ran against its trimmed branch copies, not the bytes that actually merged (add/add conflict resolution
+kept the un-trimmed side). **Fix:** Cowork replaced both with clean, balanced, branded hand-authored HTML
+(reply 1.7 KB / full 5.1 KB, 0 `<img>`, 0 LinkedIn/quote leak, phone+email+address+tagline intact, Futura-PT /
+Northmarq-blue). **Durable fix → prompt 127:** add a load-time sanitizer to `loadSignatureHtml` (strip
+img/script/style/handlers + anything past a quote boundary; assert size) so a dirty asset can never leak again,
++ a test that feeds the exact P126 dirty bytes and asserts they're neutralized. **Uncommitted:** the two cleaned
+asset files (Scott commits). Live signature verify still needs the redeploy + a save.
+
 ## P125 (2026-08-21) — draft-assist retrieval + threading + deal-context, all six items fixed
 
 Reviewed + reconciled. **#1768 merged, local main at `6b33e7e7`, `/version`=`6b33e7e75f06` — the JS half is LIVE.**

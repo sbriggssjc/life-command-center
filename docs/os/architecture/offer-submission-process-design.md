@@ -29,7 +29,7 @@ Research is then run against Salesforce (prior offers/closings), buyer + broker 
 | **BCC** | Sarah Martin <smartin@northmarq.com> — standard. |
 | **Importance** | High |
 | **Attachment** | **The buyer's executed LOI PDF, exactly as received** (Scott forwards the signed LOI itself — e.g. `Signed LOI Davita .pdf`). A generated `Offer_DaVita_[City]_[ST].doc` is the **counter / Seller Response** artifact, not the initial submission. |
-| **Signature** | Northmarq / **Scott Briggs · Senior Vice President · Commercial Investment Sales** · D (918) 794-9787 · sabriggs@northmarq.com · 6120 S. Yale Ave., Ste. 300, Tulsa, OK 74136 · Northmarq service-line tagline · northmarq.com. **(Tulsa office is the current block — supersedes the NY address in the old project reference.)** |
+| **Signature** | The **full new-email block**, stored verbatim at `docs/os/voice/signatures/signature-full.html` (P126) — Northmarq / **Scott Briggs · Senior Vice President · Commercial Investment Sales** · D (918) 794-9787 · sabriggs@northmarq.com · 6120 S. Yale Ave., Ste. 300, Tulsa, OK 74136 · service-line tagline **"Commercial Real Estate \| Debt + Equity \| Investment Sales \| Loan Servicing \| Fund Management"** (measured 2026-08-25; previously written here as an unresolved "service-line tagline" placeholder) · northmarq.com. **(Tulsa office is the current block — supersedes the NY address in the old project reference.)** ⚠️ **This describes the FULL block only.** Scott's **reply** signature is a separate, compact block with **no address** — measured over 592 sent messages, his top-posted reply block carries the street address 0 times. Never apply this row to a reply. |
 
 ### Body sequence
 1. Salutation — first name(s) only.
