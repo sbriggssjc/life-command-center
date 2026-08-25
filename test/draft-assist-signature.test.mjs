@@ -169,7 +169,13 @@ describe('P126 doctrine 3 — above the quoted thread', () => {
 
   it('the signature is the LAST thing in the body html we hand the flow', () => {
     const { html } = appendSignature(PROSE, { plainBody: PLAIN });
-    assert.ok(html.trimEnd().endsWith('</table>'), 'the block must close the body');
+    // P127: assert the block closes the body by comparing against the block the
+    // loader actually resolved, not against a literal closing tag. The original
+    // form pinned `</table>` — the assets are div-based, so it failed the moment
+    // the real bytes were checked, which is exactly the gap P127 exists to close.
+    const { html: sig } = loadSignatureHtml('reply');
+    assert.ok(sig, 'the reply block must resolve for this assertion to mean anything');
+    assert.ok(html.endsWith(sig), 'the block must close the body');
     assert.ok(html.indexOf('Scott Briggs') > html.indexOf('rent roll'),
       'the block must sit below the prose, not above it');
   });
