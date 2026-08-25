@@ -201,7 +201,7 @@ what it found on first run. Summary:
 | class | detector | first run |
 |---|---|---|
 | entity FK missing from the merge path | `lcc_audit_merge_path_coverage()` | 9 columns, **370 stranded rows** (`lcc_decisions.subject_entity_id` = 286) |
-| producer with no consumer | open vs ever-completed per type | **1,123 tasks across 7 types, ZERO completions ever** |
+| producer with no consumer | open vs ever-closed **by STATUS, not timestamp** | **1,123 tasks across 7 types, ZERO completions ever** |
 | surface notifies but cannot capture | grep the renderer for `<input>` | Research page has **0 input fields** — that is why 316 tasks are unworked |
 | guard checks the label, not the substance | ask what other attribute identifies the population | broker guard reads ROLE; 80 broker/own-firm edges wore `prospecting_contact` |
 | dormant capability ≈ quiet pipeline | `feature_flags_registry where state <> 'on'` | every external acquisition adapter off since June; 249 owners have no automated route |

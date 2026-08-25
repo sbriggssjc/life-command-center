@@ -55,10 +55,35 @@ history** — `establish_ownership_history` (545), `owner_contact_manual` (316),
 (`property_missing_recorded_owner` completed 1,007 in 30 days), which is what makes the
 contrast credible rather than a measurement artefact.
 
-**Generalise it beyond `research_tasks`:** any table with a `status`/`resolved_at`/
-`processed_at` seam deserves the same question. Candidates not yet checked:
-`lcc_decisions`, `inbox_items`, `pending_updates`, `entity_match_candidates`,
-`contact_acquisition_review`, `junk_entity_review`.
+**⚠️ CLOSURE IS A STATUS, NOT A TIMESTAMP — the first version of this detector was wrong.**
+Run across seven other queues on 2026-08-22 it reported **two** as "NEVER CONSUMED":
+`action_items` (148 open, 0 closed) and `lcc_owner_contact_propagate_review` (149 open,
+0 closed). **Both were false.** `action_items` has **94 completed** and
+`lcc_owner_contact_propagate_review` has **52 withdrawn** — neither ever stamps its
+`completed_at` / `decided_at` column, so a timestamp test reads zero on a healthy queue.
+Test the STATUS column; use the timestamp only for age.
+
+That mis-measurement is itself a real (smaller) defect worth its own fix: **two tables close
+rows without recording when**, which silently breaks every age, SLA and throughput analysis
+over them — including this detector.
+
+**⚠️ AND THE HYPOTHESIS THIS WAS BUILT TO TEST WAS REFUTED.** "7 of 10 research types are
+never consumed, so the rot is probably systemic" — it is not. Corrected results:
+
+| queue | open | closed ever | verdict |
+|---|---|---|---|
+| `lcc_decisions` | 2,358 | 2,687 (1,254 in 30d) | healthy |
+| `lcc_health_alerts` | 12 | 5,223 | healthy |
+| `junk_entity_review` | 63 | 218 | healthy |
+| `action_items` | 54 | 94 | healthy (untimestamped) |
+| `lcc_owner_contact_propagate_review` | 97 | 52 | healthy (untimestamped) |
+| `contact_acquisition_review` | 9 | 5 | healthy |
+| `comms_owner_attribution_review` | 9 | 22 | healthy |
+| **`research_tasks` / `owner_contact_manual`** | **316** | **0** | **the only genuinely dead lane** |
+
+The Decision-Center family is consumed. The research lane is the outlier, and Class 3 explains
+why: it is the one work surface with no way to enter an answer. **Do not generalise a single
+dead queue into a systemic claim without running the others.**
 
 ---
 
@@ -145,11 +170,18 @@ A count that does not move is inventory, not throughput.
 
 Ordered by expected yield, not by ease:
 
-1. **Class 2 across the other queues** — `lcc_decisions`, `inbox_items`, `pending_updates`,
-   `entity_match_candidates`, `junk_entity_review`. The research-task result (7 of 10 types
-   never consumed) suggests this is systemic, not local.
+1. ~~**Class 2 across the other queues**~~ — **DONE 2026-08-22, hypothesis refuted.** Six of
+   seven are healthy; `owner_contact_manual` is the only genuinely dead lane. See the
+   corrected table under Class 2. Still unchecked: `inbox_items`, `pending_updates`,
+   `entity_match_candidates` (different seam names — they did not surface in the
+   status-column scan and need locating first).
 2. **`lcc_decisions` 286 stranded subjects** — Class 1's largest finding, and it sits on the
-   Decision Center, the surface most likely to be trusted.
+   Decision Center, the surface most likely to be trusted. Note the lane itself is HEALTHY
+   (2,687 closed) — so this is 286 cards being worked against an entity that no longer
+   exists, which is worse than a dead queue, not better.
+3. **Two queues that close without stamping a closure time** — `action_items.completed_at`
+   and `lcc_owner_contact_propagate_review.decided_at` are never written. Cheap to fix,
+   and until it is, no age or throughput measure over those tables can be trusted.
 3. **Class 3 across every work surface** — Decision Center lanes, inbox triage, the
    contact-acquisition review. Each one: can the operator actually record the answer?
 4. **Crons that succeed and change nothing** — join `cron.job_run_details` to a row-count
