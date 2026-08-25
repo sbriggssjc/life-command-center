@@ -237,6 +237,28 @@ gap. It now compares against the block the loader actually resolves.
 **Close-out:** ships on the Railway redeploy of merged `main` → `npm run verify:deploy`. Until then the safety
 still rests on the assets being clean (they are).
 
+## Capstone 2026-08-24 — draft-assist arc COMPLETE + live; next-up = security/hygiene
+
+The full email arc shipped this session and is live (redeploy confirmed by Scott): **intake fixed → forward
+capture + contact-history flows → voice v3 → deal-grounded, recipient-matched, full-body retrieval → threaded
+Outlook reply → branded signature → load-time sanitizer.** draft-assist end to end: real thread → correct deal
+→ Scott's voice → threaded draft with signature, in Drafts, never sent. Prompt **128** queued (fixes the lone
+stale test so the suite reads truly green — test-only). Also shipped this session: P118 cron fixes, P119 mailbox
+mirror, P120 move-queue executor, P122 CM packet cursor, P123 deal-matcher, health surface 3,987 → ~24.
+
+**⏭ Recommended next step — SECURITY/HYGIENE, not a feature:**
+1. **Rotate `LCC_API_KEY`.** It's now genuinely exposed — pasted in chat curl/IRM commands repeatedly this
+   session AND embedded in the committed PA flow export zips (`private/power-automate/exports/…`). Rotate per
+   `docs/AUTH_ENFORCEMENT_ROLLOUT.md`; verify readiness FIRST via `GET /api/diag?kind=auth-ready`
+   (`would_pass_in_production` must be true); **never flip `LCC_ENV` before the key is set** (that = total
+   sign-in lockout, per CLAUDE.md). After rotating, update the key in every PA flow + Railway + Supabase Vault
+   (`lcc_api_key`) that carries it.
+2. **Commit the session's doc/prompt work** — 12 uncommitted working-tree files (STATUS, prompts 122–128,
+   signature assets). All engine PRs (#1760–1770) already merged to origin; these Cowork docs are the residue.
+3. Older standing items still open: the 475 MB `.pst` history rewrite (unblocks local `git push`), CF token
+   rotations, W6.5 Stage 2 frontend decomposition, U4 first-of-month report, the parked Online Archive backfill
+   (needs a Purview export from IT).
+
 ## P127 (2026-08-24) — signature load-time sanitizer shipped (the durable fix)
 
 Reviewed + reconciled. PR #1770 merged (local `ea561ca3`). `loadSignatureHtml` now sanitizes every signature
