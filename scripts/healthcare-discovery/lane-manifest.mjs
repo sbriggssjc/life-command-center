@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { resolvePrivateSourcePath } from './manifest.mjs';
+import { canonicalizeSyntheticFixtureBytes, resolvePrivateSourcePath } from './manifest.mjs';
 
 export const LANE_MANIFEST_VERSION = '2.0';
 export const LANE_POLICIES = Object.freeze({
@@ -134,6 +134,28 @@ async function sha256Header(filePath) {
   return createHash('sha256').update(newline === -1 ? contents : contents.subarray(0, newline + 1)).digest('hex');
 }
 
+function isSyntheticFixture(filePath, fixtureRoot) {
+  if (!fixtureRoot) return false;
+  const relative = path.relative(path.resolve(fixtureRoot), path.resolve(filePath));
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+async function inspectSourceFile(filePath, options) {
+  if (!isSyntheticFixture(filePath, options.fixtureRoot)) {
+    const fileStat = await stat(filePath);
+    return { bytes: null, byteSize: fileStat.size, sha256: await sha256File(filePath), headerSha256: await sha256Header(filePath) };
+  }
+  const bytes = canonicalizeSyntheticFixtureBytes(await readFile(filePath));
+  const newline = bytes.indexOf(0x0a);
+  const header = newline === -1 ? bytes : bytes.subarray(0, newline + 1);
+  return {
+    bytes,
+    byteSize: bytes.length,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    headerSha256: createHash('sha256').update(header).digest('hex'),
+  };
+}
+
 export async function validateLaneManifestFile(manifestPath, options = {}) {
   const raw = await readFile(manifestPath, 'utf8');
   const manifest = JSON.parse(raw);
@@ -141,16 +163,17 @@ export async function validateLaneManifestFile(manifestPath, options = {}) {
   const sourceFingerprints = [];
   for (const source of manifest.sources) {
     const filePath = resolvePrivateSourcePath(manifestPath, source.object_path, options);
-    const fileStat = await stat(filePath);
-    if (fileStat.size !== source.byte_size) throw new Error(`${source.source_key} byte-size mismatch`);
-    if (fileStat.size > manifest.limits.max_bytes_per_source) throw new Error(`${source.source_key} exceeds max_bytes_per_source`);
-    const sha256 = await sha256File(filePath);
+    const inspected = await inspectSourceFile(filePath, options);
+    if (inspected.byteSize !== source.byte_size) throw new Error(`${source.source_key} byte-size mismatch`);
+    if (inspected.byteSize > manifest.limits.max_bytes_per_source) throw new Error(`${source.source_key} exceeds max_bytes_per_source`);
+    const sha256 = inspected.sha256;
     if (sha256 !== source.sha256) throw new Error(`${source.source_key} checksum mismatch`);
-    if (await sha256Header(filePath) !== source.header_sha256) throw new Error(`${source.source_key} header checksum mismatch`);
-    const header = (await readFile(filePath, 'utf8')).split(/\r?\n/, 1)[0].split(',').map((value) => value.trim());
+    if (inspected.headerSha256 !== source.header_sha256) throw new Error(`${source.source_key} header checksum mismatch`);
+    const headerText = inspected.bytes ? inspected.bytes.toString('utf8') : await readFile(filePath, 'utf8');
+    const header = headerText.split(/\r?\n/, 1)[0].split(',').map((value) => value.trim());
     const missing = source.required_columns.filter((column) => !header.includes(column));
     if (missing.length) throw new Error(`${source.source_key} missing required column(s): ${missing.join(', ')}`);
-    sourceFingerprints.push({ source_key: source.source_key, sha256, byte_size: fileStat.size });
+    sourceFingerprints.push({ source_key: source.source_key, sha256, byte_size: inspected.byteSize });
   }
   return { receipt_version: '1.0', lane: manifest.lane, release_id: manifest.release_id, source_fingerprints: sourceFingerprints, status: 'pass' };
 }

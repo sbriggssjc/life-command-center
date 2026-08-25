@@ -123,6 +123,31 @@ async function sha256Header(filePath) {
   return createHash('sha256').update(header).digest('hex');
 }
 
+function isSyntheticFixture(filePath, fixtureRoot) {
+  if (!fixtureRoot) return false;
+  const relative = path.relative(path.resolve(fixtureRoot), path.resolve(filePath));
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+export function canonicalizeSyntheticFixtureBytes(contents) {
+  return Buffer.from(contents.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+}
+
+async function inspectSourceFile(filePath, options) {
+  if (!isSyntheticFixture(filePath, options.fixtureRoot)) {
+    const fileStat = await stat(filePath);
+    return { byteSize: fileStat.size, sha256: await sha256File(filePath), headerSha256: await sha256Header(filePath) };
+  }
+  const contents = canonicalizeSyntheticFixtureBytes(await readFile(filePath));
+  const newline = contents.indexOf(0x0a);
+  const header = newline === -1 ? contents : contents.subarray(0, newline + 1);
+  return {
+    byteSize: contents.length,
+    sha256: createHash('sha256').update(contents).digest('hex'),
+    headerSha256: createHash('sha256').update(header).digest('hex'),
+  };
+}
+
 export async function validateManifestFile(manifestPath, options = {}) {
   const raw = await readFile(manifestPath, 'utf8');
   const manifest = JSON.parse(raw);
@@ -130,15 +155,15 @@ export async function validateManifestFile(manifestPath, options = {}) {
   const sources = [];
   for (const source of manifest.sources) {
     const filePath = resolvePrivateSourcePath(manifestPath, source.object_path, options);
-    const fileStat = await stat(filePath);
-    if (fileStat.size !== source.byte_size) throw new Error(`${source.name} byte-size mismatch`);
-    const sha256 = await sha256File(filePath);
+    const inspected = await inspectSourceFile(filePath, options);
+    if (inspected.byteSize !== source.byte_size) throw new Error(`${source.name} byte-size mismatch`);
+    const sha256 = inspected.sha256;
     if (sha256 !== source.sha256) throw new Error(`${source.name} checksum mismatch`);
     if (source.header_sha256) {
-      const headerSha256 = await sha256Header(filePath);
+      const headerSha256 = inspected.headerSha256;
       if (headerSha256 !== source.header_sha256) throw new Error(`${source.name} header checksum mismatch`);
     }
-    sources.push({ name: source.name, sha256, byte_size: fileStat.size });
+    sources.push({ name: source.name, sha256, byte_size: inspected.byteSize });
   }
   return {
     receipt_version: '1.0',

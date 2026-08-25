@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -15,6 +15,18 @@ test('A1 validates the frozen synthetic source bundle', async () => {
   assert.equal(receipt.status, 'pass');
   assert.deepEqual(receipt.source_fingerprints.map((source) => source.name), ['nppes_v2_monthly', 'nppes_secondary_locations', 'nucc_taxonomy']);
   assert.doesNotMatch(JSON.stringify(receipt), /NPI|street|object_path/i);
+});
+
+test('A1 canonicalizes CRLF only inside an explicit synthetic fixture root', async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'healthcare-crlf-fixture-'));
+  const manifest = JSON.parse(await readFile(manifestUrl, 'utf8'));
+  await writeFile(path.join(tempRoot, 'manifest.json'), JSON.stringify(manifest));
+  for (const source of manifest.sources) {
+    const original = await readFile(new URL(source.object_path, fixtureRoot), 'utf8');
+    await writeFile(path.join(tempRoot, source.object_path), original.replace(/\n/g, '\r\n'));
+  }
+  const receipt = await validateManifestFile(path.join(tempRoot, 'manifest.json'), { fixtureRoot: tempRoot });
+  assert.equal(receipt.status, 'pass');
 });
 
 test('A1 rejects a source path outside the approved root', async () => {
