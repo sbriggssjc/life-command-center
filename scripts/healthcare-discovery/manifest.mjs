@@ -130,7 +130,7 @@ function isSyntheticFixture(filePath, fixtureRoot) {
 }
 
 export function canonicalizeSyntheticFixtureBytes(contents) {
-  return Buffer.from(contents.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+  return Buffer.from(contents.toString('utf8').replace(/\r+\n/g, '\n'), 'utf8');
 }
 
 async function inspectSourceFile(filePath, options) {

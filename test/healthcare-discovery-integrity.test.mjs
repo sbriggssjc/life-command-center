@@ -3,15 +3,17 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { validateManifestFile } from '../scripts/healthcare-discovery/manifest.mjs';
 import { validateNuccTaxonomyFile } from '../scripts/healthcare-discovery/nucc-taxonomy.mjs';
 
 const fixtureRoot = new URL('./fixtures/healthcare-discovery/', import.meta.url);
+const fixtureRootPath = fileURLToPath(fixtureRoot);
 const manifestUrl = new URL('manifest.valid.json', fixtureRoot);
 
 test('A1 validates the frozen synthetic source bundle', async () => {
-  const receipt = await validateManifestFile(manifestUrl, { fixtureRoot: fixtureRoot.pathname });
+  const receipt = await validateManifestFile(manifestUrl, { fixtureRoot: fixtureRootPath });
   assert.equal(receipt.status, 'pass');
   assert.deepEqual(receipt.source_fingerprints.map((source) => source.name), ['nppes_v2_monthly', 'nppes_secondary_locations', 'nucc_taxonomy']);
   assert.doesNotMatch(JSON.stringify(receipt), /NPI|street|object_path/i);
