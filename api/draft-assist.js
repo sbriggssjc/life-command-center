@@ -44,6 +44,7 @@ import { cleanEmailBody, classifyDraftType, pickBestBody, voiceCorpusExclusion }
 import { invokeOnPremGeneration, invokeOnPremEmbeddings } from './_shared/ai.js';
 import { buildDealPacket } from './_handlers/entities-handler.js';
 import { createOutlookDraftViaPA } from './_shared/outlook-draft.js';
+import { appendSignature } from './_shared/email-signature.js';
 import { flagEnabled, fetchFeatureFlag } from './_shared/feature-flag.js';
 import {
   SCOTT_FROM, VALID_PURPOSES,
@@ -429,6 +430,28 @@ export default async function draftAssistHandler(req, res) {
     body: bodyCheck.text,
   };
 
+  // P126 — SIGN THE DRAFT so it is send-ready.
+  //
+  // The body html is built HERE, not in the save branch, for two reasons. (a) The
+  // dry run must show exactly what a save would write — the GET response used to
+  // describe a body that no code had rendered yet, so the signature could only be
+  // verified by actually saving. (b) One construction means one owner: a rendering
+  // that exists in the save path only is a rendering nobody can test.
+  //
+  // ORDER IS LOAD-BEARING: escape the model's prose FIRST, then append the
+  // signature, because the block is trusted HTML from our own asset and escaping
+  // it would render tags as literal text. The already-signed probe runs on the
+  // PLAIN body (`draft.body`) — the anchors are text regexes and would not match
+  // through the escaping.
+  const escapedBody = `<div>${String(draft.body).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')}</div>`;
+  // VARIANT: reply ⇒ the compact block, new thread ⇒ the full block (service line,
+  // address, tagline) — how Scott actually signs. `inReplyTo` is the SAME value
+  // handed to the flow below, so the block can never disagree with the shape of
+  // the draft that is actually created.
+  const inReplyTo = replyTarget ? replyTarget.internet_message_id : '';
+  const signed = appendSignature(escapedBody, { plainBody: draft.body, inReplyTo });
+  const bodyHtml = signed.html;
+
   // P117: pass the exemplars themselves so the note can report FULL-BODY coverage
   // from their real lengths instead of asserting the old corpus-wide preview cap.
   const voice_confidence = voiceConfidenceNote(bucket, exemplars);
@@ -440,7 +463,21 @@ export default async function draftAssistHandler(req, res) {
     mode: isPost ? 'save' : 'dry_run',
     purpose,
     bucket,
-    draft,
+    // P126: `body_html` is what a save actually writes (prose + signature),
+    // exposed on the dry run so the block is verifiable WITHOUT saving.
+    draft: { ...draft, body_html: bodyHtml },
+    // P126: honest status — 'appended' | 'already_present' | 'not_configured'.
+    // `not_configured` means nothing was invented, NOT that signing succeeded.
+    signature: {
+      status: signed.status,
+      source: signed.source,
+      // 'reply' = the compact self-contained block; 'full' = the new-email block.
+      variant: signed.variant,
+      note: signed.note,
+      // The block sits at the END of body_html, and the flow's reply branch
+      // composes `concat(body_html, <quoted thread>)` — so it is above the quote.
+      above_quote: signed.status === 'appended' ? true : null,
+    },
     retrieval: {
       method: retrievalMethod,
       exemplar_ids: exemplarIds,
@@ -527,14 +564,17 @@ export default async function draftAssistHandler(req, res) {
   }
 
   // SAVE-NOT-SEND: createOutlookDraftViaPA creates a DRAFT. There is no send.
-  const bodyHtml = `<div>${String(draft.body).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')}</div>`;
+  // `bodyHtml` (prose + signature) was rendered above and is the SAME string the
+  // dry run reported — the two can never drift because there is only one.
   const saveRes = await createOutlookDraftViaPA({
     to: recipient,
     subject: draft.subject,
     body_html: bodyHtml,
     // P124: thread the draft into the live conversation. The PA flow replies to
     // this message id when present and creates a standalone draft when it is ''.
-    in_reply_to: replyTarget ? replyTarget.internet_message_id : '',
+    // P126: the SAME value the signature variant was chosen from — one
+    // expression, so the block and the draft shape cannot drift apart.
+    in_reply_to: inReplyTo,
   });
 
   // P125: report whether the draft actually landed in the thread, and say so
