@@ -29,32 +29,26 @@ isn't send-ready as-is; Scott would hand-add his signature every time, which def
 5. **Verify:** a saved reply ends with Scott's real signature block once, the quoted thread remains beneath it,
    `threaded=true`, nothing fabricated, Sent empty.
 
-## Canonical signatures (provided by Scott 2026-08-21 — use these verbatim, do not fabricate)
+## Canonical signatures — use the REAL branded HTML assets (not plain text)
 
-Context-aware: **replies get the compact block, new/cold emails get the full block** (matches Scott's actual
-practice). The Northmarq logo image is Outlook-side; render the text form (no cid/hosted image needed).
+Scott's signature is branded HTML (Futura PT font, Northmarq blue `rgb(0,61,165)`, styled D/E/A layout), NOT
+plain text — extracted verbatim from his own sent `.eml`s and saved to the repo:
 
-**Reply (compact) — for `in_reply_to != ''` / `external_follow_up` / `internal_coordination` / `loi_offer`:**
-```
-Scott Briggs
-Senior Vice President · Northmarq
-D  (918) 794-9787  |  E  sabriggs@northmarq.com
-```
+- **`docs/os/voice/signatures/signature-reply.html`** — the COMPACT reply signature. **Self-contained, NO logo
+  image** (no `cid:`), so it renders correctly appended to any generated draft with zero image dependency.
+  ⚠️ This file was extracted with a loose lower boundary (~9.7 KB) — **trim it to the signature block only**
+  (ends after the `sabriggs@northmarq.com` line; drop any trailing quoted content) before using.
+- **`docs/os/voice/signatures/signature-full.html`** — the FULL new-email signature. Branded, and it carries
+  the Northmarq **logo as a `cid:` inline image** — that reference BREAKS in a generated draft. To use it,
+  host `docs/os/voice/signatures/northmarq-logo.png` at a stable public URL and replace the `cid:…` `src` with
+  that `https://` URL; if no host is available, strip the `<img>` and keep the styled text.
+- **`docs/os/voice/signatures/northmarq-logo.png`** — the logo bytes (4.2 KB) for hosting.
 
-**New email (full) — for `in_reply_to == ''` / `cold_bd_outreach` / `listing_announcement`:**
-```
-Scott Briggs
-Senior Vice President
-Commercial Investment Sales
-D  (918) 794-9787
-E  sabriggs@northmarq.com
-A  6120 S. Yale Ave., Ste. 300, Tulsa, OK 74136
-Commercial Real Estate | Debt + Equity | Investment Sales | Loan Servicing | Fund Management
-northmarq.com
-```
-
-These are now "configured" per item 2 — append the matching block; never invent contact details, and if the
-purpose→block mapping is ambiguous, default to the compact reply block.
+**Rule (matches Scott's practice):** replies (`in_reply_to != ''` — external_follow_up / internal_coordination
+/ loi_offer) → **signature-reply.html**; new/cold (`in_reply_to == ''` — cold_bd_outreach /
+listing_announcement) → **signature-full.html**. Ambiguous → default to the reply block. Store the chosen HTML
+as an asset/config draft-assist reads; append it verbatim (item 3: once, above the quote). Never re-type or
+fabricate the contact details — the phone/address/title must come from these files exactly.
 
 ## Close-out
 - Handler change ships on the Railway redeploy of merged `main` → `npm run verify:deploy`. If a stored
