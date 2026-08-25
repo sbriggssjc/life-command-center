@@ -157,6 +157,16 @@ deal-aware subject, and **`outlook_draft.threaded=true`** (v5 re-import took). D
 Minor observability nit: `conversation_matches_thread` came back blank (the flow echoes `threaded` but not
 `conversationId` for the seam to compare) — cosmetic, not functional; optional tiny follow-up.
 
+**v6 (Cowork flow re-package, 2026-08-21) — threading fully proven + quote preserved.** The first threaded
+draft had correct headers (In-Reply-To + full References + Thread-Index) but read as bare because
+`Set_reply_body` PATCH *replaced* the body, wiping the createReply-seeded quote. Fixed: PATCH now prepends
+`body_html` ABOVE `body('Create_draft_reply')?['body']?['content']` (repo `flow-lcc-create-outlook-draft.json`
+updated + re-packaged `LCC-CreateOutlookDraft-import-v6.zip`). Post-re-import save: **`threaded=true`,
+`conversation_id` populated, `conversation_matches_thread=true`** — threading definitively confirmed via the
+seam. ⏭ **Open follow-up: no signature block** — draft-assist emits a sign-off but not Scott's Northmarq
+signature; the draft isn't send-ready. Drafted **prompt 126** (append canonical signature, sourced
+conservatively, above the quote, never fabricated). Quote-preservation (v6) to be eyeballed on the newest draft.
+
 ## 🎉 2026-08-21 — draft-assist is LIVE end-to-end: the app drafted an email in Scott's voice, in Outlook
 
 First real save succeeded through the whole chain: captured history → v3 voice profile → `/api/draft-assist?save=true`
