@@ -30,8 +30,30 @@ Ambiguous ⇒ the **reply** block (it asserts strictly less and is never wrong t
   Delete or blank a file and draft-assist appends **nothing** and reports `signature.status =
   "not_configured"` — it never falls back to a guess.
 
-## Not stored here
+## Provenance + the trim that mattered
 
-`northmarq-logo.png` — the 4,221-byte logo referenced by his real full block. It is a `cid:` attachment part,
-not something `email_bodies` retains, so it is not in this directory. It is only needed if the logo question
-above is answered yes.
+Both files are Scott's own `.eml` extractions (committed to `main` 2026-08-25), used verbatim except:
+
+- **`signature-reply.html` was trimmed 9,641 → 1,546 bytes.** The extraction ran past the block and carried
+  the QUOTED MESSAGE below it — an Outlook `divRplyFwdMsg` boundary, a whole LinkedIn notification email
+  ("Brandon Sherrill recently posted…", 2026-08-24) and its **four tracking `<img>` tags**. Appending that
+  untrimmed would have pasted a third party's LinkedIn post and four tracking pixels into every reply Scott
+  sends. The block ends after the `sabriggs@northmarq.com` line; everything after is dropped.
+- **`signature-full.html` lost its logo cell** (see below). Its extraction was otherwise already clean.
+
+Both were cross-checked against LCC Opps `email_bodies.body_html` and are byte-consistent with his live block.
+
+## `northmarq-logo.png`
+
+The 4,221-byte logo his real full block references as `<img src="cid:bc8c8e3e-…">`. A `cid:` points at an
+attachment part of the message it was copied from, so it cannot ship in a generated draft — the whole `<td>`
+was removed (not just the `<img>`: that cell carries the blue `border-right` divider, so stripping only the
+image leaves a stray floating rule).
+
+**To restore it — a deliberate decision, not a default.** `server.js` serves the repo root via
+`express.static`, so the file is reachable at
+`https://<the-Railway-host>/docs/os/voice/signatures/northmarq-logo.png`. Re-add the cell with that `https://`
+src, or set `DRAFT_ASSIST_SIGNATURE_FULL_HTML` to override without a redeploy. Accept two consequences first:
+every recipient's mail client then fetches an image from the LCC app on open (a read receipt for us, a
+tracking beacon for them), and if that host is renamed or sleeps, every already-sent email shows a broken
+logo forever.
