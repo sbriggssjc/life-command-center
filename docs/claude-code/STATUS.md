@@ -237,6 +237,27 @@ gap. It now compares against the block the loader actually resolves.
 **Close-out:** ships on the Railway redeploy of merged `main` → `npm run verify:deploy`. Until then the safety
 still rests on the assets being clean (they are).
 
+## P127 (2026-08-24) — signature load-time sanitizer shipped (the durable fix)
+
+Reviewed + reconciled. PR #1770 merged (local `ea561ca3`). `loadSignatureHtml` now sanitizes every signature
+before use: strips `<img>`/`<script>`/`<style>`/handlers + anything past an Outlook quote boundary
+(`appendonsend`/`divRplyFwdMsg`/`From:`), bounds size (>8 KB after cleaning ⇒ `not_configured`, nothing
+appended), and surfaces removals (`signature.sanitized_removed` / `sanitize_rejected` + a once-per-source
+stderr warning). **59 new tests replay the exact P126 dirty bytes through the real `appendSignature` path and
+assert no `<img>`/`linkedin`/`cid:`/quoted-header survives while name/title/phone/email do.** Both committed
+assets re-verified clean with an HTML tokenizer — **857 B (reply) / 1,253 B (full)**, image-free, mailto/tel/
+northmarq.com only, exact facts once (Tulsa address on FULL only). Ships on the Railway redeploy; assets are
+clean now regardless, so the sanitizer is defense-in-depth.
+
+**⚠️ Honest-measurement note (CC self-corrected — worth keeping):** CC first reported "full suite green / exit
+0," then retracted it — `node --test` returned 0 *despite* a failing test, and its grep watched for a `# fail`
+marker the dot reporter never emits. Both "green" signals were measurement artifacts, not measurements —
+exactly the repo doctrine "assert on the STATE DELTA, never the worker's exit status." The real state: **1
+pre-existing failure, `test/w8-u3-conflict-card.test.mjs`** — a stale source-grep that Prompt 89's null-guard
+invalidated (it greps `api/admin.js` for a line P89 rewrote), fails identically on HEAD~1, untouched by P127.
+Same class as the `</table>` stale assertion CC fixed in the P126 signature test. **Optional one-line follow-up**
+to fix that grep (CC offered); not blocking (CI here only runs the boot check).
+
 ## P126 (2026-08-24) — signature append shipped; ⚠️ Cowork caught DIRTY runtime assets (fixed) → prompt 127
 
 Reviewed + reconciled. PR #1769 merged (local `57329e58`). CC built the context-aware signature append
@@ -253,7 +274,8 @@ tracking-pixel `<img>`s + a broken `cid:` logo** below the real signature; `sign
 tracking pixels onto **every reply** — invisible in the JSON, visible only on open. CC's tests passed because
 they ran against its trimmed branch copies, not the bytes that actually merged (add/add conflict resolution
 kept the un-trimmed side). **Fix:** Cowork replaced both with clean, balanced, branded hand-authored HTML
-(reply 1.7 KB / full 5.1 KB, 0 `<img>`, 0 LinkedIn/quote leak, phone+email+address+tagline intact, Futura-PT /
+(final committed sizes **857 B reply / 1,253 B full** — an earlier note said 1.7/5.1 KB, that was the messy
+regex draft, superseded; 0 `<img>`, 0 LinkedIn/quote leak, phone+email+address+tagline intact, Futura-PT /
 Northmarq-blue). **Durable fix → prompt 127:** add a load-time sanitizer to `loadSignatureHtml` (strip
 img/script/style/handlers + anything past a quote boundary; assert size) so a dirty asset can never leak again,
 + a test that feeds the exact P126 dirty bytes and asserts they're neutralized. **Uncommitted:** the two cleaned
