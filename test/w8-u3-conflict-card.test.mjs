@@ -68,8 +68,23 @@ describe('W8 U3 conflict card — feed surfaces conflict rows with candidates', 
   });
 
   it('total counts open proposals PLUS conflict rows (honest badge)', () => {
-    assert.match(feed, /status=eq\.conflict'\)/, 'total must add the conflict count');
-    assert.match(feed, /out\.total = \(u3OpenCnt \|\| 0\) \+ \(u3ConfCnt \|\| 0\)/);
+    assert.match(feed, /opsCnt\('w8_u3_link_review\?status=eq\.conflict'\)/,
+      'total must probe the conflict count');
+
+    // Assert the CONTRACT, not the expression text. Pinning the literal sum rotted
+    // the moment Prompt 89 wrapped it in the both-null guard, even though the
+    // behaviour was correct. Anchor on the `out.total =` assignment (a stable
+    // structural token), then evaluate the right-hand side over both probes.
+    const m = feed.match(/out\.total\s*=\s*([\s\S]*?);\s*\r?\n/);
+    assert.ok(m, 'the feed block must assign out.total from the two count probes');
+    const total = new Function('u3OpenCnt', 'u3ConfCnt', 'return (' + m[1] + ');');
+
+    assert.equal(total(3, 2), 5, 'both probes present -> open + conflict');
+    assert.equal(total(3, 0), 3, 'a zero conflict count still sums');
+    assert.equal(total(3, null), 3, 'a failed conflict probe must not erase the open count');
+    assert.equal(total(null, 2), 2, 'a failed open probe must not erase the conflict count');
+    assert.equal(total(null, null), null,
+      'both probes null -> null, never 0 (Prompt 89 honest-badge null-guard)');
   });
 });
 

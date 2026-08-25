@@ -126,6 +126,48 @@ action it does not own. Until that edit lands the two movers race **benignly** �
 message.
 
 ---
+## P128 (2026-08-25) — the U3 conflict-card test asserts the CONTRACT, not the expression text
+
+`test/w8-u3-conflict-card.test.mjs` greps `api/admin.js` for the honest-badge total. It pinned the
+**literal** `out.total = (u3OpenCnt || 0) + (u3ConfCnt || 0)`, which **Prompt 89's null-guard rewrote**
+to `(u3OpenCnt == null && u3ConfCnt == null) ? null : (u3OpenCnt || 0) + (u3ConfCnt || 0)`. Runtime
+behaviour was correct the whole time; only the assertion was stale. Provenance: commit `1e9238e`
+("Desktop Changes.") both rewrote that line and last touched the test, so it has been red since.
+
+**Re-pinning the new literal would just rot again**, so the assertion now tests the contract. It anchors
+on the `out.total =` assignment (a stable structural token), extracts the right-hand side and evaluates
+it over both probes: `(3,2)→5`, `(3,0)→3`, `(3,null)→3`, `(null,2)→2`, **`(null,null)→null`** — the
+honest-badge guard P89's own comment documents ("report null, NOT 0, so the lane header does not read
+'1 shown · 0 workable' over a workable card"). The surviving shape check is tightened from a bare
+`status=eq.conflict')` to the full `opsCnt('w8_u3_link_review?status=eq.conflict')` call.
+
+**Mutation-tested in both directions** (a green test that cannot fail is not a measurement): reverting
+`admin.js` to the pre-P89 expression fails the both-null case; dropping `u3ConfCnt` from the sum fails
+the sum case. `api/admin.js` is byte-unchanged — `git diff origin/main HEAD` is exactly one file.
+
+**⚠️ Correction — P127's STATUS said "1 pre-existing failure." The real count was 4, and is now 3.**
+Measured by the pass/fail list, not the exit code: **4,363 pass / 3 fail** (was 4,372 tests / 4 fail).
+P126's entry above recorded "4,283 pass / **4 fail**" and was right; P127 under-counted. So the state
+delta from this round is exactly **−1 failure, the one targeted** — the suite is *not* "now clean," and
+saying so would repeat the dated-claim trap the doctrine section warns about.
+
+**The 3 that remain are pre-existing, in files this round never touched, and reproduce in isolation**
+(so they are not cross-test interference). Unlike the U3 case these are **behavioural** assertions, not
+stale greps — each is worth its own look, and none is in scope here:
+
+| test | assertion failing | shape |
+|---|---|---|
+| `auto-scrape-listings.test.js` | "expected ±3y lower bound in URL" — the query issues `sale_date=gte.<listing_date>&lte.<+3y>`, i.e. no `−3y` lower bound; handler 502s | test and code disagree on whether the window is ±3y or on/after listing_date |
+| `folder-feed-enrich-mode.test.mjs` | "disambiguation decision emitted" `false !== true` — enrich + no match creates nothing AND emits nothing | a producer that should route ambiguity to a review lane appears not to |
+| `ollama-clean-assist.test.mjs` | "clean-assist worker must not call `properties?`" `true !== false` | a guardrail (assist annotates, never writes canonical data) is currently violated |
+
+The third is the one to look at first — it is the P106-class invariant that the assist layer **annotates
+and never writes canonical data**, and the guard is red.
+
+**Close-out:** test-only; no runtime code, no migration, nothing waits on a redeploy. Branch
+`claude/fix-conflict-card-test-grep-sm7lav`.
+
+---
 ## P126 (2026-08-25) — draft-assist appends Scott's real branded signature; the draft is send-ready
 
 Closes the P125 v6 follow-up ("no signature block"). The generated draft ended at the model's sign-off
