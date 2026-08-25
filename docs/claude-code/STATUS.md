@@ -182,6 +182,61 @@ the 4 are **pre-existing** (verified on a clean tree: `auto-scrape-listings`, `f
 decide the logo question.
 
 ---
+## P127 (2026-08-25) — the signature loader sanitizes; a dirty asset can no longer reach a draft
+
+The durable half of the P126 catch below. The assets are clean today (reply **857 B**, full **1,253 B** — both
+verified below with a parser, not a regex); the point of this round is that "the bytes happen to be clean" was
+the *only* thing between a recipient and someone else's mail, and that is not a control.
+
+**New `api/_shared/html-sanitize.js`** — a **tokenizing** sanitizer, deliberately not a regex strip. It walks
+the markup with a tokenizer that respects quoted attribute values and raw-text elements, then rebuilds from an
+**allowlist** of tags and attributes: `script`/`style`/`iframe`/`form`/`svg`/… dropped with their content,
+`img`/`link`/`meta`/`input` dropped outright, every `on*=` handler refused (an allowlist is the only defence
+that holds — a denylist misses `onauxclick`), any non-`http(s)`/`mailto:`/`tel:` URL dropped (so `cid:`,
+`javascript:`, `data:` all go), `url(`/`@import`/`expression(` styles dropped, unknown tags **unwrapped** so a
+strange wrapper can't take the block with it, and the tag stack rebalanced. `loadSignatureHtml` routes **every**
+source through it — both env overrides included; there is no trusted branch — as does `appendSignature`'s
+caller-supplied override.
+
+- **It reuses the corpus cleaner's boundary sets, it does not fork them.** `QUOTE_BOUNDARY_TAGS` /
+  `REPLY_MARKERS` / `MIN_LEAD_CHARS` come from `voice-corpus-clean.js::_internals` — the same definitions that
+  cut a quoted chain off an exemplar. A private copy is the normaliser drift CLAUDE.md warns about: the loader
+  would eventually pass through something the cleaner calls a quote. A test greps for a local copy and fails on
+  one. (It also resets `lastIndex` on that shared `/g` regex — a stateful `.test()` would make whoever ran
+  second skip a boundary.)
+- **`MIN_LEAD_CHARS` earns its keep here for the same reason it exists there.** Outlook writes an EMPTY
+  `<div id=appendonsend>` on a freshly composed message; cutting at a boundary that sits before any real text
+  would delete the whole signature, so a leading sentinel is **unwrapped**, not treated as a cut.
+- **It degrades toward LESS signature, never a leak.** Over the 8 KB ceiling after cleaning, or nothing left
+  but removable content, or unparseable ⇒ `html: null` ⇒ `signature.status = "not_configured"` ⇒ **nothing is
+  appended** and the note says why. A dirty asset costs a hand-typed signature; a leaked one costs a recipient
+  seeing someone else's mail. Nothing is truncated mid-tag.
+- **Removal is observable — the P126 failure was that it wasn't.** The dry run now carries
+  `signature.sanitized_removed` + `sanitize_rejected`, and the loader warns once per source on stderr.
+  **`sanitized_removed: []` is the only healthy value.** It also reports what sat *below* a cut
+  (`below-cut:img`): a cut subsumes what it discards, so without that the warning for the exact P126 asset
+  would have read `["quoted-thread"]` and never mentioned the four tracking pixels that were the whole story.
+
+**The leak is tested directly, not by proxy.** `test/draft-assist-signature-sanitize.test.mjs` (56 tests)
+rebuilds the exact shape P126 shipped — the real block, then the LinkedIn notification email with its pixels,
+its `cid:` logo and the Outlook quote header — feeds it through `appendSignature` (the real call path) and
+asserts the body handed to the flow carries no `<img>`, no `linkedin`, no `cid:`, no quoted header, and still
+carries name/title/phone/email. It also pins the evasions a regex strip misses (`<IMG\n SRC=…>`,
+`<img/src=…>`, an unclosed `<script>`, a `>` inside a quoted attribute).
+
+**Both committed assets are re-verified with the tokenizer, not a regex:** every tag balanced and closed, no
+`img`/`script`/`style`/`link`/`iframe`/`svg`/`meta`/`form`, every URL pointing only at `mailto:`/`tel:`/
+northmarq.com, no `on*` attribute, no LinkedIn/`From:`/`Sent:`/`wrote:` residue in the text, the exact contact
+facts present (address + tagline on FULL only, absent from REPLY), each fact appearing exactly once, and each
+asset sanitizing to itself with **zero** removals — i.e. the sanitizer is a net here, not a crutch.
+
+**One pre-existing P126 test was failing against the merged bytes and is fixed:** it asserted the body ends
+with `</table>`, but the assets are div-based — precisely the "tests ran against a different copy than shipped"
+gap. It now compares against the block the loader actually resolves.
+
+**Close-out:** ships on the Railway redeploy of merged `main` → `npm run verify:deploy`. Until then the safety
+still rests on the assets being clean (they are).
+
 ## P126 (2026-08-24) — signature append shipped; ⚠️ Cowork caught DIRTY runtime assets (fixed) → prompt 127
 
 Reviewed + reconciled. PR #1769 merged (local `57329e58`). CC built the context-aware signature append

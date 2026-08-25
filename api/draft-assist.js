@@ -477,6 +477,14 @@ export default async function draftAssistHandler(req, res) {
       // The block sits at the END of body_html, and the flow's reply branch
       // composes `concat(body_html, <quoted thread>)` — so it is above the quote.
       above_quote: signed.status === 'appended' ? true : null,
+      // P127: what the sanitizer took out of the STORED block. `[]` is the only
+      // healthy value — anything else means the committed/env bytes are dirty and
+      // the draft is only clean because the loader caught it. `rejected` names the
+      // fault when the block could not be made safe at all (⇒ not_configured).
+      // Surfaced on the DRY RUN so a dirty asset is visible without saving; that
+      // is the whole reason P126's over-captured LinkedIn email went unnoticed.
+      sanitized_removed: signed.sanitized ? [...new Set(signed.sanitized.removed)] : [],
+      sanitize_rejected: signed.sanitized ? signed.sanitized.rejected : null,
     },
     retrieval: {
       method: retrievalMethod,

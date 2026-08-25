@@ -37,11 +37,16 @@
 //     flow-lcc-create-outlook-draft.json composes the draft as
 //     `concat(triggerBody()?['body_html'], <the createReply-seeded quote>)`, so
 //     "end of our html" IS "above the quoted thread". A test pins that order.
-//  4. NO `cid:` AND NO REMOTE IMAGE. A `cid:` logo reference points at an
-//     attachment part of the message it was copied from; a generated draft has no
-//     such part, so it renders broken on every send. signature-full.html
-//     therefore ships the styled text without the <img> (see its header for how
-//     to restore the logo deliberately).
+//  4. NO `cid:` AND NO REMOTE IMAGE — AND SINCE P127 THAT IS ENFORCED, NOT
+//     ASSUMED. A `cid:` logo reference points at an attachment part of the
+//     message it was copied from; a generated draft has no such part, so it
+//     renders broken on every send, and a remote <img> turns every send into a
+//     read receipt for the recipient. The assets P126 actually merged carried
+//     BOTH — plus a whole LinkedIn notification email — because this loader
+//     stripped HTML comments and nothing else and trusted the bytes. Every source
+//     now goes through `html-sanitize.js::sanitizeSignatureHtml` (allowlisted
+//     tags/attributes, quote-boundary cut, size ceiling), and a block that cannot
+//     be made safe degrades to `not_configured`. See that module's doctrine.
 //  5. It does not poison the voice corpus. A sent draft comes back through
 //     `cleanEmailBody`, whose SIGNATURE_ANCHORS cut these exact blocks — the same
 //     set used for detection here — so an appended signature can never be learned
@@ -53,6 +58,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 import { _internals } from './voice-corpus-clean.js';
+import { sanitizeSignatureHtml } from './html-sanitize.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SIG_DIR = path.resolve(__dirname, '..', '..', 'docs', 'os', 'voice', 'signatures');
@@ -83,9 +89,42 @@ export function _resetSignatureCache() {
   for (const k of Object.keys(_assetCache)) delete _assetCache[k];
 }
 
-/** Strip the provenance comment block — it must never reach a recipient. */
-function stripHtmlComments(html) {
-  return String(html || '').replace(/<!--[\s\S]*?-->/g, '');
+/**
+ * P127 — sanitize whatever the configuration actually holds.
+ *
+ * The comment strip alone was NOT enough. The assets P126 merged carried a whole
+ * LinkedIn notification email, four tracking-pixel <img> tags and a broken `cid:`
+ * logo below the signature (an over-capture from the source .eml), and this
+ * loader would have handed all of it to `appendSignature` — invisible in the JSON
+ * envelope, visible only when the recipient opened the mail. The bytes are clean
+ * now; this is the seam that makes a FUTURE dirty asset harmless.
+ *
+ * See html-sanitize.js for the doctrine. The two things to know here:
+ *   - it fails toward LESS signature (a block that cannot be made safe returns
+ *     null ⇒ `not_configured` ⇒ nothing is appended), and
+ *   - a removal is LOGGED, once per distinct source, because a silently-cleaned
+ *     asset renders perfectly and hides that the stored bytes are wrong.
+ *
+ * @returns {{html: string|null, removed: string[], reason: string|null}}
+ */
+const _warned = new Set();
+function sanitize(html, label) {
+  const r = sanitizeSignatureHtml(html);
+  if ((r.removed.length || r.reason) && !_warned.has(label)) {
+    _warned.add(label);
+    console.warn(
+      `[email-signature] sanitized the ${label} signature — the stored bytes are not clean. `
+      + `removed=${JSON.stringify([...new Set(r.removed)])} `
+      + `bytes=${r.inputBytes}->${r.outputBytes}`
+      + (r.reason ? ` REJECTED: ${r.reason} (nothing will be appended)` : ''),
+    );
+  }
+  return { html: r.html, removed: r.removed, reason: r.reason };
+}
+
+/** Reset the "warned once" set. Test seam only. */
+export function _resetSignatureWarnings() {
+  _warned.clear();
 }
 
 function envValue(name) {
@@ -107,23 +146,33 @@ export function signatureVariantFor({ inReplyTo, isReply } = {}) {
 
 /**
  * Load the canonical signature HTML for a variant.
- * @returns {{html: string|null, source: 'env'|'env_shared'|'asset'|'none', variant: string}}
+ *
+ * EVERY source — the two env overrides and the committed asset alike — goes
+ * through the P127 sanitizer. An ops escape hatch is exactly as capable of
+ * carrying a pasted-in tracking pixel as a committed file is, so there is no
+ * "trusted" branch here.
+ *
+ * @returns {{html: string|null, source: 'env'|'env_shared'|'asset'|'none',
+ *            variant: string, removed: string[], rejected: string|null}}
  */
 export function loadSignatureHtml(variant = 'reply') {
   const v = VARIANTS.includes(variant) ? variant : 'reply';
+  const done = (r, source) => ({
+    html: r.html, source: r.html ? source : 'none', variant: v,
+    removed: r.removed, rejected: r.reason,
+  });
 
   const specific = envValue(SIGNATURE_ENV_VARS[v]);
-  if (specific) return { html: stripHtmlComments(specific).trim(), source: 'env', variant: v };
+  if (specific) return done(sanitize(specific, `${v}/env`), 'env');
 
   const shared = envValue(SIGNATURE_ENV_VARS.shared);
-  if (shared) return { html: stripHtmlComments(shared).trim(), source: 'env_shared', variant: v };
+  if (shared) return done(sanitize(shared, `${v}/env_shared`), 'env_shared');
 
   if (_assetCache[v] === undefined) {
     try { _assetCache[v] = readFileSync(SIGNATURE_ASSETS[v], 'utf8'); }
     catch { _assetCache[v] = ''; }   // a missing asset is "not configured", not a crash
   }
-  const html = stripHtmlComments(_assetCache[v]).trim();
-  return html ? { html, source: 'asset', variant: v } : { html: null, source: 'none', variant: v };
+  return done(sanitize(_assetCache[v], `${v}/asset`), 'asset');
 }
 
 /**
@@ -170,10 +219,15 @@ export function appendSignature(bodyHtml, { plainBody, inReplyTo, isReply, signa
     };
   }
 
+  // A caller-supplied block is un-vetted content like any other — sanitize it on
+  // the same terms as the stored asset rather than trusting the call site.
   const override = signatureHtml !== undefined;
-  const { html: sig, source } = override
-    ? { html: String(signatureHtml || '').trim() || null, source: 'override' }
+  const loaded = override
+    ? { ...sanitize(signatureHtml, 'override'), source: 'override' }
     : loadSignatureHtml(variant);
+  const { html: sig, removed = [], reason, rejected } = loaded;
+  const source = loaded.source;
+  const why = reason || rejected || null;
 
   if (!sig) {
     return {
@@ -181,7 +235,10 @@ export function appendSignature(bodyHtml, { plainBody, inReplyTo, isReply, signa
       status: 'not_configured',
       source: 'none',
       variant,
-      note: `No stored ${variant} signature is configured (${SIGNATURE_ENV_VARS[variant]}/${SIGNATURE_ENV_VARS.shared} unset and ${path.basename(SIGNATURE_ASSETS[variant] || '')} missing or empty) — appended NOTHING rather than inventing contact details. The draft needs Scott's signature added by hand.`,
+      sanitized: { removed, rejected: why },
+      note: why
+        ? `The stored ${variant} signature was REJECTED by the sanitizer (${why}) — appended NOTHING rather than letting un-vetted content reach a recipient. Fix the stored block; the draft needs Scott's signature added by hand meanwhile.`
+        : `No stored ${variant} signature is configured (${SIGNATURE_ENV_VARS[variant]}/${SIGNATURE_ENV_VARS.shared} unset and ${path.basename(SIGNATURE_ASSETS[variant] || '')} missing or empty) — appended NOTHING rather than inventing contact details. The draft needs Scott's signature added by hand.`,
     };
   }
 
@@ -191,7 +248,9 @@ export function appendSignature(bodyHtml, { plainBody, inReplyTo, isReply, signa
     status: 'appended',
     source,
     variant,
-    note: `${variant === 'reply' ? 'Compact reply' : 'Full new-email'} signature appended once, below the sign-off and above any quoted thread (source: ${source}).`,
+    sanitized: { removed, rejected: null },
+    note: `${variant === 'reply' ? 'Compact reply' : 'Full new-email'} signature appended once, below the sign-off and above any quoted thread (source: ${source}).`
+      + (removed.length ? ` NOTE: the stored block was not clean — the sanitizer removed ${[...new Set(removed)].join(', ')}.` : ''),
   };
 }
 
