@@ -182,6 +182,28 @@ the 4 are **pre-existing** (verified on a clean tree: `auto-scrape-listings`, `f
 decide the logo question.
 
 ---
+## P126 (2026-08-24) — signature append shipped; ⚠️ Cowork caught DIRTY runtime assets (fixed) → prompt 127
+
+Reviewed + reconciled. PR #1769 merged (local `57329e58`). CC built the context-aware signature append
+(`api/_shared/email-signature.js`: reply vs full variant, conservative already-signed detection reusing the
+corpus `SIGNATURE_ANCHORS`, `body_html` now rendered once so the dry-run equals the save, 28 tests). It also
+correctly stripped the `cid:` logo (a `cid:` ref renders broken in a generated draft, and a hosted remote image
+would turn every send into a read-receipt) and corrected a real offer-submission doc error (the Tulsa address
+lives in the FULL block only — 0 of 592 recent reply blocks carry it).
+
+**⚠️ Cowork catch — the committed signature ASSETS draft-assist reads at runtime were DIRTY.**
+`docs/os/voice/signatures/signature-reply.html` merged at **12.7 KB carrying a LinkedIn notification email + 4
+tracking-pixel `<img>`s + a broken `cid:` logo** below the real signature; `signature-full.html` similar.
+`loadSignatureHtml` only strips HTML comments, so `appendSignature` would have stapled a LinkedIn email +
+tracking pixels onto **every reply** — invisible in the JSON, visible only on open. CC's tests passed because
+they ran against its trimmed branch copies, not the bytes that actually merged (add/add conflict resolution
+kept the un-trimmed side). **Fix:** Cowork replaced both with clean, balanced, branded hand-authored HTML
+(reply 1.7 KB / full 5.1 KB, 0 `<img>`, 0 LinkedIn/quote leak, phone+email+address+tagline intact, Futura-PT /
+Northmarq-blue). **Durable fix → prompt 127:** add a load-time sanitizer to `loadSignatureHtml` (strip
+img/script/style/handlers + anything past a quote boundary; assert size) so a dirty asset can never leak again,
++ a test that feeds the exact P126 dirty bytes and asserts they're neutralized. **Uncommitted:** the two cleaned
+asset files (Scott commits). Live signature verify still needs the redeploy + a save.
+
 ## P125 (2026-08-21) — draft-assist retrieval + threading + deal-context, all six items fixed
 
 Reviewed + reconciled. **#1768 merged, local main at `6b33e7e7`, `/version`=`6b33e7e75f06` — the JS half is LIVE.**
