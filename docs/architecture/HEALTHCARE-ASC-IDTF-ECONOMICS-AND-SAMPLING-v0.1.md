@@ -163,3 +163,17 @@ only the aggregate receipt is eligible for architectural review or later governe
 
 Current acceptance is synthetic only. A real 50-property run still requires separate authorization for the
 frozen private release, source acquisition, reviewer access, and any database persistence.
+
+## 9. Authorized sample-execution boundary
+
+`scripts/healthcare-discovery/sample-execution.mjs` and its CLI close the gap between the authorized private
+release and the deterministic sampling contract. The boundary requires an authorized ASC packet with two
+distinct approvals, its matching aggregate execution receipt, a sampling contract bound to the exact artifact
+release, and a candidate pool inside the approved private root. It writes the row-level frame only inside that
+root and emits an aggregate receipt containing packet/release bindings, cell counts, seed fingerprint,
+candidate-pool fingerprint and selection fingerprint.
+
+The boundary fails closed on an unapproved or IDTF packet, receipt mismatch, release drift, path escape,
+insufficient cell quota, duplicate candidates or existing output. It does not download data, classify property
+form, populate scorecards, select replacements, write a database or authorize production promotion. Synthetic
+acceptance does not authorize the first official run.

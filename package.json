@@ -37,7 +37,9 @@
     "healthcare:artifact-staging": "node scripts/healthcare-discovery/artifact-staging-cli.mjs",
     "healthcare:artifact-staging:test": "node --test test/healthcare-artifact-staging.test.mjs",
     "healthcare:execution-boundary": "node scripts/healthcare-discovery/execution-boundary-cli.mjs",
-    "healthcare:execution-boundary:test": "node --test test/healthcare-execution-boundary.test.mjs"
+    "healthcare:execution-boundary:test": "node --test test/healthcare-execution-boundary.test.mjs",
+    "healthcare:sample-execution": "node scripts/healthcare-discovery/sample-execution-cli.mjs",
+    "healthcare:sample-execution:test": "node --test test/healthcare-sample-execution*.test.mjs"
   },
   "engines": {
     "node": ">=20.0.0"

@@ -79,3 +79,18 @@ invalid. Correct the source or create a new release directory; never weaken the 
 After a successful run, review the private packet and aggregate receipt. A separate checkpoint must validate
 the execution boundary and add two distinct approvals (`release_owner` and `privacy_reviewer`) before any
 official ASC profiling or 50-property sampling begins.
+
+## 7. Authorized private sample execution
+
+After the execution-boundary CLI produces an authorized private packet and its aggregate authorization
+receipt, freeze the reviewed ASC sample with the network-free sample harness:
+
+```text
+npm run healthcare:sample-execution -- --approved-root <absolute-private-root> --authorized-packet <private-authorized-packet.json> --authorization-receipt <aggregate-authorization-receipt.json> --sampling-contract <private-sampling-contract.json> --candidates <private-candidates.json> --private-frame-output <private-50-property-frame.json> --receipt-output <aggregate-sample-receipt.json>
+```
+
+The authorized packet, sampling contract, candidate pool and row-level frame must resolve inside the approved
+private root. Existing outputs are never overwritten. The harness requires the receipt to bind to the exact
+authorized packet and the contract to bind to the same ASC artifact release. It is ASC-only and has no
+downloader, database client, replacement discretion, review-score writer or CRM promotion capability. The
+private frame authorizes governed human review only; it is not a positive lane decision.

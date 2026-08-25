@@ -146,3 +146,10 @@ the verified staged release, includes header digests and privacy receipt in pack
 distinct people in the release-owner and privacy-reviewer roles, and emits an aggregate authorization receipt.
 The next real-world checkpoint remains selection of the private coordinates and separated reviewers, followed
 by the official ASC staging run; repository implementation does not substitute for those approvals.
+
+The ASC-only sample-execution harness is also implemented synthetically. It requires the exact authorized
+packet and bound aggregate authorization receipt before the frozen 50-property contract can run, keeps all
+row-level inputs and the selected frame inside the approved private root, and emits only an aggregate selection
+receipt. This removes any code path that could draw the official sample from a staged or draft packet. The
+operational next step remains the separately authorized official ASC staging and approval sequence; only then
+may this harness freeze the private review frame.
