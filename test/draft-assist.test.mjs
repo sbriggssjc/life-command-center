@@ -370,7 +370,12 @@ describe('P124 — the saved draft threads into the live conversation', () => {
   it('draft-assist resolves a reply target and passes it to the seam', () => {
     const src = read('api/draft-assist.js');
     assert.match(src, /async function findReplyTarget/);
-    assert.match(src, /in_reply_to:\s*replyTarget \? replyTarget\.internet_message_id : ''/);
+    // P126 hoisted this into ONE `inReplyTo` const, because the signature variant
+    // (compact reply vs full new-email block) is chosen from the same value — two
+    // copies of the expression could drift and put the reply block on a standalone
+    // draft. The guarded property is unchanged: the resolved target reaches the seam.
+    assert.match(src, /const inReplyTo\s*=\s*replyTarget \? replyTarget\.internet_message_id : ''/);
+    assert.match(src, /in_reply_to:\s*inReplyTo/, 'the resolved target must reach the seam');
     assert.match(src, /reply_to:\s*replyTarget \?/, 'the dry-run must report what it would thread into');
   });
 
