@@ -43,11 +43,12 @@ function packetIdentity(packet) {
     packet_version: packet.packet_version,
     lane: packet.lane,
     source_manifest_release_id: packet.source_manifest_release_id,
-    artifacts: packet.artifacts.map(({ source_key, release_date, artifact_url, byte_size, sha256 }) => ({ source_key, release_date, artifact_url, byte_size, sha256 })).sort((a, b) => a.source_key.localeCompare(b.source_key)),
+    artifacts: packet.artifacts.map(({ source_key, release_date, artifact_url, byte_size, sha256, header_sha256 }) => ({ source_key, release_date, artifact_url, byte_size, sha256, header_sha256 })).sort((a, b) => a.source_key.localeCompare(b.source_key)),
     storage: packet.storage,
     reviewer_evidence_dictionary: packet.reviewer_evidence_dictionary,
     second_review: packet.second_review,
     retention: packet.retention,
+    privacy_receipt: packet.privacy_receipt,
     lane_stop_conditions: packet.lane_stop_conditions,
   };
 }
@@ -105,6 +106,7 @@ export function assertRunAuthorizationPacket(packet, { allowAuthorized = false }
     if (approvalRoles.has(approval.role)) throw new Error('Approval roles must be unique');
     approvalRoles.add(approval.role);
   }
+  if (packet.approvals.length > 1 && new Set(packet.approvals.map((approval) => approval.approver_id)).size !== packet.approvals.length) throw new Error('Approval records require distinct approver identities');
   if (packet.status === 'authorized') exactSet(approvalRoles, ['release_owner', 'privacy_reviewer'], 'authorized approval roles');
   return true;
 }

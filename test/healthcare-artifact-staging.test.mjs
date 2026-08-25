@@ -69,6 +69,24 @@ test('fails closed on symlink artifacts when the platform permits symlink fixtur
   await assert.rejects(stageAscArtifacts({ template: linked.template, approvedRoot: linked.root, artifacts: linked.artifacts, verifierAttestations: linked.verifierAttestations }), /non-symlink/);
 });
 
+test('fails closed when an intermediate directory link escapes the private root', async (t) => {
+  const linked = await setup();
+  const outside = await mkdtemp(join(tmpdir(), 'lcc-asc-outside-'));
+  const escapedName = 'escaped.csv';
+  await writeFile(join(outside, escapedName), await readFile(join(linked.root, linked.artifacts[0].local_path)));
+  try {
+    await symlink(outside, join(linked.root, 'linked-dir'), process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (error) {
+    if (error?.code === 'EPERM' || error?.code === 'EACCES') {
+      t.skip(`platform cannot create the directory-link fixture (${error.code})`);
+      return;
+    }
+    throw error;
+  }
+  linked.artifacts[0].local_path = join('linked-dir', escapedName);
+  await assert.rejects(stageAscArtifacts({ template: linked.template, approvedRoot: linked.root, artifacts: linked.artifacts, verifierAttestations: linked.verifierAttestations }), /canonical path escapes/);
+});
+
 test('fails closed when the independent digest disagrees', async () => {
   const input = await setup();
   input.verifierAttestations[0].sha256 = 'a'.repeat(64);

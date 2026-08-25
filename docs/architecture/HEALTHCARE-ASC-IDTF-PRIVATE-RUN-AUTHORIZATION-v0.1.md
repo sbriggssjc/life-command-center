@@ -1,6 +1,6 @@
 # Healthcare ASC and Fixed-Site IDTF Private Run Authorization v0.1
 
-**Status:** Design, synthetic contract, release-template preflight, and ASC staging contract complete; official runs remain unauthorized
+**Status:** Design, synthetic contract, release-template preflight, ASC staging contract, and run harness complete; official runs remain unauthorized
 **Scope:** ASC and fixed-site IDTF source acquisition, private profiling, and 50-property review  
 **Execution boundary:** No official artifact download, sample draw, database write, or CRM promotion
 
@@ -142,3 +142,29 @@ Supabase, LCC, or Salesforce. IDTF staging remains intentionally disabled until 
 The next authorization decision is whether to run this contract against four exact ASC artifacts already
 placed in an approved private staging root. That decision must identify the storage boundary and run operator;
 it is not implied by this repository checkpoint.
+
+## 11. ASC-first run harness
+
+`scripts/healthcare-discovery/artifact-staging-cli.mjs` and
+`HEALTHCARE-ASC-FIRST-STAGING-RUNBOOK-v0.1.md` make the local staging procedure reproducible without adding a
+network or production capability. The command requires the frozen ASC template, a private request file, an
+absolute approved root, a private packet destination inside that root, and a separate aggregate-receipt
+destination. It refuses existing outputs and writes both files atomically.
+
+The harness derives the source-manifest release identity from the bytes it verifies, removes any opportunity
+for the request to supply approvals, and can emit only `draft_unapproved`. Its completion closes the build gap
+between the staging contract and an operator-run procedure; it does not satisfy the missing real-world inputs.
+The official ASC run remains blocked on an approved private root, named run operator, different verifier,
+exact official releases, and independently computed attestations.
+
+## 12. Execution-boundary authorization
+
+`scripts/healthcare-discovery/execution-boundary.mjs` and its network-free CLI implement the separate approval
+checkpoint after successful staging. Packet identity now binds both header digests and the aggregate privacy
+receipt. Authorization requires the artifact-derived release fingerprint to match both the private packet and
+staging receipt, exactly two role-separated approvals, distinct approver identities, and timestamps no earlier
+than packet creation. The authorized packet remains private; only the identifier-free aggregate authorization
+receipt may leave the boundary.
+
+This validator has no download, sampling, database, CRM, or production-write capability. Passing it authorizes
+only the explicitly governed next lane action; it does not itself perform that action.
