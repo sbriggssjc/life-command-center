@@ -237,6 +237,27 @@ gap. It now compares against the block the loader actually resolves.
 **Close-out:** ships on the Railway redeploy of merged `main` → `npm run verify:deploy`. Until then the safety
 still rests on the assets being clean (they are).
 
+## P128 (2026-08-24) — stale w8-u3 test fixed; ⚠️ suite is NOT clean (3 real failures remain)
+
+Reviewed + reconciled. PR #1771 merged (d9f5370). The `w8-u3-conflict-card` test now asserts the *contract*
+(u3 total = null when both counts null, else the sum — the honest-badge guard) instead of a source-grep P89
+broke; mutation-verified both ways, `api/admin.js` byte-unchanged.
+
+**⚠️ Correction — the "lone remaining failure" premise (mine, inherited from P127) was WRONG.** Measured off
+the pass/fail LIST, not the exit code: **4,363 pass / 3 fail** (was 4,372 / 4; P128 fixed exactly the U3 one).
+**P126 was right at "4 fail"; P127's "1 pre-existing" undercounted, and prompt 128 inherited it.** The suite is
+NOT clean. The 3 remaining are **pre-existing, behavioural (not stale greps), reproduce in isolation, in files
+this session never touched:**
+- **`ollama-clean-assist.test.mjs`** — "clean-assist worker must NOT call `properties?`" is RED → the P106-class
+  invariant (assist layer ANNOTATES, never writes/reads canonical) is currently violated. **Highest priority —
+  this is a possible live doctrine breach, not just a red test.** Investigate first.
+- `auto-scrape-listings.test.js` — URL missing the −3y lower bound; handler 502s.
+- `folder-feed-enrich-mode.test.mjs` — enrich + no-match emits no disambiguation decision.
+
+CC left all three (P128 was scoped test-only) and offered to take the ollama-clean-assist one next. **Doctrine
+reminder this whole P126→128 run reinforced: read the pass/fail LIST, never `node --test`'s exit code** (it
+returned 0 over real failures three times this arc).
+
 ## Capstone 2026-08-24 — draft-assist arc COMPLETE + live; next-up = security/hygiene
 
 The full email arc shipped this session and is live (redeploy confirmed by Scott): **intake fixed → forward
@@ -274,8 +295,9 @@ clean now regardless, so the sanitizer is defense-in-depth.
 **⚠️ Honest-measurement note (CC self-corrected — worth keeping):** CC first reported "full suite green / exit
 0," then retracted it — `node --test` returned 0 *despite* a failing test, and its grep watched for a `# fail`
 marker the dot reporter never emits. Both "green" signals were measurement artifacts, not measurements —
-exactly the repo doctrine "assert on the STATE DELTA, never the worker's exit status." The real state: **1
-pre-existing failure, `test/w8-u3-conflict-card.test.mjs`** — a stale source-grep that Prompt 89's null-guard
+exactly the repo doctrine "assert on the STATE DELTA, never the worker's exit status." The real state (CORRECTED
+by P128 — this "1" was itself an undercount; it was actually **4 fail**, matching P126): the U3 case was
+`test/w8-u3-conflict-card.test.mjs` — a stale source-grep that Prompt 89's null-guard
 invalidated (it greps `api/admin.js` for a line P89 rewrote), fails identically on HEAD~1, untouched by P127.
 Same class as the `</table>` stale assertion CC fixed in the P126 signature test. **Optional one-line follow-up**
 to fix that grep (CC offered); not blocking (CI here only runs the boot check).
