@@ -344,6 +344,21 @@ whose FROM endpoint was a tombstone; verification then read 0 stranded on `from`
 stranded on `to`**. An edge has two ends. (P118: fix every layer, not the one the error names.)
 Write the gate to check every side of the thing you repaired, not the side you happened to fix.
 
+### Class 8, fourth instance and closure (P178, 2026-08-26)
+
+`external_identities` — 45 stranded, 26 created post-merge, same trigger pattern, 45 repointed
+with **0 collisions** (the unique key excludes `entity_id`, so the P177 dedup class barely
+exists here) and **0 domain-anchor identities affected**.
+
+**Status: the class is closed.** Four live producers found and fixed in one day — portfolio
+facts ($71.8M), the junk-lane seed flag, relationship edges (41 survivors' deal history),
+identities. The re-sweep leaves only by-design history, backups, and one held human judgement.
+
+**What made all four findable was a single question**, asked of a table nobody suspected:
+*"was this row written AFTER the thing that should have removed it?"* Three of the four had
+been running for weeks against surfaces that all read healthy. Run this sweep after any bulk
+merge, and before believing any count that joins `entities`.
+
 ---
 
 ## What to audit next
@@ -383,15 +398,29 @@ Ordered by expected yield, not by ease:
    `metadata->>'junk_name_flagged'`, plus cron 238. **A plausible root cause named before
    measurement pointed at the wrong function entirely.**
 
-   **NEXT (P178): `external_identities`** — 45 stranded, **26 created after their entity was
-   merged**, dominated by the CoStar sidebar (`costar/company` 18, `salesforce/Account` 3,
-   `rca/company` 3; newest 2026-08-10). `lcc_reconcile_tombstone_backrefs` DOES move identities
-   on merge, so this is Class 8 again: a producer re-minting them. The P177 pattern applies
-   directly — a BEFORE INSERT trigger resolving `entity_id` through `lcc_entity_survivor()`.
-   Note the `chk_external_identities_source_system` CHECK and the canonical-scheme rules in
-   CLAUDE.md must be respected; and an identity is keyed `(source_system, source_type,
-   external_id)`, so resolution can collide with the survivor's existing identity — skip, don't
-   raise, exactly as P177 does.
+   ~~**NEXT (P178): `external_identities`**~~ — **DONE 2026-08-26.** 45 stranded, 26 created
+   post-merge, dominated by the CoStar sidebar. Fixed with the P177 trigger pattern: **45
+   repointed, 0 dedup-deleted.** Measuring first corrected two assumptions I had written into
+   this very item:
+
+   - I said "an identity is keyed `(source_system, source_type, external_id)` so resolution can
+     collide." **The unique key is `(workspace_id, source_system, source_type, external_id)` and
+     EXCLUDES `entity_id`** — so a repoint cannot normally collide at all (it would need the
+     ghost and survivor to hold the same identity in *different workspaces*). Measured: **0
+     collisions.** The guard is still there and still skips rather than raises, but the
+     three-way disposition P175 needed does not arise here.
+   - **None of the 45 were domain-anchor identities** — zero `asset`, zero `true_owner`. The
+     `true_owner` join that resolves a domain owner to an LCC entity BY ID (the one CLAUDE.md
+     singles out) was clean. That is the difference between 45 vendor rows and the entire
+     owner-resolution path, and it was worth checking before assuming severity.
+
+   **✅ CLASS 8 IS CLOSED.** Full re-sweep of every entity-referencing column carrying a
+   `created_at` (excluding this work's own repair logs, which record ghosts by design) leaves:
+   61 `exact_name_merge` cards (**by design** — the card records *which* entity was merged away;
+   0 open), 1 `sf_contact_account_mismatch` held for a human by P172, 8 void self-referential
+   edges left deliberately, and two backup/reconcile tables. **No live producer remains.** Four
+   were found and closed in a single day: P175 (portfolio facts, $71.8M), P176 (junk-lane seed
+   flag), P177 (relationship edges, 41 survivors' deal history), P178 (identities).
 
    **Also still open:** `lcc_sync_property_owner_to_portfolio` carries the identical
    existence-not-liveness guard. It has no cron and no caller today (checked), so it was
@@ -465,10 +494,44 @@ Ordered by expected yield, not by ease:
    timestamp. `lcc_reusable_owner_contacts`, `lcc_owner_evidence_cache` and
    `lcc_sf_comp_on_market` have no `_at` column at all, so no throughput measure over them is
    possible by any method. That observability gap is the item, not the parser.
-5. **The `establish_ownership_history` producer** — 545 open, 0 completed, emits one task per
-   property with no value gate. Either give it a consumer or stop it producing; P165a added
-   the auto-retire predicate but the value gate is still missing. **It is now the largest
-   never-consumed block sitting above the newly-ranked contact lane.**
+5. **The `establish_ownership_history` producer** — **MEASURED 2026-08-26, and TWO of this
+   item's own claims were wrong.** It said "0 completed, no value gate, never consumed."
+
+   - **It HAS a value gate.** `below_value_floor` has swept **1,548** tasks (`p_min_value`,
+     recorded in `outcome.reason`). P165a shipped the floor *and* the auto-retire.
+   - **It IS consumed.** Status counts are **1,690 skipped / 545 queued** — the auto-retire
+     closed 1,690, of which 142 were `chain_gap_resolved_or_changed` (the premise clearing on
+     its own, still happening through 2026-08-21). "0 completed" was true and "never consumed"
+     was false. **Same trap as Class 2's timestamp bug, one level up: `completed` is not the
+     only closure status.** Read the whole status distribution, never one value.
+
+   **The real defect is Class 3, not a missing gate.** The 545 remaining are above the floor
+   with an unresolved premise — genuine work — and the Research card renders the "Find the
+   contact" button **only for `owner_contact_manual`** (`ops.js`, the P173 gate). An
+   `establish_ownership_history` card offers Complete / Follow-up / Dismiss / Assist, and
+   `completeResearch()` posts only `{ research_task_id }`. So working one destroys it and
+   captures nothing.
+
+   **The ranking is also inverted at the bottom, and this is the ordering trap:** by owner
+   (deduped, never by task — the 4.65× double-count),
+
+   | priority band | owners | rent | owners ≥ $5M |
+   |---|---|---|---|
+   | 50–60 (top of lane) | 94 | $259.5M | 5 |
+   | 61–80 | 101 | $67.8M | 0 |
+   | 81–99 | 46 | $39.2M | 0 |
+   | **100 (bottom)** | **214** | **$709.7M** | **31** |
+
+   Nearly 3× the value and 6× the high-value owners sit in the worst slot — the P174 shape
+   again (a graduated rank with a large residue dumped at a flat default).
+
+   **⚠️ ORDER MATTERS AND THE OBVIOUS ORDER IS WRONG.** Re-ranking first would promote 214
+   owners' worth of *unanswerable* work onto page 1, displacing the contact lane P174 just
+   made reachable — strictly worse than leaving it buried. **Capture path first
+   (`openUnifiedDetail(domain, source_record_id, null, 'Ownership')`, mirroring P173's
+   open-the-existing-surface pattern — the property panel already has an Ownership tab), then
+   rank.** Prerequisite to check: the research queue payload must carry `domain` and
+   `source_record_id`; if it does not, that is the first change.
 6. **The observability gap (blocks Class 6, Class 8, and any future Class-4 detector)** —
    `lcc_reusable_owner_contacts` (10,430 rows), `lcc_owner_evidence_cache` (43,161) and
    `lcc_sf_comp_on_market` (1,696) have **no `_at` column at all**. No age, SLA, freshness or
