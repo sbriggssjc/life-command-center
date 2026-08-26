@@ -408,7 +408,11 @@ stale test so the suite reads truly green — test-only). Also shipped this sess
 mirror, P120 move-queue executor, P122 CM packet cursor, P123 deal-matcher, health surface 3,987 → ~24.
 
 **⏭ Recommended next step — SECURITY/HYGIENE, not a feature:**
-1. **Rotate `LCC_API_KEY`.** It's now genuinely exposed — pasted in chat curl/IRM commands repeatedly this
+1. **Rotate `LCC_API_KEY`. — DEFERRED 2026-08-24 (Scott's call):** hold until the app is a workable version in
+   regular use with users beyond Scott; the naive swap breaks ~10 live PA flows + Vault + Railway under
+   `LCC_ENV=production`, so do it as the deliberate multi-user-onboarding task (preferably via the dual-key
+   `LCC_API_KEY_PREVIOUS` approach for zero downtime). Exposure meanwhile is a private repo + this chat, not
+   public. Original note: It's now genuinely exposed — pasted in chat curl/IRM commands repeatedly this
    session AND embedded in the committed PA flow export zips (`private/power-automate/exports/…`). Rotate per
    `docs/AUTH_ENFORCEMENT_ROLLOUT.md`; verify readiness FIRST via `GET /api/diag?kind=auth-ready`
    (`would_pass_in_production` must be true); **never flip `LCC_ENV` before the key is set** (that = total
