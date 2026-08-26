@@ -591,9 +591,50 @@ Ordered by expected yield, not by ease:
      path exists, so it is an explicit list. **When a new capture path ships, update that list
      in the same change**, or the picker under-reports what the operator can do.
 
-   **Newly surfaced by it:** `npi_missing_inventory` — 203 open, **0 completed, 0 skipped, no
-   capture path** — a third genuinely dead lane (Class 2 + Class 3), previously invisible inside
-   an undifferentiated count. Now it displays its own emptiness.
+   **Newly surfaced by it:** `npi_missing_inventory` — 203 open, 0 completed, 0 skipped.
+   ~~a third genuinely dead lane~~ — **that call was WRONG, twice over. See 5c.**
+
+5c. **NEW CLASS-9 CANDIDATE (P181, 2026-08-26): value-gated but not DECIDABILITY-gated.**
+   Chasing `npi_missing_inventory` produced two wrong conclusions before the data corrected
+   each one, and the pattern is worth more than the fix:
+
+   - **"A third dead lane"** — the tasks were created 2026-08-06..08-15. The lane was **three
+     weeks old**. "Zero completions ever" on a new lane is not the same claim as zero on a
+     year-old one, and the phrase conceals the difference. *Check the age before calling
+     anything dead.*
+   - **"It needs a capture path"** — the tasks carry a ready-made `metadata.deep_link`, so a
+     button looked obvious. Checking the destination first: **NPI is display-only in the clinic
+     panel.** The button would have been the exact P173 trap it was meant to fix. *Verify the
+     destination can accept an answer before routing anyone to it.*
+
+   **What was really there:** an NPPES lookup worker had already run — 7,088 rows in
+   `npi_registry_lookups`. For the 504 missing-NPI clinics, **all 504 had a lookup, 480 returned
+   a candidate, and 0 were applied**, every one `low_confidence`/`no_match`. That is the worker
+   *abstaining correctly* under never-guess, and the research tasks are the intended escalation
+   of its residue. The lane was the designed flow working.
+
+   **The actual defect: one label covering two different facts.** `low_confidence` was applied
+   to everything, so a genuine judgement call and a hopeless one looked identical:
+
+   | best-match score | clinics | reading |
+   |---|---|---|
+   | ≥ 0.75 | 50 | a real human call |
+   | 0.50–0.75 | 141 | weak |
+   | **< 0.50** | **289** (avg 0.28) | **not "low confidence" — no match at all** |
+
+   Of the 203 queued tasks, **141 (69%) were unanswerable by anyone**, burying the 15 that were.
+   The producer capped by patient volume and never asked whether the question could be answered.
+   **The Consumption-Layer "actionable-only" rule has TWO axes — value AND decidability — and a
+   lane can pass one while failing the other.**
+
+   Fixed: 141 retired (`no_plausible_npi_match`, reversible, tagged), 47 → priority 60, 15 →
+   priority 30. Lane 203 → 62. Gate confirmed **0 tasks scoring ≥ 0.50 were retired**, and two
+   independent computations agreed on 15/47/141 before anything was written.
+
+   **Still open:** the 15 (and arguably the 47) want a BINARY VERDICT surface — "is clinic X the
+   same facility as NPPES org Y?", clinic name/address beside `best_match_org`/`npi_address`.
+   That is a Decision Center lane, not a research card. Until it ships they remain notify-only,
+   and the lane picker correctly reports `answerable = false`.
 
 6. **The observability gap (blocks Class 6, Class 8, and any future Class-4 detector)** —
    `lcc_reusable_owner_contacts` (10,430 rows), `lcc_owner_evidence_cache` (43,161) and
