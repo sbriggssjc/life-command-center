@@ -17,6 +17,64 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-26 (Cowork) — Tier 0 owner-contact arc COMPLETE: P186 → P187 → P188 (all merged, live)
+
+**The bench that reads "— none" on top owners now has a working consumer.** Three prompts, each
+correcting the one before it — the corrections are the point.
+
+**P186** (PR merged) — `v_lcc_tier0_owner_contact_candidates` **58,694 ms → 252 ms (124×)**,
+0-row equivalence diff both directions. ⚠️ *The recorded cause was wrong on both halves*: the rent
+function was 0.3% and the two `EXISTS` 0.09%; 99.5% was a keyless join at `loops = 5,624,400`. A
+prefix match on a metacharacter-free token is an equality join. Also: **public bodies out of
+prospecting scope** per Scott (`lcc_owner_name_is_public_body` widened, 27/27 named-row gate, OBO
+guard; ownership reconciliation untouched) and no blanket `university` rule — GWU $23.8M and
+Georgetown $8.0M are private and must stay.
+
+**P187** (PR merged) — the matcher was structurally blind to the biggest owners. `length(token)>=5`
+yielded **zero tokens** for NGP/RMR/TIAA/USAA/GI/HPI/AVG; `watterson` could not prefix-match
+`boydwatterson`; the stoplist ate "Realty Income Corporation" entirely. Fixed with
+`lcc_owner_domain_core()` (**order-preserving** — `lcc_owner_strict_core` SORTS to
+`assetboydmanagementwatterson`) plus an 8-char prefix-equality arm. Pairs 2,314 → 558, top-of-book
+precision 76–80% → **~91%**. **Boyd Watterson ($179.8M), RMR incl. Adam Portnoy, Realty Income incl.
+Sumit Roy, TIAA-CREF, GI Partners, AVG, Cole Capital visible for the first time.** Acronym arm
+built, measured and **rejected**: 27.6% of owner names are entirely uppercase (the SPE naming
+convention), so it produced `BOYD DEL RIO GSA LLC` → **dell.com**.
+
+**P188** (PR #1785, merged, redeploy live) — the consumer: federated Decision Center lane
+`tier0_owner_contact`, **558 pairs → 283 cards → 237 actionable / 171 owners / $695M**, one card per
+(owner, DOMAIN), verdicts attach/reject/research, reversible via `lcc_tier0_confirm_log`.
+**Nothing is written to `owner_contact_pivot` until Scott clicks.**
+
+**Four corrections worth more than the features:**
+1. **Evidence attests the PERSON, not the LINK.** Split: `company_confirms_employer` 164 vs
+   `company_matches_owner` 99. Gary George (George's Inc, a poultry company) carries three of four
+   signals for George Washington University.
+2. **⚠️ P187's fan-out gate re-created the exact cross product P186 removed** —
+   `Rows Removed by Join Filter: 6,222,095`, invisible because the gate returns 160 rows.
+   3,099 ms → 1,263 ms. **A gate that filters a join is part of that join.**
+3. **⚠️ Measuring a gate is not shipping a gate** — P186 measured the token fan-out gate, reported
+   its effect, and never wrote it into the view.
+4. **⚠️ Precision is a curve; quote the band.** ~91% covers only the top **10 cards / 7 owners /
+   $521M** (the 45th pair sits at $16.38M). $16M→$2M is ungraded; `rentBand()` returns
+   `precision: null` rather than interpolating. And **`v_owner_contact_enrich_queue` is the wrong
+   drain metric** — 6 rows total, 2 of this lane's 171 owners.
+
+**NEW DEFECT FOUND WHILE RECONCILING (→ Prompt 189): `lcc_normalize_entity_name` returns NULL for
+1,089 live organisations carrying $185.1M of rent** — RMR Group, GI Partners, AVG Partners, MMI
+Capital among them. `v_lcc_merge_candidates` groups on that column, so the duplicate-entity
+detector is **structurally blind to all 1,089**. It also misses Easterly's two entities
+(`easterly gov reit` vs `easterly government`). Duplicates measured in the live lane: Cambridge
+$13.2M, Cunningham $10.6M, Gray Harbor, Procacci — plus Easterly ×2 (4 cards for one firm),
+NGP ×3, Boyd Watterson ×8.
+
+**Open for Scott:** public universities (Memphis/UNC public and in scope vs GWU/Georgetown private
+and must stay); the six sponsor→domain entries (NGP→ngpv.com is $59.8M + ~$26M across 10 SPEs,
+plus UIRC, HPI, JBG, FCP, TMG). **Work the lane top-down — the 10 `measured_high` cards first.**
+
+Docs: `docs/audits/P186_TIER0_VIEW_FIX_AND_BENCH_REVIEW_2026-08-26.md`,
+`docs/audits/P188_TIER0_CONFIRM_LANE_2026-08-26.md`, playbook **Class 13**.
+
+
 ## 2026-08-26 (Cowork) — R8 Stage 1 SCOPED: on-box "Analyst's Take" (Prompt 138)
 
 Production-health arc fully closed (all 9 assists healthy; P137 provenance ladder wired). Moved to the R8

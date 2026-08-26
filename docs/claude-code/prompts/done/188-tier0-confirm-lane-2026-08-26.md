@@ -1,5 +1,32 @@
 # Prompt 188 — the Tier 0 confirm lane, and the residue P187 left
 
+> ## ✅ BUILT, MERGED (PR #1785) AND LIVE 2026-08-26
+>
+> **Lane `tier0_owner_contact` is live: 558 pairs → 283 cards → 237 actionable / 171 owners /
+> $695M.** Verdicts attach / reject / research, reversible via `lcc_tier0_confirm_log`.
+> **Nothing has been written to `owner_contact_pivot` — the first write is Scott's click.**
+> 29 named-row planner tests; full suite 4,541 pass / 0 fail. Writeup:
+> `docs/audits/P188_TIER0_CONFIRM_LANE_2026-08-26.md`.
+>
+> **Four things measurement changed, all worth carrying:**
+> 1. **Evidence had to be SPLIT IN TWO.** `company_confirms_employer` (company ↔ email domain)
+>    **164** vs `company_matches_owner` (company ↔ owner) **99**. Gary George passes the first and
+>    fails the second — only the second attests the *link*. Collapsing them is how that row kept
+>    coming back green.
+> 2. **⚠️ "Top 45 pairs by rent" is a SHORTER REACH than it sounds** — the 45th pair sits at
+>    $16.38M, so the ~91% figure covers **10 cards / 7 owners / $521M**. $16M→$2M has never been
+>    graded, so `rentBand()` returns `precision: null` there rather than interpolating.
+> 3. **⚠️ `v_owner_contact_enrich_queue` is the WRONG drain metric** — it holds 6 rows total and
+>    only 2 of this lane's 171 owners (the P159/P182 exclusions cover nearly the whole
+>    population). Quote the lane's own `_open` (237), `v_lcc_owner_unreachable_worklist`
+>    (161 of 171, $642M), or `reachable_hero_qualified` (299).
+> 4. **⚠️ P187's fan-out gate re-created the cross product P186 removed** — `Rows Removed by Join
+>    Filter: 6,222,095`. Fixed: 3,099 ms → 1,263 ms. **A gate that filters a join is part of that
+>    join.** Playbook Class 13 lesson 5.
+>
+> **Next queue: `189-*.md`.** Sections 1–4 below are the original spec, kept for the record;
+> §3's open decisions are still open.
+
 > **Read first:** `docs/audits/P186_TIER0_VIEW_FIX_AND_BENCH_REVIEW_2026-08-26.md`,
 > `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md` Class 13,
 > `docs/architecture/account-based-contact-intelligence.md`.
