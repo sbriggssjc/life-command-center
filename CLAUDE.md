@@ -251,6 +251,19 @@ worst failure mode: a `5,447` / `999+` badge that is mostly noise trains the ope
 2. **Auto-retire + auto-resolve.** A scheduled sweep closes items whose premise cleared and auto-resolves the
    high-confidence subset, leaving genuine judgment calls for a human. Reversible — pause/skip with a reason,
    **never hard-delete**.
+   - **⚠️ CLOSING AN ITEM IS NOT CLOSING A LANE — CLEAR THE PRODUCER'S SEED PREDICATE (P176,
+     2026-08-26).** P172 superseded 78 `junk_entity_name` cards on merged-away subjects and
+     reported a clean 80 → 2. **Within 24 hours 10 of the same subjects were open again**,
+     because that lane seeds from a flag on the ENTITY (`metadata->>'junk_name_flagged'`), not
+     from `lcc_decisions` — so the nightly seeder correctly re-minted every card the sweep had
+     closed. The re-mint surface was exactly the 78 it had "fixed". Before writing anything
+     that closes a lane's items, **grep for how that lane is SEEDED and ask what would recreate
+     the row tomorrow**; the B9 bulk worker already documents the answer in a comment
+     (`delete meta.junk_name_flagged; // drop out of the lane (seed predicate fails)`).
+   - **A one-shot repair of a RECURRING producer is a chore you repeat silently forever** —
+     pair it with a scheduled sweep (P176 = cron 238, 06:40). Corollary: **a verified result
+     has a shelf life.** P172's gate was not wrong, it just could not see the producer; re-run
+     the gate a day later, or make it permanent.
 3. **Surface actionable-only, value-ranked, capped** (top-N, with a "show all" toggle).
 4. **Close the loop from real activity** (Salesforce/Outlook activity → cadence advance) rather than a separate
    manual queue.
@@ -487,6 +500,16 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
     hit *"ON CONFLICT DO UPDATE command cannot affect row a second time."* The generalised
     detector (was the row written AFTER the merge?) is Class 8 of
     `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md`.
+  - **`entity_relationships` resolves BOTH endpoints to the survivor at INSERT (P177,
+    2026-08-26).** 184 edges pointed at tombstones, **131 created AFTER the merge, 125 in the
+    last 30 days** — transaction history (listing_broker/true_seller/buyer/owner), so **41
+    survivors were under-reporting their own deal history**, the exact signal prospecting ranks
+    on. Fixed with the writer-agnostic trigger `trg_lcc_entity_rel_resolve_survivor` rather
+    than by patching `insertEntityRelationship` (a trigger also covers SQL writers and cannot
+    be bypassed by the next producer). It **skips, never raises**, in two cases: a resolved
+    SELF-LOOP (`chk_entity_relationships_no_self_loop` would abort the ingestion that wrote it)
+    and a DUPLICATE of an edge the survivor already holds (there is **no unique constraint** on
+    `(from,to,type)`, so nothing else would catch the double-count).
   - **A survivor row for the same key is not automatically a DUPLICATE (P175a).** Where the
     ghost reads `is_current` and the survivor reads ENDED, the rows **contradict** each other
     about whether the party still holds the asset — deleting the ghost resolves the conflict
