@@ -291,10 +291,16 @@ the pass/fail LIST, not the exit code: **4,363 pass / 3 fail** (was 4,372 / 4; P
 NOT clean. The 3 remaining are **pre-existing, behavioural (not stale greps), reproduce in isolation, in files
 this session never touched:**
 - **`ollama-clean-assist.test.mjs`** — "clean-assist worker must NOT call `properties?`" is RED → the P106-class
-  invariant (assist layer ANNOTATES, never writes/reads canonical) is currently violated. **Highest priority —
-  this is a possible live doctrine breach, not just a red test.** → **prompt 129 drafted** (makes CC prove
-  whether it's a real breach in the `ollama-clean-assist-tick` handler or a drifted block-grep like P128, then
-  fix the worker or the test accordingly; verify by pass/fail list → expect 4,363/3 → 4,364/2).
+  invariant (assist layer ANNOTATES, never writes/reads canonical). → **P129 DONE (PR #1772, dbde27b,
+  test-only): verdict = (B) DRIFTED BLOCK-GREP, NOT a breach.** The `ollama-clean-assist` worker is
+  annotation-only as designed (P106 intact); the test's extracted block had drifted into an adjacent `admin.js`
+  handler that legitimately calls `properties?`. Re-anchored the test; suite **4,365/2**. This was the THIRD
+  slice-a-source-region stale test in one arc (P126 `</table>`, P128 U3, P129) — durable footgun line added to
+  `CLAUDE.md` (§W6.5 Step 5b corollary). **2 behavioural failures remain** (`auto-scrape-listings` — scrape URL
+  missing −3y bound, handler 502s; `folder-feed-enrich-mode` — enrich+no-match emits no disambiguation) — real
+  gaps, separate follow-ups → **prompt 130 drafted** (classify real-bug vs stale-test PER failure, fix at the
+  right layer or honestly `it.skip` an intentionally-unbuilt path; suite → 4,367/0; closes the test-hygiene
+  segment, then key rotation).
 - `auto-scrape-listings.test.js` — URL missing the −3y lower bound; handler 502s.
 - `folder-feed-enrich-mode.test.mjs` — enrich + no-match emits no disambiguation decision.
 

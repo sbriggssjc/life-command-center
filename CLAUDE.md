@@ -167,6 +167,17 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
   moves,** and no structural guard can see it (they assert file shape, not eval-ability).
   Stage 1 shipped one broken this way for weeks. **Grep `test/` for the moved function name
   BEFORE extracting**; stub any callee left behind in the parent.
+  - **⚠️ Corollary — a test that SLICES A SOURCE REGION (a block between banners, or a
+    `case` handler in a big file) and greps it for a literal is the SAME footgun and it
+    recurred THREE times in one arc (2026-08-24): P126 pinned `</table>` as a div-based
+    signature's end; P128's `w8-u3-conflict-card` grepped `out.total = (a||0)+(b||0)` that
+    P89's null-guard had rewritten; P129's `ollama-clean-assist` asserted its extracted
+    block had no `properties?` but the block boundary had DRIFTED into an adjacent
+    `admin.js` handler that legitimately calls it — a false "P106 breach," not a real one.
+    Anchor block-slice assertions on a STABLE structural boundary (the exact `case '…':` …
+    `break;`) or assert the BEHAVIOUR (compile the RHS and check outputs), never a literal
+    that moves. And when one of these fails, DETERMINE breach-vs-stale-grep before you
+    "fix" — twice this arc the red test was stale and the code was correct.**
 - **⚠️ "REACHABLE" AND "IN THE RIGHT MODULE" ARE DIFFERENT PROPERTIES.** Unit 4 moved 7 of
   12 `_entityTab*` bodies and left five behind; every guard stayed green because the
   tab-registry guard only asks whether a tab reaches a renderer that EXISTS — and it did.
