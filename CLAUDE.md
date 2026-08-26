@@ -1519,18 +1519,55 @@ Related invariants from the same round:
     human-entered label is unreliable, the machine key is not. Verified live: the principals for
     Easterly, NGP Capital and Elman Investors are all in SF as entities with
     **`linked_to_owner = false`** — the names were never missing, the LINKS were.
-  - **⚠️ OUTLOOK CONTACTS HAVE NEVER SYNCED — THE RECEIVER IS BUILT AND UNFED (2026-08-26).**
-    Scott syncs LinkedIn into his Outlook contacts, so the data is assumed present; it is not.
-    On `unified_contacts` (31,038 rows): `sf_contact_id` 17,298 but **`outlook_contact_id` 0,
-    `last_synced_outlook` NEVER, `icloud_contact_id` 0**. `api/_handlers/contacts-handler.js`
-    already accepts `outlook_contact_id`, has a **Tier-3 match rule** on it and renders an
-    Outlook source badge — there is simply no sender (no PA flow pulls `/me/contacts`, unlike
-    the mail/calendar bridges). **This is the highest-leverage enrichment gap because only
-    585 of 31,038 contacts (1.9%) carry a TITLE**, and title is what separates acquisitions
-    from disposition from DD in the role taxonomy above. Build the PA flow on the
-    `api/bridges.js` pattern (route the source-user id through `resolveSourceUserId` — see the
-    P116 footgun). A dormant capability that is UNFED does not appear in
-    `feature_flags_registry`, so nothing surfaces it.
+  - **⚠️ ~~OUTLOOK CONTACTS HAVE NEVER SYNCED~~ — FED 2026-08-26. THE SYNC WORKED AND THAT IS
+    EXACTLY WHY THERE IS ALMOST NOTHING TO SEND BACK (P184).** The note here used to read
+    "`outlook_contact_id` 0, no sender, the highest-leverage enrichment gap." The sender was
+    built and ran: **`outlook_contact_id` 2,809**, titles **585 → 1,706** fleet-wide (1,127 of
+    them on Outlook rows). Re-measure before quoting it again.
+    - **The outbound half has a payload of ~211 field-values, and that is an UPPER BOUND.**
+      Read `field_sources` across the 2,809 Outlook-linked rows for values NOT sourced from
+      Outlook: `title` **3**, `company_name` **25**, `phone` **39**, `mobile_phone` **144**.
+      Everything else in those rows *came from Outlook*, so a PATCH projector would re-send
+      Outlook its own data — green tally, unmoved population (P159a). Only the 144 mobiles are
+      cleanly fill-blank (`mobile_phone` ranks outlook above salesforce); the 39 phones include
+      conflicts, because salesforce OUTRANKS outlook there. **Before building a projector,
+      measure what the hub knows that the destination does not.**
+    - **⚠️ `email_aliases` IS 98% A SELF-ECHO — it does not preserve employer history.**
+      16,811 rows carry an array; **16,612 are the primary email repeated** (all `sf_import`).
+      Only **199** carry a distinct alias, **182 of them `outlook_import`** — i.e. captured FROM
+      Outlook's `emailAddresses`, so Outlook already holds them and writing them back is a
+      no-op. Quote 199, never 16,811.
+    - **98 Outlook contacts show a dead `@stanjohnsonco.com` primary and 56 already hold the
+      live address** (mostly `@northmarq.com` colleagues). This is NOT an outbound write —
+      Outlook has both. `pickBestEmail` returns the first BUSINESS domain and the dead firm
+      sorts first, so it is a hub-side selection bug with a hub-side fix. (`email_stale` is
+      false on all 2,809 — the flag exists and nothing sets it.) Migration tombstones like
+      `khedrick20200306@stanjohnsonco.com` are residue, not employer history.
+    - **The real outbound payload is CREATE, not PATCH:** 30,024 contacts are absent from the
+      address book, but only **828** have real correspondence (`last_email_date`/meeting/call)
+      and **487** are named + touched within 24 months. Pushing the 16,202 email-bearing rows
+      would be the Consumption-Layer noise failure. Junk-guard it — the ranked head already
+      contains `emails@campaigns.crexi.com` filed as a person, a firm name in `full_name`, and
+      **Scott himself** at his own dead address with 26,228 sends.
+    - **⚠️ `contact_merge_queue` HAS NEVER HELD A ROW ON EITHER PROJECT (0 ops / 0 gov).** Its
+      only writer, `intake-promoter.js::checkBrokerMergeCandidates`, is hard-coded to
+      `domainQuery('government', …)` while the reader goes through `govQuery`, which the A9b
+      cutover repointed to LCC Opps — **producer and consumer are on different databases**
+      (P182 shape, and the `CONTACTS_HUB` trap: the function is called `govQuery` regardless).
+      Sizing if it is ever fixed: **zero exact-email duplicates**, and only **24 addresses
+      colliding across 45 contacts** over `email ∪ email_secondary ∪ email_aliases`.
+      **14,465 of 32,833 rows (44%) carry no email at all** and are undedupable on the identity
+      key — a stated ceiling, not a backlog to close with `nameSimilarity` (banned for identity).
+    - **⚠️ A PROBE THAT WRITES A FIELD BACK TO ITS EXISTING VALUE CANNOT ANSWER ITS OWN
+      QUESTION.** The Graph-writability probe was specced as "PATCH `jobTitle` to its current
+      value, then re-read" — but a real write and a silent discard then re-read IDENTICALLY,
+      and silent discard is the whole risk (Graph can return 200 and drop the change).
+      `flow-lcc-probe-outlook-contact-write.json` writes a sentinel DERIVED from the baseline,
+      re-reads to compare, restores, and re-reads again to prove cleanup; the verdict names
+      `ACCEPTED_THEN_DISCARDED` rather than folding it into success. Same family as the P125
+      draft seam, which returned a byte-identical response for a threaded reply and a
+      standalone message. Guard: `test/outlook-contact-write-probe.test.mjs`.
+    - Full measurement + sequencing: `docs/architecture/contact-reconciliation-outbound.md`.
   - **⚠️ NAME-KEYED WEB/LINKEDIN ENRICHMENT WILL CONFIDENTLY MOVE PEOPLE TO THE WRONG FIRM.** A
     2026-08-26 search for Pulliam returned a DIFFERENT Andrew Pulliam ("VP Financial Operations
     at Integra"). Key on email domain + employer corroboration, record `source_url`/`confidence`/
