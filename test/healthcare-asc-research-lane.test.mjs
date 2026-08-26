@@ -71,6 +71,25 @@ test('sidebar evidence capture is structured-only and bound to the exact active 
   assert.throws(() => buildAscStructuredCapture(target, { ...context, address: '999 Other Road' }), /does not match/);
 });
 
+test('CoStar full display addresses bind to the same frozen street-only target', () => {
+  const target = {
+    candidate_fingerprint: sha('e'),
+    address_token: normalizeAscAddressToken({
+      address: '1101 Professional Blvd', city: 'Evansville', state: 'IN', zip: '47714',
+    }),
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://product.costar.com/detail/lookup/858677/summary',
+    address: '1101 Professional Blvd, Evansville, IN 47714',
+    city: 'Evansville', state: 'IN', zip: '47714',
+    square_footage: '24,072',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.structured_payload.square_footage, '24,072');
+});
+
 test('migration is private, RLS-protected, exact-50, and hard-blocks prohibited writes', async () => {
   const sql = await readFile(new URL('../supabase/migrations/20261001120000_lcc_asc_research_swim_lane.sql', import.meta.url), 'utf8');
   for (const table of ['runs', 'candidates', 'captures', 'evidence', 'reviews']) {

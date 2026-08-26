@@ -27,7 +27,24 @@ function clean(value) {
 }
 
 export function normalizeAscAddressToken({ address, city, state, zip } = {}) {
-  const street = clean(address)
+  const cityValue = clean(city);
+  const stateValue = clean(state).toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+  let addressValue = clean(address);
+  // CoStar sometimes emits the full display location in `address` while also
+  // supplying city/state/ZIP separately. Strip only the corroborated trailing
+  // location so both that shape and the CMS street-only shape bind to the same
+  // property token. The city and two-letter state must both agree before any
+  // suffix is removed.
+  if (addressValue && cityValue && stateValue) {
+    const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const locationSuffix = new RegExp(
+      `\\s*,?\\s*${escapeRegex(cityValue)}\\s*,?\\s*${escapeRegex(stateValue)}` +
+      '(?:\\s+\\d{5}(?:-\\d{4})?)?\\s*$',
+      'i',
+    );
+    addressValue = addressValue.replace(locationSuffix, '').replace(/,\s*$/, '').trim();
+  }
+  const street = addressValue
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, ' ')
     .replace(/\b(STREET|ST)\b/g, 'ST')
@@ -44,8 +61,8 @@ export function normalizeAscAddressToken({ address, city, state, zip } = {}) {
     .replace(/\b(SUITE|STE|UNIT)\s+[A-Z0-9-]+\b/g, '')
     .replace(/\s+/g, ' ')
     .trim();
-  const cityToken = clean(city).toUpperCase().replace(/[^A-Z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
-  const stateToken = clean(state).toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+  const cityToken = cityValue.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const stateToken = stateValue;
   const zipToken = clean(zip).match(/\d{5}/)?.[0] || '';
   if (!street || !stateToken) return null;
   return [street, cityToken, stateToken, zipToken].join('|');
