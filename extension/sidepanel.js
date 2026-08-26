@@ -258,7 +258,12 @@ async function wireAscResearchAction(ctx, actions) {
   button.addEventListener('click', async () => {
     button.disabled = true;
     button.textContent = 'Validating address…';
-    const liveCtx = (await getPageContext()) || ctx;
+    // CoStar injects this extension into same-origin child frames. A child
+    // frame can update session.pageContext after the property card rendered,
+    // but without carrying the subject address/state. Do not let that partial
+    // context replace the complete page context that produced this card.
+    const sessionCtx = await getPageContext();
+    const liveCtx = sessionCtx?.address && sessionCtx?.state ? sessionCtx : ctx;
     const domain = liveCtx.domain || liveCtx.source || '';
     const context = {
       ...buildMetadata(liveCtx, domain),

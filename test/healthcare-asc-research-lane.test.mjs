@@ -88,14 +88,16 @@ test('migration is private, RLS-protected, exact-50, and hard-blocks prohibited 
 });
 
 test('ASC routes are mounted and never invoke the dialysis/government propagator', async () => {
-  const [server, intake, handler] = await Promise.all([
+  const [server, intake, handler, sidepanel] = await Promise.all([
     readFile(new URL('../server.js', import.meta.url), 'utf8'),
     readFile(new URL('../api/intake.js', import.meta.url), 'utf8'),
     readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
+    readFile(new URL('../extension/sidepanel.js', import.meta.url), 'utf8'),
   ]);
   for (const route of ['asc-research-import', 'asc-research-target', 'asc-research-capture', 'asc-research-complete']) {
     assert.match(server, new RegExp(`/api/${route}`));
     assert.match(intake, new RegExp(`case '${route}'`));
   }
   assert.doesNotMatch(handler, /propagateToDomainDb|processSidebarExtraction|sf_sync_queue|bd_opportunities|touchpoint_cadence/);
+  assert.match(sidepanel, /sessionCtx\?\.address\s*&&\s*sessionCtx\?\.state\s*\?\s*sessionCtx\s*:\s*ctx/);
 });
