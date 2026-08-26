@@ -248,6 +248,16 @@ worst failure mode: a `5,447` / `999+` badge that is mostly noise trains the ope
 
 1. **Value-gate the producer.** Emit only above an actionability/value floor — never one item per captured row.
    The floor is a single tunable knob (e.g. `$500k` chain-task floor; `CADENCE_SIGNAL_MIN_VALUE`).
+   - **⚠️ "ACTIONABLE-ONLY" HAS TWO AXES — VALUE **AND** DECIDABILITY (P181, 2026-08-26).**
+     `npi_missing_inventory` was correctly capped by patient volume and never asked whether the
+     question could be answered at all. An NPPES lookup worker had already run and abstained on
+     every row, but stamped them all `low_confidence` — so a genuine judgement call (score 0.80)
+     and a hopeless one (0.28) wore the same label. **141 of 203 queued tasks (69%) were
+     unanswerable by anyone**, burying the 15 that were. One label covering two different facts
+     is what made it invisible. When a worker escalates its residue to a human, **the escalation
+     must carry the worker's CONFIDENCE, and the surface must gate on it.**
+   - **Before calling a lane dead, check its AGE** — this one was three weeks old, and "0
+     completions ever" reads very differently at three weeks than at a year.
 2. **Auto-retire + auto-resolve.** A scheduled sweep closes items whose premise cleared and auto-resolves the
    high-confidence subset, leaving genuine judgment calls for a human. Reversible — pause/skip with a reason,
    **never hard-delete**.
