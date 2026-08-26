@@ -7649,7 +7649,7 @@ async function getOversight(req, res, user, workspaceId) {
   const overview = await opsQuery('GET', `v_manager_overview?workspace_id=eq.${workspaceId}&order=display_name`);
   const unassigned = await opsQuery('GET', `v_unassigned_work?workspace_id=eq.${workspaceId}&limit=50&order=created_at.desc`);
   const escalations = await opsQuery('GET',
-    `escalations?workspace_id=eq.${workspaceId}&resolved_at=is.null&select=*,action_items(title,status,priority),users!escalations_escalated_by_fkey(display_name),users!escalations_escalated_to_fkey(display_name)&order=created_at.desc&limit=25`
+    `escalations?workspace_id=eq.${workspaceId}&resolved_at=is.null&select=*,action_items(title,status,priority),escalated_by_user:users!escalations_escalated_by_fkey(display_name),escalated_to_user:users!escalations_escalated_to_fkey(display_name)&order=created_at.desc&limit=25`
   );
 
   return res.status(200).json({
