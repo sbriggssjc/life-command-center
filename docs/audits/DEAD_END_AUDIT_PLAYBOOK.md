@@ -381,6 +381,111 @@ merge, and before believing any count that joins `entities`.
 
 ---
 
+## Class 9 — a RECEIVER with no SENDER (built, wired, never fed)
+
+**Symptom:** a capability is fully implemented — endpoint, matching rule, UI badge, schema
+columns — and no data has ever reached it. Distinct from Class 5: there is **no flag**, so it
+does not appear in `feature_flags_registry`, and nothing anywhere reports it as off. It is
+invisible by construction.
+
+**First run (2026-08-26).** Scott assumed his LinkedIn→Outlook contact sync was reaching the
+LCC. `api/_handlers/contacts-handler.js` accepts `outlook_contact_id`, carries a **Tier-3 match
+rule** on it and renders an Outlook source badge; `unified_contacts` has the columns. Measured:
+**0 of 31,038 rows populated, `last_synced_outlook` = never.** The receiver had been complete
+and unfed since before the table had 31,000 rows. Building the one missing Power Automate flow
+landed **2,809 contacts, 1,130 titles and 98 acquisitions contacts** in 88 minutes — against a
+prior title coverage of 1.9%.
+
+**Detector — enumerate external-system id / sync columns and count what is populated:**
+
+```sql
+do $$
+declare r record; n bigint; tot bigint;
+begin
+  create temp table _unfed(tbl text, col text, populated bigint, total bigint) on commit drop;
+  for r in
+    select c.table_name t, c.column_name c
+    from information_schema.columns c
+    join information_schema.tables tb on tb.table_name=c.table_name and tb.table_schema='public'
+    where c.table_schema='public' and tb.table_type='BASE TABLE'
+      and (c.column_name ~ '^(sf|outlook|icloud|webex|teams|iphone|linkedin|zoom)_.*_id$'
+           or c.column_name ~ '^last_synced_'
+           or c.column_name ~ '_(external|source)_id$')
+  loop
+    begin
+      execute format('select count(*) filter (where %I is not null), count(*) from %I', r.c, r.t) into n, tot;
+      if tot > 100 then insert into _unfed values (r.t, r.c, n, tot); end if;
+    exception when others then null; end;
+  end loop;
+end $$;
+select * from _unfed where populated = 0 or populated < total*0.01 order by total desc;
+```
+
+**Live result after fixing the Outlook one — SIX more, clustered in the same subsystem:**
+
+| table.column | populated | of |
+|---|---|---|
+| `unified_contacts.last_synced_calendar` | 0 | 32,833 |
+| `unified_contacts.webex_person_id` | 0 | 32,833 |
+| `unified_contacts.icloud_contact_id` | 0 | 32,833 |
+| `unified_contacts.teams_user_id` | 0 | 32,833 |
+| `lcc_sf_list_membership.sf_lead_id` | 0 | 7,186 |
+| `listing_bd_runs.sf_deal_id` | 0 | 1,472 |
+
+The contacts handler ships `ingest_calendar_contacts`, `ingest_webex_calls`, `send_teams` and
+`send_webex` — **every one built, every one with zero data.** Whether each is worth feeding is a
+separate judgement (Webex/Teams may simply not be used); the point is that *nobody knew*.
+
+**⚠️ Corollary: a zero column is not automatically a defect.** Some receivers were built for
+tools the firm does not use. The detector produces CANDIDATES; each needs the question "is
+there a sender, and should there be?" answered on its own terms. Record the verdict either way
+so the next sweep does not re-litigate it.
+
+**The general question: for every integration we can RECEIVE, does anything SEND?** Grep for
+the write path, then count the rows. A receiver is cheap to build and invisible when unused,
+which is why these accumulate.
+
+---
+
+## Class 10 — an EXCLUSION with no counterpart that PROMOTES
+
+**Symptom:** a surface excludes a population on the grounds that it is "already handled", and
+nothing handles it. The exclusion is correct in isolation; the system has a hole where the
+handler was assumed to be.
+
+**First run (2026-08-26).** `v_owner_contact_worklist` excludes any owner that already has a
+linked person — correct, they need no contact *acquisition*. But **nothing promotes that person
+into `owner_contact_pivot`**, which is what the engine and the panel actually read. Measured
+over the 120 suppressed owners ($875.3M): 72 work as designed, 37 have an empty pivot, and
+**11 have no pivot row at all — $240.5M, suppressed AND invisible**, including Easterly
+($85.0M), NGP Capital ($59.8M), US Fed Properties Trust ($53.7M) and Elman Investors ($29.0M).
+Their panels read "— none" while a person sat in the graph.
+
+**Detector — find the exclusions, then ask what promotes:**
+
+```sql
+-- Candidate exclusions across every view.
+select viewname,
+       (regexp_match(definition, '(NOT\s+EXISTS|NOT\s+IN)[^)]{0,120}'))[1] as exclusion_kind
+from pg_views
+where schemaname = 'public'
+  and definition ~* '(NOT\s+EXISTS|NOT\s+IN)'
+  and viewname ~* '(worklist|queue|candidates|review|prospect)'
+order by viewname;
+```
+
+For each hit, ask the two questions the detector cannot: **what population does this exclude,
+and what is supposed to serve it?** Then verify that thing actually does, by counting the
+excluded rows that reached the downstream surface. If the answer is "I assumed something else
+picked it up", that is the defect.
+
+**⚠️ Two hypotheses were discarded on the way to this one, both plausible:** that two
+definitions of owner rent disagreed (they matched to the dollar), and that the suppression came
+from broker links we may not call (measured fleet-wide: **zero** owners suppressed by
+broker-only links). Either would have produced a confident, wrong fix.
+
+---
+
 ## What to audit next
 
 Ordered by expected yield, not by ease:
