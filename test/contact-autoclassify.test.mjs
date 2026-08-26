@@ -17,7 +17,54 @@
 // ============================================================================
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { autoClassify } from '../api/_handlers/contacts-handler.js';
+import { autoClassify, pickBestEmail } from '../api/_handlers/contacts-handler.js';
+
+// ============================================================================
+// pickBestEmail — the FIRST email is often the WRONG one.
+//
+// Grounded in Scott's real Outlook contacts (probe run 2026-08-26):
+//   Sarah Martin   primary = idigmusic27@gmail.com      (personal), work address 2nd
+//   Ken Hedrick    primary = khedrick@stanjohnsonco.com (PRIOR firm), northmarq 3rd
+//   Jerry Hopkins  primary = jhopkins@northmarq.com     (correct)
+// Email is the Tier-0 identity key, so `emailAddresses[0]` would file people under a
+// personal address or a firm they have left, and every later match inherits the error.
+// ============================================================================
+
+test('pickBestEmail skips a personal primary for the work address', () => {
+  const r = pickBestEmail(
+    [{ name: 'idigmusic27@gmail.com', address: 'idigmusic27@gmail.com' },
+     { name: 'Sarah Martin', address: 'smartin@NorthMarq.com' }], null);
+  assert.equal(r.email, 'smartin@NorthMarq.com');
+  assert.equal(r.basis, 'first_business_domain');
+  assert.deepEqual(r.aliases, ['idigmusic27@gmail.com'], 'the personal address is KEPT, not dropped');
+});
+
+test('pickBestEmail keeps the full employment history as aliases', () => {
+  const r = pickBestEmail([{ address: 'khedrick@stanjohnsonco.com' },
+                           { address: 'khedrick20200306@stanjohnsonco.com' },
+                           { address: 'khedrick@northmarq.com' }], null);
+  assert.equal(r.email, 'khedrick@stanjohnsonco.com');
+  assert.equal(r.aliases.length, 2, 'both other addresses survive — that IS the job history');
+  assert.ok(r.aliases.includes('khedrick@northmarq.com'));
+});
+
+test('pickBestEmail falls back to the first when every domain is consumer', () => {
+  const r = pickBestEmail([{ address: 'gsb3212015@icloud.com' }], null);
+  assert.equal(r.email, 'gsb3212015@icloud.com');
+  assert.equal(r.basis, 'all_consumer_domains');
+  assert.deepEqual(r.aliases, []);
+});
+
+test('pickBestEmail handles the degenerate inputs the connector actually emits', () => {
+  assert.equal(pickBestEmail(null, 'x@northmarq.com').email, 'x@northmarq.com');
+  assert.equal(pickBestEmail([], 'x@gmail.com').email, 'x@gmail.com');
+  assert.equal(pickBestEmail(undefined, undefined).email, null);
+  // ⚠️ `name` is frequently a DISPLAY name, not an address — it must not be mistaken for one.
+  assert.equal(pickBestEmail([{ name: 'Sarah Martin' }], 's@northmarq.com').email, 's@northmarq.com');
+  // De-duplication, case-insensitively.
+  const dup = pickBestEmail([{ address: 'a@x.com' }, { address: 'A@X.com' }], null);
+  assert.equal(dup.aliases.length, 0);
+});
 
 test('business evidence outranks a consumer email domain', () => {
   // The live rows that motivated the fix.

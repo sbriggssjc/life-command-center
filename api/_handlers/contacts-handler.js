@@ -619,13 +619,27 @@ async function getHistory(req, res, id) {
 async function ingestContact(req, res, user) {
   const {
     source, contact_class: requestedClass,
-    first_name, last_name, email, phone, mobile_phone,
+    first_name, last_name, email: emailIn, email_candidates, phone, mobile_phone,
     company_name, title, city, state, website,
     sf_contact_id, sf_account_id, outlook_contact_id,
     webex_person_id, teams_user_id, icloud_contact_id,
     entity_type, contact_type, industry,
     engagement  // optional: { call_date, call_duration, email_date, meeting_date }
   } = req.body || {};
+
+  // ⚠️ THE FIRST EMAIL IS OFTEN THE WRONG ONE — pick, do not take (2026-08-26).
+  // Grounded in Scott's real Outlook contacts:
+  //   Sarah Martin  primary = idigmusic27@gmail.com   (personal), work address is 2nd
+  //   Ken Hedrick   primary = khedrick@stanjohnsonco.com (PRIOR firm), northmarq is 3rd
+  //   Jerry Hopkins primary = jhopkins@northmarq.com  (correct)
+  // Email is the Tier-0 identity key, so taking `emailAddresses[0]` would file people
+  // under a personal address or a firm they have left, and every later match inherits it.
+  // Callers may send `email_candidates` (array of strings, or of {address} / {name,address})
+  // and let the server choose. The extras are KEPT — a multi-domain history is exactly the
+  // "where did this person go" signal (Ken Hedrick: stanjohnson -> northmarq, company says
+  // Newmark = a stale contact, which is a finding rather than a defect).
+  const emailPicked = pickBestEmail(email_candidates, emailIn);
+  const email = emailPicked.email;
 
   const VALID_SOURCES = ['salesforce', 'outlook', 'outlook_gal', 'calendar', 'webex', 'teams', 'teams_call', 'iphone', 'icloud', 'iphone_call', 'manual'];
   if (!source || !VALID_SOURCES.includes(source)) {
@@ -885,6 +899,10 @@ async function ingestContact(req, res, user) {
       first_name: first_name || null,
       last_name: last_name || null,
       email: email || null,
+      // Keep every other address the source gave us. A multi-domain history IS the
+      // "where did this person go" signal (Ken Hedrick: stanjohnsonco -> northmarq while
+      // companyName reads Newmark). Never discarded, never used as the identity key.
+      email_aliases: emailPicked.aliases.length ? emailPicked.aliases : null,
       phone: phone || null,
       mobile_phone: mobile_phone || null,
       title: title || null,
@@ -2030,6 +2048,45 @@ function computeEngagementScore(lastCallDate, lastEmailDate, lastMeetingDate, to
 // tiebreak used only when we know nothing else. Deliberately NOT applied to `icloud`, whose
 // personal default is intentional, nor to the sources that already return 'business'.
 // `evidence` is optional, so the existing calendar caller is unchanged.
+// Choose the identity email from a candidate list, and keep the rest.
+//
+// RULE (deliberately simple and deterministic — see the header comment in ingestContact):
+//   1. the first candidate on a NON-consumer domain wins;
+//   2. if every candidate is consumer-domain, the first candidate wins;
+//   3. an explicitly-supplied `email` is used when no candidates are given, and is itself
+//      treated as a candidate when they are.
+// ⚠️ We deliberately do NOT try to guess which employer is CURRENT. Ken Hedrick carries
+// stanjohnsonco.com and northmarq.com while his companyName reads "Newmark" — no ordering
+// rule can resolve that, and guessing would silently pick a firm he has left. The aliases
+// preserve the full history so a later, evidence-based pass can decide.
+export function pickBestEmail(candidates, explicitEmail) {
+  const norm = (v) => {
+    if (!v) return null;
+    const s = typeof v === 'string' ? v : (v.address || v.Address || v.name || null);
+    if (!s || typeof s !== 'string') return null;
+    const t = s.trim();
+    return t.includes('@') ? t : null;      // `name` is often a display name, not an address
+  };
+  const list = [];
+  for (const c of (Array.isArray(candidates) ? candidates : [])) {
+    const e = norm(c);
+    if (e && !list.some((x) => x.toLowerCase() === e.toLowerCase())) list.push(e);
+  }
+  const explicit = norm(explicitEmail);
+  if (explicit && !list.some((x) => x.toLowerCase() === explicit.toLowerCase())) list.unshift(explicit);
+
+  if (!list.length) return { email: null, aliases: [], basis: 'none' };
+
+  const isConsumer = (e) => PERSONAL_DOMAINS.has((e.split('@')[1] || '').toLowerCase());
+  const business = list.find((e) => !isConsumer(e));
+  const chosen = business || list[0];
+  return {
+    email: chosen,
+    aliases: list.filter((e) => e !== chosen),
+    basis: business ? 'first_business_domain' : 'all_consumer_domains',
+  };
+}
+
 export function autoClassify(source, email, evidence) {
   const hasBusinessEvidence = !!(evidence && (
     (evidence.title && String(evidence.title).trim()) ||
