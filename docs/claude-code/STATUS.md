@@ -10,6 +10,22 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## 2026-08-26 (Cowork) — R8 Stage 1 SCOPED: on-box "Analyst's Take" (Prompt 138)
+
+Production-health arc fully closed (all 9 assists healthy; P137 provenance ladder wired). Moved to the R8
+net-new build (daily-briefing prose, per Scott's pick of the safer first pilot). **Re-measure-before-build
+finding:** the brief already has an "Analyst's Take — AI-generated narrative" section + a
+`briefing_intel_snapshot.analyst_take` column + renderer, but the field is **EMPTY** (length 0 for
+2026-08-24/25/26) — the section renders nothing. Generator = a **cloud Claude** call in the
+`briefing-intel-snapshot` edge fn (`api.anthropic.com`, model `claude-sonnet-4-6`), gated on
+`ANTHROPIC_API_KEY`; unset → *"skipped AI generation"* → null. **P138** builds the on-box replacement: a Node
+tick (`/api/briefing-analyst-take-tick`, flag `BRIEFING_ANALYST_TAKE_ONPREM`) that assembles the PRIVATE
+signals (pipeline rollup, scored priorities, deal-propagation delta, work counts, hot contacts) via the
+existing `briefing-data.js` fetchers, generates a 2–4 paragraph take in Scott's voice via
+`invokeOnPremGeneration` (fail-soft, never fabricate), and upserts `analyst_take` into today's snapshot row
+before the ~12:30 UTC send. Doctrine: private synthesis stays on-box; public market/news sections keep their
+cloud path. First net-new on-box GENERATION build (vs the annotation assists).
+
 ## 2026-08-26 (Cowork) — P134/P135/P136 SHIPPED (assist production-health fixes); folder cleaned
 
 All three stalled-assist prompts merged and reconciled:

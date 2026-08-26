@@ -108,7 +108,13 @@ would have promoted work onto a screen no operator could see.
 - **Template library** (ROLLOUT_STATUS W10 Stage 3, `⬜`): cluster the sent corpus by draft-type, synthesize
   Scott-voiced parameterized templates + triggers (new listing → announcement; LOI → offer-submission).
 - **LoRA fine-tune** on the 10-yr sent corpus (`garybuilt-local-model.md` Phase 3) — never started.
-- **Daily-briefing narrative polish** — generate the brief's prose section on-box each night.
+- **Daily-briefing narrative → SCOPED as R8 Stage 1 (Prompt 138, 2026-08-26).** The brief already has an
+  "Analyst's Take" section + `briefing_intel_snapshot.analyst_take` column + renderer — but the field is
+  **EMPTY** (0 length, 3 days running): the generator is a **cloud Claude** call in the
+  `briefing-intel-snapshot` edge fn, gated on `ANTHROPIC_API_KEY` (unset → silently skipped). P138 moves it
+  **on-box** (a Node tick → `invokeOnPremGeneration`, fills `analyst_take` from the private pipeline/priority/
+  deal-delta signals in Scott's voice) — doctrine-correct (private synthesis stays on-box) and lights up a
+  dead section. Public market/news sections stay cloud.
 - **Research synthesis** — summarize owner-contact / `research_task` results into structured payloads.
 - **U4 edit-distance feedback** — the draft-vs-actually-sent accept/edit signal is wired in `draft-assist.js`
   but not fed; it's the quality loop that would tune voice over time.
