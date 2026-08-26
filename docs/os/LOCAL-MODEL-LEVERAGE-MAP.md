@@ -51,9 +51,9 @@ reversible.
 | match-disambig | `MATCH_DISAMBIG_ASSIST` | on | 1,270 total, 33 in 7d, 0 unannotated | ✅ healthy (caught up) |
 | sf-link assist | `W9_3_RESCORE` (source `w9_3_sf_assist`) | on | 247 total, 47 in 7d, caught up | ✅ healthy (caught up) |
 | next-step | `NEXT_STEP_AI` | on | inline (no proposal table) | ✅ on |
-| **property-twin** | `PROPERTY_TWIN_ASSIST` | on | **200, 0 in 7d, 895 unreached** | 🔧 **FIXED (P135, 2026-08-26)** — window lifted; verify by the proposal-count DELTA past 200 |
+| **property-twin** | `PROPERTY_TWIN_ASSIST` | on | **200, 0 in 7d, 895 unreached** | ✅ **FIXED + LIVE-VERIFIED (P135, 2026-08-26)** — live dry-run now `fresh:895 / remaining:895` (was `fresh:0`); drains toward 1,095 over nightly runs |
 | **reachability harvest** | `W9_2_REACHABILITY_HARVEST` | on | **16 ever, 0 in 11d** vs ~15k pool; diagnostic POST = fixed 120-target window, 0 evidence for those 120 while 5k intake + 4.3k comms names + 2k signature phones sit unused | 🔧 **FIXED (P136, 2026-08-26)** — checked targets are marked (`reachability_harvest_target_marker`) so the window advances, AND targets are chosen by an evidence JOIN; verify by the proposal-count DELTA past 16 |
-| ollama clean-assist | `OLLAMA_CLEAN_ASSIST` | off | held (thin context) | ⚪ off → Prompt 134 |
+| ollama clean-assist | `OLLAMA_CLEAN_ASSIST` | off | **ENRICHED (P134, merged; `member_property_ids` views live on gov+dia):** per-lane evidence context + `skipped_no_evidence` / `no_evidence_reasons` / `coherence_downgraded` response fields + a decisive-verdict-at-0-confidence coherence guard | ⚪ off → **re-grade to flip**: `POST /api/ollama-clean-assist-tick?limit=20`, keep on only if most proposals quote real evidence |
 
 **Structural tell (CONFIRMED on both, now both fixed):** the two stalled lanes were the ONLY ones without a
 **paging scan** over their backlog — every healthy assist pages through its own. property-twin used a fixed

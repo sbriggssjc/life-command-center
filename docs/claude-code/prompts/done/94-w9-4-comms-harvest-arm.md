@@ -1,48 +1,49 @@
-# Prompt 94 — W9.4: Comms-harvest arm (third arm of the W9.2 reachability tick)
+# Prompt 94 — W9.4: comms-harvest arm (closes the Outlook↔LCC↔SF loop, unlocks the W9.2 flip)
 
-**Status: DONE (built as the third arm of the live W9.2 tick; flag `W9_2_REACHABILITY_HARVEST`
-stays OFF). 2026-08-12.**
+**Grounding:** `docs/audits/W9_CONNECTEDNESS_KICKOFF.md` (W9.4) + the LIVE W9.2 machinery
+(prompt 88 — `reachability-harvest-tick`, review lane, fill-blanks writer, `comms_observed`@40
+fsp rows ALREADY REGISTERED) + W7 correspondence attribution. **Design intent: W9.4 is a THIRD
+ARM of the existing harvest tick, not a new unit** — extend, never fork. Landing this arm gives
+the harvest real input yield, after which `W9_2_REACHABILITY_HARVEST` (still OFF) flips and one
+flag runs all three arms.
 
-W9.4 closes the Outlook↔LCC↔SF loop by making the correspondence LCC already ingests
-(`activity_events`) a THIRD input source for the existing reachability-harvest tick — it
-extends, never forks. One flag (`W9_2_REACHABILITY_HARVEST`), one lane
-(`reachability_harvest_review`), one cron (04:40 UTC), now three arms.
+**Why comms is the yield-rich source:** correspondence LCC already ingests carries (a) header
+from/to/cc pairs — display name + email, deterministically bound; (b) signature blocks — the
+best PHONE source anywhere in the system; (c) thread participants who are contacts-of-owners not
+yet in the contact tables at all.
 
-## Three sub-arms (reuse the existing deterministic + llm split)
-1. **Header pairs → deterministic** — a header display name bound to a valid, non-internal,
-   non-generic email/phone matching a blank contact's normalized name (arithmetic fill,
-   confidence 1.0, provenance `comms_observed`, source pointer = message id).
-2. **Signature phones → llm** — `extractSignaturePhones` over the body signature region,
-   assembled under the sender name; the SAME verbatim-quote validator gates them.
-3. **Create-contact → `target_kind='owner'`** — a thread participant attributable to an
-   owner (ops entity → domain `true_owner` via `external_identities`) with zero contacts →
-   propose CREATE-contact; minted ONLY via a human verdict, never auto.
+## Do
 
-Privacy-scoped: harvests ONLY business-attributed, `visibility<>'private'` threads.
+1. **Comms evidence index (deterministic, bounded):** from the attributed correspondence store
+   (W7's activity_events/correspondence tables — ground the exact tables/columns live first),
+   build a bounded name→(email, phone?, source pointer) index: header pairs (name+email exact
+   from headers = deterministic class) and signature-block phones (regex phone near the sender
+   name in the last N chars of body/snippet = LLM-verified class). Respect correspondence-privacy
+   scoping (`docs/architecture/access-scoping-and-my-work.md`) — harvest only from
+   business-attributed threads, never private-scoped rows.
+2. **Route through the EXISTING two-arm split:**
+   - Header name+email exactly matching a blank contact's name (normalized) → **deterministic
+     proposal** (provider 'none', source pointer = message id/thread), bulk-confirmable.
+   - Signature phones + fuzzy attributions → **LLM arm** with the verbatim-quote validator (the
+     quote must contain the phone/email AND the name — existing dropped-log catches the rest).
+   - **New-contact shape (owner has NO contact row):** where a thread participant is attributable
+     to an owner entity (W7 attribution), propose CREATE-contact (name+email+source) — minted only
+     via the lane, the propose-new-contact shape prompt 88 specced. Never auto.
+3. **fsp/provenance:** `comms_observed`@40 rows already exist for email/phone — add any missing
+   field rows for the create-contact shape in-migration; unranked view stays 0.
+4. **Flip plan:** after this arm's dry-run passes review, Cowork flips
+   `W9_2_REACHABILITY_HARVEST` — one flag, three arms, 04:40 cron. Batch caps per arm
+   (deterministic ~100 / LLM ~15 / comms-index build bounded+cursored per the house pattern —
+   and the 92/93 walk-the-pool guard applies to the new fetches).
+5. **Tests:** header-pair extraction, privacy-scope exclusion, phone-regex + verbatim validator,
+   create-contact-never-auto, arm routing, cursor walk.
 
-## Deliverables shipped
-- Planner helpers (pure, tested) in `api/_shared/reachability-harvest-planner.js`.
-- Tick + create-contact producer + verdict-path mint (idempotent, reversible) in
-  `api/admin.js`; DC lane create-contact card + bulk-confirm exclusion in `dc-lanes.js`.
-- Migration `supabase/migrations/20260827120000_lcc_w9_4_comms_harvest.sql` (applied live to
-  LCC Opps): 2 NAME-field `comms_observed@40` fsp rows (`v_field_provenance_unranked`=0 for
-  the reachability fields) + flag notes refreshed to 3 arms. No new table.
-- Tests `test/reachability-harvest-planner.test.mjs` (22 → 34, all pass).
-- Dry-run + grounding `docs/audits/W9_4_comms_harvest_dryrun_2026-08-12.md`; ROLLOUT_STATUS
-  W9.4 row.
+## Acceptance
 
-## ⚠ Grounded honestly — input-starved today (the finding)
-Live (2026-08-12): of 7,751 business-attributed correspondence rows, **0 carry a header
-display name** (Outlook ingestion flattens Graph `{name,address}` → bare email), so header
-pairs = 0 and the 2,410 phone-bearing signature bodies are not name-keyable; the 309 linked
-correspondence entities are deals/properties and **0 map to a `true_owner`**, so
-create-contact = 0. The arm is correct + complete and lights up the moment header display
-names are preserved at ingestion. Same honest posture as W9.2's input-starved deterministic
-arm and the SOS "yields nothing from CI" finding.
+- Dry-run: per-source counts (headers/signatures/new-contact candidates) + a sampled sheet —
+  deterministic header fills with message pointers, LLM phone proposals with verbatim quotes,
+  create-contact proposals clearly shaped. Honest zeros where attribution is thin.
+- Scott reviews → Cowork flips the W9.2 flag → nightly harvest live with all three arms.
+- ROLLOUT_STATUS W9.4 row + kickoff status update; prompt to done/.
 
-## The single unlock (W9.4 follow-on, not built here)
-Preserve the header display name at Outlook ingestion — capture Graph's
-`from.emailAddress.name` / `toRecipients[].emailAddress.name` (`metadata.from_name`/`to_names`
-on the mailbox-mirror row + the inbound/sent loggers, forward-only). That one field lights up
-all three sub-arms at once. Then redeploy → `GET /api/reachability-harvest-tick?score=1&n=10`
-should show non-zero `comms_counts` → review → Cowork flips `W9_2_REACHABILITY_HARVEST`→on.
+Commit with the repo Co-Authored-By + Claude-Session trailer.

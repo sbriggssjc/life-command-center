@@ -184,14 +184,15 @@ substance second-look), R6 (undecidable owner-attach rationale), R7 (signals lea
 > leftover to review + flip: **`OLLAMA_CLEAN_ASSIST`** (dry-run first).
 
 ## Tackle order (most impactful first) — and the first concrete action for each
-1. **R3 first (fast, high, low-risk):** dry-run review + flip the dormant Decision Center `*_ASSIST` lanes in
-   value order. ✅ `NEXT_STEP_AI` **DONE 2026-08-26**. ⚠️ `OLLAMA_CLEAN_ASSIST` **dry-run 2026-08-26 → HELD OFF**
-   (12-item inert sample: 6/12 content-free "insufficient evidence" from a thin `context` payload; safe but
-   low-value — flipped back off + sample deleted; **Prompt 134** enriches the context before re-enabling). Next
-   actionable flip: `PROPERTY_TWIN_ASSIST` (P106-tested, bounded lane) → `W9_3_SF_ASSIST` → the rest. → *first
-   action: dry-run sample `PROPERTY_TWIN_ASSIST`.* ⚠️ Confirm each lane's SURFACE renders before ranking it —
-   the Research list was 500-dead until P132. **Lesson reinforced: a "just flip it" assist can still be a
-   noise producer — grade the sample against the Consumption-Layer bar, not just the safety bar.**
+1. ~~**R3 (fast, high, low-risk):** flip the dormant `*_ASSIST` lanes~~ — **DONE 2026-08-26, and the premise
+   was CORRECTED by measurement.** The lanes were **not dormant**: a registry sweep found **9 of 10 assist
+   flags already `on`**. So the work was PRODUCTION HEALTH, not activation. Outcome: `NEXT_STEP_AI` flipped on
+   (6/6 dry-run); `OLLAMA_CLEAN_ASSIST` dry-run failed the Consumption-Layer bar (6/12 content-free) → held off
+   + **P134** enriched context (re-grade to flip); **P135** fixed the property-twin fixed-window stall (live:
+   `fresh:895`); **P136** fixed the reachability 120-target-window stall (marker + evidence JOIN). 6 other
+   assists were already healthy. **Lesson (proven 3×): assert on the produced DELTA, not `state=on`; a
+   producer keyed on "already processed" needs a marker/cursor that ADVANCES.** → Production-health is GREEN;
+   next is R8.
 2. ~~**R1 (biggest raw impact):** build the Ollama draft-generator for the dead research lanes~~ — **DONE 2026-08-26 (P131)**, but NOT as an Ollama drafter: the ownership lane turned out to be answerable deterministically from gov records LCC already held, and the contact lane turned out not to be answerable on-box at all. See R1 above for the measured numbers.
    (ownership-history + owner_contact_manual) → *first action: draft a CC prompt.*
 3. **R2 (biggest connectivity unlock):** correspondence-first ORE dedupe + OM-economics write-back → *CC prompt.*

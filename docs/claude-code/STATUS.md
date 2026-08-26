@@ -10,6 +10,35 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## 2026-08-26 (Cowork) — P134/P135/P136 SHIPPED (assist production-health fixes); folder cleaned
+
+All three stalled-assist prompts merged and reconciled:
+- **P135 (property-twin cursor) — LIVE-VERIFIED.** PR merged + redeployed; live dry-run now reads
+  `fresh:895 / remaining:895` (was `fresh:0` against 1,095 pending). The window advances; the lane drains
+  toward 1,095 over nightly runs. Assert on the proposal-count delta past 200.
+- **P136 (reachability target window) — MERGED, migration live.** No-evidence target marker
+  (`reachability_harvest_target_marker`) so the window advances + evidence-JOIN target selection; new
+  `v_lcc_reachability_harvest_target_marker_summary`. JS shipped on the redeploy. **First live POST is
+  Scott's call** (it writes real proposals) — tell is `targets_with_evidence>0 / proposed>0`, then watch
+  `reachability_harvest_review` climb past 16. (PR body's "73 new tests" is wrong; real 12 added, suite
+  4,442→4,453.)
+- **P134 (clean-assist context enrichment) — MERGED; `member_property_ids` views live on gov+dia.** Per-lane
+  evidence context + `skipped_no_evidence` / `no_evidence_reasons` / `coherence_downgraded` fields + a
+  decisive-at-0-confidence coherence guard. **`OLLAMA_CLEAN_ASSIST` STAYS OFF pending a re-grade:**
+  `POST /api/ollama-clean-assist-tick?limit=20`, keep on only if most proposals quote real evidence and
+  `uncertain` lands on genuine ties.
+
+**Assist production-health is now GREEN across the board** — 6 were already healthy, the 2 stalled lanes are
+fixed (P135 live, P136 merged), clean-assist enriched (re-grade to flip). The recurring lesson, now proven
+three times in one arc: a producer keyed on "already processed" needs a marker/cursor that ADVANCES, or it
+silently re-checks the same residue forever while looking healthy.
+
+**Folder cleaned (2026-08-26).** All loose prompts filed to `docs/claude-code/prompts/done/` (98 total) and
+134/135/136 responses to `responses/done/` (33). **Finding: none of the loose prompts were un-sent** — the
+whole backlog (18–97 waves, 119, 182, 184, 134–136) was already-shipped work never filed; git log confirms
+182 (PR #1778) and 184 (`claude/prompt-184-hub-and-spoke`) merged. `prompts/` and `responses/` are now empty
+of loose files.
+
 ## 2026-08-26 (Cowork) — Research page task list was DEAD (P132, SHIPPED); P133 cron; NEXT_STEP_AI ON
 
 **Finding while walking Scott to the R1 review cards.** The Research page rendered "0 tasks" for EVERY
