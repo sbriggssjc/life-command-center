@@ -5515,6 +5515,7 @@ async function renderResearchPage(page = opsResearchPage) {
         </div>
         <div class="q-actions">
           ${item.status !== 'completed' && item.research_type === 'owner_contact_manual' && item.entity_id ? `<button class="q-action primary" onclick="researchFindContact(decodeURIComponent('${encodeURIComponent(item.entity_id)}'))">Find the contact &rarr;</button>` : ''}
+          ${item.status !== 'completed' && item.research_type === 'establish_ownership_history' && item.domain && item.source_record_id ? `<button class="q-action primary" onclick="researchOpenOwnership(decodeURIComponent('${encodeURIComponent(item.domain)}'), decodeURIComponent('${encodeURIComponent(item.source_record_id)}'))">Open ownership &rarr;</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action primary" onclick="_opsBtnGuard(this, completeResearch, decodeURIComponent('${encodeURIComponent(item.id)}'))">Complete</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action" onclick="_opsBtnGuard(this, createFollowup, decodeURIComponent('${encodeURIComponent(item.id)}'))">Follow-up</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action" onclick="_opsBtnGuard(this, dismissResearch, decodeURIComponent('${encodeURIComponent(item.id)}'))">Dismiss</button>` : ''}
@@ -5583,6 +5584,30 @@ async function researchFindContact(entityId) {
   if (typeof _entityAcquireContact === 'function') setTimeout(_entityAcquireContact, 250);
 }
 window.researchFindContact = researchFindContact;
+
+// ─── P179 — make the OWNERSHIP-HISTORY lane answerable too ───────────────────
+// P173 gave `owner_contact_manual` a capture path and gated the button to that
+// ONE type. `establish_ownership_history` — 545 open, above the value floor,
+// premise unresolved — was left with Complete / Follow-up / Dismiss, and
+// completeResearch() posts only { research_task_id }. Same Class-3 defect, same
+// remedy: open the surface where the answer is ALREADY recorded (the property
+// panel's Ownership tab) rather than build a second write path.
+//
+// ⚠️ The task's subject is a PROPERTY, not an owner — `source_record_id` is the
+// domain property_id and `domain` is dia|gov (source_table =
+// v_lcc_ownership_chain_completeness). Do NOT route this to the entity panel:
+// entity_id is the *current* owner, and the task is precisely that the ownership
+// CHAIN is incomplete, so the linked owner is the thing in question.
+async function researchOpenOwnership(domain, propertyId) {
+  const dom = String(domain || '').trim();
+  const pid = Number(propertyId);
+  if (!dom || !Number.isFinite(pid)) { showToast('This task has no linked property', 'error'); return; }
+  if (typeof openUnifiedDetail !== 'function') { showToast('Property panel unavailable', 'error'); return; }
+  // property_id is passed as a NUMBER: every other call site in this file does
+  // the same, and the domain lookup keys on an integer id.
+  await openUnifiedDetail(dom, { property_id: pid }, {}, 'Ownership');
+}
+window.researchOpenOwnership = researchOpenOwnership;
 
 async function completeResearch(id) {
   const res = await opsPost('/api/workflows?action=research_followup', {

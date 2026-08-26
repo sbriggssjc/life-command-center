@@ -672,6 +672,33 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
       'the button is scoped to owner_contact_manual — a binary verdict needs no field');
   });
 
+  // ── P179: the ownership-history lane must be answerable too ───────────────
+  it('the ownership-history research card opens the property Ownership tab', () => {
+    const ops = readFileSync(join(root, 'ops.js'), 'utf8');
+    // P173 gated its button to ONE research_type, leaving establish_ownership_history
+    // (545 open, above the value floor) with no way to record an answer.
+    assert.match(ops, /function\s+researchOpenOwnership\b/, 'ops.js defines the capture action');
+    assert.match(ops, /window\.researchOpenOwnership\s*=/,
+      'it must be on window — the card reaches it from an inline onclick at CLICK time');
+    assert.match(ops, /onclick="researchOpenOwnership\(/, 'the research card renders the button');
+    // ⚠️ Same trap the P173 test documents: the explanatory comment above the
+    // function mentions both `researchOpenOwnership` and `openUnifiedDetail`, so a
+    // bare-word match would pass with the real call deleted. Anchor on the CALL,
+    // with its exact argument shape.
+    assert.match(ops, /openUnifiedDetail\(dom,\s*\{\s*property_id:\s*pid\s*\},\s*\{\},\s*'Ownership'\)/,
+      'it must INVOKE the existing property panel on the Ownership tab, not merely mention it');
+    // Scoped to the one lane, and gated on the identifiers it actually needs.
+    assert.match(ops, /item\.research_type === 'establish_ownership_history'/,
+      'the button is scoped to establish_ownership_history');
+    assert.match(ops, /item\.domain && item\.source_record_id/,
+      'gated on the property identifiers — the card is about a PROPERTY, not the owner');
+    // ⚠️ The subject is a property. Routing to the entity panel would open the
+    // CURRENT owner, and the whole task is that the ownership chain is unresolved,
+    // so that owner is the thing in question.
+    assert.doesNotMatch(ops, /onclick="researchOpenOwnership\([^"]*item\.entity_id/,
+      'must NOT be wired to entity_id — that is the disputed owner, not the subject');
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');

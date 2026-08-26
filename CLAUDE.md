@@ -265,6 +265,17 @@ worst failure mode: a `5,447` / `999+` badge that is mostly noise trains the ope
      has a shelf life.** P172's gate was not wrong, it just could not see the producer; re-run
      the gate a day later, or make it permanent.
 3. **Surface actionable-only, value-ranked, capped** (top-N, with a "show all" toggle).
+   - **⚠️ "UNREACHABLE" HAS THREE DIFFERENT CAUSES AND ONLY ONE IS FIXED BY RANKING (P179,
+     2026-08-26).** Ranking `establish_ownership_history` off a flat priority 100 left it at
+     **row 1,528 — page 62** of the global research list. The tempting next move is to demote
+     whatever is above it; measured first, the 1,527 rows ahead were two lanes with **4,772 and
+     595 lifetime completions**, one completing rows that same day. They were the system
+     working, not noise. The three causes: *unranked/flat-defaulted* → rank it (P174);
+     *ranked but genuinely behind more valuable work* → a filter/lane picker, NOT a re-rank;
+     *reachable but with nowhere to enter an answer* → a capture path (P173/P179). **Measure the
+     throughput of whatever a promotion would displace before promoting.**
+   - **Capture path BEFORE rank, always.** Ranking an unanswerable lane promotes work nobody can
+     complete onto page 1 and displaces work they can — strictly worse than leaving it buried.
 4. **Close the loop from real activity** (Salesforce/Outlook activity → cadence advance) rather than a separate
    manual queue.
 5. **Honest counts** — every badge is actionable work, not raw output.
