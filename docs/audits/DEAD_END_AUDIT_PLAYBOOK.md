@@ -691,6 +691,10 @@ The fix is a cursor that advances and a selection that joins.
 
 ## What to audit next
 
+> **⚠️ CURRENT BACKLOG LIVES IN `docs/claude-code/prompts/186-continuation-handoff-2026-08-26.md`**
+> — priority-ranked, with what is known vs assumed for each item. The list below is the
+> historical audit trail; 186 is the working queue. Items 0–5 here are closed.
+
 Ordered by expected yield, not by ease:
 
 0. ~~**Class 8 across every table the merge path cleans**~~ — **SWEPT 2026-08-26, and it
