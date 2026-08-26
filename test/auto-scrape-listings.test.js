@@ -1,7 +1,17 @@
 // Tests for the lcc-auto-scrape-listings cron handler in api/admin.js.
-// Focus: the new ±3-year window + closest-sale picker that mirrors the
+// Focus: the sale-search window + closest-sale picker that mirrors the
 // JS sidebar pickClosestListing rule. Both paths now converge on the
 // same listing→sale pairing.
+//
+// P130: these tests used to assert a symmetric ±3-year window
+// (gte listing_date−3y). That lower bound was REMOVED in the fix for the
+// June-2026 dia off_market backdating incident — a pre-listing sale (a prior
+// owner's deal) matched, and the RPC stamped off_market_date = run date,
+// collapsing years of exits into one month. The window is now floored at the
+// listing's MARKET-ENTRY date (on_market_date, fallback listing_date) with the
+// 3y recency headroom kept on the upper bound only. The assertions below are
+// re-anchored on that behaviour and explicitly guard against the −3y bound
+// being re-introduced.
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -68,7 +78,7 @@ describe('admin /_route=auto-scrape-listings', () => {
     }
   });
 
-  it('queries the ±3-year window and picks the closest sale on/after listing_date', async () => {
+  it('floors the sale window at market-entry (never listing_date−3y) and picks the closest sale', async () => {
     const calls = [];
     global.fetch = async (url, opts = {}) => {
       const target = String(url);
@@ -90,26 +100,37 @@ describe('admin /_route=auto-scrape-listings', () => {
         return jsonResponse([{
           listing_id: 42,
           property_id: 100,
-          listing_date: '2026-01-15',
+          // Market entry precedes the capture date, the normal shape: the
+          // window floor must come from on_market_date, the distance
+          // comparison from listing_date.
+          on_market_date: '2026-01-15',
+          listing_date: '2026-02-01',
           verification_due_at: '2026-04-01T00:00:00Z',
           consecutive_check_failures: 0
         }]);
       }
 
-      // The candidate sales — three within window, one outside.
+      // The candidate sales — both inside the entry-floored window.
       if (target.startsWith('https://gov.example.com/rest/v1/sales_transactions')) {
-        // Spec: lower bound 2023-01-15, upper bound 2029-01-15 (±~3y).
-        // Verify both bounds are in the URL.
-        assert.ok(target.includes('sale_date=gte.2023-01-1'),
-          `expected ±3y lower bound in URL: ${target}`);
+        // Lower bound is the MARKET-ENTRY date itself (on_market_date =
+        // 2026-01-15), not listing_date and not entry−3y. Upper bound keeps
+        // the 3y recency headroom (2026-01-15 + 1096d = 2029-01-15).
+        assert.ok(target.includes('sale_date=gte.2026-01-15'),
+          `expected market-entry lower bound in URL: ${target}`);
         assert.ok(target.includes('sale_date=lte.2029-01-1'),
-          `expected ±3y upper bound in URL: ${target}`);
+          `expected 3y upper bound in URL: ${target}`);
+        // Incident regression guard: the pre-entry lower bound
+        // (entry − 3y = 2023-01-15) must never come back — it is what let a
+        // prior owner's sale close this listing and backdate off_market_date.
+        assert.ok(!/sale_date=gte\.202[0-3]/.test(target),
+          `pre-entry lower bound re-introduced: ${target}`);
         // Deterministic order=sale_date.asc so tiebreaks are stable.
         assert.ok(target.includes('order=sale_date.asc'),
           `expected order=sale_date.asc in URL: ${target}`);
+        // A pre-entry sale (e.g. 2024-12-01, a prior owner's deal) is excluded
+        // by the gte filter above, so PostgREST never returns one here.
         return jsonResponse([
-          { sale_id: 'old',     sale_date: '2024-12-01' }, // 45d before listing — close
-          { sale_id: 'closer',  sale_date: '2026-02-01' }, // 17d after listing — closest
+          { sale_id: 'closer',  sale_date: '2026-02-10' }, //  9d after listing_date — closest
           { sale_id: 'further', sale_date: '2027-06-01' }  // ~16mo after — far
         ]);
       }
