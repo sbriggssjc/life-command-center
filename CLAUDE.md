@@ -1273,6 +1273,22 @@ Related invariants from the same round:
 - **OM intake:** `docs/architecture/om_intake_pipeline.md`.
 - **Provenance / self-learning loop:** `docs/architecture/data_quality_self_learning_loop.md`.
 - **Consumption-layer doctrine (long form):** `audit/data-flow-2026-05-30/CONSUMPTION_LAYER_DOCTRINE_2026-06-23.md`.
+- **Account-based contact intelligence (WHO to call at a repeat buyer):**
+  `docs/architecture/account-based-contact-intelligence.md`. Scott's doctrine, 2026-08-26:
+  **the ACCOUNT is the primary pursuit; who to call there is a SEPARATE, STANDING function** —
+  value-based and ongoing, never one-and-done, re-derived as correspondence and transactions
+  land. People change firms, so track where they went and leverage the prior relationship.
+  **Brokers are NEVER prospected as principal-buyer contacts** — but broker↔buyer history is
+  kept as market intelligence (who transacts with this buyer, where the gaps are for a
+  buyer's-rep pitch, where competitors are winning). Email correspondence is what reveals a
+  person's FUNCTION — demonstrated live: Easterly's panel read "— none" while we held **71
+  emails with Andrew Pulliam** (closings/press) and **51 with Lucas Shuler** (prorations),
+  neither linked to the owner, while 7 competitor brokers were.
+  - **⚠️ AN EXCLUSION NEEDS A COUNTERPART THAT PROMOTES.** `v_owner_contact_worklist` excludes
+    owners that already have a linked person (correct — they need no *acquisition*), and
+    nothing writes that person into `owner_contact_pivot`. Result: **11 owners, $240.5M,
+    suppressed AND invisible.** Whenever a surface excludes a population on the grounds that
+    it is "already handled", name the thing that handles it and verify that it does.
 - **Ownership Resolution Engine:** government-lease `docs/OWNERSHIP_RESOLUTION_ENGINE.md`.
 - **Property-owner subsystem + SF-as-a-source doctrine:** `docs/architecture/property-owner-subsystem.md`
   + `docs/architecture/property-owner-source-authority-and-doctrine.md`. **Point person ≠ property owner:**
