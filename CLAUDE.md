@@ -1364,6 +1364,18 @@ Related invariants from the same round:
     human-entered label is unreliable, the machine key is not. Verified live: the principals for
     Easterly, NGP Capital and Elman Investors are all in SF as entities with
     **`linked_to_owner = false`** — the names were never missing, the LINKS were.
+  - **⚠️ OUTLOOK CONTACTS HAVE NEVER SYNCED — THE RECEIVER IS BUILT AND UNFED (2026-08-26).**
+    Scott syncs LinkedIn into his Outlook contacts, so the data is assumed present; it is not.
+    On `unified_contacts` (31,038 rows): `sf_contact_id` 17,298 but **`outlook_contact_id` 0,
+    `last_synced_outlook` NEVER, `icloud_contact_id` 0**. `api/_handlers/contacts-handler.js`
+    already accepts `outlook_contact_id`, has a **Tier-3 match rule** on it and renders an
+    Outlook source badge — there is simply no sender (no PA flow pulls `/me/contacts`, unlike
+    the mail/calendar bridges). **This is the highest-leverage enrichment gap because only
+    585 of 31,038 contacts (1.9%) carry a TITLE**, and title is what separates acquisitions
+    from disposition from DD in the role taxonomy above. Build the PA flow on the
+    `api/bridges.js` pattern (route the source-user id through `resolveSourceUserId` — see the
+    P116 footgun). A dormant capability that is UNFED does not appear in
+    `feature_flags_registry`, so nothing surfaces it.
   - **⚠️ NAME-KEYED WEB/LINKEDIN ENRICHMENT WILL CONFIDENTLY MOVE PEOPLE TO THE WRONG FIRM.** A
     2026-08-26 search for Pulliam returned a DIFFERENT Andrew Pulliam ("VP Financial Operations
     at Integra"). Key on email domain + employer corroboration, record `source_url`/`confidence`/
