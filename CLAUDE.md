@@ -1097,6 +1097,45 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
     `"DP Brighton LLC by Marcus & Millichap"` normalizes to `dp brighton by marcus millichap` — which never
     groups with `dp brighton`. Cleaning the stored name is therefore what SURFACES a duplicate, not what
     hides it. Whenever you correct a captured name, check whether the correction changes its merge grouping.
+  - **⚠️ AND IT RETURNED **NULL** FOR 1,089 LIVE ORGANISATIONS — SO THE MERGE DETECTOR COULD NOT
+    SEE THEM AT ALL (P189, 2026-08-26).** `lcc_normalize_entity_name` strips
+    `group|partners|capital|holdings|company|trust` on top of legal forms, so an ACRONYM-NAMED firm
+    has nothing left: **RMR Group, GI Partners, AVG Partners, NGP Capital, MMI Capital all normalize
+    to NULL**, carrying **$185.1M of current annual rent**. `v_lcc_merge_candidates` filters
+    `WHERE norm_name IS NOT NULL`, so they were not ranked low or flagged — they were **absent**,
+    and the surface reported no duplicates for any of them, forever (playbook Class 11: the zero is
+    the instrument). Fixed with a namespaced `dc:<lcc_owner_domain_core>` FALLBACK key
+    (`20260827080000`): **+121 groups / 300 entities / $136.5M, 60 of them BYTE-IDENTICAL names**
+    (`"NGP Capital"` ×5). **The durable lesson is the meta one — this exact reduce-to-nothing hazard
+    was already documented in this file for `dup-pair-planner.ownerCore` and `lcc_owner_strict_core`,
+    and nobody checked it on the normalizer the detector actually USES. When a hazard is documented
+    for one function, grep every sibling that does the same job; the hazard travels with the
+    TECHNIQUE, not the name.**
+    - **The fallback is forced `auto_mergeable = false`, and that is not optional.**
+      `lcc_apply_fuzzy_merges()` loops `WHERE auto_mergeable = true` → `lcc_merge_entity()`, so
+      admitting an ungraded grouping key there would auto-merge 121 unreviewed groups. Safety was
+      PROVEN, not asserted: the blind population is **all NULL, zero empty-string**, hence exactly
+      the set the old filter excluded and DISJOINT from every existing group — gated against a
+      pre-migration snapshot at **`auto_mergeable` 3,053 → 3,053, 0 pre-existing groups changed**.
+    - **⚠️ THE OBVIOUS FIX FOR THE *SECOND* BLIND SPOT WAS MEASURED AND REJECTED.** A wording
+      difference defeats the normalizer even when it returns a value (Easterly →
+      `easterly gov reit` vs `easterly government`), and grouping on the shared Tier 0 bench EMAIL
+      DOMAIN looks like far stronger evidence. Graded over every same-domain owner pair: **4
+      net-new pairs, exactly 1 a genuine duplicate (Easterly)** — the other 3 plus 13 further NGP
+      pairs are **sponsor↔SPE**. **25% precision; a domain-keyed view would be a noise generator.**
+      The domain is shared *because an SPE family shares its sponsor's domain* — real evidence
+      answering a DIFFERENT question (the P188 Gary George shape, and the P190/P193 sponsor→SPE
+      relation already models it). Also caught: `jameshowardcpa.com` groups two unrelated owners
+      through a shared **CPA**, and `lcc_is_spe_shell_name` under-detects PLACE-NAMED SPEs
+      ("Woodbranch Lafayette VA LLC", "NGP VI PHOENIX AZ LLC") — a stated gap, not patched, because
+      a second SPE detector is the normaliser drift this file keeps warning about.
+    - **⚠️ `IS NOT DISTINCT FROM` TREATS NULL–NULL AS EQUAL, AND THAT INVERTED AN AUDIT MID-FLIGHT.**
+      Bucketing pairs on `na is not distinct from nb` labelled every both-NULL (i.e. blind) pair
+      **"already visible to the detector"** — the exact opposite of the truth — reporting 8/17 where
+      the corrected split is 4/13/4/4. Same family as the P157 `reloptions` and P182 deparse traps:
+      a predicate structurally unable to express the question returns a plausible number. **Any
+      audit that buckets on equality must decide what NULL means before it counts anything.**
+      Full writeup: `docs/audits/P189_MERGE_DETECTOR_BLIND_SPOT_2026-08-26.md`.
   - **⚠️ `&` IN AN OWNER NAME IS USUALLY A MARRIED COUPLE, NOT A FIRM (P158a, caught pre-apply).** Adding
     `&` to `lcc_owner_name_has_org_marker` looks obviously right — no person's name has an ampersand — and
     would have flagged **1,305 entities, retyped 119 people and touched 66 RESOLVED OWNERS**. The population
