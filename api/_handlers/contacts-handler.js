@@ -53,14 +53,25 @@ const PERSONAL_DOMAINS = new Set([
 ]);
 
 // Field-level authority: which source wins for each field
+// ⚠️ `outlook` and `outlook_gal` are DELIBERATELY DIFFERENT SOURCES (2026-08-26).
+//   • `outlook`     = Scott's OWN contacts folder (LinkedIn-synced, curated by him). Evidence
+//                     of a relationship he actually has.
+//   • `outlook_gal` = the Northmarq-wide "Shared Contacts Folder" / company address book.
+//                     Reference data about people the FIRM knows — NOT evidence that Scott
+//                     knows them.
+// They must stay separable because `source` is persisted per-field in `field_sources`, and a
+// directory entry is the weakest possible association (the P112 / P161 lesson: a bare
+// association is not a BD signal). Conflating them would inflate reachability and pursuit.
+// `outlook_gal` therefore sits BELOW `outlook` on every ladder — it fills blanks and never
+// clobbers Scott's own curation.
 const FIELD_PRIORITY = {
-  email:        ['salesforce', 'outlook', 'calendar', 'iphone', 'manual'],
-  phone:        ['salesforce', 'outlook', 'webex', 'iphone', 'manual'],
-  mobile_phone: ['iphone', 'outlook', 'salesforce', 'manual'],
-  title:        ['salesforce', 'outlook', 'manual'],
-  company_name: ['salesforce', 'gov_contacts', 'dia_activities', 'outlook', 'manual'],
-  city:         ['salesforce', 'gov_contacts', 'manual'],
-  state:        ['salesforce', 'gov_contacts', 'manual'],
+  email:        ['salesforce', 'outlook', 'calendar', 'iphone', 'outlook_gal', 'manual'],
+  phone:        ['salesforce', 'outlook', 'webex', 'iphone', 'outlook_gal', 'manual'],
+  mobile_phone: ['iphone', 'outlook', 'salesforce', 'outlook_gal', 'manual'],
+  title:        ['salesforce', 'outlook', 'outlook_gal', 'manual'],
+  company_name: ['salesforce', 'gov_contacts', 'dia_activities', 'outlook', 'outlook_gal', 'manual'],
+  city:         ['salesforce', 'gov_contacts', 'outlook_gal', 'manual'],
+  state:        ['salesforce', 'gov_contacts', 'outlook_gal', 'manual'],
 };
 
 // WebEx API base URL
@@ -616,7 +627,7 @@ async function ingestContact(req, res, user) {
     engagement  // optional: { call_date, call_duration, email_date, meeting_date }
   } = req.body || {};
 
-  const VALID_SOURCES = ['salesforce', 'outlook', 'calendar', 'webex', 'teams', 'teams_call', 'iphone', 'icloud', 'iphone_call', 'manual'];
+  const VALID_SOURCES = ['salesforce', 'outlook', 'outlook_gal', 'calendar', 'webex', 'teams', 'teams_call', 'iphone', 'icloud', 'iphone_call', 'manual'];
   if (!source || !VALID_SOURCES.includes(source)) {
     return res.status(400).json({ error: `source is required, one of: ${VALID_SOURCES.join(', ')}` });
   }
@@ -734,7 +745,7 @@ async function ingestContact(req, res, user) {
 
   const now = new Date().toISOString();
   const syncField = source === 'salesforce' ? 'last_synced_sf'
-    : source === 'outlook' ? 'last_synced_outlook'
+    : (source === 'outlook' || source === 'outlook_gal') ? 'last_synced_outlook'
     : (source === 'calendar' || source === 'teams' || source === 'teams_call') ? 'last_synced_calendar'
     : null;
 
@@ -2027,6 +2038,10 @@ export function autoClassify(source, email, evidence) {
 
   // Salesforce contacts are always business
   if (source === 'salesforce') return 'business';
+
+  // The company-wide address book is business by definition — it is a corporate
+  // directory, so the consumer-domain tiebreak must never apply to it.
+  if (source === 'outlook_gal') return 'business';
 
   // WebEx contacts are always business (org calls)
   if (source === 'webex') return 'business';

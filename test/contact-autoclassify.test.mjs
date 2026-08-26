@@ -60,6 +60,17 @@ test('sources with an explicit rule are deliberately unchanged', () => {
   }
 });
 
+test('outlook_gal (company directory) is business by definition', () => {
+  // ⚠️ A corporate address book is business data — the consumer-domain tiebreak
+  // must never apply to it, with or without evidence.
+  assert.equal(autoClassify('outlook_gal', 'someone@gmail.com', {}), 'business');
+  assert.equal(autoClassify('outlook_gal', 'someone@me.com', undefined), 'business');
+  assert.equal(autoClassify('outlook_gal', null, {}), 'business');
+  // And it must stay DISTINCT from `outlook` — the two populations carry different
+  // trust (Scott's own book vs the firm's directory) and are separated in field_sources.
+  assert.notEqual('outlook_gal', 'outlook');
+});
+
 test('the legacy 2-arg caller is unaffected', () => {
   // contacts-handler.js:1718 calls autoClassify('calendar', email) with no evidence.
   assert.equal(autoClassify('calendar', 'x@gmail.com'), 'personal');
