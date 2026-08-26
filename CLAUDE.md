@@ -83,6 +83,26 @@ deleted (Vercel retired after 40+ failed deploys against the old Hobby 12-functi
   Edge endpoints. pg_cron on LCC Opps runs the scheduled sweeps (queue/decision refresh, health checks,
   offload, syncs, reconciles). Grep the history file for the exact schedule of a named job.
 
+### ⚠️ `unified_contacts` LIVES IN TWO PROJECTS — read the `CONTACTS_HUB` flag first
+
+`unified_contacts` (+ `contact_change_log`, `contact_merge_queue`) exists on **both** gov and
+LCC Opps. Which one is live is decided by the **`CONTACTS_HUB`** env var
+(`api/_handlers/contacts-handler.js`, the "A9b cutover"): default `gov`, and `ops` repoints all
+three tables to LCC Opps. **It is currently set to `ops`** — LCC Opps is live (31,038 rows and
+growing); the gov copy is a **frozen pre-cutover snapshot**, 30,709 rows, last written
+2026-08-17 (the cutover date), 0 rows touched since.
+
+**⚠️ The function that reads them is called `govQuery()` REGARDLESS** — it does path-based
+routing internally, so the NAME tells you nothing about which database a contact write lands
+in. On 2026-08-26 this produced two consecutive wrong reports inside five minutes: first
+"nothing has arrived" and then "stop the run", about an Outlook contact sync that was working
+perfectly and had already written 600+ rows to the other project. **Before quoting any
+`unified_contacts` count, confirm which project the flag points at** — and note the stale gov
+copy will answer a query happily, with 9-day-old data and a plausible-looking row count.
+
+Same shape as the other measurement traps in this file: the wrong source answered confidently
+instead of erroring.
+
 ### Database topology (3 projects)
 
 | Project | Ref | Role |
