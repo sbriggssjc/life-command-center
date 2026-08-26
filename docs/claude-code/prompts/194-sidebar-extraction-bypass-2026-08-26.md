@@ -36,21 +36,43 @@ Full write-up, including the OM-class coverage split and the reproduction querie
 the hardened path. On a static read these rows *should* be hardened. They never are, and they
 never have been.
 
-**Leading untested hypothesis: the `seed_data` / extraction-race interaction.** The sidebar
-supplies pre-extracted CoStar property hints as `seed_data`. The sidebar OM-class coverage profile
-— building SF **96%**, cap **87%**, NOI **80%**, responsibilities **78%** — is what a *structured
-page capture* looks like, not what a full-key LLM return looks like. If a snapshot is being
-persisted from seed data (or from a pre-hardening sidebar path) rather than from `mergedSnapshot`,
-every symptom follows at once: no `_provider`, no P61 keys, no `stripNonSaleKeys`, and unusually
-high coverage on exactly the fields CoStar renders.
+### ⚠️ The `seed_data` hypothesis is REFUTED — do not spend time on it
+
+The obvious answer was a `seed_data` passthrough. It was tested and it is wrong. **The sidebar
+channel is itself two populations:**
+
+| sidebar sub-population | rows | OM-class | cap | NOI |
+|---|---|---|---|---|
+| **rich seed** — CoStar *property page* capture (`asking_price`, `cap_rate`, `tenant_name`, `lease_expiration`, `domain_property_id`) | 101 | **0** | **0%** | **0%** |
+| **bare seed** — document capture (`tags` only) | 249 | 76 | 36% (**87%** in the OM subset) | 34% |
+
+**65 of the 101 rich-seed rows carry a `cap_rate` in the seed; 0 carry one in the snapshot.**
+`cap_identical` / `price_identical` / `tenant_identical` all measure **0**. The seed is never
+copied into the snapshot, and the high-coverage OM rows are the ones with *no* structured hints.
+**Sidebar's quality is a real extraction, not an echo of CoStar.**
+
+**Corrected hypothesis:** a **distinct sidebar document-extraction path carrying its own, older
+prompt** — good enough to out-recall the email path, predating Prompt 61, never routed through
+`buildExtractionPrompt` / `ensureProviderStamp` / `stripNonSaleKeys`. Find that path.
 
 Candidates worth tracing, in rough order:
+- **`api/_handlers/sidebar-pipeline.js` and the "OM live-tab path"** `CLAUDE.md` refers to — the
+  most likely home of a second prompt. Start here.
 - the `defer_extraction` / `intake-extract-drain` branch,
 - the extraction **race timeout** path in `intake-om-pipeline.js` (~line 529–563) — what gets
   written when the race times out,
 - the `!context.forceReextract` **reuse short-circuit** (`intake-extractor.js:589`),
-- `api/_handlers/sidebar-pipeline.js` and whether an OM captured in-tab reaches a different writer,
 - `mergeExtractions` behaviour when the only input is a seed.
+
+### Second, separate question while you are in there
+
+The 101 rich-seed CoStar **page** captures carry `asking_price`, `cap_rate`, `tenant_name`,
+`lease_expiration` and a `domain_property_id`, and **none of it reaches the extraction snapshot**
+(0% cap, 0% NOI, 0 OM-class, 72 of 101 with no doctype at all). `CLAUDE.md` says
+`sidebar-pipeline.js` writes the domain DBs directly, so this may be routed elsewhere rather than
+dropped. **That is a docs assertion, not a verified fact — check it.** If the structured CRE data
+IS being discarded, that is a real capture loss on 101 rows in 30 days and worth its own fix. If
+it is being written to the domain DBs, say so and close the question.
 
 ## What I want
 

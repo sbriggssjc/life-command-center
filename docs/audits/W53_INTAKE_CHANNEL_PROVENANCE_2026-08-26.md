@@ -86,16 +86,51 @@ pass does not re-walk them:
 `processIntakeExtraction` — the hardened path. So on a static read these rows *should* be
 hardened, and they never are.
 
-The leading un-tested candidate is the **`seed_data` / extraction-race interaction**: the sidebar
-supplies pre-extracted CoStar property hints as `seed_data`, and the 96%-building-SF / 87%-cap
-profile above is exactly what a structured page capture looks like — not what an LLM returning a
-full-key schema looks like. If a snapshot is being persisted from seed data (or from a
-pre-hardening sidebar path) rather than from `mergedSnapshot`, every symptom follows: no
-`_provider`, no P61 keys, no `stripNonSaleKeys`, and high coverage on precisely the fields CoStar
-renders.
+### ⚠️ The `seed_data` hypothesis was TESTED AND REFUTED (same session)
 
-**This needs runtime evidence (Railway logs for one sidebar intake end-to-end), which is why it
-goes to Claude Code rather than being guessed at here** → prompt `194`.
+The obvious candidate was the **`seed_data` passthrough**: the sidebar supplies CoStar hints, and
+the 96%-building-SF / 87%-cap profile looks exactly like a structured page capture. **It is wrong,
+and the test was one query.**
+
+**The sidebar channel is itself TWO populations** (last 30 days):
+
+| sidebar sub-population | rows | seed keys | OM-class | cap | NOI |
+|---|---|---|---|---|---|
+| **rich seed** — CoStar *property page* capture | 101 | `address, asking_price, cap_rate, city, doctype, domain, domain_property_id, lease_expiration, source_url, state, tags, tenant_name` | **0** | **0%** | **0%** |
+| **bare seed** — document capture | 249 | `tags` only | 76 | 36% (**87%** within the OM subset) | 34% |
+
+Of the 101 rich-seed rows, **65 carry a `cap_rate` in the seed and 0 carry one in the snapshot** —
+`cap_identical`, `price_identical` and `tenant_identical` all measure **0**. The seed is *not*
+copied into the extraction snapshot. So the high-coverage OM rows come from the **bare-seed**
+group, which has no structured hints at all: **sidebar's quality is a genuine extraction, not an
+echo of CoStar.**
+
+**This answers the sizing question directly and negatively: seeding the email/PDF path from
+structured capture would NOT buy sidebar-like coverage,** because the seed is not where sidebar's
+coverage comes from. Do not build that.
+
+**The corrected hypothesis** (still untested, still needs runtime evidence): a **distinct sidebar
+document-extraction path with its own, older prompt** — good enough to beat the email path on
+recall, predating Prompt 61, and never routed through `buildExtractionPrompt` /
+`ensureProviderStamp` / `stripNonSaleKeys`.
+
+**A second, separate finding falls out of the same table:** the 101 rich-seed captures carry
+`asking_price`, `cap_rate`, `tenant_name`, `lease_expiration` and a `domain_property_id`, and
+**none of it reaches the extraction snapshot** (0% cap, 0% NOI, 0 OM-class, 72 of 101 with no
+doctype at all). `CLAUDE.md` states that `sidebar-pipeline.js` writes the domain DBs directly, so
+this may be routed elsewhere rather than lost — **that is asserted in the docs and NOT verified
+here.** Verify before treating it as either a leak or a non-issue.
+
+**Both remaining questions need Railway logs for one sidebar intake end to end, which is why they
+go to Claude Code rather than being guessed at** → prompt `194`.
+
+### ⚠️ And the lesson generalises past this table
+
+"Split by channel" was right and **not sufficient** — the channel that mattered had to be split
+again. A population defined by *where a row entered* can still contain two populations defined by
+*what kind of thing entered*. **Before quoting any per-channel number, check whether the channel
+has sub-populations with different input types** — the unsplit sidebar average (36% cap) and the
+document-only average (87%) differ by 51 points and describe different things.
 
 ## 4. What this changes
 

@@ -66,13 +66,22 @@ match-disambig, next-step: all healthy.
 
 **Three things are open and cheap, and all three are "verify," not "build":**
 
-1. **Two assist lanes are stalled with `on` flags and merged fixes.** property-twin **200 / 0 in
-   7d** (last write 2026-08-19); reachability-harvest **4 / 0 in 7d** (2026-08-13). P135/P136
-   dry-ran clean and have produced no write delta across two nightly windows. → backlog V1/V2.
-2. **`OWNERSHIP_CHAIN_ROLE_LABELS` is built, merged (#1788) and ungraded.** After the next Railway
-   redeploy: `GET /api/ownership-chain-draft-tick?role_labels=1&generate=1` — read
-   `summary.providers` **first** (a cloud-fallback sample is not a grade of the on-box layer), then
-   `chains_altered_by_layer2` must be **0**. → backlog N2.
+1. **⏳ THREE LANES ARE AWAITING THEIR FIRST POST-DEPLOY RUN — check these before anything else.**
+   property-twin, reachability-harvest and the Analyst's Take all had merged fixes that were
+   **never deployed** (they landed after the 16:03 UTC cutoff on 2026-08-26; PR #1789 shipped them
+   at 23:13 UTC). **They were not broken — they were not running.** Verify by the delta:
+
+   | lane | cron | window (UTC) | passes when |
+   |---|---|---|---|
+   | property-twin | 220 | 05:45 | proposals pass **200** |
+   | reachability-harvest | 212 | 04:40 | `reachability_harvest_review` passes **4** |
+   | Analyst's Take | 240 | 10:18 (weekdays) | a take lands with `generated_at` **inside** that window |
+
+   If any is still flat, *now* it is a code stall. → backlog V1/V2/V7.
+2. **`OWNERSHIP_CHAIN_ROLE_LABELS` is built, merged (#1788), deployed, and still ungraded.** The
+   endpoint is now live: `GET /api/ownership-chain-draft-tick?role_labels=1&generate=1` (ungated,
+   write-free). Read `summary.providers` **first** — a cloud-fallback sample is not a grade of the
+   on-box layer the flag turns on — then `chains_altered_by_layer2` must be **0**. → backlog N2.
 3. **The `briefing-intel-snapshot` edge fn must carry `if (row.analyst_take == null) delete
    row.analyst_take;`** or a manual re-fire upserts NULL over the on-box take. → backlog V4.
 

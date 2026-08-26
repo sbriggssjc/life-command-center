@@ -236,6 +236,40 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
 
 ## Core doctrines (apply to every change)
 
+### ⚠️ "MERGED" IS NOT "RUNNING" — CHECK THE FIX AGAINST THE DEPLOYED SHA BEFORE CALLING IT BROKEN (2026-08-26)
+
+Three assist fixes landed on 2026-08-26 and **the deploy cutoff cut straight through them.** The
+build serving all day was `bb26453a`, cut at **16:03 UTC**:
+
+| fix | merged | vs cutoff | production |
+|---|---|---|---|
+| P131 ownership-chain drafter | 15:18 UTC | **before** | ✅ 545 rows written |
+| P135 property-twin window fix | 18:16 UTC | after | ❌ 0 writes |
+| P136 reachability harvest fix | 18:56 UTC | after | ❌ 0 writes |
+
+Same author, same day, same code quality — **the only variable was which side of the deploy they
+landed on.** But the SYMPTOM is identical to a broken worker (cron green, flag `on`, zero writes),
+and it had already been written up twice as "verified in dry-run but no live delta," then escalated
+to "a second stall to diagnose." **That escalation was wrong, and it was one `git merge-base` away
+from being obviously wrong.**
+
+- **Before diagnosing a worker that writes nothing, run
+  `git merge-base --is-ancestor <fix-sha> <deployed-sha>`.** Get the deployed sha from live
+  `/version`. It is one command and it precedes every other hypothesis.
+- **⚠️ `/version` reports `git_pinned: true` — treat it as a claim, not proof.** Corroborate with a
+  behavioural probe (does a route/field that only exists post-fix respond?) or by checking a
+  SIBLING lane that IS writing: if a same-day fix works and yours does not, the boundary between
+  them is the answer. That corroboration is what made this diagnosis safe.
+- **⚠️ A DB migration ships INSTANTLY; the JS that reads it does not.** This split is why P192/P193
+  visibly moved the Tier 0 lane counts (views + migrations, live immediately) while P135/P136 did
+  nothing — the same "deploy" was half-applied. **Never infer that a JS change shipped because its
+  SQL half is visibly working.**
+- **A `pg_cron` job existing proves nothing about the JS it calls** — the cron is a DB object
+  created by a migration. Cron 239 existed and fired while its handler's newer half was absent.
+- **Corollary — re-measure the deploy itself before recommending one.** The redeploy landed
+  (#1789, 23:13 UTC) *during* this very diagnosis; `/version` moved from `bb26453a` to `870445f1`
+  mid-session. A recommendation written five minutes earlier would have shipped stale.
+
 ### ⚠️ RE-MEASURE A DATED BLOCKER BEFORE QUOTING IT (2026-08-20)
 
 This file and its siblings are full of dated findings — "X is blocked", "Y returns 401", "Z yields
@@ -446,8 +480,18 @@ All three converge on `api/_shared/intake-om-pipeline.js::stageOmIntake`:
   - **A fleet-wide coverage number therefore moves with the channel MIX, not with prompt
     quality.** On OM-class docs over 30 days the *unhardened* sidebar channel outscores the
     hardened email channel on every field (NOI 80% vs 52%, cap 87% vs 65%, building SF 96% vs
-    65%, responsibilities 78% vs 44%) — because sidebar reads **structured CoStar page data**
-    while email runs **AI extraction over a PDF**. Comparing them measures the input.
+    65%, responsibilities 78% vs 44%).
+  - **⚠️ AND "SPLIT BY CHANNEL" WAS NOT SUFFICIENT — THE CHANNEL ITSELF HAS TWO POPULATIONS.**
+    Sidebar splits into **101 CoStar *page* captures** (rich `seed_data`: asking_price, cap_rate,
+    tenant_name, domain_property_id — and **0 OM-class, 0% cap, 0% NOI** in the snapshot) and
+    **249 *document* captures** (`seed_data` = `tags` only, 76 OM-class, **87% cap**). The
+    unsplit sidebar average (36% cap) and the document-only average (87%) differ by 51 points
+    and describe different things. **Before quoting a per-channel number, check whether the
+    channel carries sub-populations with different INPUT types.**
+  - **The seed-passthrough explanation is REFUTED, tested:** 65 of the 101 rich-seed rows carry a
+    `cap_rate` in the seed and **0** carry one in the snapshot (identical-value counts all zero).
+    Sidebar's quality is a genuine extraction, not an echo of CoStar — so **seeding the email/PDF
+    path from structured capture would not buy sidebar-like coverage. Do not build that.**
   - **This invalidates the evidence for, not the conclusion of, the 2026-08-11 W5.3 re-grade**
     ("hardening worked — NOI 89%"). That window is exactly when a 64-row sidebar backfill
     landed. The verdict reverts to *unproven for the email/PDF path*, not *refuted*.
