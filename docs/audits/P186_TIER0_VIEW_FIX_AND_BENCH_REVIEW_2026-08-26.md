@@ -337,6 +337,58 @@ rushed. Specified in `docs/claude-code/prompts/187-*.md`.
    generic-noun stoplist. It is worth more than the promoter: **$358M of top owners currently
    invisible**, including the largest owner in the system.
 
+---
+
+# Round 3 — P187 shipped the matching fix. What §6 predicted, measured.
+
+Migration `20260827010000_lcc_p187_tier0_core_arm_and_stoplist.sql`, applied live.
+
+| | before P187 | after |
+|---|---|---|
+| candidate pairs | 2,314 | **558** |
+| owners with a bench | 346 | **208** |
+| top-45-by-rent precision | 76–80% | **~91%** |
+| empty bench ≥$5M | 41 owners / $902M | 44 owners / **$738M** |
+
+**Now visible, exactly as §6 predicted:** Boyd Watterson ($179.8M) 2 people · RMR Group 20 incl.
+**Adam Portnoy** · Realty Income 12 incl. **Sumit Roy** · TIAA-CREF · GI Partners · AVG · Cole
+Capital · 14 smaller owners.
+
+**Shipped:** `lcc_owner_domain_core()` (order-preserving, 11/11 named-row gate — the contrast
+column proves `lcc_owner_strict_core` sorts to `assetboydmanagementwatterson`); Arm 2 as an
+8-character core/domain prefix *equality* join (so it costs nothing); fan-out gates on both arms;
+a widened stoplist covering geography, generic CRE nouns and consumer-ISP suffixes.
+
+### Four things worth keeping from the build
+
+1. **⚠️ Measuring a gate is not shipping a gate.** §5 measured a token fan-out gate and reported
+   it cut CIM Urban 17→0 and Johnson 9→0. It was only ever applied in *analysis queries* — never
+   written into the view. `johnsonlexus.com` was still matching "Allan Bailey Johnson Group" until
+   P187 actually shipped it.
+2. **⚠️ The empty-bench count got WORSE and that is the improvement.** 41 → 44 owners, while the
+   rent behind it fell $902M → $738M. All 10 newly-"empty" owners had benches that were **100%
+   false positives** (avenueview, plazacorp, 17 urban\* domains, officecourt, streetviewllc,
+   tenantwisdom, developerservices, denverrealestate, phoenix\*). The old figure was inflated by
+   noise.
+3. **⚠️ Precision is a curve — quote the band.** ~91% at the top 45 by rent; **~60–70%** down in
+   the ~$2M single-property SPE band, where names are a place or a surname and little else
+   ("NGP VI ESSEX VT LLC" → essexconcrete.org, "Boyd Atlanta Williams" → williamson.com). The
+   confirm lane must be worked top-down.
+4. **The acronym arm was built, measured and rejected.** "A 3–4 char ALL-CAPS token is an
+   acronym" — but **27.6% of owner names (212 of 769) are entirely uppercase**, because that is
+   the government SPE naming convention. It produced `BOYD DEL RIO GSA LLC` → **dell.com**,
+   `1445 ROSS AVE LLC` → **avera.org**, `EGP DEA VISTA LLC` → de-az.com (DEA is the *tenant*).
+   ~30–40% precision. Its real value sits in ~6 sponsor acronyms best handled by a small curated
+   map — see prompt 188.
+
+**Residue recorded, not patched:** GWU → `georgesinc.com` (fan-out cannot see it); "Southern SSA"
+(fan-out exactly 2); one CMBS securitization trust ($2.38M, 6 pairs) — one row does not justify a
+rule that would later be trusted as general.
+
+**Next:** `docs/claude-code/prompts/188-tier0-confirm-lane-2026-08-26.md`.
+
+---
+
 ## Housekeeping — done
 
 - `_p186_tier0_baseline` **dropped** (equivalence diff recorded above; leaving a stale snapshot

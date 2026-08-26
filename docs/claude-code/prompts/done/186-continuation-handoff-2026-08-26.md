@@ -70,7 +70,13 @@ Elman → Mitchell Freeman; Trammell Crow → Aaron Thielhorn.
    Build a **confirm-a-draft lane** instead (the `lcc_clean_assist_proposals` pattern already in
    use). **And do P187 first** — it is worth more than the promoter.
 
-**➡️ SUPERSEDED BY `187-tier0-owner-domain-matching-2026-08-26.md`.** The biggest unlock is not
+**➡️ 187 IS DONE (applied 2026-08-26). THE LIVE QUEUE IS NOW
+`188-tier0-confirm-lane-2026-08-26.md`.** P187 shipped the matching fix: pairs 2,314 → 558,
+top-of-book precision 76–80% → **~91%**, and Boyd Watterson, RMR (Adam Portnoy), Realty Income
+(Sumit Roy), TIAA-CREF, GI Partners, AVG and Cole Capital are visible for the first time. The
+remaining unit is the **confirm lane**, not a promoter.
+
+**➡️ Original pointer, kept for the record — `187-tier0-owner-domain-matching-2026-08-26.md`.** The biggest unlock is not
 the promoter and not Salesforce: **≈51 people at 9 owners worth $358M are already in `entities`
 and invisible to Tier 0**, including Boyd Watterson ($179.8M, the largest owner in the system),
 RMR's CEO and Realty Income's CEO. Cause is the matcher's own eligibility test — playbook
