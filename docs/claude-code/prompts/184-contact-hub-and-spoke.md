@@ -26,7 +26,8 @@ works.
 | iPhone integration | **not needed** | iOS syncs contacts from Exchange; fixing Outlook propagates. A separate path would be a third writer fighting for the same fields. |
 | WebEx / Teams write-back | **blocked on INGEST** | `webex_person_id` and `teams_user_id` are 0 / 32,833 — no identity to address a write to. |
 | Salesforce scope | **short written allowlist** | Existing doctrine: LCC never writes back to *clean* SF. Territory marking / rules-of-engagement logging only. Explicitly NOT name/title/company/phone corrections. |
-| Outlook writability | **⚠️ THE BLOCKER** | 4 of 5 sampled contacts carry `personalNotes: "This contact is read-only…"`. A 100-row probe was run; read its result before anything else. |
+| Outlook writability (CLIENT) | **✅ RESOLVED — writable** | Scott edited Ken Hedrick in Outlook desktop on 2026-08-26 and it **saved**, with the "read-only" text still in the notes. The marker is residue from the Stan Johnson → Northmarq migration, not a live link. |
+| Outlook writability (**API**) | **⚠️ STILL THE BLOCKER** | The client edit proves the contact is not locked. It does **not** prove `PATCH /me/contacts/{id}` works — Graph can return `200` and discard. **Probe B, with a re-read, is still required.** |
 
 ---
 
@@ -37,7 +38,19 @@ works.
 `/me/contacts` returns them and marks them read-only. Read-only in Graph means they are a
 **projection of some other store**. Find that store.
 
-### The strongest lead: a mailbox migration, not a live link
+### ✅ ANSWERED 2026-08-26 — it was a migration artifact
+
+Scott edited a read-only-marked contact in Outlook desktop and it saved. **The investigation
+below is retained because it explains WHY, and because the API question is still open** — but
+do not re-run steps 1, 3, 4 or 5. **Go straight to Probe B (the PATCH + re-read).**
+
+One thing the edit dialog revealed that changes a design assumption: Ken Hedrick's three
+addresses are all typed **"Other email"**, none primary. So `emailAddresses[0]` ordering is
+arbitrary — which is why `pickBestEmail` exists — and **there is no natural "primary address"
+field to write back to.** Reordering a user's address list is more invasive than filling a
+blank, so primary-address correction is out of scope unless Scott asks for it explicitly.
+
+### The original lead: a mailbox migration, not a live link
 
 Scott's hypothesis, and the probe data supports it. The `personalNotes` on real contacts contain:
 

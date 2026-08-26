@@ -85,7 +85,34 @@ decision, not a refactor.
 
 ## 4. Outlook — one unknown blocks everything
 
-**⚠️ Scott's probe (2026-08-26) showed 4 of 5 sampled contacts carrying**
+## ✅ RESOLVED 2026-08-26 — OUTLOOK IS WRITABLE. The marker is a migration artifact.
+
+**Scott edited Ken Hedrick in Outlook desktop and it SAVED**, with the "This contact is
+read-only" text still present in the notes. The marker does not describe the contact's current
+state — it is residue from the **Stan Johnson Company → Northmarq migration**, corroborated by
+the same `personalNotes` carrying `"Contact Imported:"` three and four times over and Lync 2010
+references dated 2012–2014.
+
+**Consequence: the outbound path is open.** Everything in §5 (field authority, fill-blanks,
+conflict surfacing, honest counts) now applies, and the sequencing in §6 can proceed.
+
+**⚠️ But the API is still the unknown.** Scott edited through the Outlook CLIENT. Whether
+`PATCH /me/contacts/{id}` succeeds — and whether it *sticks* — is a separate question, because
+**Graph can return `200` and discard the change**. Probe B remains required, and its
+verification step (re-read the contact, do not trust the status code) is the whole point.
+
+**Also learned from the edit dialog:** all three of Ken Hedrick's addresses are typed
+**"Other email"** — none is marked primary. That is why `emailAddresses[0]` returned
+`khedrick@stanjohnsonco.com` (his prior firm) and why `pickBestEmail` was necessary. It also
+means **a "set the primary address" outbound write has no natural target field** in this
+mailbox's data shape; ordering is the only signal, and reordering someone's address list is a
+more invasive change than filling a blank.
+
+---
+
+### The original finding (kept for the record)
+
+**Scott's probe (2026-08-26) showed 4 of 5 sampled contacts carrying**
 `personalNotes: "This contact is read-only. To make changes, tap the link above to edit in
 Outlook."`
 
