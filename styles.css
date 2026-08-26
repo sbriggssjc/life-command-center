@@ -2359,3 +2359,36 @@ body:has(.modal-overlay.open) .copilot-fab { display: none !important; }
 .mkt-research-label { color:var(--text3); }
 .mkt-rlink { color:var(--accent); text-decoration:none; }
 .mkt-rlink:hover { text-decoration:underline; }
+
+
+/* ── P131 — ownership-chain draft on the research card ─────────────────────
+   Reads as a RECORD, not a suggestion: monospaced dates, explicit gaps, and a
+   warning row when the chain's last grantee disagrees with the owner on file.
+   Nothing here implies the draft has been applied — it has not, until a human
+   confirms it on the Ownership tab. */
+.chain-draft {
+  margin: 10px 0 4px; padding: 10px 12px; border-radius: 6px;
+  background: var(--bg-elev, rgba(255,255,255,.03));
+  border: 1px solid var(--border, rgba(255,255,255,.10));
+  border-left: 3px solid var(--blue, #62B5E5);
+  font-size: 12.5px; line-height: 1.55;
+}
+.chain-draft-none { border-left-color: var(--muted, #7a8090); opacity: .85; }
+.chain-draft-head { font-weight: 600; margin-bottom: 6px; }
+.chain-conf { font-weight: 400; opacity: .7; font-size: 11.5px; }
+.chain-draft-why { opacity: .8; }
+.chain-link { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; padding: 2px 0; }
+.chain-date { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; opacity: .75; font-size: 11.5px; min-width: 78px; }
+.chain-party { font-weight: 500; }
+.chain-arrow { opacity: .55; }
+.chain-price { opacity: .7; font-size: 11.5px; }
+.chain-role {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em;
+  padding: 1px 5px; border-radius: 3px; opacity: .8;
+  background: var(--border, rgba(255,255,255,.10));
+}
+.chain-gap {
+  padding: 2px 0 2px 84px; opacity: .65; font-style: italic; font-size: 11.5px;
+}
+.chain-warn { margin-top: 6px; color: var(--yellow, #E5B62B); font-size: 11.5px; }
+.chain-draft-src { margin-top: 7px; opacity: .6; font-size: 11px; }
