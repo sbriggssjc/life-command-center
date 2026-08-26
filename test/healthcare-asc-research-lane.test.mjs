@@ -90,6 +90,23 @@ test('CoStar full display addresses bind to the same frozen street-only target',
   assert.equal(built.capture.structured_payload.square_footage, '24,072');
 });
 
+test('multi-token CMS suite suffixes bind to building-level research pages', () => {
+  const cmsToken = normalizeAscAddressToken({
+    address: '302 W 14TH ST STE 100 B',
+    city: 'JEFFERSONVILLE',
+    state: 'IN',
+    zip: '47130',
+  });
+  const costarToken = normalizeAscAddressToken({
+    address: '302 W 14th St',
+    city: 'Jeffersonville',
+    state: 'IN',
+    zip: '47130',
+  });
+  assert.equal(cmsToken, '302 W 14TH ST|JEFFERSONVILLE|IN|47130');
+  assert.equal(cmsToken, costarToken);
+});
+
 test('migration is private, RLS-protected, exact-50, and hard-blocks prohibited writes', async () => {
   const sql = await readFile(new URL('../supabase/migrations/20261001120000_lcc_asc_research_swim_lane.sql', import.meta.url), 'utf8');
   for (const table of ['runs', 'candidates', 'captures', 'evidence', 'reviews']) {

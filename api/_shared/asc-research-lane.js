@@ -58,7 +58,10 @@ export function normalizeAscAddressToken({ address, city, state, zip } = {}) {
     .replace(/\bSOUTH\b/g, 'S')
     .replace(/\bEAST\b/g, 'E')
     .replace(/\bWEST\b/g, 'W')
-    .replace(/\b(SUITE|STE|UNIT)\s+[A-Z0-9-]+\b/g, '')
+    // CMS addresses sometimes split a suite into multiple tokens (for
+    // example, "STE 100 B"). Treat the complete trailing designator as
+    // non-property identity so it binds to building-level CoStar/RCA pages.
+    .replace(/\b(SUITE|STE|UNIT)\b(?:\s+[A-Z0-9-]+)+\s*$/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   const cityToken = cityValue.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
