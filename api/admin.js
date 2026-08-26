@@ -99,6 +99,7 @@ import { buildNameBackfillPatch, reverseNameBackfillPatch, senderEmailFromMetada
 import { artifactSafeName } from './_shared/artifact-storage.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 import { handleOwnershipChainDraftTick } from './_handlers/ownership-chain-draft-tick.js';
+import { handleBriefingAnalystTakeTick } from './_handlers/briefing-analyst-take-tick.js';
 import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
 import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
 import {
@@ -217,6 +218,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'match-disambig-assist-tick': return handleMatchDisambigAssistTick(req, res);
     case 'property-twin-assist-tick': return handlePropertyTwinAssistTick(req, res);
     case 'ownership-chain-draft-tick': return handleOwnershipChainDraftTick(req, res);
+    case 'briefing-analyst-take-tick': return handleBriefingAnalystTakeTick(req, res);
     case 'sf-link-assist-tick':        return handleSfLinkAssistTick(req, res);
     case 'sf-link-rescore-tick':       return handleSfLinkRescoreTick(req, res);
     case 'sf-donor-handoff-tick':      return handleSfDonorHandoffTick(req, res);
