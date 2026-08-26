@@ -17,6 +17,44 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-26 (Cowork) — P191: the lane closed cards it had no business closing (found by working it)
+
+**Scott worked the first five Tier 0 cards and noticed duplicate companies. Reviewing what was
+written found a real defect — in the lane, not in his judgement.**
+
+**All four attaches are mechanically correct**: written, logged in `lcc_tier0_confirm_log`,
+reversible, pivot and `entity_relationships` consistent. Nothing to undo for correctness.
+
+**The defect: attach was per-OWNER while the card is per-(OWNER, DOMAIN).**
+`v_lcc_tier0_owner_contact_lane_open` filtered `where not owner_already_has_contact`, and that flag
+is derived per owner. P188's write-up explicitly claims *"rejecting one never closes the other"* —
+true for reject (keyed on `subject_ref`), **false for attach**. So attaching any one domain card
+closed every other domain card for that owner.
+
+**What it cost, on the highest-value lane in the system:** the attach landed on
+`easterlypartners.com` — **Alison Bernard, 0 emails, no SF, no Outlook, no campaign** (the card's
+own counters read link 0 / person 0) — and silently suppressed the `easterlyreit.com` card holding
+**Andrew Pulliam: 109 emails, in Salesforce, in the GSA Buyer campaign, 37 edges, EVP-Acquisitions**
+— the doctrinal pursuit target. No signal was given that a better card had just closed.
+
+**Fixed (P191):** closes only the (owner, DOMAIN) actually decided, discriminating on
+`owner_contact_pivot.active_source = 'tier0_confirm'` so the 1,381 owners with contacts from
+elsewhere stay excluded and the lane does not inflate. Measured: cards **260 → 256**,
+easterlyreit.com **0 → 2** (7 candidates each), easterlypartners.com stays 0, Boyd Watterson stays
+0. **No revert needed** — the verdict path supersedes rather than overwrites, so attaching Pulliam
+on the restored card makes him active and leaves Bernard on the bench.
+
+**New playbook Class 14 — a WRITE whose scope is wider than the QUESTION it answers.** Detector:
+compare the key of the *question* to the key of the *exclusion*, check **every verdict type
+separately** (reject was correct, attach was not — testing reject would have "proved" the design
+sound), and after the first real verdicts diff the open list: one attach should remove one card.
+
+**⚠️ And duplicates stopped being abstract.** Easterly is two owner entities, so the same question
+was answered twice and the same person attached to both. **"NGP Capital" is five entities** — the
+$8.5M one still has an open `ngpv.com` card asking what was already answered for the $59.8M one.
+This is now duplicated operator work on the top lane, which raises prompt 189 above everything else.
+
+
 ## 2026-08-26 (Cowork) — P190: Scott's two Tier 0 decisions, applied live
 
 **Decision 1 — "drop all universities."** Scott's explicit call, made with the cost stated: it

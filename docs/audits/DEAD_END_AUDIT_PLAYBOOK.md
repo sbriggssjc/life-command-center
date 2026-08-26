@@ -706,6 +706,57 @@ proposals once and stalled again at row 1,001, with the failure now more expensi
 The fix is a cursor that advances and a selection that joins.
 
 
+## Class 14 — a WRITE whose scope is wider than the QUESTION it answers
+
+**Symptom:** a surface asks a narrow question and records the answer against a broader key. Every
+write is correct, logged and reversible; the defect is that answering one question silently closes
+others the operator never saw. It cannot be found by checking the write — only by asking *what else
+disappeared when this landed.*
+
+**First run (P191, 2026-08-26) — found by Scott on the first five cards ever worked.** The Tier 0
+lane is deliberately **one card per (owner, DOMAIN)**, and P188's own write-up says so: *"the domain
+split is load-bearing… rejecting one never closes the other."* True for **reject**, which keys on
+`lcc_decisions.subject_ref`. False for **attach**, because the open-list filter read
+`where not owner_already_has_contact`, and that flag is derived per **OWNER** from
+`owner_contact_pivot`.
+
+So attaching any one domain card closed every other domain card for that owner. The cost, on the
+highest-value lane in the system:
+
+| attached | suppressed |
+|---|---|
+| Alison Bernard `@easterlypartners.com` — **0 emails, no SF, no Outlook, no campaign** (the card's own counters read link 0 / person 0) | Andrew Pulliam `@easterlyreit.com` — **109 emails, in Salesforce, in the GSA Buyer campaign, 37 edges, EVP-Acquisitions** — the doctrinal pursuit target |
+
+**The operator did nothing wrong.** Four cards for one firm (two duplicate owner entities × two
+domains) were presented as four independent questions, and answering one closed two others with no
+signal.
+
+**Detector — for any surface that records a verdict:**
+
+1. **Compare the key of the QUESTION to the key of the EXCLUSION.** Card keyed
+   `(owner, domain)`, exclusion keyed `(owner)` — the mismatch *is* the bug. Write both keys down
+   explicitly; they are rarely compared because each looks right alone.
+2. **Check every verdict type separately.** Here reject and attach used different keys, so testing
+   reject would have "proved" the design correct. A design claim that holds for one verdict and not
+   another is the common shape.
+3. **After the first real verdicts, diff the open list before and after.** One attach should remove
+   one card. If it removes three, the exclusion is wider than the answer.
+
+**⚠️ Corollary — the fix must not re-inflate the surface.** The naive repair (drop the
+`owner_already_has_contact` filter) would have re-admitted the 1,381 owners whose contacts came from
+elsewhere and who need no acquisition at all. The discriminator was
+`owner_contact_pivot.active_source = 'tier0_confirm'`: *this lane is being worked, so this owner's
+remaining questions are still open.* **Narrow the exclusion to match the question; do not delete
+it.**
+
+**⚠️ And it put a number on a "data hygiene" item.** Easterly is two owner entities, so the same
+question was answered twice and the same person attached to both; "NGP Capital" is **five**
+entities, so the $8.5M one still asks a question already answered for the $59.8M one. Duplicate
+entities stopped being an abstract cleanup item and became **duplicated operator work on the
+highest-value lane** (Class 11's blind detector, prompt 189).
+
+---
+
 ## Class 13 — a MATCHING RULE whose eligibility test silently excludes the highest-value population
 
 **Symptom:** a matcher runs fast, returns thousands of rows, and reads as a rich, healthy bench.
