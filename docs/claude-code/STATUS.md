@@ -292,7 +292,9 @@ NOT clean. The 3 remaining are **pre-existing, behavioural (not stale greps), re
 this session never touched:**
 - **`ollama-clean-assist.test.mjs`** — "clean-assist worker must NOT call `properties?`" is RED → the P106-class
   invariant (assist layer ANNOTATES, never writes/reads canonical) is currently violated. **Highest priority —
-  this is a possible live doctrine breach, not just a red test.** Investigate first.
+  this is a possible live doctrine breach, not just a red test.** → **prompt 129 drafted** (makes CC prove
+  whether it's a real breach in the `ollama-clean-assist-tick` handler or a drifted block-grep like P128, then
+  fix the worker or the test accordingly; verify by pass/fail list → expect 4,363/3 → 4,364/2).
 - `auto-scrape-listings.test.js` — URL missing the −3y lower bound; handler 502s.
 - `folder-feed-enrich-mode.test.mjs` — enrich + no-match emits no disambiguation decision.
 
