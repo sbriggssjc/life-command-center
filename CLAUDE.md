@@ -510,6 +510,13 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
     SELF-LOOP (`chk_entity_relationships_no_self_loop` would abort the ingestion that wrote it)
     and a DUPLICATE of an edge the survivor already holds (there is **no unique constraint** on
     `(from,to,type)`, so nothing else would catch the double-count).
+  - **`external_identities` resolves `entity_id` to the survivor at INSERT (P178).** 45
+    stranded, 26 created post-merge (CoStar sidebar-dominated). Its unique key
+    `(workspace_id, source_system, source_type, external_id)` **excludes `entity_id`**, so a
+    repoint cannot normally collide — 45 repointed, 0 deduped. **None were `asset`/`true_owner`
+    anchors**, so the by-ID domain-owner join stayed clean. The trigger does NOT touch
+    `source_system`/`source_type`: the canonical scheme above remains the only authority on
+    spelling.
   - **A survivor row for the same key is not automatically a DUPLICATE (P175a).** Where the
     ghost reads `is_current` and the survivor reads ENDED, the rows **contradict** each other
     about whether the party still holds the asset — deleting the ghost resolves the conflict
