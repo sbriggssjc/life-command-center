@@ -76,6 +76,7 @@ export async function buildOfficialAscCandidatePack({ packet, authorizationRecei
   const releaseId = packet.source_manifest_release_id;
   const quality = new Map();
   const qualityExclusions = { missing_facility_id: 0, missing_npi: 0, unjoinable_identity_rows: 0 };
+  const qualityEvidence = { multi_row_facility_ids: 0, pos_state_mismatch_facility_ids: 0, multi_npi_facility_ids: 0, name_drift_facility_ids: 0, city_drift_facility_ids: 0, zip_drift_facility_ids: 0 };
   await eachCsv(qualityPath, (row) => {
     const ccn = clean(row['Facility ID']);
     const npi = clean(row.NPI);
@@ -85,14 +86,14 @@ export async function buildOfficialAscCandidatePack({ packet, authorizationRecei
       qualityExclusions.unjoinable_identity_rows += 1;
       return;
     }
-    const candidate = { ccn, npi, facility_name: String(row['Facility Name'] ?? '').trim(), city: String(row['City/Town'] ?? '').trim(), state: clean(row.State), zip: String(row['ZIP Code'] ?? '').trim(), year: Number(row.Year) || 0 };
-    const existing = quality.get(ccn);
-    if (existing && existing.npi !== npi) throw new Error(`ASCQR Facility ID ${ccn} maps to conflicting NPIs`);
-    if (!existing || candidate.year > existing.year || (candidate.year === existing.year && canonicalJson(candidate) < canonicalJson(existing))) quality.set(ccn, candidate);
+    const evidence = { npi, facility_name: String(row['Facility Name'] ?? '').trim(), city: String(row['City/Town'] ?? '').trim(), state: clean(row.State), zip: String(row['ZIP Code'] ?? '').trim(), year: Number(row.Year) || 0 };
+    if (!quality.has(ccn)) quality.set(ccn, []);
+    quality.get(ccn).push(evidence);
   });
+  for (const rows of quality.values()) if (rows.length > 1) qualityEvidence.multi_row_facility_ids += 1;
 
   const enrollmentByNpi = new Map();
-  const relevantNpis = new Set([...quality.values()].map((row) => row.npi));
+  const relevantNpis = new Set([...quality.values()].flat().map((row) => row.npi));
   await eachCsv(enrollmentPath, (row) => {
     const npi = clean(row.NPI);
     if (!relevantNpis.has(npi) || clean(row.PROVIDER_TYPE_DESC) !== ASC_ENROLLMENT_TYPE) return;
@@ -104,13 +105,25 @@ export async function buildOfficialAscCandidatePack({ packet, authorizationRecei
   const certified = new Map();
   await eachCsv(posPath, (row) => {
     const ccn = clean(row.prvdr_num);
-    const q = quality.get(ccn);
-    if (!q || clean(row.fed_crtfctn_stus_name) !== 'CERTIFIED') return;
+    const qualityRows = quality.get(ccn);
+    if (!qualityRows || clean(row.fed_crtfctn_stus_name) !== 'CERTIFIED') return;
     if (clean(row.prvdr_type_id) !== '11') throw new Error(`POS facility ${ccn} has unexpected provider type`);
-    const state = clean(row.state_cd || q.state);
+    const state = clean(row.state_cd);
     const region = REGIONS[state];
     if (!region) return;
-    const value = { ...q, facility_name: String(row.fac_name || q.facility_name).trim(), address: String(row.st_adr ?? '').trim(), city: String(row.city_name || q.city).trim(), state, zip: String(row.zip_cd || q.zip).trim(), region };
+    const sameStateRows = qualityRows.filter((qualityRow) => qualityRow.state === state);
+    if (!sameStateRows.length) { qualityEvidence.pos_state_mismatch_facility_ids += 1; return; }
+    const latestYear = Math.max(...sameStateRows.map((qualityRow) => qualityRow.year));
+    const currentQualityRows = sameStateRows.filter((qualityRow) => qualityRow.year === latestYear);
+    const npis = [...new Set(currentQualityRows.map((qualityRow) => qualityRow.npi))].sort();
+    if (npis.length > 1) qualityEvidence.multi_npi_facility_ids += 1;
+    const facilityName = String(row.fac_name ?? '').trim();
+    const city = String(row.city_name ?? '').trim();
+    const zip = String(row.zip_cd ?? '').trim();
+    if (currentQualityRows.some((qualityRow) => clean(qualityRow.facility_name) !== clean(facilityName))) qualityEvidence.name_drift_facility_ids += 1;
+    if (currentQualityRows.some((qualityRow) => clean(qualityRow.city) !== clean(city))) qualityEvidence.city_drift_facility_ids += 1;
+    if (currentQualityRows.some((qualityRow) => clean(qualityRow.zip) !== clean(zip))) qualityEvidence.zip_drift_facility_ids += 1;
+    const value = { ccn, npis, facility_name: facilityName, address: String(row.st_adr ?? '').trim(), city, state, zip, region, ascqr_year: latestYear };
     const existing = certified.get(ccn);
     if (existing && canonicalJson(existing) !== canonicalJson(value)) throw new Error(`Certified POS facility ${ccn} is duplicated inconsistently`);
     certified.set(ccn, value);
@@ -118,7 +131,8 @@ export async function buildOfficialAscCandidatePack({ packet, authorizationRecei
 
   const orgFacilities = new Map();
   for (const facility of certified.values()) {
-    for (const org of enrollmentByNpi.get(facility.npi) ?? []) {
+    const orgs = new Set(facility.npis.flatMap((npi) => [...(enrollmentByNpi.get(npi) ?? [])]));
+    for (const org of orgs) {
       if (!orgFacilities.has(org)) orgFacilities.set(org, new Set());
       orgFacilities.get(org).add(facility.ccn);
     }
@@ -127,15 +141,15 @@ export async function buildOfficialAscCandidatePack({ packet, authorizationRecei
   const candidates = [];
   const crosswalk = [];
   for (const facility of certified.values()) {
-    const orgs = [...(enrollmentByNpi.get(facility.npi) ?? [])].sort();
+    const orgs = [...new Set(facility.npis.flatMap((npi) => [...(enrollmentByNpi.get(npi) ?? [])]))].sort();
     const corroborationTier = orgs.length ? 'pos_quality_enrollment' : 'pos_quality_only';
     const footprint = !orgs.length ? 'unknown' : orgs.some((org) => orgFacilities.get(org).size > 1) ? 'multi_site_proxy' : 'single_site_proxy';
     const candidateFingerprint = sha256(`${releaseId}:asc:${facility.ccn}`);
     candidates.push({ candidate_fingerprint: candidateFingerprint, region: facility.region, corroboration_tier: corroborationTier, operator_footprint_proxy: footprint });
     crosswalk.push({
       candidate_fingerprint: candidateFingerprint,
-      cms_identity: { ccn: facility.ccn, npi: facility.npi, facility_name: facility.facility_name, address: facility.address, city: facility.city, state: facility.state, zip: facility.zip },
-      cms_evidence: { pos_certification_status: 'CERTIFIED', ascqr_year: facility.year, enrollment_corroborated: orgs.length > 0, enrollment_org_names: orgs, operator_footprint_proxy: footprint },
+      cms_identity: { ccn: facility.ccn, npis: facility.npis, facility_name: facility.facility_name, address: facility.address, city: facility.city, state: facility.state, zip: facility.zip },
+      cms_evidence: { location_authority: 'cms_pos', pos_certification_status: 'CERTIFIED', ascqr_year: facility.ascqr_year, enrollment_corroborated: orgs.length > 0, enrollment_org_names: orgs, operator_footprint_proxy: footprint },
       manual_review: { property_form: null, landlord_owner: null, ownership_evidence: null, landlord_addressable: null, economics_bounded: null, lcc_connection: null, salesforce_connection: null, public_record_sources: [], costar_reviewed: false, rca_reviewed: false, notes: null },
     });
   }
@@ -159,11 +173,19 @@ export async function buildOfficialAscCandidatePack({ packet, authorizationRecei
       ascqr_missing_facility_id: qualityExclusions.missing_facility_id,
       ascqr_missing_npi: qualityExclusions.missing_npi,
       ascqr_unjoinable_identity_rows: qualityExclusions.unjoinable_identity_rows,
+      certified_pos_without_same_state_ascqr: qualityEvidence.pos_state_mismatch_facility_ids,
+    },
+    source_evidence_quality: {
+      ascqr_multi_row_facility_ids: qualityEvidence.multi_row_facility_ids,
+      retained_multi_npi_facility_ids: qualityEvidence.multi_npi_facility_ids,
+      pos_ascqr_name_drift_facility_ids: qualityEvidence.name_drift_facility_ids,
+      pos_ascqr_city_drift_facility_ids: qualityEvidence.city_drift_facility_ids,
+      pos_ascqr_zip_drift_facility_ids: qualityEvidence.zip_drift_facility_ids,
     },
     stratum_counts: Object.fromEntries([...counts].sort()),
     cell_quotas: Object.fromEntries(cells.map((cell) => [cell.name, cell.quota])),
     candidate_pool_fingerprint: sha256(canonicalJson(candidates.map((row) => row.candidate_fingerprint))),
-    controls: { certified_pos_only: true, terminated_excluded: true, sample_size: 50, candidate_files_private: true, manual_property_research_required: true, database_write_authorized: false, production_write_authorized: false, outreach_authorized: false, idtf_activated: false },
+    controls: { certified_pos_only: true, pos_location_authority: true, same_state_ascqr_evidence_only: true, terminated_excluded: true, sample_size: 50, candidate_files_private: true, manual_property_research_required: true, database_write_authorized: false, production_write_authorized: false, outreach_authorized: false, idtf_activated: false },
     privacy: { classification: 'aggregate_only', record_level_identifiers_emitted: false },
   };
   return { candidates, crosswalk, contract, receipt };

@@ -176,8 +176,14 @@ exactly 50 slots proportionally across observed strata, and the existing determi
 those frozen cells without replacement.
 
 ASCQR rows lacking either Facility ID or NPI are unjoinable and are excluded rather than assigned an inferred
-identity. Their reason counts appear in the aggregate receipt; conflicting nonblank Facility ID/NPI mappings
-remain a fail-closed integrity error.
+identity. Their reason counts appear in the aggregate receipt.
+
+For duplicated ASCQR Facility IDs, POS is the current location authority. The adapter retains only ASCQR rows
+whose state agrees with the certified POS row, preserves every distinct NPI from the latest retained reporting
+year as evidence, and emits one candidate per POS Facility ID. Enrollment corroboration and the organization
+footprint proxy consider all retained NPIs. Name, city and ZIP differences are aggregate evidence-quality
+counts; a certified POS facility with no same-state ASCQR evidence is excluded. No duplicate row is silently
+chosen and no NPI is promoted into the property identity.
 
 This checkpoint deliberately leaves property form, landlord/owner identity, ownership evidence, economics,
 LCC connection and Salesforce connection blank. A human may research those fields with approved CoStar, RCA,

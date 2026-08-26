@@ -48,6 +48,11 @@ async function fixtures() {
     if (index < 56) enrollment.push(`${npi},PART B SUPPLIER - AMBULATORY SURGICAL CENTER,${index < 16 ? 'SHARED ASC ORG' : `ORG ${index}`}`);
     enrollment.push(`${npi},PART B SUPPLIER - CLINIC/GROUP PRACTICE,IGNORED ORG`);
   }
+  quality.push('Facility Zero DBA,100000,8999999998,Alternate City,NY,99999,2025');
+  quality.push('Wrong State Evidence,100001,8999999999,Wrong City,CA,88888,2025');
+  quality.push('State Mismatch Only,199996,8999999996,No Match,FL,77777,2025');
+  pos.push('199996,POS State Authority,11,1 Main St,New York,77777,NY,CERTIFIED');
+  enrollment.push('8999999998,PART B SUPPLIER - AMBULATORY SURGICAL CENTER,SECOND ASC ORG');
   const paths = { qualityPath: path.join(root, 'quality.csv'), posPath: path.join(root, 'pos.csv'), enrollmentPath: path.join(root, 'enrollment.csv'), paymentPath: path.join(root, 'payment.zip') };
   await Promise.all([writeFile(paths.qualityPath, `${quality.join('\n')}\n`), writeFile(paths.posPath, `${pos.join('\n')}\n`), writeFile(paths.enrollmentPath, `${enrollment.join('\n')}\n`), writeFile(paths.paymentPath, 'synthetic payment artifact')]);
   return paths;
@@ -67,18 +72,23 @@ test('official pack creates a deterministic certified universe and executable 50
     ascqr_missing_facility_id: 1,
     ascqr_missing_npi: 1,
     ascqr_unjoinable_identity_rows: 2,
+    certified_pos_without_same_state_ascqr: 1,
   });
+  assert.deepEqual(first.receipt.source_evidence_quality, {
+    ascqr_multi_row_facility_ids: 64,
+    retained_multi_npi_facility_ids: 1,
+    pos_ascqr_name_drift_facility_ids: 1,
+    pos_ascqr_city_drift_facility_ids: 1,
+    pos_ascqr_zip_drift_facility_ids: 1,
+  });
+  assert.equal(first.receipt.controls.pos_location_authority, true);
+  assert.equal(first.crosswalk.find((row) => row.cms_identity.ccn === '100000').cms_identity.npis.length, 2);
+  assert.equal(first.crosswalk.find((row) => row.cms_identity.ccn === '100001').cms_identity.npis.length, 1);
+  assert.equal(first.crosswalk.some((row) => row.cms_identity.ccn === '199996'), false);
   assert.equal(first.crosswalk[0].manual_review.landlord_owner, null);
   assert.ok(first.candidates.some((row) => row.operator_footprint_proxy === 'multi_site_proxy'));
   assert.ok(first.candidates.some((row) => row.corroboration_tier === 'pos_quality_only'));
   assert.doesNotMatch(serializeOfficialAscCandidatePackReceipt(first.receipt), /Facility|Main St|900000/);
-});
-
-test('official pack fails closed on conflicting ASCQR identities', async () => {
-  const paths = await fixtures();
-  await writeFile(paths.qualityPath, 'Facility Name,Facility ID,NPI,City/Town,State,ZIP Code,Year\nA,100000,9000000000,A,NY,1,2025\nB,100000,9000000001,B,NY,1,2025\n');
-  const tamperedAuthorization = await setupAuthorization(paths);
-  await assert.rejects(buildOfficialAscCandidatePack({ packet: tamperedAuthorization.packet, authorizationReceipt: tamperedAuthorization.receipt, ...paths }), /conflicting NPIs/);
 });
 
 test('official pack rejects source drift after authorization', async () => {
