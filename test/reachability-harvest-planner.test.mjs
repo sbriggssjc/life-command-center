@@ -23,6 +23,11 @@ import {
   // Prompt 104 — create_contact precision (fan-out cap)
   HARVEST_MINT_FANOUT_MAX, createContactKey, createContactOwnerKey,
   createContactFanoutMap, createContactFanoutSuppressed,
+  // Prompt 136 — the advancing target window
+  HARVEST_TARGET_SCAN_PAGE, HARVEST_TARGET_SCAN_MAX, HARVEST_TARGET_SCAN_HARD_MAX,
+  HARVEST_TARGET_MARKER_TTL_DAYS, harvestTargetScanCeiling,
+  targetMarkerKey, targetMarkerIsActive, targetEvidenceSignal,
+  selectHarvestTargets, planHarvestTargetMarkers,
 } from '../api/_shared/reachability-harvest-planner.js';
 import {
   isBrokerageEmail, isBrokerageContact, isBrokerageOwnerName,
@@ -473,4 +478,274 @@ test('create_contact guards do NOT touch the deterministic fill-blanks arm', () 
     adminJs.indexOf('-- ARM 3a: deterministic COMMS header'));
   assert.ok(!/coaIsBrokerageContact|createContactFanoutSuppressed/.test(detArm),
     'the deterministic fill-blanks arm carries no create_contact precision guard');
+});
+
+// ===========================================================================
+// Prompt 136 — the target window must ADVANCE.
+//
+// The live stall: a FIXED top-120 slice of a ~15k unreachable pool, re-selected
+// every night, all yielding no evidence, never recorded as checked. These tests
+// pin the exact silent failure — the SECOND run must see a DIFFERENT target set.
+// (Mirrors the P135 property-twin guard shape.)
+// ===========================================================================
+
+// A 15k-row unreachable pool: only rows whose name is in the evidence index can
+// ever yield a proposal. Ranks descend so paging order is deterministic.
+function makeHarvestPool(n, { evidenceEvery = 0 } = {}) {
+  const rows = [];
+  for (let i = 0; i < n; i++) {
+    rows.push({
+      domain: 'gov', target_contact_id: 'c' + String(i).padStart(6, '0'),
+      contact_name: (evidenceEvery && i % evidenceEvery === 0) ? 'Evidence Person ' + i : 'Blank Person ' + i,
+      sf_contact_id: null, salesforce_id: null, missing_fields: ['email', 'phone'],
+      rank_value: n - i,
+    });
+  }
+  return rows;
+}
+const pagerFor = (rows) => async (limit, offset) => rows.slice(offset, offset + limit);
+const noEvidence = () => ({ has_evidence: false, sources: [] });
+
+test('P136 selector: the window ADVANCES — run 2 sees a different target set', async () => {
+  const pool = makeHarvestPool(15000);          // the live shape: nothing resolvable
+  const fetchPage = pagerFor(pool);
+  const markers = new Set();
+
+  const run1 = await selectHarvestTargets({
+    fetchPage, isMarked: (t) => markers.has(targetMarkerKey(t.domain, t.target_contact_id)),
+    evidenceOf: noEvidence, want: 60,
+  });
+  assert.equal(run1.targets.length, 60, 'a run still fills its batch');
+  assert.equal(run1.targets_with_evidence, 0, 'the live shape: none of them carry evidence');
+
+  // Nothing was produced -> every selected target is marked (fix 1).
+  const plan1 = planHarvestTargetMarkers(run1.targets, new Set());
+  assert.equal(plan1.length, 60);
+  assert.ok(plan1.every((m) => m.reason === 'no_evidence'));
+  for (const m of plan1) markers.add(targetMarkerKey(m.domain, m.target_contact_id));
+
+  const run2 = await selectHarvestTargets({
+    fetchPage, isMarked: (t) => markers.has(targetMarkerKey(t.domain, t.target_contact_id)),
+    evidenceOf: noEvidence, want: 60,
+  });
+  assert.equal(run2.targets.length, 60);
+  assert.equal(run2.marker_skipped, 60, 'the previous window is skipped, not re-checked');
+  const ids1 = new Set(run1.targets.map((t) => t.target_contact_id));
+  const overlap = run2.targets.filter((t) => ids1.has(t.target_contact_id));
+  assert.equal(overlap.length, 0, 'THE BUG: run 2 must not re-select run 1s targets');
+  assert.equal(run2.targets[0].target_contact_id, 'c000060', 'rank order is preserved past the marked window');
+});
+
+test('P136 selector goes RED against the SHIPPED (pre-fix) behaviour', async () => {
+  // The shipped bug reproduced exactly: nothing was ever recorded as checked, so
+  // the marker predicate could never exclude anything. Same selector, isMarked
+  // pinned false -> run 2 re-selects run 1's targets in full. This is what the
+  // advance guard above asserts against; verified to fail (overlap 60) on it.
+  const pool = makeHarvestPool(15000);
+  const fetchPage = pagerFor(pool);
+  const r1 = await selectHarvestTargets({ fetchPage, isMarked: () => false, evidenceOf: noEvidence, want: 60 });
+  const r2 = await selectHarvestTargets({ fetchPage, isMarked: () => false, evidenceOf: noEvidence, want: 60 });
+  const ids = new Set(r1.targets.map((t) => t.target_contact_id));
+  assert.equal(r2.targets.filter((t) => ids.has(t.target_contact_id)).length, 60,
+    'without markers the window is pinned — this is the live stall, and the guard above goes red on it');
+  // ...and the fixed 120-target reading the diagnostic showed: 15k pool, 60 targets.
+  assert.equal(r1.targets.length, 60);
+  assert.ok(r1.remaining_untargeted > 5000, 'a huge pool sat behind the pinned window');
+});
+
+test('P136 selector: evidence-bearing targets are preferred over blind rank', async () => {
+  // Evidence exists only every 100th row — under blind rank the top 60 carry NONE
+  // (exactly the live donors_found:0 / with_evidence:0 reading).
+  const pool = makeHarvestPool(15000, { evidenceEvery: 100 });
+  const evidenceNames = new Set(pool.filter((r) => r.contact_name.startsWith('Evidence'))
+    .map((r) => r.contact_name.toLowerCase()));
+  const evidenceOf = (t) => targetEvidenceSignal(t, {
+    hasIntakeName: (nm) => evidenceNames.has(nm), hasCommsName: () => false,
+  });
+  const blindTop60 = pool.slice(0, 60).filter((r) => evidenceNames.has(r.contact_name.toLowerCase()));
+  assert.equal(blindTop60.length, 1, 'blind rank surfaces almost nothing resolvable');
+
+  const sel = await selectHarvestTargets({
+    fetchPage: pagerFor(pool), isMarked: () => false, evidenceOf, want: 60,
+  });
+  assert.ok(sel.targets_with_evidence > blindTop60.length,
+    'evidence-first beats blind rank: ' + sel.targets_with_evidence + ' vs ' + blindTop60.length);
+  assert.equal(sel.targets.length, 60, 'the batch is still filled — the remainder drains no-evidence rows');
+  assert.ok(sel.targets.slice(0, sel.targets_with_evidence).every((t) => t.evidence_signal.has_evidence),
+    'evidence-bearing targets rank first');
+  assert.equal(sel.targets[0].evidence_signal.sources[0], 'intake');
+});
+
+test('P136 selector: honest counts distinguish a drained pool from a capped scan', async () => {
+  // (a) Small, fully-scanned pool -> remaining_untargeted is a TOTAL, not capped.
+  const small = makeHarvestPool(40);
+  const drained = await selectHarvestTargets({
+    fetchPage: pagerFor(small), isMarked: () => false, evidenceOf: noEvidence, want: 60,
+  });
+  assert.equal(drained.targets.length, 40);
+  assert.equal(drained.remaining_untargeted, 0, 'nothing left behind');
+  assert.equal(drained.scan_capped, false);
+  assert.equal(drained.scan_exhausted, true);
+
+  // (b) A capped scan reports a FLOOR — never "done".
+  const big = makeHarvestPool(15000);
+  const capped = await selectHarvestTargets({
+    fetchPage: pagerFor(big), isMarked: () => false, evidenceOf: noEvidence,
+    want: 60, pageSize: 500, maxScan: 1000,
+  });
+  assert.equal(capped.scan_capped, true, 'a windowed scan says so');
+  assert.equal(capped.scanned, 1000);
+  assert.equal(capped.remaining_untargeted, 940, 'a FLOOR of what this run could not reach');
+
+  // (c) An entirely marked window: 0 selected, and that is honest, not a crash.
+  const allMarked = await selectHarvestTargets({
+    fetchPage: pagerFor(small), isMarked: () => true, evidenceOf: noEvidence, want: 60,
+  });
+  assert.equal(allMarked.targets.length, 0);
+  assert.equal(allMarked.marker_skipped, 40);
+  assert.equal(allMarked.remaining_untargeted, 0);
+});
+
+test('P136 selector: a POST-FILTERED short page is not the end of the slice', async () => {
+  // The target fetch drops '' -blank rows in JS after the DB page returns. If the
+  // filtered length were read as exhaustion, paging would stop early and re-pin the
+  // very window this unit unpins — so `raw` (the DB page size) decides.
+  const pool = makeHarvestPool(2000);
+  let pagesFetched = 0;
+  const fetchPage = async (limit, offset) => {
+    pagesFetched += 1;
+    const slice = pool.slice(offset, offset + limit);
+    // keep only half of each page, as a post-filter would
+    return { rows: slice.filter((_r, i) => i % 2 === 0), raw: slice.length };
+  };
+  const sel = await selectHarvestTargets({ fetchPage, isMarked: () => false, evidenceOf: noEvidence,
+    want: 60, pageSize: 500, maxScan: 3000 });
+  assert.ok(pagesFetched > 1, 'paging continued past the short filtered page');
+  assert.equal(sel.eligible_scanned, 1000, 'every page was scanned, not just the first');
+  assert.equal(sel.scan_exhausted, true);
+  assert.equal(sel.targets.length, 60);
+});
+
+test('P136 scan ceiling grows with the marker prefix — markers cannot refill the window', async () => {
+  // The second-order stall: markers are skipped in JS, so every marked row still
+  // costs scan budget. With a FIXED ceiling the window refills with markers in weeks
+  // and re-stalls. Simulated here: 6,000 markers occupying the head of the slice.
+  const pool = makeHarvestPool(15000);
+  const marked = new Set(pool.slice(0, 6000).map((t) => targetMarkerKey(t.domain, t.target_contact_id)));
+  const isMarked = (t) => marked.has(targetMarkerKey(t.domain, t.target_contact_id));
+
+  const fixed = await selectHarvestTargets({ fetchPage: pagerFor(pool), isMarked, evidenceOf: noEvidence,
+    want: 60, pageSize: 500, maxScan: 6000 });
+  assert.equal(fixed.targets.length, 0, 'a FIXED 6,000-row ceiling sees nothing but markers — re-stalled');
+
+  const ceiling = harvestTargetScanCeiling(6000, 60, 6000);
+  assert.ok(ceiling > 6000, 'the ceiling grows past the marker prefix');
+  const adaptive = await selectHarvestTargets({ fetchPage: pagerFor(pool), isMarked, evidenceOf: noEvidence,
+    want: 60, pageSize: 500, maxScan: ceiling });
+  assert.equal(adaptive.targets.length, 60, 'the adaptive ceiling reaches past the marked prefix');
+  assert.equal(adaptive.targets[0].target_contact_id, 'c006000');
+  // ...and it is still bounded — never an unbounded scan.
+  assert.equal(harvestTargetScanCeiling(1e9, 1e9), HARVEST_TARGET_SCAN_HARD_MAX);
+  assert.equal(harvestTargetScanCeiling(0, 60), HARVEST_TARGET_SCAN_MAX, 'no markers -> the configured window');
+});
+
+test('P136 marker plan: produced targets are NOT marked; two reasons stay distinct', () => {
+  const targets = [
+    { domain: 'gov', target_contact_id: 'a', evidence_signal: { has_evidence: true, intake: true, sources: ['intake'] } },
+    { domain: 'gov', target_contact_id: 'b', evidence_signal: { has_evidence: true, comms: true, sources: ['comms'] } },
+    { domain: 'dia', target_contact_id: 'c', evidence_signal: { has_evidence: false, sources: [] } },
+  ];
+  const produced = new Set([targetMarkerKey('gov', 'a')]);
+  const plan = planHarvestTargetMarkers(targets, produced, { sourceRunId: 'w92_test' });
+  assert.equal(plan.length, 2, 'a target that produced fresh work keeps its slot');
+  assert.deepEqual(plan.map((m) => m.target_contact_id), ['b', 'c']);
+  // "evidence existed but produced nothing new" and "nothing could be proposed"
+  // are DIFFERENT facts and must never wear one label.
+  assert.equal(plan.find((m) => m.target_contact_id === 'b').reason, 'no_fresh_work');
+  assert.equal(plan.find((m) => m.target_contact_id === 'c').reason, 'no_evidence');
+  assert.equal(plan[0].source_run_id, 'w92_test');
+  // The exclusion EXPIRES — an exclusion nothing clears is a permanent removal.
+  const ttlMs = HARVEST_TARGET_MARKER_TTL_DAYS * 86400000;
+  assert.equal(Date.parse(plan[0].recheck_after) - Date.parse(plan[0].checked_at), ttlMs);
+});
+
+test('P136 marker expiry: an expired marker stops excluding its target', () => {
+  const now = Date.parse('2026-09-01T00:00:00Z');
+  assert.ok(targetMarkerIsActive({ recheck_after: '2026-09-20T00:00:00Z' }, now));
+  assert.ok(!targetMarkerIsActive({ recheck_after: '2026-08-20T00:00:00Z' }, now), 'expired -> re-eligible');
+  // Falls back to checked_at + TTL when recheck_after is absent.
+  assert.ok(targetMarkerIsActive({ checked_at: '2026-08-25T00:00:00Z' }, now));
+  assert.ok(!targetMarkerIsActive({ checked_at: '2026-06-25T00:00:00Z' }, now));
+  assert.ok(!targetMarkerIsActive(null, now));
+});
+
+test('P136 evidence signal: intake / comms / SF identity are named, never blended', () => {
+  const has = (set) => (nm) => set.has(nm);
+  const sig = targetEvidenceSignal({ contact_name: 'Jane Doe', sf_contact_id: '003xx' }, {
+    hasIntakeName: has(new Set(['jane doe'])), hasCommsName: has(new Set()),
+  });
+  assert.deepEqual(sig.sources, ['intake', 'sf_identity']);
+  assert.ok(sig.has_evidence);
+  // A nameless contact cannot join the name indexes — SF identity alone still counts.
+  const nameless = targetEvidenceSignal({ contact_name: null, salesforce_id: '003yy' },
+    { hasIntakeName: () => true, hasCommsName: () => true });
+  assert.deepEqual(nameless.sources, ['sf_identity']);
+  const nothing = targetEvidenceSignal({ contact_name: 'Nobody Here' },
+    { hasIntakeName: () => false, hasCommsName: () => false });
+  assert.equal(nothing.has_evidence, false);
+  assert.deepEqual(nothing.sources, []);
+});
+
+test('P136 tick wiring: evidence-aware paged selection + marker write, honest counts', () => {
+  // Indexes are built BEFORE target selection (the selection JOINS against them).
+  const idxAt = adminJs.indexOf('const intake = await harvestBuildIntakeIndex();');
+  const selAt = adminJs.indexOf('RH.selectHarvestTargets({');
+  const donorAt = adminJs.indexOf('const donor = await harvestBuildDonorMaps(allTargets);');
+  assert.ok(idxAt > 0 && selAt > idxAt, 'evidence indexes are built before target selection');
+  assert.ok(donorAt > selAt, 'donor maps are built for the SELECTED batch');
+  // Paging, not a fixed slice.
+  assert.match(adminJs, /fetchHarvestTargets\(dom, lim, off\)/);
+  assert.match(adminJs, /async function fetchHarvestTargets\(domain, cap, offset = 0\)/);
+  assert.match(adminJs, /contact_id\.asc/, 'a stable tiebreak — OFFSET paging needs a total order');
+  // Markers: read on both paths, written only on POST.
+  assert.match(adminJs, /await fetchHarvestTargetMarkers\(\)/);
+  assert.match(adminJs, /await writeHarvestTargetMarkers\(targetMarkerRows \|\| \[\]\)/);
+  assert.match(adminJs, /RH\.planHarvestTargetMarkers\(allTargets, producedTargetKeys/);
+  // Honest counts the prompt asks for, surfaced on the response.
+  for (const k of ['targets_selected', 'targets_with_evidence', 'targets_marked_no_evidence', 'remaining_untargeted']) {
+    assert.ok(adminJs.includes(k + ':'), 'summary carries ' + k);
+  }
+  assert.match(adminJs, /target_scan_capped: counts\.target_window\.scan_capped/);
+  // The scan ceiling is adaptive — a fixed one refills with markers and re-stalls.
+  assert.match(adminJs, /RH\.harvestTargetScanCeiling\(markersForDomain\(dom\), perDomain/);
+});
+
+test('P136 keeps every existing guard: proposal-only, verbatim, fanout/brokerage, budget', () => {
+  // The create-contact arm still never mints — a human verdict does.
+  assert.match(adminJs, /RH\.createContactFanoutSuppressed\(/);
+  assert.match(adminJs, /coaIsBrokerageContact\(p\.name, p\.email\)/);
+  // The verbatim validator still gates ARM 2, and the score budget still bounds it.
+  assert.match(adminJs, /RH\.scoreHarvestWithBudget\(llmItems/);
+  assert.match(adminJs, /validated\.drop.*dropped_not_verbatim|dropped_not_verbatim \+= 1/s);
+  // Writes remain annotation-only against reachability_harvest_review.
+  assert.match(adminJs, /'reachability_harvest_review\?on_conflict=subject_ref'/);
+  // create_contact never resolves a CONTACT target's marker (owner-keyed, not target-keyed).
+  const createArm = adminJs.slice(adminJs.indexOf('// 5. W9.4 CREATE-CONTACT arm'),
+    adminJs.indexOf('// 6. P136 — plan the target markers'));
+  assert.ok(!/noteProduced\(/.test(createArm),
+    'the owner-keyed mint arm does not clear a contact target marker');
+});
+
+test('P136 migration: marker table is additive, expiring, reversible', () => {
+  const p136 = readFileSync(join(repoRoot,
+    'supabase/migrations/20260830120000_lcc_p136_reachability_harvest_target_marker.sql'), 'utf8');
+  assert.match(p136, /CREATE TABLE IF NOT EXISTS public\.reachability_harvest_target_marker/);
+  assert.match(p136, /UNIQUE \(domain, target_contact_id\)/, 'one marker per target — the upsert key');
+  assert.match(p136, /recheck_after\s+timestamptz NOT NULL DEFAULT \(now\(\) \+ interval '30 days'\)/,
+    'the exclusion EXPIRES');
+  assert.match(p136, /CHECK \(reason IN \('no_evidence', 'no_fresh_work'\)\)/);
+  assert.match(p136, /REVERSAL RUNBOOK/);
+  assert.match(p136, /GRANT SELECT, INSERT, UPDATE ON public\.reachability_harvest_target_marker/);
+  assert.ok(!/DROP TABLE (?!IF EXISTS public\.reachability_harvest_target_marker)/.test(p136),
+    'additive — it drops nothing else');
 });

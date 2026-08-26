@@ -564,3 +564,194 @@ export async function scoreHarvestWithBudget(items, scoreOne, opts = {}) {
     capped: Math.max(0, list.length - cap), cap,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Prompt 136 — the ADVANCING target window.
+//
+// THE STALL (grounded live 2026-08-26): the tick took a FIXED top-120 slice of the
+// unreachable pool (~15k), asked "is there evidence for these?" (donors_found:0 /
+// with_evidence:0), and wrote nothing — then re-selected the SAME 120 the next
+// night, forever. `reachability_harvest_review` sat at 16 rows / 0 in 11 days while
+// 5,000 intake records, 4,305 comms name-pairs and 2,042 signature phones went
+// untouched. Same class as the P135 property-twin fixed window and the general
+// Dead-End "producer that re-checks its own residue" pattern.
+//
+// TWO complementary fixes, both pure here:
+//   1. A checked target that produced NO fresh work is MARKED, so it drops out of
+//      the window (with a dated re-check so new evidence still reaches it).
+//   2. Targets are chosen by an EVIDENCE JOIN — an unreachable contact whose name
+//      is in the intake/comms evidence index (or that carries an SF identity a
+//      donor could match) is preferred over blind unreachability rank.
+// Blind rank alone is what produced 0; evidence-first is what turns the ~7,926
+// harvestable comms rows into proposals.
+// ---------------------------------------------------------------------------
+
+// Paging bounds for the target scan. The window is a WINDOW, not a total — every
+// caller reports scan_capped so a floor is never mistaken for an exhausted pool.
+export const HARVEST_TARGET_SCAN_PAGE = 500;
+// Big enough to page THROUGH each domain's whole unreachable slice (dia ~4.3k,
+// gov ~10.7k measured 2026-08-26) — paging stops on its own when the slice is
+// exhausted, so this is a ceiling, not a cost floor.
+export const HARVEST_TARGET_SCAN_MAX = 20000;
+// Hard ceiling for the adaptive floor below (a runaway-paging backstop).
+export const HARVEST_TARGET_SCAN_HARD_MAX = 60000;
+
+// ⚠️ The scan must always be able to reach PAST the accumulated marker prefix.
+// Markers are skipped in JS (they live on LCC Opps, the targets on the domain DBs),
+// so every marked row still costs scan budget: with a fixed window and ~120 markers
+// a night, the window would fill with markers in weeks and re-stall — the same bug
+// wearing a different hat. The floor grows with the marker count.
+export function harvestTargetScanCeiling(markerCount, want, configured = HARVEST_TARGET_SCAN_MAX) {
+  const base = Number.isFinite(configured) ? configured : HARVEST_TARGET_SCAN_MAX;
+  const mk = Number.isFinite(markerCount) ? Math.max(0, markerCount) : 0;
+  const w = Number.isFinite(want) ? Math.max(0, want) : 0;
+  return Math.min(HARVEST_TARGET_SCAN_HARD_MAX, Math.max(base, mk + w * 6));
+}
+// A no-evidence marker expires so a target becomes eligible again once new intake
+// or correspondence evidence has had a chance to land (auto-retire doctrine applied
+// to the EXCLUSION, not just the queue — P182).
+export const HARVEST_TARGET_MARKER_TTL_DAYS = 30;
+
+// Stable marker identity for a target contact (domain-scoped).
+export function targetMarkerKey(domain, contactId) {
+  return `${normDomain(domain)}:${contactId == null ? '' : String(contactId)}`;
+}
+
+// A marker is ACTIVE while its re-check date is still in the future. Callers that
+// read markers straight from the DB filter on recheck_after; this is the pure
+// mirror used by the selector + tests.
+export function targetMarkerIsActive(marker, now = Date.now(), ttlDays = HARVEST_TARGET_MARKER_TTL_DAYS) {
+  if (!marker || typeof marker !== 'object') return false;
+  const explicit = marker.recheck_after ? Date.parse(marker.recheck_after) : NaN;
+  if (Number.isFinite(explicit)) return explicit > now;
+  const checked = marker.checked_at ? Date.parse(marker.checked_at) : NaN;
+  if (!Number.isFinite(checked)) return false;
+  const ttl = Number.isFinite(ttlDays) ? ttlDays : HARVEST_TARGET_MARKER_TTL_DAYS;
+  return checked + ttl * 86400000 > now;
+}
+
+// The evidence signal for ONE target, computed against the already-built indexes.
+// Pure + injectable: `hasIntakeName` / `hasCommsName` are (normName) => boolean.
+// An SF identity is a POSSIBLE deterministic donor (the donor map is only built
+// for the selected batch, so this is the honest pre-signal, flagged as such).
+export function targetEvidenceSignal(target, { hasIntakeName, hasCommsName } = {}) {
+  const t = target && typeof target === 'object' ? target : {};
+  const nm = normalizeForMatch(t.contact_name || '');
+  const intake = !!(nm && typeof hasIntakeName === 'function' && hasIntakeName(nm));
+  const comms = !!(nm && typeof hasCommsName === 'function' && hasCommsName(nm));
+  const sf = !!(t.sf_contact_id || t.salesforce_id);
+  const sources = [];
+  if (intake) sources.push('intake');
+  if (comms) sources.push('comms');
+  if (sf) sources.push('sf_identity');
+  return { has_evidence: intake || comms || sf, intake, comms, sf_identity: sf, sources };
+}
+
+// ---------------------------------------------------------------------------
+// selectHarvestTargets — page THROUGH the ranked unreachable slice, skip markers,
+// and prefer targets that carry evidence.
+//
+//   fetchPage(limit, offset) -> rows (already rank-ordered + stably tiebroken), or
+//                               { rows, raw } when the caller post-filters a page —
+//                               `raw` is the PAGE size the DB returned, which is what
+//                               decides exhaustion. A post-filtered short page is not
+//                               the end of the slice, and conflating the two would
+//                               re-pin the window this whole unit exists to unpin.
+//   isMarked(target)         -> true when an ACTIVE marker excludes it
+//   evidenceOf(target)       -> the targetEvidenceSignal result
+//
+// Evidence-bearing targets fill the batch first (that is what makes a run able to
+// produce anything); the remainder is topped up with no-evidence targets so THEY
+// get checked, marked, and drop out — which is what makes the window advance on a
+// night when evidence is scarce. Counting continues past the batch so
+// `remaining_untargeted` is honest.
+// ---------------------------------------------------------------------------
+export async function selectHarvestTargets({
+  fetchPage, isMarked, evidenceOf, want,
+  pageSize = HARVEST_TARGET_SCAN_PAGE, maxScan = HARVEST_TARGET_SCAN_MAX,
+} = {}) {
+  const page = Math.max(1, Math.min(pageSize, HARVEST_TARGET_SCAN_PAGE));
+  const ceiling = Math.max(page, Number.isFinite(maxScan) ? maxScan : HARVEST_TARGET_SCAN_MAX);
+  const cap = Math.max(0, want || 0);
+  const marked = typeof isMarked === 'function' ? isMarked : () => false;
+  const evidence = typeof evidenceOf === 'function' ? evidenceOf : () => ({ has_evidence: false, sources: [] });
+
+  const withEvidence = [];
+  const withoutEvidence = [];
+  let scanned = 0;
+  let markerSkipped = 0;
+  let eligible = 0;          // unmarked candidates seen (evidence or not)
+  let eligibleWithEvidence = 0;
+  let scanCapped = false;
+  let exhausted = false;
+
+  for (let offset = 0; offset < ceiling; offset += page) {
+    const want_ = Math.min(page, ceiling - offset);
+    // eslint-disable-next-line no-await-in-loop
+    const rows = await fetchPage(want_, offset);
+    const batch = Array.isArray(rows) ? rows : (Array.isArray(rows && rows.rows) ? rows.rows : []);
+    const rawLen = (rows && !Array.isArray(rows) && Number.isFinite(rows.raw)) ? rows.raw : batch.length;
+    scanned += batch.length;
+    for (const row of batch) {
+      if (marked(row)) { markerSkipped += 1; continue; }
+      eligible += 1;
+      const sig = evidence(row) || { has_evidence: false, sources: [] };
+      if (sig.has_evidence) {
+        eligibleWithEvidence += 1;
+        if (withEvidence.length < cap) withEvidence.push({ ...row, evidence_signal: sig });
+      } else if (withoutEvidence.length < cap) {
+        withoutEvidence.push({ ...row, evidence_signal: sig });
+      }
+    }
+    if (rawLen < want_) { exhausted = true; break; }
+    if (offset + want_ >= ceiling) { scanCapped = true; break; }
+  }
+
+  // Evidence first (resolvable work), then the no-evidence filler that keeps the
+  // cursor moving. Rank order is preserved WITHIN each tier — the value gate still
+  // decides who goes first among equals.
+  const fill = Math.max(0, cap - withEvidence.length);
+  const targets = withEvidence.concat(withoutEvidence.slice(0, fill));
+  return {
+    targets,
+    targets_with_evidence: withEvidence.length,
+    targets_without_evidence: Math.min(fill, withoutEvidence.length),
+    eligible_scanned: eligible,
+    eligible_with_evidence: eligibleWithEvidence,
+    remaining_untargeted: Math.max(0, eligible - targets.length),
+    marker_skipped: markerSkipped,
+    scanned,
+    scan_capped: scanCapped,
+    scan_exhausted: exhausted,
+  };
+}
+
+// Which of the selected targets produced NOTHING this run → mark them so the next
+// run sees a different window. `producedKeys` is the Set of marker keys that DID
+// yield a fresh deterministic/LLM/create item; everything else is checked-and-empty.
+// A target with no evidence signal is marked 'no_evidence'; one that had evidence
+// but yielded nothing fresh (already proposed, or the evidence carried no usable
+// value) is marked 'no_fresh_work' — two different facts, never one label.
+export function planHarvestTargetMarkers(targets, producedKeys, opts = {}) {
+  const produced = producedKeys instanceof Set ? producedKeys : new Set(producedKeys || []);
+  const ttlDays = Number.isFinite(opts.ttlDays) ? opts.ttlDays : HARVEST_TARGET_MARKER_TTL_DAYS;
+  const nowMs = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const checkedAt = new Date(nowMs).toISOString();
+  const recheckAfter = new Date(nowMs + ttlDays * 86400000).toISOString();
+  const out = [];
+  for (const t of (Array.isArray(targets) ? targets : [])) {
+    const key = targetMarkerKey(t.domain, t.target_contact_id);
+    if (produced.has(key)) continue;
+    const sig = t.evidence_signal || { has_evidence: false, sources: [] };
+    out.push({
+      domain: normDomain(t.domain),
+      target_contact_id: String(t.target_contact_id),
+      reason: sig.has_evidence ? 'no_fresh_work' : 'no_evidence',
+      evidence_signal: { sources: sig.sources || [], intake: !!sig.intake, comms: !!sig.comms, sf_identity: !!sig.sf_identity },
+      checked_at: checkedAt,
+      recheck_after: recheckAfter,
+      source_run_id: opts.sourceRunId || null,
+    });
+  }
+  return out;
+}
