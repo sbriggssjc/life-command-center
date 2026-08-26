@@ -38,6 +38,13 @@ remaining (Scott):** (1) `supabase functions deploy briefing-intel-snapshot --pr
 xengecqvemvfknjvbvrq --no-verify-jwt` (the omit-when-null guard — do BEFORE any manual snapshot re-fire);
 (2) flip `BRIEFING_ANALYST_TAKE_ONPREM` on. Then the brief renders a real Analyst's Take nightly.
 
+**R8 STAGE 1 NOW FULLY LIVE (2026-08-26).** Edge fn deployed (Scott); `BRIEFING_ANALYST_TAKE_ONPREM` flipped
+ON (registry — the tick reads env-override-then-registry via `flagEnabled`, so no Railway var needed). Fired
+one write: today's `briefing_intel_snapshot.analyst_take` = **774 chars, `analyst_take_meta.source =
+onprem_ollama`** (proves on-box generation), grounded in real signals, no fabrication. Cron 240 fills it
+nightly. The dead 3-year-empty section is now populated on-box. Only open R8 items: the voice-tightening
+tuning (slightly generic tone) and Stage 2 (CM book copy).
+
 **Two small follow-ups drafted (139, 140) + a consolidation prompt (141):**
 - **P139** — interleave the clean-assist provenance lane so P137's 433 ladder-decidable cards surface ahead
   of the no-ladder `dia_xref` backlog (two incomparable rank scales sharing one budget; xref `1001` >
