@@ -22,6 +22,7 @@
 | **Production web app** | **Railway** — `server.js` mounts every `/api/*` handler directly. **Vercel was retired 2026-07-20**; `vercel.json` is deleted; there is **no serverless-function cap**. | `CLAUDE.md` §"PRODUCTION RUNS ON RAILWAY" |
 | **`/api/*` routing** | `server.js` is the **single source of truth**. Sub-routes via `?_route=`. Every new route must be mounted there (guarded by `test/operations-subroutes.test.mjs`). | `.github/AI_INSTRUCTIONS.md` |
 | **Deploy gate** | `npm run verify:deploy` — compares live `/version` to the merge SHA **and** probes that critical routes return JSON (not the SPA HTML) **and** that every local `<script src>` actually ships. `--wait[=sec]` for the push→verify loop. | `CLAUDE.md` |
+| **⚠️ CI gate (or the lack of one)** | **No workflow runs `npm test` on a PR.** `boot-check.yml` is the only PR check; it runs `npm run check:boot` (a `node --check` sweep + a `server.js` import). The 4,551-test suite **never executes in CI** — which is how #1786 merged green with a red suite. Every `test/*.test.mjs` tripwire this repo documents is a **local** regression detector, not a merge gate. Fix scoped, not built (Scott's call) → backlog **N9**. | `CLAUDE.md` footgun; Prompt 139 |
 | **Two Railway services** | `tranquil-delight-…` = root web app + `/mcp` + OAuth + the 9 bounded read/comps routes (what ChatGPT and Copilot Studio use). A **separate standalone MCP service** (`mcp/server.js`) is what the personal-Claude / Cowork `mcp__lcc__*` tools talk to. `pacific-love-…` = BOV Generator. **A deploy of engine changes = redeploy BOTH.** | `AI-SURFACES-OPERATIONAL-REFERENCE.md` §2 |
 | **Databases (3)** | **LCC Opps** `xengecqvemvfknjvbvrq` (the brain + auth/GoTrue + most crons) · **Dialysis_DB** `zqzrriwuavgrquhisnoa` (dia domain; **hosts `data-query` + `daily-briefing` edge fns**) · **Government** `scknotsqkcheojiaewwh` (gov domain). | `CLAUDE.md` §"Database topology" |
 | **Supabase views/migrations** | **Live immediately** — the CM export reads views per request (`no-store`), so data-layer fixes need no deploy. **DB migration first, JS second** — except a `CHECK` that enforces new writer output, which goes *after* the writer deploy. | `CLAUDE.md` §"Deploy ordering" |
@@ -40,7 +41,12 @@ matcher → cadence-scan → weekly pipeline email; deal dossier + link-only Sal
 
 ### Ingestion & intake
 Three OM channels converge on `intake-om-pipeline.js::stageOmIntake` (email PA flow · CoStar sidebar ·
-Copilot Studio). Multi-model AI fallback on extraction. Tiered OCR — digital `pdf-parse` → free OSS →
+Copilot Studio). ⚠️ **They converge on the pipeline but NOT on the hardened prompt — measured
+2026-08-26, the sidebar channel has produced 0 hardened-schema extractions out of 350 in 30 days
+while being the largest producer (56% of rows). `staged_intake_extractions` is therefore not one
+population: split by channel before grading it, or you are measuring the channel mix.** →
+`docs/audits/W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md`, backlog N8/L8/V6.
+Multi-model AI fallback on extraction. Tiered OCR — digital `pdf-parse` → free OSS →
 **Google Document AI** (`docai-ocr`, LIVE + verified 2026-08-12) → gpt-4o vision last resort. Office
 docs (docx/xlsx) never go to OCR (byte-sniffed, extracted in-process).
 → `docs/architecture/om_intake_pipeline.md`, `docs/architecture/document-capture-and-ocr-status.md`
@@ -130,9 +136,9 @@ from lcc_clean_assist_proposals group by source`:
 |---|---|---|---|---|---|
 | ownership-chain draft | `OWNERSHIP_CHAIN_DRAFT` | 545 | 545 | 2026-08-26 | ✅ healthy — full corpus drafted; cron 239 keeps it fed |
 | sf-link assist | `W9_3_RESCORE` (source `w9_3_sf_assist`) | 247 | 47 | 2026-08-22 | ✅ healthy (caught up) |
-| ollama clean-assist | `OLLAMA_CLEAN_ASSIST` | 45 | 45 | 2026-08-26 | ✅ producing since the P134 re-grade + P137 ladder wiring |
-| **property-twin assist** | `PROPERTY_TWIN_ASSIST` | 200 | **0** | 2026-08-19 | ⚠️ **P135's fix is verified in dry-run (`fresh:895`) but has NOT yet produced a live write delta.** Verify by the count moving past 200 — do not read the fix as done until it does. |
-| reachability harvest | `W9_2_REACHABILITY_HARVEST` | *(writes to `lcc_decisions`)* — `decision_type='reachability_harvest_review'`: **4 total, 0 in 7d, last 2026-08-13** | | | ⚠️ **P136's fix has not yet produced a delta either.** Same rule: verify by the count moving. |
+| ollama clean-assist | `OLLAMA_CLEAN_ASSIST` | **63** (45 earlier the same day) | 63 | 2026-08-26 | ✅ producing and still climbing since the P134 re-grade + P137 ladder wiring |
+| **property-twin assist** | `PROPERTY_TWIN_ASSIST` | 200 | **0** | 2026-08-19 | 🔴 **RE-CONFIRMED STALLED 2026-08-26 (evening) — still exactly 200 / 0 in 7d.** P135's fix dry-ran clean (`fresh:895`) and has now had two nightly windows without a single write. This has stopped being "awaiting verification" and is a second stall to diagnose. |
+| reachability harvest | `W9_2_REACHABILITY_HARVEST` | *(writes to `lcc_decisions`)* — `decision_type='reachability_harvest_review'`: **4 total, 0 in 7d, last 2026-08-13** | | | 🔴 **RE-CONFIRMED STALLED 2026-08-26** — 13 days without a write. Same escalation as property-twin. |
 | junk pre-screen · naming hygiene · dup-pair · match-disambig · next-step | `W8_U1` · `W8_U5` · `W8_U2` · `MATCH_DISAMBIG_ASSIST` · `NEXT_STEP_AI` | *(other stores / inline)* | | | Doc-sourced ✅ healthy as of 2026-08-26 — see `LOCAL-MODEL-LEVERAGE-MAP.md` §2; not independently re-measured here |
 
 ## 5. Surfaces & the instruction canon
@@ -191,7 +197,21 @@ Recorded here so the next chat does not re-inherit them, per the fix-the-note-in
 4. **P135 / P136 are written up as fixed.** The code fixes shipped and dry-ran clean, but **neither
    lane has yet produced a live write delta** (property-twin still 200/0-in-7d; reachability-harvest
    4/0-in-7d). By this repo's own rule that is *not yet* fixed in production. Carried as an open
-   verify in `PLANNED-BACKLOG.md`.
+   verify in `PLANNED-BACKLOG.md`. **Re-confirmed the same evening — both unchanged.**
+
+### Added 2026-08-26 (evening) — three more, from picking up the W5.3 / Ollama-hygiene thread
+
+5. **`ROLLOUT_STATUS.md` W5.3 says the Prompt-61 hardening is "VALIDATED at production quality"
+   (NOI 89% / tenant 79%).** That number averages **three channels with different input types**,
+   and the sidebar channel — **56% of rows, 0 hardened-schema extractions out of 350** — has never
+   run the hardened prompt. The verdict is **unproven, not refuted**; the evidence offered cannot
+   carry it. Row corrected in place. → `docs/audits/W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md`
+6. **The post-93 note "stamp coverage now 100% (87/87 backfilled)" reads as a fixed writer.** It
+   was a **backfill**; the daily new-row rate decays straight back to zero (2026-08-26: **0 of
+   21**). Carried as backlog **V6**.
+7. **`CLAUDE.md` said "CI keeps the hard fail."** No workflow runs `npm test` on a PR at all — the
+   4,551-test suite never executes in CI, which is how #1786 merged green with a red suite.
+   Corrected in `CLAUDE.md`; fix scoped as backlog **N9**.
 
 ## 8. Where the history went (nothing was deleted)
 

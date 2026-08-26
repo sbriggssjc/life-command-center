@@ -9,9 +9,19 @@
 > (32 auto-links, 8 review; conservative ratio steady); sf-assist walking the 3.3k pool 20/night
 > post-92; donor handoff stamped 14 night one then stalled on a fixed scan window (→ prompt 93A).
 > Donor-key coverage: gov 19 / dia 15 of the 2,305 addressable. W9.2 stays gated on that count
-> climbing. **W5.3 re-grade (08-11): the hardened extraction prompt VALIDATED at production
+> climbing. ~~**W5.3 re-grade (08-11): the hardened extraction prompt VALIDATED at production
 > quality (OM NOI 89% vs pre-61 4%) — ollama-primary intake confirmed; attribution caveat →
-> prompt 93B.**
+> prompt 93B.**~~ ⚠️ **CORRECTED 2026-08-26: that grade averaged THREE CHANNELS with different
+> INPUT types.** The sidebar channel is **56% of rows and has produced 0 hardened-schema
+> extractions out of 350 in 30 days** — it has never run the Prompt-61 prompt, never stamps
+> `_provider`, never passes `stripNonSaleKeys`. A fleet-wide coverage number therefore tracks the
+> channel **mix**, not prompt quality, and the Aug 7–11 grading window is exactly when a 64-row
+> sidebar backfill landed. **The verdict reverts to UNPROVEN for the email/PDF path — not
+> refuted.** First unmixed reading: email OM-class NOI **52%** / tenant **60%** / responsibilities
+> **44%**. Whether that is a regression, a harder document mix, or simply the first honest
+> measurement is **not established**. Also: the post-93 "stamp coverage now 100% (87/87
+> backfilled)" was a **backfill, not a repaired writer** — daily rate is back to **0 of 21**
+> (2026-08-26). → `docs/audits/W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md`; backlog N8 / L8 / V6.
 
 > **Connectedness audit (2026-08-14, Cowork) — the loop is CLOSED end-to-end in every category.** Traced
 > Scott's ~36h of manual verdicts → writes → consumers live: hygiene junk **203→207 ledger rows**, naming

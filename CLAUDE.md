@@ -210,6 +210,29 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
   gate reads green — and the SPA catch-all can return **HTTP 200 with index.html in the
   body**, so the check asserts on the BODY. Use `--wait[=sec]` for the interactive
   push→verify loop (Railway may still be building); CI keeps the hard fail.
+  ⚠️ **"CI keeps the hard fail" is only true of the checks CI actually runs — and it does NOT
+  run the test suite.** See the next bullet before relying on any guard in `test/`.
+
+- **⚠️ NO WORKFLOW RUNS `npm test` ON A PULL REQUEST — THE 4,551-TEST SUITE NEVER EXECUTES IN CI
+  (measured 2026-08-26, Prompt 139).** `.github/workflows/boot-check.yml` is the **only** check
+  that runs on a PR, and it runs `npm run check:boot` — a `node --check` sweep plus a `server.js`
+  import. The other five workflows (`address-normalize-drift`, `cron-heartbeat`, `daily-db-checks`,
+  `field-source-priority-schema`, `supabase-advisor`) are scheduled or ops checks, not PR gates.
+  **This is why PR #1786 merged green carrying a red suite and duplicated `<script>` tags.**
+  - **Every "guard" this file cites is therefore a guard only if a human runs `npm test` locally.**
+    The dozens of `test/*.test.mjs` tripwires documented throughout this file — the duplicate-
+    definition pin, the load-order guard, the subroute dispatch check, the research-embed
+    invariant — are real and they are green, but **nothing enforces them at merge time.** Do not
+    write "guarded by `test/x.test.mjs`" as though it were a merge gate; it is a regression
+    detector for whoever remembers to run it.
+  - **It is the exact mirror of the 2026-07-20 incident `boot-check.yml`'s own header describes** —
+    there the suite stayed green while the app crash-looped, because tests import modules and
+    nothing imported the app. The gap nobody closed is the other direction: CI imports the app and
+    never runs the tests. One failure mode produced the workflow; its twin was left standing.
+  - **The fix is small and offered:** a `pull_request` job running `npm ci && npm test`. The suite
+    runs fully offline — no secrets, no network, no DB. It is **not** built yet because widening a
+    docs/lane PR into a CI-policy change was not Claude Code's call to make.
+    Backlog row **N9** in `docs/os/PLANNED-BACKLOG.md`.
 
 ## Core doctrines (apply to every change)
 
@@ -414,6 +437,28 @@ All three converge on `api/_shared/intake-om-pipeline.js::stageOmIntake`:
 - Doctype: `intake-promoter.js::normalizeDocType()` maps extractor synonyms → canonical (`om`/`flyer`/
   `marketing_brochure`); `snapshotLooksLikeListing()` promotes when doctype is null but the data looks like a
   listing.
+- **⚠️ `staged_intake_extractions` IS NOT ONE POPULATION — SPLIT BY CHANNEL BEFORE GRADING IT
+  (2026-08-26).** Three channels feed the table with **different input types**, and the
+  sidebar channel has produced **0 hardened-schema rows out of 350 in 30 days** — it has never
+  once run `buildExtractionPrompt` (all seven Prompt-61 keys are structurally ABSENT from its
+  snapshots, not null within them), never stamps `_provider`, and never passes through
+  `stripNonSaleKeys`. It is also the **largest producer, 56% of rows.**
+  - **A fleet-wide coverage number therefore moves with the channel MIX, not with prompt
+    quality.** On OM-class docs over 30 days the *unhardened* sidebar channel outscores the
+    hardened email channel on every field (NOI 80% vs 52%, cap 87% vs 65%, building SF 96% vs
+    65%, responsibilities 78% vs 44%) — because sidebar reads **structured CoStar page data**
+    while email runs **AI extraction over a PDF**. Comparing them measures the input.
+  - **This invalidates the evidence for, not the conclusion of, the 2026-08-11 W5.3 re-grade**
+    ("hardening worked — NOI 89%"). That window is exactly when a 64-row sidebar backfill
+    landed. The verdict reverts to *unproven for the email/PDF path*, not *refuted*.
+  - **The post-93 "stamp coverage now 100%" was a BACKFILL, not a fixed writer** — the daily
+    rate decays straight back to zero after it (08-26: 0 of 21). Assert on the **new-row rate
+    over the last 7 days**, never a cumulative percentage a backfill can carry. Same class as
+    P176: *a one-shot repair of a recurring producer is a chore you repeat silently forever.*
+  - Ruled out already, do not re-walk: stale deploy (live `/version` **includes** the P61
+    commit), a second writer (exactly one insert site, `intake-extractor.js:751`, with both
+    guards on the lines above it), a flow writing the table directly (none).
+    Full measurement + the open hypothesis: `docs/audits/W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md`.
 - Full reference: `docs/architecture/om_intake_pipeline.md`.
 
 ### Multi-model AI fallback (extraction)

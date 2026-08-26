@@ -1,6 +1,11 @@
 # LCC — Fresh Chat Kickoff (paste this to start a new Cowork context window)
 
-*Generated 2026-08-26. Copy everything below the line into a new chat.*
+*Regenerated 2026-08-26 (evening). Copy everything below the line into a new chat.*
+
+> **Maintenance rule:** this file goes stale faster than anything else in the repo — it is a
+> snapshot of "what's in flight," and in-flight things land. **Rewrite it at the end of any
+> session that closes or opens a prompt.** The last version claimed 139/140/141 were still to be
+> sent and that the Analyst's Take was flag-off; all four claims were wrong within a day.
 
 ---
 
@@ -9,58 +14,90 @@ You're helping Scott Briggs run **Life Command Center (LCC)** — a CRE business
 `C:\Users\scott\life-command-center`.
 
 **Read these first, in order, before doing anything (don't rebuild from scratch):**
-1. `C:\Users\scott\...\.claude\CLAUDE.md` (global instructions) + the project `CLAUDE.md` (architecture
-   invariants, DB topology, the durable footguns).
-2. **`docs/os/CURRENT-STATE.md`** — the one-page "where are we": what is LIVE, what is flag-gated OFF and
-   **why**, the live flag snapshot, the assist production-health table, and the canonical-doc map.
-3. **`docs/os/PLANNED-BACKLOG.md`** — the one ranked list of everything unbuilt-but-intended, every row
-   citing its source. **Read it before proposing anything new** — it is probably already there, possibly
-   already measured and refuted.
-4. `docs/claude-code/STATUS.md` — the running reconcile log, newest first. It is a *log*, not the state;
-   pre-2026-08-13 entries are archived at `docs/history/STATUS_claude-code_2026-08-03_to_2026-08-12.md`.
-5. `docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md` — surfaces/comps/deploy map (its §4 "DEPLOY-PENDING" is
-   historical; the live answer is `PLANNED-BACKLOG.md`).
-6. `docs/os/LOCAL-MODEL-LEVERAGE-MAP.md` + `docs/os/LOCAL-MODEL-GAP-AUDIT.md` — where the on-prem Ollama
-   model is live/dormant/planned, and the ranked gap backlog (R1–R9) with the refuted premises.
 
-**Standing workflow:** Scott pastes Cowork-drafted prompts to "Claude Code" (CC), then pastes CC's responses
-(as .docx) into `docs/claude-code/responses/`. Cowork reviews each against LIVE Supabase data, reconciles,
-updates STATUS + the relevant docs, verifies migrations/flags live, grades dry-run samples before flipping
-flags, and files finished prompts→`prompts/done/` + responses→`responses/done/`. **Git: never run git from
-the sandbox** — the `.git/index.lock` is held by Scott's Windows process; hand Scott the PowerShell
-(remove lock → add → commit → pull --rebase → push).
+1. `~/.claude/CLAUDE.md` (global) + the project `CLAUDE.md` — architecture invariants, DB topology,
+   and the durable footguns. The footgun list is the most valuable thing in the repo; read it.
+2. **`docs/os/CURRENT-STATE.md`** — the one-page "where are we": LIVE / flag-gated OFF and **why** /
+   the live flag snapshot / the assist production-health table / the canonical-doc map.
+3. **`docs/os/PLANNED-BACKLOG.md`** — the one ranked list of everything unbuilt-but-intended, every
+   row citing its source. **Read it before proposing anything** — it is probably already there,
+   possibly already measured and refuted.
+4. `docs/claude-code/STATUS.md` — the running reconcile log, newest first. It is a *log*, not the
+   state; pre-2026-08-13 entries are archived under `docs/history/`.
 
-**Standing doctrine (non-negotiable):** never fabricate (render "Not on file"/"Derived"/"Conflict"); every
-assist is annotation/draft-only + reversible + human-confirmed; **assert on the produced state-delta, never
-on `state=on` or a worker's own tally**; re-measure any dated blocker before quoting it; private corpora
-(voice, deal correspondence, LOIs, comps) NEVER egress to a cloud model — the on-prem Ollama box
-(`OLLAMA_URL`, `invokeOnPremGeneration`) is the path for those. Use `AskUserQuestion` + a task list for
-multi-step work.
+Then, only if the task touches them: `docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md` (surfaces /
+comps / deploy map) and `docs/os/LOCAL-MODEL-{LEVERAGE-MAP,GAP-AUDIT}.md` (where the on-prem model
+is live/dormant, and the ranked gaps with their refuted premises).
 
-**Live infra:** Railway host `https://tranquil-delight-production-633f.up.railway.app` (JS ships on redeploy
-of merged `main`). Supabase: LCC Opps `xengecqvemvfknjvbvrq`, Dialysis_DB `zqzrriwuavgrquhisnoa`, Government
-`scknotsqkcheojiaewwh`. `LCC_API_KEY` rotation is DEFERRED until the app is multi-user.
+**Standing workflow:** Scott pastes Cowork-drafted prompts to Claude Code (CC), then pastes CC's
+responses (as .docx) into `docs/claude-code/responses/`. Cowork reviews each against **live**
+Supabase data, reconciles, updates STATUS + the affected docs, verifies migrations/flags live,
+grades dry-run samples before flipping flags, and files finished prompts → `prompts/done/` and
+responses → `responses/done/`. **Git: never run git from the sandbox** — the `.git/index.lock` is
+held by Scott's Windows process; hand Scott the PowerShell (remove lock → add → commit →
+pull --rebase → push).
 
-**Current state (2026-08-26) — the local-model arc is essentially complete:**
-- **Production-health of all Ollama assists is GREEN.** 9 of 10 assist flags are ON and producing; the two
-  that had silently stalled are fixed (P135 property-twin cursor — live; P136 reachability target-window —
-  merged); `OLLAMA_CLEAN_ASSIST` was enriched (P134), re-graded clean, and flipped ON; its provenance ladder
-  was wired (P137). `NEXT_STEP_AI` is ON. The Research-page task list (P132) and its ownership-chain drafts
-  (P131/P133, cron 239) are live.
-- **R8 Stage 1 (on-box daily-briefing "Analyst's Take") shipped (P138) and graded clean** but is **flag-OFF**
-  pending two Scott steps: deploy the `briefing-intel-snapshot` edge fn (omit-when-null guard), then flip
-  `BRIEFING_ANALYST_TAKE_ONPREM`. Cron 240 fills it at 10:18 UTC once on.
+**Standing doctrine (non-negotiable):** never fabricate (render "Not on file" / "Derived" /
+"Conflict"); every assist is annotation/draft-only, reversible, human-confirmed; **assert on the
+produced state-delta, never on `state=on` or a worker's own tally**; re-measure any dated blocker
+before quoting it; private corpora (voice, deal correspondence, LOIs, comps) NEVER egress to a
+cloud model — the on-prem Ollama box is the path for those. Use `AskUserQuestion` + a task list
+for multi-step work.
 
-**Immediate next actions (in flight):**
-1. **Send to CC (drafted, in `docs/claude-code/prompts/`):** `139` (clean-assist xref rank interleave —
-   surface P137's ladder cards), `140` (grade the dormant `OWNERSHIP_CHAIN_ROLE_LABELS` layer), `141` (docs
-   consolidation — slim to a lossless current-state + backlog).
-2. **R8 gate:** Scott deploys the edge fn + flips `BRIEFING_ANALYST_TAKE_ONPREM`; then Cowork verifies the
-   brief renders a real take.
-3. **R8 Stage 2:** the same on-box generation pattern for **CM quarterly book copy** (higher-stakes,
-   client-facing) — the next net-new build.
-4. **Backlog (don't lose):** account-based-contact-intelligence + contact-reconciliation-outbound (hub-and-
-   spoke, P184), SOS-direct external egress (bot-wall), the analyst-take voice-tightening tuning, capital_markets
-   empty (Anthropic billing). See `LOCAL-MODEL-GAP-AUDIT.md` for R2 (engine-connectivity) + R5–R9.
+**Live infra:** Railway `https://tranquil-delight-production-633f.up.railway.app` (JS ships on a
+redeploy of merged `main`; **a deploy of engine code = redeploy BOTH** tranquil-delight and the
+standalone MCP). Supabase: LCC Opps `xengecqvemvfknjvbvrq`, Dialysis_DB `zqzrriwuavgrquhisnoa`,
+Government `scknotsqkcheojiaewwh`.
 
-Start by reading the four docs above, then confirm the current state matches and ask Scott what to pick up.
+---
+
+## Where things actually stand (measured 2026-08-26 evening)
+
+**Scott is actively working the Tier 0 owner-contact lane** — 27 confirms logged today, lane
+**109 → 87 open** (78 `ask` / $237M, 9 `auto` / $10M). That is the highest-value operator surface
+in the system and it is draining. His track and the build track do not block each other.
+*(That −22 is three effects mixed: Scott's confirms, P193's SPE inheritance removing cards, and
+P191 restoring some. Don't quote it as a confirm rate.)*
+
+**The local-model arc is essentially complete.** 30 flags `on`, 27 `off`, 2 `partial`. The on-box
+daily-brief **Analyst's Take is LIVE and producing** (774 chars, `source = onprem_ollama`).
+Clean-assist, ownership-chain drafts, sf-link, junk pre-screen, naming hygiene, dup-pairs,
+match-disambig, next-step: all healthy.
+
+**Three things are open and cheap, and all three are "verify," not "build":**
+
+1. **Two assist lanes are stalled with `on` flags and merged fixes.** property-twin **200 / 0 in
+   7d** (last write 2026-08-19); reachability-harvest **4 / 0 in 7d** (2026-08-13). P135/P136
+   dry-ran clean and have produced no write delta across two nightly windows. → backlog V1/V2.
+2. **`OWNERSHIP_CHAIN_ROLE_LABELS` is built, merged (#1788) and ungraded.** After the next Railway
+   redeploy: `GET /api/ownership-chain-draft-tick?role_labels=1&generate=1` — read
+   `summary.providers` **first** (a cloud-fallback sample is not a grade of the on-box layer), then
+   `chains_altered_by_layer2` must be **0**. → backlog N2.
+3. **The `briefing-intel-snapshot` edge fn must carry `if (row.analyst_take == null) delete
+   row.analyst_take;`** or a manual re-fire upserts NULL over the on-box take. → backlog V4.
+
+**Two structural findings from 2026-08-26 that change how you read everything else:**
+
+- **⚠️ CI RUNS NO TESTS.** `boot-check.yml` is the only PR check and it runs `npm run check:boot`.
+  The 4,551-test suite **never executes on a PR** — which is how #1786 merged green with a red
+  suite. **Every "guarded by `test/*.test.mjs`" claim in `CLAUDE.md` is a local regression
+  detector, not a merge gate.** Fix is scoped and small; it needs Scott's word → backlog **N9**.
+- **⚠️ `staged_intake_extractions` is not one population.** Three channels with different *input
+  types* feed it, and the sidebar channel — **56% of rows, 0 hardened-schema extractions out of
+  350** — has never run the Prompt-61 prompt. Any unsplit coverage number measures the channel
+  **mix**, not the prompt. This reverts the W5.3 "validated" verdict to *unproven* (not refuted).
+  → `docs/audits/W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md`, backlog **N8 / L8 / V6**.
+
+**Live prompt queue — three files in `docs/claude-code/prompts/`:**
+
+| # | What | State |
+|---|---|---|
+| **189** | **Duplicate owner entities — the top build priority.** Step 1 shipped (`v_lcc_merge_candidates_normalizer_blind`: **121 groups / 300 entities / $136.5M** invisible to the normalizer). Remaining: the wording-difference blind spot (Easterly ×2) and the merge pass. **This is costing Scott operator time right now** — "NGP Capital" is five entities asking the same question. | 🔴 |
+| **192** | Tier 0 auto-attach sweep + the living loop. Triage shipped (255 → 109 cards). Remaining: attach the `exact` single-candidate cards **through the existing JS verdict path** (never a new SQL writer that skips the shape gates), un-park signals, learning from `lcc_tier0_confirm_log`. **Auto-attach on `exact` ONLY** — the next tier down proposes *JP Morgan CMBS Trust → jpmorgan.com*. | 🟡 |
+| **194** | Trace the sidebar-channel extraction bypass with runtime evidence (+ optionally the CI test workflow). | 🔴 new |
+
+**Next net-new build after those:** R8 Stage 2 — capital-markets book copy on-box (higher-stakes,
+client-facing; the same pattern as the brief's Analyst's Take).
+
+Start by reading the four docs above, confirm the current state still matches (**re-measure; this
+file is a snapshot**), then ask Scott what to pick up.

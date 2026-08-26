@@ -62,6 +62,87 @@ one that stays on the card. **UIRC has seven candidates** — auto-picking there
 mistake at 5× the blast radius. Spec: `prompts/193-*.md`.
 
 
+## 2026-08-26 (Cowork, evening) — picked up the W5.3 / Ollama-hygiene thread; it was measuring the wrong population
+
+Scott: *"pick up the thread that the W5.3 and Ollama hygiene campaign last left off."* The
+**hygiene half (W8) is complete** — U1/U2/U3/U4/U5 all shipped, all `on`; its only open items are
+the two stalled lanes (V1/V2). **The W5.3 half is what was still open**, and the open end was not
+the one the backlog described.
+
+**The backlog row (L8) asked for "a re-grade on ~50 fresh intakes post-Prompt-61." That re-grade
+already happened on 2026-08-11 (102 extractions) and upgraded the verdict to "validated."** What
+nobody checked is *what population it graded.*
+
+**`staged_intake_extractions` is fed by three channels with different INPUT types, and only two
+ever run the hardened prompt.** Last 30 days:
+
+| channel | rows | `_provider` stamped | hardened (P61) schema |
+|---|---|---|---|
+| **sidebar** | **350** (56%) | 67 | **0 — zero, ever** |
+| email | 261 | 87 | 69 |
+| folder_feed | 9 | 8 | 7 |
+
+All seven P61 keys are **structurally absent** from sidebar snapshots (not null within them), so
+this is a different prompt, not a coverage shortfall. **A fleet-wide coverage number therefore
+moves with the channel MIX, not with prompt quality** — and the Aug 7–11 grading window is exactly
+when a 64-row sidebar backfill landed.
+
+**On OM-class docs the unhardened channel BEATS the hardened one on every field** — sidebar NOI
+80% / cap 87% / building SF 96% / responsibilities 78%, against email 52 / 65 / 65 / 44. Not a
+verdict on the prompt: sidebar reads **structured CoStar page data**, email runs **AI extraction
+over a PDF**. Comparing them measures the input. **The verdict reverts to UNPROVEN for the
+email/PDF path — not refuted**, and the first unmixed reading of that path (NOI 52%, tenant 60%,
+responsibilities 44%) is stated without a conclusion attached, because none is established.
+
+**Three hypotheses ruled out, recorded so nobody re-walks them:** stale deploy (live `/version` =
+`bb26453abc01`, and `git merge-base --is-ancestor` confirms it **includes** the P61 commit — the
+tempting answer, checked and wrong); a second writer (repo-wide grep: exactly **one** insert site,
+`intake-extractor.js:751`, with `stripNonSaleKeys` + `ensureProviderStamp` on the two lines above
+it); a flow writing the table directly (none). **The remaining candidate is the `seed_data` /
+extraction-race interaction** — that 96%-building-SF profile is what a structured capture looks
+like, not a full-key LLM return — and it needs **runtime evidence**, which is why it goes to Claude
+Code as **prompt 194** rather than being guessed at here.
+
+**Also found: `_provider` stamp coverage is decaying, not fixed.** The post-93 "100% (87/87
+backfilled)" was a **backfill, not a repaired writer** — 08-10: 64/64, then 08-14 1/9, 08-19 0/4,
+**08-26 0 of 21**. Class P176: *a one-shot repair of a recurring producer is a chore you repeat
+silently forever.* → backlog **V6**.
+
+**Reconciled prompts 139 / 140 / 141** (responses filed to `responses/done/`):
+
+- **139 shipped** (PR #1787) — and its response surfaced something bigger than the prompt.
+  **⚠️ NO WORKFLOW RUNS `npm test` ON A PR.** `boot-check.yml` is the only PR check and it runs
+  `npm run check:boot` — a `node --check` sweep plus a `server.js` import. **The 4,551-test suite
+  never executes in CI**, which is how #1786 merged green carrying a red suite and duplicated
+  `<script>` tags. Every "guarded by `test/*.test.mjs`" claim across `CLAUDE.md` is a **local**
+  regression detector, not a merge gate. It is the exact mirror of the 2026-07-20 incident
+  `boot-check.yml`'s own header describes — that one produced the workflow; its twin was left
+  standing. Fix is small, offline, and already scoped (`npm ci && npm test` on `pull_request`);
+  **not built, because widening a lane PR into a CI-policy change is Scott's call** → backlog N9.
+- **140 merged** (PR #1788), **grade still outstanding, flag still off.** The endpoint ships with
+  the Railway redeploy; the sandbox has no `OLLAMA_URL` so every model path was stubbed and no
+  real sample exists. Prompt moved to `done/`; the grade is carried as an operator step (N2).
+- **141 shipped** (`07b2f845`) — CURRENT-STATE + PLANNED-BACKLOG created, STATUS trimmed to
+  2,440 lines, preservation manifest in `docs/history/DOCS_CONSOLIDATION_2026-08-26.md`.
+
+**Re-measured, unchanged, now escalated:** property-twin **still exactly 200 / 0 in 7d** (two
+nightly windows since P135 merged); reachability-harvest **still 4 / 0 in 7d** (13 days). Both
+flags read `on`. These have stopped being "awaiting verification."
+
+**Healthy and moving:** clean-assist **45 → 63 in nine hours**; ownership-chain 545/545.
+**Scott's Tier 0 lane is draining — 27 confirms logged today**, lane 109 → **87 open** (78 `ask`
+/ $237M, 9 `auto` / $10M). ⚠️ **Do not attribute that −22 to the confirms alone** — **P193 (SPE
+sponsor inheritance) also merged to `main` today** (`18c55acf`) and removes cards by design, and
+P191 restored some. The three effects are mixed in one number; separating them needs
+`lcc_tier0_confirm_log` diffed against the lane, which nobody has done. Prompt 193 filed to
+`prompts/done/` (merged; no response docx — it landed as a direct commit).
+
+Docs updated: `CLAUDE.md` (two new footguns), `CURRENT-STATE.md` (§1 CI row, §2 intake caveat,
+§4 health table, §7 three new overturned claims), `PLANNED-BACKLOG.md` (N1 ✅, N2 ⏳, **N8/N9/V6
+new**, L8 premise rewritten), `ROLLOUT_STATUS.md` (W5.3 corrected in place),
+`NEW-CHAT-KICKOFF.md` (rewritten).
+
+
 ## 2026-08-26 (Cowork) — DIVISION OF LABOUR: Scott works the lane, the builds run in parallel
 
 Scott asked whether to work the Decision Center lane now or wait. **Work it now — the two tracks do
