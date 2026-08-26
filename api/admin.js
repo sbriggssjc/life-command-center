@@ -91,6 +91,8 @@ import * as RS from './_shared/sf-link-rescore-planner.js';
 import * as DH from './_shared/sf-donor-handoff-planner.js';
 import * as SA from './_shared/sf-link-assist-planner.js';
 import * as PT from './_shared/property-twin-assist-planner.js';
+import * as CA from './_shared/clean-assist-context.js';
+import { enrichCleanAssistItems } from './_shared/clean-assist-enrich.js';
 import { handleDealCorrespondenceBackfill } from './_handlers/deal-correspondence-backfill.js';
 import { handleSfSellerOwner } from './_handlers/sf-seller-owner.js';
 import { buildNameBackfillPatch, reverseNameBackfillPatch, senderEmailFromMetadata, recipientEmailsFromMetadata, isHarvestableParty } from './_shared/outlook-name-backfill.js';
@@ -1402,15 +1404,27 @@ async function handleNewsAlerts(req, res) {
 // writes lcc_clean_assist_proposals. It never calls merge/apply/change RPCs and
 // never writes domain canonical tables. The human/resolver/priority ladder keeps
 // ownership of truth.
+//
+// P134 (2026-08-26) — CONTEXT ENRICHMENT + EVIDENCE GATE. A 12-item inert dry-run
+// graded 6 of 12 proposals as `uncertain @ 0.00` whose reason was "the context
+// lacks detail" / "insufficient info about the conflict". The model was not
+// failing; it was being handed a lane row's IDENTIFIERS with none of the
+// comparative evidence the task needs, and correctly abstaining. Shipping that
+// would fill the Decision Center with content-free cards — the Consumption-Layer
+// noise failure. Three changes, none of which touch the safety doctrine:
+//   1. ENRICH — clean-assist-enrich.js batch-reads the real evidence per lane
+//      (group members, the priority ladder, each entity's own attributes, the
+//      matched property).
+//   2. GATE — clean-assist-context.js decides whether an item HAS comparative
+//      evidence. One that does not is skipped and counted (`skipped_no_evidence`)
+//      rather than paying an Ollama call to hear "insufficient evidence".
+//   3. COHERENCE — a decisive verdict returned at ~0 confidence is downgraded to
+//      `uncertain` (the lane sorts on confidence; an assertion with none must not
+//      rank as a decisive call).
+// The brain is pure and unit-tested; the enrichment IO is read-only GETs.
 // ============================================================================
 const CLEAN_ASSIST_SOURCE = 'ollama_clean_assist';
-const CLEAN_ASSIST_TYPES = [
-  'property_merge',
-  'owner_reconcile',
-  'sf_link_candidate',
-  'provenance_conflict',
-  'intake_disposition',
-];
+const CLEAN_ASSIST_TYPES = CA.CLEAN_ASSIST_TYPES;
 
 function cleanAssistEnabled(flagRow) {
   const env = String(process.env.OLLAMA_CLEAN_ASSIST || '').toLowerCase();
@@ -1418,77 +1432,10 @@ function cleanAssistEnabled(flagRow) {
   return String(flagRow?.state || '').toLowerCase() === 'on';
 }
 
-function cleanAssistKind(type) {
-  if (type === 'provenance_conflict') return 'conflict_narration';
-  if (type === 'intake_disposition') return 'unstructured_reconciliation';
-  return 'review_triage';
-}
-
-function cleanAssistAllowedVerdicts(kind) {
-  if (kind === 'conflict_narration') return new Set(['keep_current', 'accept_attempted', 'research', 'uncertain']);
-  if (kind === 'unstructured_reconciliation') return new Set(['link', 'no_link', 'research', 'uncertain']);
-  return new Set(['merge', 'not', 'research', 'uncertain']);
-}
-
-function cleanAssistNormalizeProposal(raw, kind) {
-  const obj = raw && typeof raw === 'object' ? raw : {};
-  const allowed = cleanAssistAllowedVerdicts(kind);
-  let verdict = String(obj.verdict || '').toLowerCase().trim();
-  if (!allowed.has(verdict)) verdict = 'uncertain';
-  const n = Number(obj.confidence || 0);
-  const confidence = Math.max(0, Math.min(1, Number.isFinite(n) ? n : 0));
-  const reason = String(obj.reason || obj.conflict_summary || 'No grounded reason supplied.').replace(/\s+/g, ' ').trim().slice(0, 500);
-  return {
-    verdict,
-    confidence,
-    reason: reason || 'No grounded reason supplied.',
-    proposed_link: obj.proposed_link && typeof obj.proposed_link === 'object' ? obj.proposed_link : {},
-    conflict_summary: obj.conflict_summary ? String(obj.conflict_summary).replace(/\s+/g, ' ').trim().slice(0, 1000) : null,
-  };
-}
-
-function parseCleanAssistJson(text) {
-  const raw = String(text || '').trim();
-  if (!raw) return null;
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = fenced ? fenced[1].trim() : raw;
-  try { return JSON.parse(candidate); } catch (_e) { /* fall through */ }
-  const first = candidate.indexOf('{');
-  const last = candidate.lastIndexOf('}');
-  if (first >= 0 && last > first) {
-    try { return JSON.parse(candidate.slice(first, last + 1)); } catch (_e) { /* fall through */ }
-  }
-  return null;
-}
-
-function buildCleanAssistPrompt(item, kind) {
-  const payload = {
-    decision_type: item.decision_type,
-    subject_ref: item.subject_ref,
-    subject_domain: item.subject_domain,
-    subject_property_id: item.subject_property_id,
-    rank_value: item.rank_value,
-    context: item.context || {},
-  };
-  const task =
-    kind === 'conflict_narration'
-      ? 'Narrate the field conflict and recommend which source should win per the visible precedence/current-source evidence.'
-      : kind === 'unstructured_reconciliation'
-        ? 'Extract property, sale, or contact mentions from the available unstructured context and propose whether they link to an existing record.'
-        : 'Triage this ambiguous resolver/review item as same/merge, not same, or uncertain.';
-  return [
-    'You are the LCC Ollama cleaning-assist agent.',
-    'You only propose. You never decide truth, never merge, never write canonical data, and never fabricate missing facts.',
-    'Use only the JSON evidence below. If evidence is thin or ambiguous, return verdict "uncertain".',
-    task,
-    'Return ONLY strict JSON with keys: verdict, reason, confidence, proposed_link, conflict_summary.',
-    'Allowed verdicts by task:',
-    '- review_triage: merge | not | research | uncertain',
-    '- unstructured_reconciliation: link | no_link | research | uncertain',
-    '- conflict_narration: keep_current | accept_attempted | research | uncertain',
-    JSON.stringify({ proposal_kind: kind, item: payload }, null, 2),
-  ].join('\n');
-}
+const cleanAssistKind = CA.cleanAssistKind;
+const cleanAssistNormalizeProposal = CA.normalizeCleanAssistProposal;
+const parseCleanAssistJson = CA.parseCleanAssistJson;
+const buildCleanAssistPrompt = CA.buildCleanAssistPrompt;
 
 async function fetchCleanAssistFlag() {
   try {
@@ -1568,11 +1515,32 @@ async function handleOllamaCleanAssistTick(req, res) {
     }
   }
 
-  const selected = candidates.slice(0, limit);
-  const summary = { source_run_id: sourceRunId, candidates: selected.length, proposed: 0, failed: 0, skipped: 0, by_type: {} };
+  // P134: fill each card's context with the comparative evidence its lane needs
+  // (batched, read-only) BEFORE the gate — an item skipped for thin evidence must
+  // be one whose evidence genuinely is not on file, not one we failed to fetch.
+  let selected = candidates.slice(0, limit);
+  try {
+    selected = await enrichCleanAssistItems(selected);
+  } catch (e) {
+    console.warn('[ollama-clean-assist] context enrichment failed', e?.message || e);
+  }
+
+  const summary = { source_run_id: sourceRunId, candidates: selected.length, proposed: 0, failed: 0,
+    skipped: 0, skipped_no_evidence: 0, coherence_downgraded: 0, by_type: {}, no_evidence_reasons: {} };
   for (const item of selected) {
     const kind = cleanAssistKind(item.decision_type);
-    const prompt = buildCleanAssistPrompt(item, kind);
+    // The evidence gate. No comparative evidence => no model call: a proposal
+    // that can only say "insufficient evidence" is noise on the operator's
+    // surface and a wasted Ollama call.
+    const gate = CA.assessCleanAssistEvidence(item);
+    if (!gate.sufficient) {
+      summary.skipped += 1;
+      summary.skipped_no_evidence += 1;
+      const why = gate.reason || 'unknown';
+      summary.no_evidence_reasons[why] = (summary.no_evidence_reasons[why] || 0) + 1;
+      continue;
+    }
+    const prompt = buildCleanAssistPrompt(item, kind, gate.evidence);
     const promptHash = createHash('sha256').update(prompt).digest('hex');
     try {
       const ai = await invokeExtractionAI({ prompt, surface: 'clean_assist' });
@@ -1582,7 +1550,9 @@ async function handleOllamaCleanAssistTick(req, res) {
         proposal.verdict = 'uncertain';
         proposal.confidence = 0;
         proposal.reason = 'AI response was not valid JSON; queued as uncertain for human review.';
+        proposal.coherence_downgraded = false;
       }
+      if (proposal.coherence_downgraded) summary.coherence_downgraded += 1;
       const wr = await upsertCleanAssistProposal(item, proposal, {
         sourceRunId, kind, promptHash,
         provider: ai?.provider || null,
@@ -7730,7 +7700,11 @@ async function fetchFederatedSource(type, cap, opts) {
   if (type === 'property_merge') {
     const fetchDom = async (dom) => {
       // R17 Unit 4: group-level true-duplicate candidates (de-noised lane source).
-      const r = await domainQuery(dom, 'GET', 'v_property_merge_lane?select=record_id,detail_1,detail_2,detail_3,severity'
+      // P134: member_property_ids comes FROM the view, so a consumer never
+      // re-derives the group. (Measured 2026-08-26: re-deriving it by
+      // state+normalized-address returned 150 properties for a 2-member gov
+      // group, because the view also excludes archived rows.)
+      const r = await domainQuery(dom, 'GET', 'v_property_merge_lane?select=record_id,detail_1,detail_2,detail_3,severity,member_property_ids'
         + '&order=severity.desc&limit=' + cap);
       const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
       return rows.map((row) => ({
@@ -7738,7 +7712,8 @@ async function fetchFederatedSource(type, cap, opts) {
         subject_domain: dom, subject_property_id: String(row.record_id), subject_entity_id: null,
         rank_value: Number(row.severity) || 0,
         context: { domain: dom, property_id: row.record_id, address: row.detail_1, state: row.detail_2,
-          label: row.detail_3, cluster_size: Number(row.severity) || null },
+          label: row.detail_3, cluster_size: Number(row.severity) || null,
+          member_property_ids: Array.isArray(row.member_property_ids) ? row.member_property_ids : [] },
       }));
     };
     const [g, d, gc, dc] = await Promise.all([
@@ -7976,10 +7951,17 @@ async function fetchFederatedSource(type, cap, opts) {
     // no_current_authority conflicts (~249) — all still queryable via
     // v_field_provenance_conflict_classified.
     const [pv, xr, pc, xc] = await Promise.all([
+      // P134: attempted_priority / attempted_confidence / decision_reason /
+      // current_recorded_at were ALREADY on this view and simply never selected —
+      // without them the clean-assist model was asked "which source wins?" with
+      // no ladder position and no writer narration to reason from.
       opsQuery('GET', 'v_field_provenance_conflict_classified?select=provenance_id,target_database,target_table,'
-        + 'record_pk_value,field_name,attempted_value,attempted_source,current_value,current_source,'
-        + 'decision,enforce_mode,recorded_at&conflict_class=eq.cross_source&order=recorded_at.desc&limit=' + cap),
-      domainQuery('dia', 'GET', 'v_data_quality_issues?select=record_id,detail_1,detail_2,detail_3,severity'
+        + 'record_pk_value,field_name,attempted_value,attempted_source,attempted_priority,attempted_confidence,'
+        + 'current_value,current_source,current_recorded_at,'
+        + 'decision,decision_reason,enforce_mode,recorded_at&conflict_class=eq.cross_source&order=recorded_at.desc&limit=' + cap),
+      // suggested_action is the VIEW's own narration of which detail column is
+      // which — the three detail_* numbers are unlabelled on their own.
+      domainQuery('dia', 'GET', 'v_data_quality_issues?select=record_id,detail_1,detail_2,detail_3,severity,suggested_action'
         + '&issue_kind=eq.sales_price_xref_conflict&order=severity.desc&limit=' + cap),
       opsCnt('v_field_provenance_conflict_classified?conflict_class=eq.cross_source'),
       domCnt('dia', 'v_data_quality_issues?issue_kind=eq.sales_price_xref_conflict'),
@@ -7994,15 +7976,18 @@ async function fetchFederatedSource(type, cap, opts) {
         target_database: row.target_database, target_table: row.target_table,
         record_pk_value: row.record_pk_value, field_name: row.field_name,
         attempted_value: row.attempted_value, attempted_source: row.attempted_source,
+        attempted_priority: row.attempted_priority, attempted_confidence: row.attempted_confidence,
         current_value: row.current_value, current_source: row.current_source,
-        decision: row.decision, enforce_mode: row.enforce_mode },
+        current_recorded_at: row.current_recorded_at,
+        decision: row.decision, decision_reason: row.decision_reason, enforce_mode: row.enforce_mode },
     }));
     const xrItems = xrRows.map((row) => ({
       subject_ref: 'prov:dia_xref:' + row.record_id,
       subject_domain: 'dia', subject_property_id: String(row.record_id), subject_entity_id: null,
       rank_value: 1000 + (Number(row.severity) || 0),
       context: { kind: 'sales_price_xref', record_id: row.record_id,
-        detail_1: row.detail_1, detail_2: row.detail_2, detail_3: row.detail_3, severity: row.severity },
+        detail_1: row.detail_1, detail_2: row.detail_2, detail_3: row.detail_3, severity: row.severity,
+        issue_narration: row.suggested_action },
     }));
     out.items = pvItems.concat(xrItems).sort((a, b) => b.rank_value - a.rank_value);
     out.total = (pc == null && xc == null) ? null : (pc || 0) + (xc || 0);
@@ -8351,6 +8336,9 @@ async function fetchFederatedSource(type, cap, opts) {
           sf_account_name_resolved: row.sf_account_name_resolved,
           score_resolved: row.score_resolved,
           conflict_existing_id: parseConflictExistingId(row.last_error),
+          // P134: the raw tag is the MATCH BASIS on a non-conflict row (which
+          // matcher/model produced this candidate) — evidence the assist needs.
+          last_error: row.last_error,
         },
       }));
     };
