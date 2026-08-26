@@ -712,6 +712,21 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
     the candidate set with a `LIMIT` to tell them apart, and prefer a one-shot **pg_cron** job (the real
     production path) over a client call for anything near the timeout. Related: `count(*)` over a scalar
     subquery **optimizes the subquery away** — time it with `count(<the column>)` or you will measure nothing.
+    (5) **⚠️ A GATE THAT FILTERS A JOIN IS PART OF THAT JOIN — fix both or neither (P188,
+    2026-08-26).** P186's entire fix was hoisting `people JOIN owner_tok ON EXISTS(unnest(toks)
+    WHERE sld LIKE tok||'%')` — an un-keyed cross product the planner can only serve as a Nested
+    Loop with a Join Filter — into a prefix-expansion equality join (58.7 s → 0.47 s). P187 then
+    added a fan-out gate written the obvious way, `from owner_tok ot join people p on p.sld like
+    ot.tok||'%'`, **re-creating the identical cross product inside the gate**: measured
+    `Rows Removed by Join Filter: 6,222,095`, 1.78 s of a 3.10 s view. It was invisible because
+    the gate returns only 160 rows. Rewriting it with the SAME identity (`sld LIKE tok||'%'` ⇔
+    `left(sld,length(tok)) = tok` for tokens ≥5 chars, i.e. the prefix rows already materialised)
+    took the view to 1.26 s with a 0-row pair-set diff both directions.
+    **Corollary — a live-data equivalence diff has to survive live data.** The full-row diff
+    showed ONE row differing (`contact_company` "Trammell Crow Co" → "Trammell Crow Company") and
+    it was the Outlook sync writing between the snapshot and the diff, not the change. Diff the
+    columns your change can actually affect, and READ the row before accepting a one-row delta as
+    a regression.
 - **Overview/snapshot tiles must render SYNCHRONOUSLY from the main data load, reading ONE canonical
   source/summary view.** Never compute a count by filtering a client-loaded array (empty on Overview), never
   gate a tile's value behind a lazy async filler with a `_rendered` once-flag (a re-render strands it forever).
@@ -1511,6 +1526,78 @@ that actually produced the symptom** — the first would not have changed a sing
   handler's `select=`** — and, now, **diff the consumer's reads against what any producer actually
   writes**.
 
+## P188 — the Tier 0 confirm lane: EVIDENCE ATTESTS THE PERSON, NOT THE LINK (2026-08-26)
+
+The Tier 0 bench (people we already hold whose email domain matches an owner's name — Boyd
+Watterson, RMR incl. Adam Portnoy, Realty Income incl. Sumit Roy) now has a consumer:
+the federated Decision Center lane **`tier0_owner_contact`**, source
+`v_lcc_tier0_owner_contact_lane_open`, planner `api/_shared/tier0-confirm-planner.js`, reversible
+via `lcc_tier0_confirm_log`. **Human verdicts only — never an unattended promoter.** Full writeup:
+`docs/audits/P188_TIER0_CONFIRM_LANE_2026-08-26.md`.
+
+- **⚠️ THE EVIDENCE ANSWERS A DIFFERENT QUESTION THAN THE ONE BEING ASKED, AND THAT MUST BE ON THE
+  CARD.** Salesforce campaign membership, a Salesforce contact record, an Outlook entry and real
+  correspondence all attest *"this person is real and known to us"*. **None of them attests
+  *"this person works for THIS owner"*** — only the contact's stated `company_name` matching the
+  OWNER does. Gary George at `georgesinc.com` (a poultry company) carries three of the four for
+  **George Washington University**. So the lane counts `n_link_evidence` and `n_person_evidence`
+  separately, and a card with zero link evidence says so in words. Same family as the P124
+  `else`-branch bucket: a plausible green signal that was never earned by the thing being decided.
+  - **The two company-name tests are DIFFERENT CLAIMS and were nearly one flag.** P186 §5 measured
+    "company_name corroborates the token" as one signal (Gary George passes). Split and measured
+    over 558 pairs: `company_confirms_employer` (company ↔ **email domain**) 164 — he passes;
+    `company_matches_owner` (company ↔ **owner name**) 99 — he does not. Collapsing them is exactly
+    how that row came back green.
+  - **Containment alone was not enough** — "Easterly Partners" neither contains nor is contained by
+    "Easterly Gov Properties", so the owner test needs a shared-8-char-opening arm. `georges` is 7
+    chars and never reaches it. Verified on named rows, not on a rate.
+- **⚠️ QUOTE A PRECISION FIGURE ONLY WITH THE RENT BAND IT WAS MEASURED IN — and "top 45 pairs" is
+  a SHORTER reach than it sounds.** The 45th pair by rent sits at **$16.38M**, so P187's ~91%
+  covers owners at roughly $16M and above — **10 cards / 7 owners / $521M**. From $16M down to $2M
+  **nothing has ever been graded**; below $2M it is ~60–70%. `rentBand()` returns `precision: null`
+  for the middle band rather than interpolating, and the lane is value-ranked so the operator meets
+  the reliable end first.
+- **ONE CARD PER (OWNER, DOMAIN), never per pair.** RMR is 19 people at `rmrgroup.com` = ONE
+  judgement; asking it nineteen times is the badge-that-is-noise failure. 558 pairs → 283 cards →
+  237 actionable / 171 owners / $695M. **And the domain split is load-bearing** — RMR also has
+  `rob@rmrgroupinc.com`, a different firm domain and a different question; `subject_ref` is
+  `t0:<owner_id>:<domain>` so rejecting one never closes the other.
+- **The MATCH KEY is on the card** (`match_arm`/`match_key`, appended to
+  `v_lcc_tier0_owner_contact_candidates`). For a lane whose job is *does this person work for THIS
+  owner*, "matched on the token `george`" IS the evidence, and it turns a landmine into a
+  one-second reject. The view knew it all along and threw it away.
+- **The shape gate is three layers and the fourth name always gets through.** SQL applies the HOUSE
+  guards (`lcc_is_rejected_contact_name`, `lcc_looks_like_person`) + broker `role_bucket`; JS adds
+  `isPersonShaped`/`isJunkEntityName`/`isMisparseName`; the verdict path re-runs all of it. Over
+  430 live bench names those catch `Equity Funds`, `Managing Partner`, `Public` — and **miss
+  `Tenants In Common`, `Inco Commercial`, `Stephen Block Deceased`, `Authorized Signer`**, which a
+  NARROW stoplist scoped to this gate (`isRoleOrFormLabelName`, the `lcc_p131_is_document_row_label`
+  precedent) catches with a measured blast radius of exactly those 4 and 0 real people. It is NOT
+  exported into the shared guards: there a false positive is destructive, here it costs one
+  rejectable card. **A blocked candidate stays ON the card, flagged** — "1 excluded (broker role)"
+  is the honest count.
+- **`active_authority_level` = 5 ("captured"), never promoted from a job title.** That ladder means
+  legal/control authority (1 signatory > 2 controlling > 3 economic > 4 agent > 5 captured);
+  "President" in a CRM title field does not establish it. The role bucket goes in
+  `active_contact_role`. `confidence='medium'` — a human confirmed the LINK, not the person's
+  authority inside the firm.
+- **The card is RE-READ from the view at verdict time, never trusted from the request** (a
+  federated decision is minted from client-supplied context), and an attach naming a person not on
+  the freshly rebuilt card is refused. Fill-blanks: an owner that gained a contact since the card
+  rendered is superseded, never overwritten.
+- **⚠️ VERIFY BY THE DRAIN — AND `v_owner_contact_enrich_queue` IS THE WRONG DRAIN HERE.** It is
+  the obvious choice (it keys on `active_contact_entity_id IS NULL`) and it holds **6 rows in
+  total**, of which **2** belong to this lane's 171 owners: P159/P182 exclude
+  `enrichment_action IN ('manual_research','find_person_at_manager')` and owners with an open
+  `owner_contact_manual` task, which is nearly the whole Tier 0 population (4,031 pivot rows carry
+  no active contact; 6 are queue-eligible). Quoting it would report ~0 movement on a lane doing real
+  work. The populations that DO move: the lane's own `_open` count (237), this lane's owners on
+  **`v_lcc_owner_unreachable_worklist`** (**161 of 171, $642M**), and
+  `v_lcc_owner_reachability.reachable_hero_qualified` (**299** today). **18 of the 171 owners
+  already carry the edge** (Boyd Watterson's Eric Dowling and Joseph Capra are both
+  `already_linked`) — for them the graph was never the gap, the pivot naming nobody was; their gain
+  is the pivot write. A count of clicks is not throughput (P159a).
+
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
 Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration
@@ -1705,6 +1792,9 @@ Related invariants from the same round:
     nothing writes that person into `owner_contact_pivot`. Result: **11 owners, $240.5M,
     suppressed AND invisible.** Whenever a surface excludes a population on the grounds that
     it is "already handled", name the thing that handles it and verify that it does.
+- **Tier 0 owner-contact confirm lane (P186→P188):** `docs/audits/P186_TIER0_VIEW_FIX_AND_BENCH_REVIEW_2026-08-26.md`
+  (the bench, its precision curve, and the decision not to build a promoter) →
+  `docs/audits/P188_TIER0_CONFIRM_LANE_2026-08-26.md` (the lane that turns it into calls).
 - **On-box daily-brief narrative (Analyst's Take), R8 Stage 1:** `docs/architecture/briefing-analyst-take-onprem.md` — the first net-new on-prem GENERATION surface, its fabrication guard, and the operator gate.
 - **Ownership Resolution Engine:** government-lease `docs/OWNERSHIP_RESOLUTION_ENGINE.md`.
 - **Property-owner subsystem + SF-as-a-source doctrine:** `docs/architecture/property-owner-subsystem.md`

@@ -42,6 +42,9 @@ import {
   TM_MISPARSE_HEURISTIC, EMAIL_FANOUT_SUSPECT_THRESHOLD, isMisparseName, tmMisparseReason,
 } from './_shared/tm-misparse.js';
 import {
+  buildTier0Card, tier0SubjectRef, validateTier0Verdict, rentBand as tier0RentBand,
+} from './_shared/tier0-confirm-planner.js';
+import {
   DUP_PAIR_TARGETS, findDupPairTarget, dupSideRef, dupPairKey, dupPairSubjectRef,
   generateCandidatePairs, excludeKnownPairs, buildDupPairPrompt, normalizeDupPairProposal,
   parseDupPairJson, isProposablePair, dupPairDisposition, DUP_PAIR_NEEDS_HUMAN_SIM,
@@ -1090,7 +1093,7 @@ async function handleReviewCounts(req, res) {
   // INCLUDING the W8 U2 dup-pair proposals (w8_u2_dup_pair).
   const [
     orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2, u3Open, u3Conflict, u5Open, w92Open, w91Open, w96Open,
-    ocpOpen,
+    ocpOpen, tier0Open,
   ] = await Promise.all([
     withLaneTimeout(opsCount('v_lcc_owner_reconcile_review')),
     withLaneTimeout(domCount('gov', 'owner_unification_review_queue?status=eq.pending_review')),
@@ -1112,6 +1115,14 @@ async function handleReviewCounts(req, res) {
     // Counted off the VIEW, not the table: the view drops rows whose owner is
     // already reachable, so the badge is real work rather than raw output.
     withLaneTimeout(opsCount('v_lcc_owner_contact_attach_review_open')),
+    // Prompt 188: Tier 0 confirm lane. Counted through fetchFederatedSource — the
+    // SAME source the list renders from — NOT a bare count on the view.
+    // ⚠️ Counting the view directly would put the badge and the list on different
+    // sources, which is exactly the P132 defect (the Research badge kept reporting
+    // healthy open counts off a summary view while the list itself 500'd). The
+    // JS name-shape gate can empty a card the SQL view still counts, so the two
+    // numbers agree today by luck and would not stay agreeing.
+    withLaneTimeout(fetchFederatedSource('tier0_owner_contact', 1).then((r) => r.total)),
   ]);
 
   const val = (r) => (r && typeof r.value === 'number') ? r.value : null;
@@ -1199,6 +1210,10 @@ async function handleReviewCounts(req, res) {
     { key: 'owner_contact_attach_review', label: 'Owner contacts — attach or reject',
       count: sum(ocpOpen), parts: { actionable_proposals: val(ocpOpen) },
       count_mode: 'exact', status: laneStatus(ocpOpen),
+      href: 'pageDataQuality', tone: '' },
+    { key: 'tier0_owner_contact', label: 'Tier 0 — confirm the owner’s firm domain',
+      count: sum(tier0Open), parts: { actionable_cards: val(tier0Open) },
+      count_mode: 'exact', status: laneStatus(tier0Open),
       href: 'pageDataQuality', tone: '' },
   ];
 
@@ -7140,6 +7155,18 @@ const FEDERATED_DECISION_TYPES = new Set([
   // server re-runs the shape gate before writing, so a verdict that does not
   // match the candidate's shape is refused. Reversible via lcc_owner_contact_attach_log.
   'owner_contact_attach_review',
+  // Prompt 188: the TIER 0 owner-contact confirm lane. Source =
+  // v_lcc_tier0_owner_contact_lane_open, ONE card per (owner, email domain) --
+  // RMR's 20 people at rmrgroup.com are one judgement, not twenty. Verdicts:
+  // attach (write owner_contact_pivot.active_contact_entity_id + an
+  // entity_relationships edge for the ONE person the operator picks), reject
+  // (terminal for that (owner, domain)), research. Deliberately NOT an
+  // unattended promoter: measured link precision is ~91% only for owners at
+  // roughly $16M+ of rent and ~60-70% in the ~$2M SPE band, so one in eleven
+  // silent writes at the TOP of the book would put the wrong firm's employee on
+  // an owner. The server re-runs the pure shape gate (tier0-confirm-planner)
+  // before writing and refuses a person that is not on the card.
+  'tier0_owner_contact',
   'intake_disposition', 'property_merge', 'provenance_conflict',
   // dia geospatial "address twin" review (2026-08-14). The dia_merge_twins engine
   // auto-merges only blank-operator husks; every twin with a competing clinical
@@ -7305,6 +7332,10 @@ function federatedSubjectRef(type, s) {
     // Prompt 114: the review row's own subject_ref ('ocp:<owner>:<domain>:<contact>').
     case 'owner_contact_attach_review': return s.subject_ref ? String(s.subject_ref) : null;
     case 'comms_owner_attribution_review': return s.subject_ref ? String(s.subject_ref) : null;
+    // Prompt 188: keyed on (owner, DOMAIN), never on the owner alone -- rejecting
+    // RMR at rmrgroupinc.com must not also close rmrgroup.com, which is a
+    // different judgement about a different firm domain.
+    case 'tier0_owner_contact': return tier0SubjectRef(s.owner_entity_id || s.owner_id, s.domain);
   }
   return null;
 }
@@ -8436,6 +8467,41 @@ async function fetchFederatedSource(type, cap, opts) {
     }));
     out.total = opsCnt ? await opsCnt('v_lcc_contact_company_link_candidates?match_class=in.(exact_ambiguous,fuzzy)&auto_appliable=eq.false') : out.items.length;
     if (out.total == null) out.total = out.items.length;
+    return out;
+  }
+
+  // ---- tier0_owner_contact (Prompt 188) -----------------------------------
+  // The Tier 0 confirm lane. ONE card per (owner, email domain), value-ranked by
+  // owner rent so the operator meets the reliable end of the precision curve
+  // first (~91% only above roughly $16M of owner rent; ~60-70% in the ~$2M SPE
+  // band -- see tier0-confirm-planner's rentBand for the anchors).
+  //
+  // The whole universe is pulled (237 open cards live, far under the PostgREST
+  // 1000-row cap) and the shape gate runs in JS, exactly like intake_disposition:
+  // the SQL view's eligibility uses the two HOUSE guards, and the planner adds
+  // the name-shape gate the shared JS modules own. Filtering in JS then counting
+  // in SQL would report a badge that does not match the list -- the P132 defect
+  // where the badge and the list read different sources. So `total` is computed
+  // AFTER the JS gate and `complete` lets listFederatedLane derive an exact
+  // count by subtracting only this lane's decided subjects.
+  if (type === 'tier0_owner_contact') {
+    const r = await opsQuery('GET', 'v_lcc_tier0_owner_contact_lane_open?select=owner_id,owner_name,'
+      + 'owner_rent,domain,n_candidates,n_eligible,n_excluded,n_link_evidence,n_person_evidence,'
+      + 'n_already_linked,match_arms,match_keys,people,owner_workspace_id,owner_domain_cards,rank_value'
+      + '&order=rank_value.desc.nullslast,owner_name,domain&limit=1000');
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    const cards = rows.map((row) => buildTier0Card(row))
+      // A card whose every candidate was blocked by the JS gate is not work.
+      .filter((card) => card.n_eligible > 0);
+    out.total = cards.length;
+    out.items = cards.slice(0, cap).map((card) => ({
+      subject_ref: tier0SubjectRef(card.owner_entity_id, card.domain),
+      subject_domain: null, subject_property_id: null,
+      subject_entity_id: card.owner_entity_id,
+      rank_value: card.rank_value,
+      context: card,
+    }));
+    out.complete = out.items.length === cards.length;
     return out;
   }
 
@@ -12239,6 +12305,210 @@ async function handleDecisionVerdict(req, res) {
         return res.status(200).json({ ok: true, verdict: 'link', owner_entity_id: chosen, existed: !!lr.existed });
       }
       return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- tier0_owner_contact (Prompt 188) -----------------------------------
+    // The human verdict on a Tier 0 (owner, email domain) card.
+    //
+    //   attach   -> write owner_contact_pivot.active_contact_entity_id for the ONE
+    //               person the operator picked, plus a person->owner
+    //               entity_relationships edge. The person is RELATED to the org,
+    //               never stamped AS it (sf-account-link.js C1/C2).
+    //   reject   -> recorded, terminal for THAT (owner, domain). The lane is a
+    //               view + an lcc_decisions exclusion, so a rejected subject is
+    //               never re-proposed; another domain for the same owner stays open.
+    //   research -> a research_task, for a card the operator cannot settle.
+    //
+    // THE CARD IS RE-READ FROM THE VIEW, NOT TRUSTED FROM THE REQUEST. A federated
+    // decision is minted from client-supplied context, so `decision.context` is
+    // whatever the browser sent. The write path re-fetches the (owner, domain) row,
+    // rebuilds the card through the same pure planner, and refuses a person that is
+    // not on it -- so a stale card, a misclick or a crafted body cannot attach an
+    // arbitrary entity id, nor a broker, nor "Tenants In Common".
+    //
+    // FILL-BLANKS: an owner that has gained an active contact since the card was
+    // rendered is NOT overwritten. Every effect is ledgered in
+    // lcc_tier0_confirm_log BEFORE the write, carrying the prior pivot state, so
+    // one verdict or a whole batch reverses exactly.
+    if (decision.decision_type === 'tier0_owner_contact') {
+      const ctx = decision.context || {};
+      const ownerId = ctx.owner_entity_id || decision.subject_entity_id;
+      const domain = String(ctx.domain || '').trim().toLowerCase();
+      if (!ownerId || !domain) {
+        return res.status(400).json({ error: 'tier0_owner_contact: owner_entity_id and domain required' });
+      }
+
+      const laneR = await opsQuery('GET', 'v_lcc_tier0_owner_contact_lane?select=*'
+        + '&owner_id=eq.' + pgFilterVal(ownerId)
+        + '&domain=eq.' + pgFilterVal(domain) + '&limit=1');
+      const laneRow = (laneR.ok && Array.isArray(laneR.data)) ? laneR.data[0] : null;
+      // A vanished card must still be CLOSEABLE. Only `attach` needs the live row
+      // (it is the only verdict that writes, and the only one that must validate a
+      // chosen person against it). Refusing reject/research too would leave the
+      // decision minted-and-open with no way to resolve it — an orphan that shows
+      // up as a phantom seeded lane in the summary counts.
+      const card = buildTier0Card(laneRow || {
+        owner_id: ownerId, owner_name: ctx.owner_name, owner_rent: ctx.owner_rent,
+        domain, match_arms: ctx.match_arms, match_keys: ctx.match_keys, people: [],
+      });
+      const gate = validateTier0Verdict(card, verdict, payload);
+      if (!gate.ok) {
+        return res.status(laneRow ? 400 : 404).json({
+          error: 'tier0_owner_contact: ' + (laneRow ? gate.error : 'card no longer in the bench'),
+          owner_entity_id: ownerId, domain,
+        });
+      }
+      const action = gate.verdict;
+
+      const nowIso = new Date().toISOString();
+      const batchTag = 't0cl_' + nowIso.slice(0, 10).replace(/-/g, '');
+      const band = tier0RentBand(card.owner_rent);
+      const ledgerBase = {
+        batch_tag: batchTag, subject_ref: decision.subject_ref, verdict: action,
+        owner_entity_id: ownerId, owner_name: card.owner_name, domain,
+        owner_rent: card.owner_rent, rent_band: band.band,
+        match_arms: card.match_arms, match_keys: card.match_keys,
+        actor: user.id || null,
+      };
+      const ledgerWrite = (row) => opsQuery('POST',
+        'lcc_tier0_confirm_log?on_conflict=subject_ref,verdict,batch_tag', row,
+        { headers: { Prefer: 'resolution=merge-duplicates,return=representation' } });
+
+      // ---- reject / research: no owner write, but always ledgered ------------
+      if (action === 'reject') {
+        await ledgerWrite(ledgerBase);
+        const rr = await record('reject', 'decided', { domain },
+          { tier0: 'rejected', owner_entity_id: ownerId, domain });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'reject', owner_entity_id: ownerId, domain });
+      }
+      if (action === 'research') {
+        const rt = await createResearchTask({
+          research_type: 'tier0_owner_contact',
+          title: 'Who at ' + domain + ' is the contact for ' + (card.owner_name || 'this owner') + '?',
+          instructions: 'Decision Center Tier 0: the email domain ' + domain + ' was matched to "'
+            + (card.owner_name || '') + '" on ' + (card.match_arms || 'a name match')
+            + ' (' + (card.match_keys || []).join(', ') + '). Candidates: '
+            + card.people.map((x) => (x.person_name || '') + ' <' + (x.email || '') + '>').join('; ')
+            + '. ' + card.evidence_headline,
+        });
+        if (!rt.ok) {
+          await recordEffectFailure({ research_task: false, error: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data });
+        }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await ledgerWrite(ledgerBase);
+        const rr = await record('research', 'decided', { domain },
+          { research_task: true, research_task_id: rid });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+
+      // ---- attach -----------------------------------------------------------
+      const person = gate.person;
+      const pivotR = await opsQuery('GET', 'owner_contact_pivot?select=entity_id,owner_name,workspace_id,'
+        + 'active_contact_entity_id,active_contact_name,active_contact_role,active_authority_level,'
+        + 'active_source,confidence&entity_id=eq.' + pgFilterVal(ownerId) + '&limit=1');
+      const pivot = (pivotR.ok && Array.isArray(pivotR.data)) ? pivotR.data[0] : null;
+
+      // Fill-blanks, re-checked HERE rather than on the card: the owner may have
+      // gained a contact from another source since the card was rendered, and
+      // this lane must never clobber it.
+      if (pivot && pivot.active_contact_entity_id) {
+        const rr = await record('reject', 'superseded', { domain, reason: 'owner_already_reachable' },
+          { tier0: 'no_longer_actionable', existing_contact_entity_id: pivot.active_contact_entity_id });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'attach', action: 'no_longer_actionable',
+          existing_contact_entity_id: pivot.active_contact_entity_id });
+      }
+
+      const workspaceId = (pivot && pivot.workspace_id) || card.owner_workspace_id || decision.workspace_id || null;
+      // authority_level 5 = "captured", the same rung a related_person carries.
+      // Deliberately NOT promoted from a job title: this ladder means legal or
+      // control authority (1 signatory > 2 controlling > 3 economic > 4 agent >
+      // 5 captured), and "President" in a CRM title field does not establish it.
+      // The role bucket rides in active_contact_role instead, where it belongs.
+      const contactRole = card.people.length && person.role_bucket && person.role_bucket !== 'no_title'
+        ? person.role_bucket : 'prospecting_contact';
+      const led = await ledgerWrite({
+        ...ledgerBase,
+        person_entity_id: person.person_id, person_name: person.person_name,
+        person_email: person.email,
+        link_evidence: person.link_evidence || [], person_evidence: person.person_evidence || [],
+        prior_active_contact_entity_id: pivot ? pivot.active_contact_entity_id : null,
+        prior_active_contact_name: pivot ? pivot.active_contact_name : null,
+        prior_active_contact_role: pivot ? pivot.active_contact_role : null,
+        prior_active_authority_level: pivot ? pivot.active_authority_level : null,
+        prior_active_source: pivot ? pivot.active_source : null,
+        prior_confidence: pivot ? pivot.confidence : null,
+        pivot_row_created: !pivot,
+        relationship_role: contactRole,
+      });
+      const logId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].log_id : null;
+
+      const pivotFields = {
+        active_contact_entity_id: person.person_id,
+        active_contact_name: person.person_name,
+        active_contact_role: contactRole,
+        active_authority_level: 5,
+        active_source: 'tier0_confirm',
+        // A human confirmed the LINK; the person's authority inside the firm is
+        // still unknown. 'medium' is the honest rung, not 'high'.
+        confidence: 'medium',
+        enrichment_action: null,
+        updated_at: nowIso,
+      };
+      const wr = pivot
+        ? await opsQuery('PATCH', 'owner_contact_pivot?entity_id=eq.' + pgFilterVal(ownerId), pivotFields)
+        : await opsQuery('POST', 'owner_contact_pivot',
+          { entity_id: ownerId, owner_name: card.owner_name, workspace_id: workspaceId, ...pivotFields });
+      if (!wr.ok) {
+        if (logId != null) {
+          await opsQuery('PATCH', 'lcc_tier0_confirm_log?log_id=eq.' + logId,
+            { reverted_at: nowIso }).catch(() => {});
+        }
+        await recordEffectFailure({ pivot_write: false, error: wr.data });
+        return res.status(502).json({ error: 'tier0_owner_contact: pivot_write_failed', detail: wr.data });
+      }
+
+      // The edge is what makes the owner reachable in the GRAPH (and what
+      // owner-reachable-via reads). Best-effort: the pivot write is the primary
+      // effect, and a duplicate edge is a no-op inside the helper.
+      const { linkPersonToEntity } = await import('./_shared/contact-attach.js');
+      const link = await linkPersonToEntity({
+        workspaceId, entityId: ownerId, contactEntityId: person.person_id,
+        role: contactRole, via: 'tier0_confirm_p188',
+      });
+      let relationshipId = null;
+      try {
+        const relR = await opsQuery('GET', 'entity_relationships?select=id&relationship_type=eq.associated_with'
+          + '&from_entity_id=eq.' + pgFilterVal(ownerId)
+          + '&to_entity_id=eq.' + pgFilterVal(person.person_id)
+          + '&order=created_at.desc&limit=1');
+        relationshipId = (relR.ok && Array.isArray(relR.data) && relR.data[0]) ? relR.data[0].id : null;
+      } catch (_e) { /* soft — the ledger still names the pair */ }
+      if (logId != null) {
+        await opsQuery('PATCH', 'lcc_tier0_confirm_log?log_id=eq.' + logId,
+          { relationship_id: relationshipId, relationship_created: !!(link && link.linked) }).catch(() => {});
+      }
+      try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+
+      const rr = await record('attach', 'decided',
+        { domain, person_entity_id: person.person_id },
+        {
+          tier0: 'attached', owner_entity_id: ownerId, domain,
+          person_entity_id: person.person_id, person_name: person.person_name,
+          pivot_row_created: !pivot,
+          relationship: (link && link.existed) ? 'existed' : ((link && link.linked) ? 'created' : 'failed'),
+          rent_band: band.band, link_evidence: person.link_evidence,
+        });
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({
+        ok: true, verdict: 'attach', owner_entity_id: ownerId, domain,
+        person_entity_id: person.person_id, person_name: person.person_name,
+        relationship: (link && link.existed) ? 'existed' : ((link && link.linked) ? 'created' : 'failed'),
+        log_id: logId, batch_tag: batchTag,
+      });
     }
 
     return res.status(400).json({ error: 'unsupported_decision_type', decision_type: decision.decision_type });
