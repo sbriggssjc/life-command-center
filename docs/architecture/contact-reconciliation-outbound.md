@@ -97,12 +97,53 @@ That is the exact failure shape this codebase keeps finding.
 **We cannot measure this from the database** — `personalNotes` was not ingested. So:
 
 **FIRST STEP, before any outbound design work: determine what fraction of the address book is
-writable.** Two ways, cheapest first:
+writable.**
 
-1. **Ingest `personalNotes`** (or a derived `is_read_only` boolean) on the next contacts sync
-   run and count it. One field, no new flow.
-2. **A single-contact PATCH probe** in a manual flow against one known contact, and read the
-   response.
+⚠️ **Do NOT do this by re-syncing.** `hwMark` is now set to `2026-08-26T16:00:00Z`, so a normal
+run only picks up changed contacts — it would report on a handful of rows, not the address book.
+Resetting the high-water mark to backfill a diagnostic field means another 88-minute run and
+2,809 redundant writes. Neither is necessary.
+
+### Probe A — how MANY are read-only (read-only, ~2 minutes, no schema change)
+
+A manual flow, no writes, no ingest:
+
+1. **Instant cloud flow** → **Manually trigger a flow**
+2. **Office 365 Outlook → Get contacts (V2)** — Folder `Contacts`, **Top `100`**
+3. **Compose** → Expression:
+   `length(body('Get_contacts__V2_')?['value'])`
+4. **Compose 2** → Expression (counts the read-only marker):
+   `length(filter(body('Get_contacts__V2_')?['value'], item()?['personalNotes'] != null))`
+5. Run, read both Compose outputs.
+
+Step 4 counts contacts carrying ANY `personalNotes`; the read-only marker is the dominant
+content of that field in this mailbox (observed in 4 of 5 sampled). If a finer count is wanted,
+`contains(coalesce(item()?['personalNotes'],''), 'read-only')` is the exact test — but PA's
+`filter()` is fussy about nested expressions, so start with the null test and refine only if the
+number is ambiguous.
+
+**Interpretation, decided BEFORE seeing the number** (so the result cannot be rationalised):
+
+- **> 70% read-only** → outbound contact cleaning to Outlook is largely unavailable. Say so,
+  stop, and reconsider whether the Salesforce-allowlist path alone is worth building.
+- **30–70%** → viable for the writable subset; the projector must detect and skip read-only
+  rows, and report the skipped count honestly rather than silently.
+- **< 30%** → proceed as designed.
+
+### Probe B — is it ACTUALLY writable (definitive, one row)
+
+The marker is inference; a PATCH is proof. In the same manual flow:
+
+- **Office 365 Outlook → Update contact (V2)**, or an HTTP action
+  `PATCH https://graph.microsoft.com/v1.0/me/contacts/{id}`
+- Target **one contact you own and can verify**, ideally one you created yourself
+- Set a harmless field — e.g. write `jobTitle` back to **its existing value**
+- Read the response: `200` with the object = writable; `403`/`ErrorAccessDenied` = not
+
+⚠️ **A `200` on a read-only contact is the dangerous case** — Graph can accept the call and
+discard the change. **Verify by re-reading the contact**, not by trusting the status code. That
+is the same lesson as the P125 Outlook draft seam, which returned an identical success response
+for a threaded reply and a standalone message.
 
 Of the 2,809 Outlook contacts, **1,767 also carry an SF id** and 1,042 are Outlook-only. If
 Outlook proves unwritable, the 1,767 are still reachable through Salesforce — but only within
