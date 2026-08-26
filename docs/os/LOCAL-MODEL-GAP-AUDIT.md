@@ -70,6 +70,17 @@ medium-high time-per-artifact, recurring. Effort: medium** (per surface).
 Ollama matches named leads to owner LLCs on-box + drafts the target rationale. **Impact: high volume BUT** the
 contact-*acquisition* half is still SOS/web egress-blocked, so partial. **Effort: medium.**
 
+## ⚠️ CORRECTION 2026-08-24 (measured live, not from seed migrations)
+The live `feature_flags_registry` shows **R3 is mostly ALREADY ON**: `MATCH_DISAMBIG_ASSIST`,
+`PROPERTY_TWIN_ASSIST`, `W8_U2_DUP_PAIRS`, `W8_U5_NAMING_HYGIENE`, `W9_2_REACHABILITY_HARVEST`,
+`W9_3_SF_ASSIST` (+ junk-prescreen) are **on**; only **`NEXT_STEP_AI` and `OLLAMA_CLEAN_ASSIST` remain off.**
+The Explore sweep + `LOCAL-MODEL-LEVERAGE-MAP.md` read the SEED-migration states; the registry had moved
+(re-measure-the-dated-blocker doctrine — it bit this very audit). Production confirmed for two:
+`w9_3_sf_assist` 247 proposals / 47 in 7d (active), `property_twin_assist` 200 / 0 in 7d (worth a "drained vs
+stalled?" glance). Others write to other stores — not verified inert. **So R3 shrinks to: dry-run + flip the 2
+remaining lanes, and spot-check the on-lanes actually drain.** The REAL top untapped leverage is R1 + R2 (both
+net-new, genuinely unbuilt). **Re-ranked #1 = R1.**
+
 ## Tackle order (most impactful first) — and the first concrete action for each
 1. **R3 first (fast, high, low-risk):** dry-run review + flip the dormant Decision Center `*_ASSIST` lanes in
    value order (`NEXT_STEP_AI` → `PROPERTY_TWIN_ASSIST` → `W9_3_SF_ASSIST` → the rest). No new build. → *first
