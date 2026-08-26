@@ -11,7 +11,8 @@
 //   - fed_outlook    (EFFR baseline + implied Fed path)
 //   - sector_news    (RSS feeds, grouped by stream)
 //   - reading_list   (curated long-form picks)
-//   - analyst_take   (Claude-generated narrative)
+//   - analyst_take   (P138: now written ON-BOX by /api/briefing-analyst-take-tick;
+//                     this function only writes the key when it produced a take)
 //   - capital_markets (Claude-generated capital markets sub-narrative)
 //   - weekly_changes (Friday variant only)
 //
@@ -655,7 +656,7 @@ async function buildSnapshot(variant: "daily" | "friday_deep_dive"): Promise<Rec
     runtime_ms:    Date.now() - startedAt,
   };
 
-  return {
+  const row: Record<string, unknown> = {
     as_of_date:      ctDateIso(),
     workspace_id:    null,    // global row
     variant,
@@ -674,6 +675,18 @@ async function buildSnapshot(variant: "daily" | "friday_deep_dive"): Promise<Rec
     ai_tokens_out:   ai.tokens_out,
     warnings,
   };
+
+  // P138 — ONE OWNER PER COLUMN. `analyst_take` is now written ON-BOX by
+  // POST /api/briefing-analyst-take-tick (private LCC signals must never egress
+  // to a cloud model), which PATCHes this same row at ~10:18 UTC. If this
+  // function later re-fires — a manual curl, the hourly self-heal, a backfill —
+  // it would upsert `analyst_take: null` over that take and the brief would go
+  // silently empty again. PostgREST derives the ON CONFLICT UPDATE column list
+  // from the payload KEYS, so DELETING the key preserves whatever is stored.
+  // Only a take this function actually produced is written.
+  if (row.analyst_take == null) delete row.analyst_take;
+
+  return row;
 }
 
 // ---------------------------------------------------------------------------

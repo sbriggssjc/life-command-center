@@ -1335,6 +1335,67 @@ about what can honestly be drafted.
   lane and the research lane) drain independently — 27 U3 cards decided did NOT move
   `establish_ownership_history` off 0.
 
+## P138 / R8 Stage 1 — the brief's "Analyst's Take", generated ON-BOX (2026-08-26)
+
+The daily brief has rendered a `renderAnalystTake` section since v2 and the column has
+been EMPTY since **2026-07-07** (11 of 67 `briefing_intel_snapshot` rows ever carried a
+take). Generation now happens on the GaryBuilt box via `invokeOnPremGeneration`, behind
+**`BRIEFING_ANALYST_TAKE_ONPREM`** (registered, **off**), tick
+`GET/POST /api/briefing-analyst-take-tick`, planner
+`api/_shared/briefing-analyst-take.js`, cron **240** (`18 10 * * 1-5`, between the 10:00
+snapshot and the 12:30 send). Full writeup:
+`docs/architecture/briefing-analyst-take-onprem.md`.
+
+- **⚠️ THE STATED BLOCKER WAS WRONG AND THE REAL ONE IS BILLING.** The prompt said the
+  edge fn is "gated on `ANTHROPIC_API_KEY`; when unset it warns *ANTHROPIC_API_KEY not
+  set*". Live, the key IS set and every row since 2026-07-08 carries
+  *"Anthropic API 400: … Your credit balance is too low"*. **`capital_markets` is empty
+  for the same reason and is NOT fixed by this build** — do not read a working Analyst's
+  Take as evidence the cloud path recovered. (The dated-blocker doctrine, hit again.)
+- **⚠️ "REUSE THE EXISTING FETCHER" CAN MEAN "RE-FIRE ITS SIDE EFFECT."**
+  `buildStrategicPriorities` is the obvious thing for a briefing tick to call, and under
+  `TEAMS_COLD_ALERTS_ENABLED` it POSTS up to three outbound *"Warm Contact Going Cold"*
+  Teams alerts (plus one `rpc/get_contact_recommendation_weight` per candidate). A 10:18
+  cron calling it would DOUBLE-SEND those to Scott — once from the tick, once when the
+  brief renders at 12:30. The tick reuses the shared SCORER (`scoreItem`/
+  `deriveItemTitle`) and re-applies the selection rule purely in `rankTodayPriorities`.
+  **Before reusing a "read" helper from a scheduled job, grep it for writes and outbound
+  posts** — a fetcher named `build*`/`fetch*` is not proof it only reads.
+- **⚠️ A HARD-CODED 0 IS THE P180 TRAP WEARING A DIFFERENT HAT.**
+  `fetchPipelineRollup` returns `total_value: 0` / `weighted_value: 0` **by construction**
+  (the SF `Amount`/`Probability` fields are not in the projection it reads). Handing those
+  to a narrator yields "your $0 pipeline" — *worthless*, not *unvalued*. The signal block
+  states `not on file` and instructs the model not to state a figure; a test asserts `$0`
+  never appears in it.
+- **⚠️ THE FABRICATION GUARD FOR PROSE-ABOUT-COUNTS NEEDS A STRICTER NUMBER REGEX THAN
+  THE ONE FOR PROSE-ABOUT-PRICES.** `draft-assist-core.js::NUM_TOKEN` requires **3+
+  digits** for a bare number (`\d[\d,]{2,}`) — correct there, wrong here. In a brief the
+  dangerous fabrication is a small COUNT: *"you have 9 overdue actions"* when the truth is
+  7 reads perfectly and is a lie. `validateAnalystTake` matches ANY digit run, and an
+  ungrounded number or date **rejects the whole take** (one retry naming the tokens, then
+  nothing is written) rather than substituting `[Not on file]` into prose. Proper names
+  are REPORTED, never fatal — that regex over-fires on ordinary capitalised text and
+  killing a take on a false positive is the P158a mistake.
+- **ONE OWNER PER COLUMN, ENFORCED ON BOTH SIDES.** The tick PATCHes only
+  `analyst_take` + `analyst_take_meta` scoped to `(as_of_date, workspace_id is null)` —
+  it can never touch `market_data`/`sector_news`/`capital_markets` nor mint a duplicate
+  row (upsert only when today's row is absent, carrying just those keys; PostgREST derives
+  the ON CONFLICT UPDATE list from the payload KEYS, so omitted columns are preserved).
+  And the edge fn now does `if (row.analyst_take == null) delete row.analyst_take;` —
+  without it a manual re-fire after 10:18 upserts NULL over the on-box take and the brief
+  goes silently empty again. **That edge-fn change is committed but NOT deployed** — see
+  the gate in the doc; deploy it before flipping the flag.
+- **`flag_off` deliberately raises NO health alert**, while `model_unavailable` /
+  `fabrication_rejected` / `write_failed` each open a deduped
+  `lcc_health_alerts(alert_kind='briefing_analyst_take_empty')` that a successful write
+  auto-resolves. An off flag is a state someone CHOSE and is already surfaced by
+  `feature_flags_registry` + Dormant Capabilities; an alert describing a decision sits
+  open forever, which is the badge-that-is-noise failure.
+- **Verify on `length(analyst_take) > 0` AND `analyst_take_meta->>'source' = 'onprem_ollama'`,
+  then READ IT — never on "the tick ran."** No live take has been generated yet: the
+  sandbox has no `OLLAMA_URL`, so all 30 tests stub the model. Grade a real sample via
+  `GET …?generate=1` (ungated, never writes) before flipping the flag.
+
 ## P134 — an LLM assist is only as good as the CONTEXT payload (2026-08-26)
 
 `OLLAMA_CLEAN_ASSIST` was flipped on for an inert 12-item sample and graded: **6 of 12 proposals were
@@ -1634,6 +1695,7 @@ Related invariants from the same round:
     nothing writes that person into `owner_contact_pivot`. Result: **11 owners, $240.5M,
     suppressed AND invisible.** Whenever a surface excludes a population on the grounds that
     it is "already handled", name the thing that handles it and verify that it does.
+- **On-box daily-brief narrative (Analyst's Take), R8 Stage 1:** `docs/architecture/briefing-analyst-take-onprem.md` — the first net-new on-prem GENERATION surface, its fabrication guard, and the operator gate.
 - **Ownership Resolution Engine:** government-lease `docs/OWNERSHIP_RESOLUTION_ENGINE.md`.
 - **Property-owner subsystem + SF-as-a-source doctrine:** `docs/architecture/property-owner-subsystem.md`
   + `docs/architecture/property-owner-source-authority-and-doctrine.md`. **Point person ≠ property owner:**
