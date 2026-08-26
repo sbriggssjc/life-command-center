@@ -77,6 +77,8 @@ const _DC_FED_META = {
     intro: 'W5.2. A dia duplicate-NPI cluster the deterministic gate flagged as a genuine data error needing human eyes. Confirm duplicate marks the cluster for the resolver/worker to collapse; Not a duplicate records them distinct. NEVER a silent auto-collapse — you decide.' },
   property_twin: { title: 'Property address twins (dia)',
     intro: 'A geocoded dia property with NO Medicare CCN sitting on top of a CMS-anchored clinic — the same building captured twice (the shadow carries the CRE/deal data; the anchor carries the census). The blank-operator husks already auto-merged; these have a competing identity (operator conflict, a distinct clinic name, or multiple anchors), so YOU decide. Merge folds the shadow into the CCN anchor via the REVERSIBLE wrapper (snapshot-before-delete, undoable). Not a twin = distinct co-located clinics (e.g. a Fresenius and a DaVita in one plaza). Research sends it out for confirmation.' },
+  tier0_owner_contact: { title: 'Tier 0 — confirm the owner’s firm domain',
+    intro: 'Prompt 188. People we ALREADY hold whose email domain matches an owner’s name — Boyd Watterson, RMR (incl. Adam Portnoy), Realty Income (incl. Sumit Roy). One card per (owner, email DOMAIN), not per person: “do the people at rmrgroup.com work for RMR?” is ONE judgement, and picking who to call is a second decision on the same card. ⚠ Read the evidence line before attaching. Salesforce campaign membership, a Salesforce contact record, Outlook and correspondence all answer “is this person real and known to us?” — they say NOTHING about whether they work for THIS owner. Only “company name matches THIS OWNER” corroborates the link. Gary George at georgesinc.com (a poultry company) passes three of the four for George Washington University. The match key is shown for exactly this reason: “matched on the token ‘george’” is what makes that card an obvious reject. ⚠ Precision is a curve — measured ~91% only for owners at roughly $16M+ of rent and ~60–70% in the ~$2M SPE band, with everything between never graded — so WORK THIS LANE TOP-DOWN. Brokers are never attachable at any deal size. Attach writes the owner’s active contact + a person→owner edge (reversible via lcc_tier0_confirm_log); Reject is terminal for that owner+domain only; Research spawns a task. Every verdict is recorded (won’t re-ask).' },
   npi_dedup_autoapprove: { title: 'NPI duplicates → approve',
     intro: 'W5.2. A dia duplicate-NPI cluster the deterministic gate scored auto-resolvable — a proposed survivor is shown. A human APPROVES the deterministic survivor (fill-blanks / never-guess applies to destructive dedup too), or rejects it. Approval spawns the reconcile task; the actual merge stays human/worker-driven — NEVER a silent auto-collapse.' },
 };
@@ -722,6 +724,60 @@ function _fedCardHTML(it, i, isNext) {
       actions += '<button class="q-action' + (lean === 'attach_person' ? ' primary' : '') + '" onclick="dcFed(' + i + ',\'attach_person\')">Attach person to owner</button>';
     }
     actions += '<button class="q-action' + (lean === 'reject' ? ' primary' : '') + '" onclick="dcFed(' + i + ',\'reject\')">Reject — not this owner’s contact</button>';
+  } else if (_dcFedType === 'tier0_owner_contact') {
+    // Prompt 188. Two things this card MUST make impossible to miss:
+    //   1. WHY the domain was proposed (the match key). "matched on the token
+    //      'george'" is the whole reason George Washington University ->
+    //      georgesinc.com is an obvious reject, and it is invisible otherwise.
+    //   2. WHAT the evidence proves. Salesforce/Outlook/correspondence attest the
+    //      PERSON, never the LINK; only "company matches this owner" attests the
+    //      link. Blurring the two is the exact trap P186 measured.
+    const ppl = Array.isArray(c.people) ? c.people : [];
+    const linkEv = ppl.filter(function (p) { return (p.link_evidence || []).length; }).length;
+    const badges = '<div class="q-item-badges">'
+      + (Number(c.owner_rent) > 0 ? '<span class="q-badge">$' + Math.round(Number(c.owner_rent)).toLocaleString() + '</span>' : '')
+      + '<span class="q-badge type">' + esc(String(c.rent_band_label || '')) + '</span>'
+      + '<span class="q-badge">' + esc(String(ppl.length)) + ' candidate' + (ppl.length === 1 ? '' : 's') + '</span>'
+      + (linkEv ? '<span class="q-badge">' + esc(String(linkEv)) + ' with employer match</span>' : '')
+      + (Number(c.owner_domain_cards) > 1 ? '<span class="q-badge">' + esc(String(c.owner_domain_cards)) + ' domains for this owner</span>' : '')
+      + '</div>';
+    const keys = Array.isArray(c.match_keys) ? c.match_keys.filter(Boolean) : [];
+    const opts = ppl.map(function (p, k) {
+      const bits = [p.person_name || '(unnamed)'];
+      if (p.title) bits.push(p.title);
+      else if (p.company) bits.push(p.company);
+      if ((p.link_evidence || []).length) bits.push('employer matches owner');
+      else if ((p.person_evidence || []).length) bits.push((p.person_evidence || []).length + ' person signal' + ((p.person_evidence || []).length === 1 ? '' : 's'));
+      return '<option value="' + esc(String(p.person_id)) + '"' + (k === 0 ? ' selected' : '') + '>'
+        + esc(bits.join(' · ')) + '</option>';
+    }).join('');
+    // The first three are spelled out under the picker: a select alone hides the
+    // evidence the operator is being asked to weigh.
+    const detail = ppl.slice(0, 3).map(function (p) {
+      const ev = (p.link_evidence || []).concat(p.person_evidence || []);
+      return '<div class="q-item-meta" style="opacity:.8">· <b>' + esc(String(p.person_name || '')) + '</b> '
+        + esc(String(p.email || ''))
+        + (p.company ? ' <span style="opacity:.7">— ' + esc(String(p.company)) + '</span>' : '')
+        + (ev.length ? ' <span style="opacity:.7">[' + esc(ev.join(', ').replace(/_/g, ' ')) + ']</span>'
+                     : ' <span style="opacity:.7">[no evidence beyond the domain match]</span>')
+        + (p.duplicate_person_ids && p.duplicate_person_ids.length
+            ? ' <span style="opacity:.6">(' + esc(String(p.duplicate_person_ids.length)) + ' duplicate entity)</span>' : '')
+        + '</div>';
+    }).join('');
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(String(c.owner_name || 'owner'))
+      + ' <span style="opacity:.6">&rarr;</span> ' + esc(String(c.domain || '')) + '</span>' + badges + '</div>'
+      + (keys.length ? '<div class="q-item-meta">Matched on <b>' + esc(keys.join(', ')) + '</b>'
+          + (c.match_arms ? ' <span style="opacity:.6">(' + esc(String(c.match_arms)) + ')</span>' : '') + '</div>' : '')
+      + '<div class="q-item-meta" style="opacity:.85">' + esc(String(c.evidence_headline || '')) + '</div>'
+      + detail
+      + (Number(c.n_excluded) > 0 ? '<div class="q-item-meta" style="opacity:.6">'
+          + esc(String(c.n_excluded)) + ' candidate' + (Number(c.n_excluded) === 1 ? '' : 's')
+          + ' excluded (broker or not a person)</div>' : '')
+      + '<div class="q-item-meta" style="opacity:.6">' + esc(String(c.precision_note || '')) + '</div>'
+      + '<div class="q-item-meta">Attach: <select id="dc-t0-' + i + '" class="q-select">' + opts + '</select></div>';
+    actions = '<button class="q-action primary" onclick="dcTier0Attach(' + i + ')">Attach as owner contact</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject — not this owner’s firm</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   } else if (_dcFedType === 'comms_owner_attribution_review') {
     // W9.6: a correspondence→owner attribution. Path A (property_bridge, arithmetic
     // owns-edge) or Path B (person_match, verbatim correspondent header). Confirm
@@ -1306,6 +1362,21 @@ async function dcFedU3Pick(i, entityId, mintNew) {
   return dcFed(i, 'link', payload);
 }
 window.dcFedU3Pick = dcFedU3Pick;
+
+// Prompt 188: attach the person the operator PICKED on a Tier 0 card. The id is
+// sent explicitly rather than defaulting server-side — validateTier0Verdict
+// refuses an attach with no person_entity_id, and refuses one that is not on the
+// freshly re-read card, so a stale select cannot write an arbitrary entity.
+function dcTier0Attach(i) {
+  const sel = document.getElementById('dc-t0-' + i);
+  const personId = sel && sel.value ? String(sel.value) : '';
+  if (!personId) {
+    if (typeof showToast === 'function') showToast('Pick which person to attach', 'error');
+    return;
+  }
+  return dcFed(i, 'attach', { person_entity_id: personId });
+}
+window.dcTier0Attach = dcTier0Attach;
 
 // Unit 2 — merge with an operator-chosen survivor. Reads the survivor dropdown
 // (default = the view winner) and only sends winner_id on a real override, so

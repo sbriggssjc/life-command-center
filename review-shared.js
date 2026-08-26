@@ -73,6 +73,9 @@ var LCC_DECISION_LANE_MAP = {
   // the org's own blank, or reject it?" is a LINKAGE question, same family as
   // sos_owner_links and contact_company_link.
   owner_contact_attach_review:   { lane: 'linkage',       merges: false },
+  // Prompt 188: "do the people at this email domain work for this owner?" is the
+  // same LINKAGE question, asked from the other direction.
+  tier0_owner_contact:           { lane: 'linkage',       merges: false },
   implausible_value:             { lane: 'automation',    merges: false },
   llc_research_dead:             { lane: 'automation',    merges: false },
   availability_checker_botblock: { lane: 'automation',    merges: false },

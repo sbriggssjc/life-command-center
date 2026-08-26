@@ -1452,6 +1452,9 @@ body.compact .greeting { font-size: 18px; }
 
 /* Advanced filter row */
 .ops-filters-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; align-items: center; }
+/* P188 — the Tier 0 confirm lane's person picker. One card can carry 19 people
+   (RMR at rmrgroup.com), so the select needs room for "Name · Title · evidence". */
+.q-select { max-width: 100%; background: var(--s2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; color: var(--text); font-size: 12px; outline: none; cursor: pointer; }
 .ops-filter-select { font-size: 11px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--s1); color: var(--text2); appearance: auto; cursor: pointer; }
 .ops-filter-select:focus { border-color: var(--accent); outline: none; }
 .ops-filter-label { font-size: 11px; color: var(--text3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }

@@ -617,6 +617,23 @@ was the instrument.
 - **the column checked is not the column that exists** — reporting three tables
   "unmeasurable, no `updated_at`" when all three carry `created_at` (P177).
 
+**Second instance (2026-08-26) — the DUPLICATE-ENTITY detector is blind to 1,089 organisations.**
+`v_lcc_merge_candidates` groups on `lcc_normalize_entity_name()`. That function returns **NULL for
+1,089 live organisations carrying $185.1M of rent** — RMR Group, GI Partners, AVG Partners, MMI
+Capital, Jc Capital Group among them — because it strips `group`/`partners`/`capital`/`holdings`
+on top of legal forms and an acronym-named firm has nothing left. So the merge surface reports no
+duplicates for them, forever, and **the zero is the instrument.**
+
+CLAUDE.md already records this reduce-to-nothing failure for `dup-pair-planner.ownerCore`
+("Realty Income Corporation" → empty string) and for `lcc_owner_strict_core`. **It was never
+checked on the normalizer the merge detector actually uses.** When a codebase documents a hazard
+for one function, grep for every sibling that does the same job — the hazard travels with the
+technique, not the name.
+
+*(Second, independent blind spot on the same surface: a wording difference defeats it. Easterly's
+two live entities normalize to `easterly gov reit` and `easterly government` and never group —
+the highest-value owner in the Tier 0 lane, rendered as four cards for one firm.)*
+
 **Detector for the detector — run before trusting any zero:**
 
 1. **Point it at a known positive.** Name a row/view/table you are certain should match. If
@@ -760,6 +777,22 @@ GI Partners, AVG and Cole Capital are now visible. Four durable lessons came out
    **~60–70%**, because those names ("NGP VI ESSEX VT LLC", "Ngp V Ogden Ut LLC", "Boyd Atlanta
    Williams") are a place or a surname and little else. Two honest numbers, one misleading
    average. The consumer surface must be worked top-down.
+
+5. **⚠️ A GATE THAT FILTERS A JOIN IS PART OF THAT JOIN — fix both or neither (found by P188).**
+   Lesson 2 above says "add a fan-out gate". P187 did, written the obvious way:
+   `from owner_tok ot join people p on p.sld like ot.tok||'%'` — which is **the exact un-keyed
+   cross product P186 existed to remove**, faithfully re-created *inside the gate*. Measured live:
+   **`Rows Removed by Join Filter: 6,222,095`**, 1.78 s of a 3.10 s view. It was invisible because
+   the gate returns only 160 rows. P188 rewrote it with P186's own identity
+   (`sld LIKE tok||'%'` ⇔ `left(sld,length(tok)) = tok`): 3,099 ms → 1,263 ms, join-filter rows
+   → **0**, 0-row pair-set diff. **When you fix a join, grep for every other place that
+   re-expresses the same predicate** — a filter, a gate, a count, a validation query.
+
+6. **⚠️ A LIVE-DATA EQUIVALENCE DIFF HAS TO SURVIVE LIVE DATA (P188).** The full-row diff showed
+   ONE row differing — Thomas Finan's `contact_company` read `Trammell Crow Co` in the snapshot and
+   `Trammell Crow Company` live. That was the **Outlook contact sync writing at 21:05:13, between
+   the snapshot and the diff**, not the change under test. Diff only the columns your change can
+   affect, and **read the row before accepting a one-row delta as a regression.**
 
 **And the arm that was built, measured and rejected — Class 4 in new clothes.** An "acronym arm"
 keyed on *a 3–4 character token that is ALL-CAPS in the original name*. Measured: **27.6% of owner

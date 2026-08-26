@@ -585,7 +585,13 @@ describe('§1.1 STRUCTURAL — panel widths are var-driven and the shell is cohe
     // W6.5 Stage 2: detail-rent.js was extracted OUT of detail.js and shares its
     // global scope, so a fresh detail.js paired with a cached detail-rent.js is
     // exactly the stale mix this guard exists to prevent — it joins the set.
-    const versions = { 'app.js': v('app.js'), 'app-modal.js': v('app-modal.js'), 'app-treasury-chart.js': v('app-treasury-chart.js'), 'app-export-comps.js': v('app-export-comps.js'), 'app-tasks.js': v('app-tasks.js'), 'ops-perf-dashboard.js': v('ops-perf-dashboard.js'), 'ops-sync-health.js': v('ops-sync-health.js'), 'ops-domain-health.js': v('ops-domain-health.js'), 'ops-metrics.js': v('ops-metrics.js'), 'detail.js': v('detail.js'), 'detail-rent.js': v('detail-rent.js'), 'detail-panel-shell.js': v('detail-panel-shell.js'), 'detail-entity-tabs.js': v('detail-entity-tabs.js'), 'detail-openers.js': v('detail-openers.js'), 'detail-tab-documents.js': v('detail-tab-documents.js'), 'ops.js': v('ops.js'), 'styles.css': v('styles.css') };
+    // P188: dc-lanes.js joins for the same reason. It was extracted out of ops.js
+    // (W6.5 Stage 1) into the SAME global scope: ops.js owns _DC_FEDERATED (which
+    // lanes exist) and dc-lanes.js owns _DC_FED_META + _fedCardHTML (how each one
+    // renders). A fresh ops.js offering a lane that a cached dc-lanes.js has no
+    // renderer for is exactly the stale mix above, and it was sitting at a
+    // DIFFERENT ?v= than the rest of the set when P188 added a lane.
+    const versions = { 'app.js': v('app.js'), 'app-modal.js': v('app-modal.js'), 'app-treasury-chart.js': v('app-treasury-chart.js'), 'app-export-comps.js': v('app-export-comps.js'), 'app-tasks.js': v('app-tasks.js'), 'ops-perf-dashboard.js': v('ops-perf-dashboard.js'), 'ops-sync-health.js': v('ops-sync-health.js'), 'ops-domain-health.js': v('ops-domain-health.js'), 'ops-metrics.js': v('ops-metrics.js'), 'detail.js': v('detail.js'), 'detail-rent.js': v('detail-rent.js'), 'detail-panel-shell.js': v('detail-panel-shell.js'), 'detail-entity-tabs.js': v('detail-entity-tabs.js'), 'detail-openers.js': v('detail-openers.js'), 'detail-tab-documents.js': v('detail-tab-documents.js'), 'ops.js': v('ops.js'), 'dc-lanes.js': v('dc-lanes.js'), 'styles.css': v('styles.css') };
     for (const [f, ver] of Object.entries(versions)) assert.ok(ver, `${f} has no ?v= cache buster`);
     assert.equal(new Set(Object.values(versions)).size, 1,
       `cache busters disagree: ${JSON.stringify(versions)}`);

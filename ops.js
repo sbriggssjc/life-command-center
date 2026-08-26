@@ -1907,6 +1907,12 @@ var _DC_FEDERATED = new Set([
   // via lcc_owner_contact_attach_log. Keep in sync with admin.js
   // FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
   'owner_contact_attach_review',
+  // Prompt 188: the Tier 0 owner-contact confirm lane. Source =
+  // v_lcc_tier0_owner_contact_lane_open, ONE card per (owner, email domain);
+  // verdicts attach / reject / research, reversible via lcc_tier0_confirm_log.
+  // Keep in sync with admin.js FEDERATED_DECISION_TYPES
+  // (test/decision-center-partition.test.mjs).
+  'tier0_owner_contact',
 ]);
 function _dcIsVerdictLane(dt) { return !_DC_FEDERATED.has(dt); }
 
@@ -1991,6 +1997,11 @@ async function renderReviewConsolePage() {
     // already drops owners that became reachable), not the raw proposal table.
     const ocpLane = res.data.lanes.find(function (l) { return l.key === 'owner_contact_attach_review'; });
     if (ocpLane && typeof ocpLane.count === 'number') dc['owner_contact_attach_review'] = ocpLane.count;
+    // Prompt 188: the Tier 0 badge. /api/review-counts computes it through the
+    // SAME fetchFederatedSource the list renders from, so badge and list cannot
+    // drift onto different sources (the P132 defect).
+    const t0Lane = res.data.lanes.find(function (l) { return l.key === 'tier0_owner_contact'; });
+    if (t0Lane && typeof t0Lane.count === 'number') dc['tier0_owner_contact'] = t0Lane.count;
   }
   // W3.4: comp reconciliation reviews (flagged sold comps) keep their own
   // status-shaped worklist (dia_comp_review_queue + gov_comp_review_queue).
@@ -2029,6 +2040,7 @@ async function renderReviewConsolePage() {
     { dt: 'contact_acquisition_review', label: 'Contact acquisition — owner outreach', open: "renderFederatedLane('contact_acquisition_review')" },
     { dt: 'comms_owner_attribution_review', label: 'Correspondence → owner attribution', open: "renderFederatedLane('comms_owner_attribution_review')" },
     { dt: 'owner_contact_attach_review', label: 'Owner contacts — attach or reject', open: "renderFederatedLane('owner_contact_attach_review')" },
+    { dt: 'tier0_owner_contact', label: 'Tier 0 — confirm the owner’s firm domain', open: "renderFederatedLane('tier0_owner_contact')" },
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
     { dt: 'property_twin', label: 'Property address twins (dia)', open: "renderFederatedLane('property_twin')" },
     { dt: 'provenance_conflict', label: 'Data conflicts & provenance', open: "renderFederatedLane('provenance_conflict')" },
