@@ -627,7 +627,9 @@ async function ingestContact(req, res, user) {
   // Auto-classify if not specified
   let contactClass = requestedClass;
   if (!contactClass) {
-    contactClass = autoClassify(source, email);
+    // Pass the business evidence the payload already carries (P-contacts 2026-08-26):
+    // a job title or company outranks a consumer email domain.
+    contactClass = autoClassify(source, email, { title, company_name });
   }
 
   // --- Entity Resolution ---
@@ -2000,7 +2002,29 @@ function computeEngagementScore(lastCallDate, lastEmailDate, lastMeetingDate, to
 // AUTO-CLASSIFICATION
 // ============================================================================
 
-function autoClassify(source, email) {
+// ⚠️ A CONSUMER EMAIL DOMAIN IS NOT EVIDENCE THAT A CONTACT IS PERSONAL (2026-08-26).
+// This function decided personal-vs-business from the email DOMAIN ALONE for every source
+// that reaches the fall-through (outlook, calendar, manual) and inside the `iphone` branch.
+// In CRE that is wrong at scale — measured live:
+//   • 2,468 of 6,553 Salesforce campaign members with an email (38%) sit on a consumer domain
+//   • 406 resolved OWNERS' active contacts sit on a consumer domain
+// Real principals on the `GSA Buyer` campaign are among them: Lee Elman <lee.eii@me.com>,
+// James Brooke <jamesbrooke.office@icloud.com>, Thomas P. Bohlinger <…@gmail.com>. Small
+// principals, family offices and single-asset LLC owners routinely use consumer email.
+//
+// This is the same trap as P124, where "exclude consumer-domain recipients" looked obviously
+// right and would have deleted the BEST BD exemplars from the voice corpus.
+//
+// FIX: business EVIDENCE (a job title or a company) outranks the domain. The domain is now a
+// tiebreak used only when we know nothing else. Deliberately NOT applied to `icloud`, whose
+// personal default is intentional, nor to the sources that already return 'business'.
+// `evidence` is optional, so the existing calendar caller is unchanged.
+export function autoClassify(source, email, evidence) {
+  const hasBusinessEvidence = !!(evidence && (
+    (evidence.title && String(evidence.title).trim()) ||
+    (evidence.company_name && String(evidence.company_name).trim())
+  ));
+
   // Salesforce contacts are always business
   if (source === 'salesforce') return 'business';
 
@@ -2018,6 +2042,7 @@ function autoClassify(source, email) {
 
   // iPhone contacts: check email domain, default business (Exchange sync path)
   if (source === 'iphone') {
+    if (hasBusinessEvidence) return 'business';   // title/company outranks the domain
     if (email) {
       const domain = email.split('@')[1]?.toLowerCase();
       if (domain && PERSONAL_DOMAINS.has(domain)) return 'personal';
@@ -2025,7 +2050,10 @@ function autoClassify(source, email) {
     return 'business';
   }
 
-  // Check email domain for personal detection
+  // A job title or a company IS business evidence, whatever the domain says.
+  if (hasBusinessEvidence) return 'business';
+
+  // Check email domain for personal detection — the TIEBREAK when we know nothing else.
   if (email) {
     const domain = email.split('@')[1]?.toLowerCase();
     if (domain && PERSONAL_DOMAINS.has(domain)) {
