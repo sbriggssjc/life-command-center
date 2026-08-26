@@ -1,3 +1,23 @@
+-- ⚠️⚠️ THE `tok_fan` CTE IN THIS MIGRATION WAS DEFECTIVE AND IS SUPERSEDED BY P188.
+--   DO NOT COPY IT. Fixed in `20260826230000_lcc_p188_tier0_confirm_lane.sql` (or whichever
+--   P188 migration re-creates this view — read the LIVE definition, not this file).
+--
+--   What was wrong: the gate was written the obvious way,
+--       from owner_tok ot join people p on p.sld like ot.tok||'%'
+--   which is **the exact un-keyed cross product P186 existed to remove**, re-created inside the
+--   gate. Measured live: `Rows Removed by Join Filter: 6,222,095`, 1.78 s of a 3.10 s view. It was
+--   invisible because the gate returns only 160 rows. P188 rewrote it using P186's own identity
+--   (`sld LIKE tok||'%'` <=> `left(sld,length(tok)) = tok`, i.e. the rows `person_prefix` already
+--   materialises): 3,099 ms -> 1,263 ms, join-filter rows 6,222,095 -> 0, 0-row pair-set diff.
+--
+--   **DURABLE RULE: a gate that FILTERS a join is part of that join. Fix both or neither.**
+--   Everything else in this migration (lcc_owner_domain_core, the Arm 2 prefix-equality join, the
+--   widened stoplists, the ISP suffix guard) is correct and still live.
+--
+-- This file is left as the historical record of what was actually applied on 2026-08-26; it is
+-- annotated rather than rewritten, because editing an applied migration would make it lie.
+--
+-- ============================================================================
 -- P187 — Tier 0 matching: see the owners the rule was structurally blind to.
 --
 -- PROBLEM (measured P186 §6): ~51 people at 9 owners worth $358M were already in `entities` and

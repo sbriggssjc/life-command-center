@@ -361,6 +361,15 @@ a widened stoplist covering geography, generic CRE nouns and consumer-ISP suffix
 
 ### Four things worth keeping from the build
 
+0. **⚠️ AND THE GATE I DID SHIP WAS DEFECTIVE — corrected by P188, record it here.** The token
+   fan-out gate was written the obvious way,
+   `from owner_tok ot join people p on p.sld like ot.tok||'%'` — **the exact un-keyed cross
+   product this whole document exists to describe removing**, re-created inside the gate.
+   Measured live: `Rows Removed by Join Filter: 6,222,095`, 1.78 s of a 3.10 s view, invisible
+   because the gate returns only 160 rows. P188 rewrote it with §1's own identity: 3,099 ms →
+   1,263 ms, join-filter rows → 0, 0-row pair-set diff. **A gate that filters a join is part of
+   that join.** See `P188_TIER0_CONFIRM_LANE_2026-08-26.md` §5 and playbook Class 13 lesson 5.
+
 1. **⚠️ Measuring a gate is not shipping a gate.** §5 measured a token fan-out gate and reported
    it cut CIM Urban 17→0 and Johnson 9→0. It was only ever applied in *analysis queries* — never
    written into the view. `johnsonlexus.com` was still matching "Allan Bailey Johnson Group" until
