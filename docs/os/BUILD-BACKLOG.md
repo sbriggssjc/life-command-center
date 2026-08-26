@@ -1,4 +1,13 @@
 # Build Backlog — the one resumable punch list
+
+> **⚠️ Dated 2026-07-27. The consolidated, current backlog is
+> [`PLANNED-BACKLOG.md`](PLANNED-BACKLOG.md); live system state is
+> [`CURRENT-STATE.md`](CURRENT-STATE.md).** Every unbuilt row in this file was swept into that
+> backlog on 2026-08-26 (Prompt 141) — see the manifest in
+> `docs/history/DOCS_CONSOLIDATION_2026-08-26.md` §5. This file is kept for its **reasoning,
+> dependency ordering and design pointers**, which the backlog deliberately does not duplicate.
+> **Re-measure any row here before acting on it.**
+
 > **Master sequence & anti-overlap invariant: `UNIFIED-BUILD-PLAN.md`.** This backlog is the checklist; that is the order.
 _Last updated: 2026-07-27._ Everything not-yet-fully-built, grouped, with dependencies + where it's designed.
 Legend: 🔴 not started · 🟡 partially built · 🟢 designed/specced, ready to build · ⚪ optional/roadmap.

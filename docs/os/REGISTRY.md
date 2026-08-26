@@ -12,6 +12,8 @@ or *historical* (kept for history; never edit/wire).
 
 | Capability | Canonical source | 
 |---|---|
+| **Current state (LIVE / flag-off / planned)** | `docs/os/CURRENT-STATE.md` |
+| **Consolidated backlog (everything unbuilt-but-intended)** | `docs/os/PLANNED-BACKLOG.md` |
 | OS entry point / map | `docs/os/README.md` |
 | Global invariants + canon version | `docs/os/canon/00-INDEX.md` |
 | Topic rules | `docs/os/canon/*.md` (comps, filing, email-and-routing, logging-and-touchpoints, writing-voice, bov, intake-triage, personal) |

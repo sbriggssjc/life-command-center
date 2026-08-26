@@ -33,6 +33,8 @@ engines were copied and diverged). Full statement: `architecture/connected-agent
 
 | Layer | Source of truth | Notes |
 |---|---|---|
+| **Where we are right now** | **`docs/os/CURRENT-STATE.md`** | What is LIVE · what is flag-gated OFF and why · the canonical-doc map. Read this first. |
+| **Everything unbuilt-but-intended** | **`docs/os/PLANNED-BACKLOG.md`** | ONE ranked backlog, every row citing where it came from. Nothing is dropped, only re-ranked or explicitly retired. |
 | **Brain — engines/data** | `mcp/` + `api/` (this repo) | One implementation each; MCP + HTTP return identical JSON |
 | **Memory — Cortex** | `log_memory`/`recall_memory`, `draft_and_log` signals, relationship/email discovery | Write-gated (log_memory Claude/MCP-only) |
 | **Instruction & policy canon** | **`docs/os/canon/`** (this folder) | The rules for each topic — the thing surfaces render |
@@ -50,8 +52,10 @@ engines were copied and diverged). Full statement: `architecture/connected-agent
 
 ## 4. How a future chat should begin (do this, in order)
 
-1. Read this README + `canon/00-INDEX.md` (the invariants + version).
-2. Read `REGISTRY.md` to find the source of truth for the capability you're touching.
+1. Read this README + **`CURRENT-STATE.md`** (where things stand) + `canon/00-INDEX.md` (the invariants + version).
+2. Read `REGISTRY.md` to find the source of truth for the capability you're touching; read
+   **`PLANNED-BACKLOG.md`** before proposing anything new — it is probably already there, possibly
+   already measured and refuted.
 3. Open the relevant `canon/<topic>.md` — that's the single place the rule lives. **Edit there, not on a surface.**
 4. If you changed a rule, bump `CANON_VERSION` and run `SURFACE-SYNC-PROTOCOL.md` to push it to every surface.
 5. If you built something new, register it (§5) so the next chat finds it.

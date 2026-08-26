@@ -1,6 +1,14 @@
 # P138 / R8 Stage 1 — the daily brief's "Analyst's Take", generated on-box
 
-**Status:** built, tested, scheduled — **flag OFF**, awaiting the operator gate below.
+**Status:** built, tested, scheduled, and **LIVE**. ⚠️ **Re-measured 2026-08-26:**
+`BRIEFING_ANALYST_TAKE_ONPREM` reads **`on`** in `feature_flags_registry` and today's
+`briefing_intel_snapshot` carries a **774-char** take with `analyst_take_meta.source =
+'onprem_ollama'` (2026-08-25 and every prior row: length 0). The "flag OFF, awaiting the
+operator gate" status below was true when written. **One gate item may still be open:** the
+`briefing-intel-snapshot` edge fn must carry `if (row.analyst_take == null) delete
+row.analyst_take;` or a manual snapshot re-fire upserts NULL over the on-box take. The fn is at
+v21 with an `updated_at` of 2026-08-26, consistent with the deploy having run — confirm the
+deployed source. Tracked as `docs/os/PLANNED-BACKLOG.md` row **V4**.
 **Date:** 2026-08-26
 
 ---

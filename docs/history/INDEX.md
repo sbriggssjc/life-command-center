@@ -16,6 +16,19 @@ Grouped by topic (document type), each sorted by date.
 
 ---
 
+## Status / worklog archives (the "opens with current state" splits)
+
+Living status files are trimmed forward; the tail lands here **verbatim**, never summarised.
+
+| Document | What it holds | Split on |
+| --- | --- | --- |
+| [STATUS_claude-code_2026-08-03_to_2026-08-12.md](STATUS_claude-code_2026-08-03_to_2026-08-12.md) | The tail of `docs/claude-code/STATUS.md`: comps arc prompts 19–60, Wave 8 hygiene, Wave 9 connectedness, ChatGPT/Copilot surface rollout, the 2026-08-03 security + deploy-pending notes | 2026-08-26 (Prompt 141) |
+| [CLAUDE_full_2026-07.md](CLAUDE_full_2026-07.md) | The full per-round worklog R5→R64 split out of `CLAUDE.md` | 2026-07 |
+| [AGENTS_full_2026-07.md](AGENTS_full_2026-07.md) | The `AGENTS.md` counterpart | 2026-07 |
+| [DOCS_CONSOLIDATION_2026-08-26.md](DOCS_CONSOLIDATION_2026-08-26.md) | What the 2026-08-26 consolidation moved and where, plus the full **preservation manifest** (every contemplated feature carried forward) | 2026-08-26 |
+
+---
+
 ## Claude Code prompt briefs
 
 Task/prompt specifications handed to Claude Code across rounds.

@@ -3,6 +3,15 @@
 Live rollout ledger for sequenced build waves. Newest wave on top. Each row: what
 shipped, where it lives, and the operator switch (if any) that lights it up.
 
+> **⚠️ The "operator switch" column is a snapshot from the day each wave shipped — it has drifted.**
+> Several units below read "BUILT — flag off" whose flag is now **on** in `feature_flags_registry`
+> (e.g. `MAILBOX_MIRROR`, `W74_ROLE_ISSUES`, `W75_ACTION_SUMMARY`, `PROPERTY_TWIN_ASSIST`).
+> **The live flag state is `docs/os/CURRENT-STATE.md` §3**, measured against the registry;
+> everything still unbuilt is consolidated in `docs/os/PLANNED-BACKLOG.md`.
+> Reconciled 2026-08-26 (Prompt 141) — no `⬜` markers exist in this file; the **W10 Stage 3 (template
+> library) and Stage 4 (LoRA)** intentions live in the prose of the **W10.1** row below and are carried
+> as backlog rows **L5** and **L6**.
+
 ---
 
 ## Prompt 106 — property_twin lane: deterministic pre-rank + Ollama assist (annotation-only)
