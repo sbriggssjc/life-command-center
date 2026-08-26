@@ -147,6 +147,21 @@ data-integrity signal. **`OWNERSHIP_CHAIN_DRAFT` flipped ON in the registry.** S
 (74 no-transitions, 18 all-guarded). `OWNERSHIP_CHAIN_ROLE_LABELS` (the Ollama label layer) held OFF pending a
 separate label-grading. ⏭ confirm via a non-dry-run tick + watch the lane drain (`completions > 0`). Lane B
 (`owner_contact_manual`) is NOT drafted (unanswerable residue) — decidability view surfaces the 6 answerable.
+**⚠️ R1 write mechanism:** GET defaults to dry-run and there is **NO cron** for `ownership-chain-draft-tick`
+(`r1_cron` null), so the 453 drafts don't auto-write — run an **apply** pass (POST the tick) to write them, and
+add a cron if the lane should keep drafting as new rows arrive. `already_drafted` = 0 until then.
+
+**✅ R2 RE-MEASURED 2026-08-24 — NOT a local-model gap; it's deterministic connectivity plumbing.** OM economics
+are ALREADY extracted on-box (**3,955 staged items carry `asking_price`/`cap_rate`**), a canonical store EXISTS
+(`lcc_property_attributes`), and owner names are extracted — the LLM (extraction) already ran. What's missing is
+the deterministic **write-back** (extraction_result → canonical economics) and **owner-edge creation** (dedupe
+the fragments + write asset→owner from the extracted owner). Category (a). **→ R2 moves to the engine-connectivity
+track (still high-value, unblocks offer-context/cadence/dossiers), OUT of the local-model rollout.**
+
+**Genuine local-model (category b) gaps remaining, re-ranked:** R4 (`NEXT_STEP_AI` — built+off — + going-cold
+thread prose), R8 (recurring-artifact drafting: daily-briefing prose / CM book copy / BOV-OM narratives — biggest
+new-build value), R5 (wrong-party edge substance second-look), R6 (undecidable owner-attach rationale), R7
+(signals learning loop — compounding). R3 leftovers: flip `NEXT_STEP_AI` + `OLLAMA_CLEAN_ASSIST` after a dry-run.
 
 ## Tackle order (most impactful first) — and the first concrete action for each
 1. **R3 first (fast, high, low-risk):** dry-run review + flip the dormant Decision Center `*_ASSIST` lanes in
