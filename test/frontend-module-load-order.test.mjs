@@ -27,6 +27,38 @@ function scriptIndex(file) {
   return m ? m.index : -1;
 }
 
+describe('index.html loads each local script EXACTLY once', () => {
+  // A merge that resolves the <script> block by keeping BOTH sides duplicates
+  // every tag in it. That shipped to main on 2026-08-26: dc-lanes.js, ops.js and
+  // the four ops-* siblings each got a second tag.
+  //
+  // Measured, not assumed — the damage differs by file and neither half is ok:
+  //   · dc-lanes.js (3 top-level let/const) and ops.js (45) throw a
+  //     redeclaration SyntaxError on the second parse. A classic script's parse
+  //     error is scoped to that script, so the first copy still holds and the app
+  //     survives — but the console fills with SyntaxErrors that mask real ones.
+  //   · the four ops-* files declare only `function`/`var`, so they parse fine
+  //     and RE-EXECUTE. Harmless only because none carries a top-level
+  //     side effect today; nothing stops the next one from doing so.
+  // Either way every duplicated file is downloaded twice.
+  //
+  // The cache-buster guard caught this only BY ACCIDENT (the two copies happened
+  // to carry different ?v= values). Two duplicate tags at the SAME version pass
+  // it cleanly, so the duplication itself needs its own assertion.
+  it('no local <script src> appears more than once', () => {
+    const seen = new Map();
+    const re = /<script[^>]*\ssrc="(?!https?:)([^"?]+)(?:\?[^"]*)?"/gi;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      seen.set(m[1], (seen.get(m[1]) || 0) + 1);
+    }
+    const dupes = [...seen.entries()].filter(([, n]) => n > 1);
+    assert.deepEqual(dupes, [],
+      'duplicate <script src> in index.html: ' + JSON.stringify(dupes));
+    assert.ok(seen.size > 10, 'sanity: the scanner found ' + seen.size + ' local scripts');
+  });
+});
+
 describe('W6.5 front-end module load order (no-bundler classic scripts)', () => {
   it('dc-lanes.js is present in index.html', () => {
     assert.ok(scriptIndex('dc-lanes.js') >= 0, 'index.html must load dc-lanes.js');
