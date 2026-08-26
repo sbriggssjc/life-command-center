@@ -352,25 +352,205 @@ export function parseRoleLabels(text) {
   } catch (_e) { return null; }
 }
 
+// ---------------------------------------------------------------------------
+// P140 — ONE OWNER FOR THE PER-LABEL DECISION.
+//
+// `applyRoleLabels` (production) and `gradeRoleLabels` (the dry-run grader) must
+// never be able to disagree about whether a label survives, or the grade is a
+// grade of something other than what ships. So both delegate to this single pure
+// evaluator; the applier adds mutation, the grader adds reporting, and neither
+// re-implements a predicate. Same discipline as
+// `lcc_mailbox_mirror_error_is_terminal` being the sole owner of the terminal-vs-
+// retry call (P119) — a second copy is the normaliser drift this codebase keeps
+// paying for.
+//
+// Returns { ok, drop_reason, label, why, link_index, link, party_presence }.
+// `party_presence` is evaluated INDEPENDENTLY of the other drops whenever the
+// index resolves, so the grader can report an honest per-guard drop rate even for
+// labels that were already dropped for a different reason.
+// ---------------------------------------------------------------------------
+export function evaluateRoleLabel(draft, item) {
+  const links = (draft && Array.isArray(draft.links)) ? draft.links : [];
+  const i = Number(item && item.index);
+  const rawLabel = String((item && item.label) || '').toLowerCase().trim();
+  const why = cleanText(item && item.why, 120);
+
+  if (!Number.isInteger(i) || i < 0 || i >= links.length) {
+    return { ok: false, drop_reason: 'bad_index', label: rawLabel || null, why: why || null,
+      link_index: Number.isFinite(i) ? i : null, link: null, party_presence: null };
+  }
+  const link = links[i];
+  // Evaluated for EVERY resolvable index, regardless of the label's own fate.
+  const partyPresence = why ? (introducesUnknownParty(why, link) ? 'fail' : 'pass') : 'no_rationale';
+  const base = { label: rawLabel || null, why: why || null, link_index: i, link, party_presence: partyPresence };
+
+  if (!OCD_ROLE_LABELS.has(rawLabel)) return { ok: false, drop_reason: 'label_not_allowed', ...base };
+  if (rawLabel === 'unknown') return { ok: false, drop_reason: 'unknown_label', ...base };
+  if (partyPresence === 'fail') return { ok: false, drop_reason: 'why_names_unknown_party', ...base };
+  return { ok: true, drop_reason: null, ...base };
+}
+
 // Drop-on-doubt validator. A label survives only if it points at a real link index
 // and uses an allowed label; `why` is additionally required to name no party that
 // is not already in that link (the U3 lesson, applied to the field that can drift).
 export function applyRoleLabels(draft, labels) {
   const out = { applied: 0, dropped: 0, drop_reasons: {} };
   if (!draft || !draft.draftable || !Array.isArray(labels)) return out;
-  const drop = (r) => { out.dropped += 1; out.drop_reasons[r] = (out.drop_reasons[r] || 0) + 1; };
   for (const item of labels) {
-    const i = Number(item && item.index);
-    if (!Number.isInteger(i) || i < 0 || i >= draft.links.length) { drop('bad_index'); continue; }
-    const label = String((item && item.label) || '').toLowerCase().trim();
-    if (!OCD_ROLE_LABELS.has(label)) { drop('label_not_allowed'); continue; }
-    if (label === 'unknown') { drop('unknown_label'); continue; }
-    const why = cleanText(item && item.why, 120);
-    if (why && introducesUnknownParty(why, draft.links[i])) { drop('why_names_unknown_party'); continue; }
-    draft.links[i].role_label = label;
-    draft.links[i].role_why = why || null;
-    draft.links[i].role_source = 'local_model';
+    const v = evaluateRoleLabel(draft, item);
+    if (!v.ok) {
+      out.dropped += 1;
+      out.drop_reasons[v.drop_reason] = (out.drop_reasons[v.drop_reason] || 0) + 1;
+      continue;
+    }
+    v.link.role_label = v.label;
+    v.link.role_why = v.why || null;
+    v.link.role_source = 'local_model';
     out.applied += 1;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// P140 — the GRADER. Same decision, NO mutation, and nothing dropped silently.
+//
+// The point of the dry run is that a human can see the model's raw output next to
+// the verdict the guard would reach, INCLUDING the rejects — a drop rate that is
+// invisible reads as a clean run (W8 U3 shipped 32 cards while dropping 35
+// proposals `quote_not_verbatim`; the drop rate WAS the finding). So every
+// proposed label comes back with its link, its rationale, its party-presence
+// verdict and `would_apply`.
+//
+// It deliberately does not touch `draft` — the caller can therefore hash the
+// chain before and after and prove Layer 2 altered nothing, rather than trusting
+// that it did not.
+// ---------------------------------------------------------------------------
+export function gradeRoleLabels(draft, labels) {
+  const rows = [];
+  const summary = {
+    proposed: 0, would_apply: 0, dropped: 0, drop_reasons: {},
+    party_presence: { pass: 0, fail: 0, no_rationale: 0, unresolvable_index: 0 },
+    labels_by_kind: {},
+  };
+  if (!draft || !draft.draftable || !Array.isArray(labels)) {
+    return { rows, summary, parsed: Array.isArray(labels) };
+  }
+  for (const item of labels) {
+    summary.proposed += 1;
+    const v = evaluateRoleLabel(draft, item);
+    if (v.party_presence == null) summary.party_presence.unresolvable_index += 1;
+    else summary.party_presence[v.party_presence] += 1;
+    if (v.label) summary.labels_by_kind[v.label] = (summary.labels_by_kind[v.label] || 0) + 1;
+    if (v.ok) summary.would_apply += 1;
+    else {
+      summary.dropped += 1;
+      summary.drop_reasons[v.drop_reason] = (summary.drop_reasons[v.drop_reason] || 0) + 1;
+    }
+    rows.push({
+      link_index: v.link_index,
+      // The link AS DRAFTED — the facts the label is being graded against.
+      link: v.link ? {
+        date: v.link.date, grantor: v.link.from, grantee: v.link.to,
+        price: v.link.price,
+        data_source: (v.link.citation && v.link.citation.data_source) || null,
+        ownership_id: (v.link.citation && v.link.citation.ownership_id) || null,
+        gap_before: v.link.gap_before === true,
+      } : null,
+      proposed_label: v.label,
+      rationale: v.why,
+      party_presence: v.party_presence,
+      would_apply: v.ok,
+      drop_reason: v.drop_reason,
+    });
+  }
+  return { rows, summary, parsed: true };
+}
+
+// A stable fingerprint of the deterministic chain, so a caller can prove Layer 2
+// added, removed, reordered, re-dated or re-named nothing. Covers exactly the
+// fields the model is forbidden to touch — role_label/role_why are excluded on
+// purpose, because those ARE the additive annotation.
+export function chainFingerprint(draft) {
+  const links = (draft && Array.isArray(draft.links)) ? draft.links : [];
+  return links.map((l) => [l.date, chainNameKey(l.from), chainNameKey(l.to),
+    l.price == null ? '' : String(l.price)].join('|')).join('||');
+}
+
+// ---------------------------------------------------------------------------
+// P140 — STRUCTURAL shape of a chain, for SAMPLE SELECTION only.
+//
+// ⚠️ Read the scope before reusing this. These buckets exist so a grading sample
+// of ~18 is not 18 copies of the same easy case: the lane is value-ranked, so its
+// head can be structurally homogeneous and a top-N sample would grade one shape
+// and report it as the model's accuracy. This is SELECTION, never identity and
+// never a write — which is why `affiliateNameOverlap` may use the loose,
+// semantic-token-stripping comparison that CLAUDE.md bans for identity. Grouping
+// for review ≠ identity for write (the `v_lcc_merge_candidates` precedent).
+//
+// Note the shapes are named for what is OBSERVABLE on the record (a nominal
+// price, an overlapping party name), never for the answer the model is being
+// asked for. Calling a bucket "arms_length" would pre-judge the very label under
+// test; `priced_transfer` is the honest name for the case that ought to attract it.
+// ---------------------------------------------------------------------------
+const GENERIC_NAME_TOKENS = new Set([
+  'llc', 'inc', 'corp', 'corporation', 'incorporated', 'ltd', 'limited', 'company',
+  'trust', 'holdings', 'holding', 'properties', 'property', 'partners', 'partnership',
+  'capital', 'group', 'realty', 'real', 'estate', 'associates', 'investments',
+  'investment', 'management', 'development', 'ventures', 'fund', 'assoc', 'the',
+]);
+
+// Nominal-consideration threshold. A recorded transfer at or under this is the
+// classic non-arm's-length marker (a $1 / $10 deed between affiliates); it is a
+// SELECTION heuristic, not a finding — the label is still the model's to propose
+// and the human's to confirm.
+export const OCD_NOMINAL_PRICE_MAX = 100;
+
+export function affiliateNameOverlap(link) {
+  const toks = (s) => String(s == null ? '' : s).toLowerCase().split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 5 && !GENERIC_NAME_TOKENS.has(t));
+  const a = new Set(toks(link && link.from));
+  for (const t of toks(link && link.to)) if (a.has(t)) return t;
+  return null;
+}
+
+// Precedence is RAREST-AND-MOST-DIAGNOSTIC FIRST, so the buckets a grade most
+// needs (a nominal-consideration deed, an affiliate reshuffle) can never be
+// starved by the abundant ones. `single_link` therefore means an UNPRICED single
+// link — a priced one is already the more informative `priced_transfer`.
+export function classifyChainShape(draft) {
+  if (!draft || !draft.draftable || !draft.links.length) return 'not_draftable';
+  const links = draft.links;
+  if (links.some((l) => l.price != null && l.price <= OCD_NOMINAL_PRICE_MAX)) return 'nominal_price';
+  if (links.some((l) => affiliateNameOverlap(l))) return 'affiliate_name_overlap';
+  if (links.some((l) => l.price != null && l.price > OCD_NOMINAL_PRICE_MAX)) return 'priced_transfer';
+  if (links.length === 1) return 'single_link';
+  if (draft.continuity && draft.continuity.breaks > 0) return 'multi_link_gapped';
+  return 'multi_link_contiguous';
+}
+
+// Round-robin across shape buckets so the sample spreads instead of taking the
+// value-ranked head. Within a bucket the incoming order (value rank) is kept, so
+// the highest-value example of each shape is graded first. Deterministic — the
+// same candidate list always yields the same sample, which is what makes two
+// grading runs comparable.
+export function pickGradeSample(candidates, n) {
+  const want = Math.max(0, Number(n) || 0);
+  const buckets = new Map();
+  for (const c of (Array.isArray(candidates) ? candidates : [])) {
+    const shape = c && c.shape ? c.shape : 'unclassified';
+    if (!buckets.has(shape)) buckets.set(shape, []);
+    buckets.get(shape).push(c);
+  }
+  const keys = [...buckets.keys()].sort();
+  const out = [];
+  let progressed = true;
+  while (out.length < want && progressed) {
+    progressed = false;
+    for (const k of keys) {
+      if (out.length >= want) break;
+      const b = buckets.get(k);
+      if (b.length) { out.push(b.shift()); progressed = true; }
+    }
   }
   return out;
 }

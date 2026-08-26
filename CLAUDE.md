@@ -1318,6 +1318,40 @@ about what can honestly be drafted.
   LABELS a transfer type on links it may not add, remove, reorder, re-date or re-name
   (`OWNERSHIP_CHAIN_ROLE_LABELS`, off; a label whose rationale names a party absent from that link is
   dropped).
+- **P140 — that Layer 2 is now GRADEABLE before the flip:
+  `GET /api/ownership-chain-draft-tick?role_labels=1&generate=1`** (`&sample=N`, default 18, max 25).
+  Ungated and write-free by design — gating the grade on the flag would make the layer ungradeable
+  until after it shipped (the P138 analyst-take `?generate=1` precedent). It returns each link as
+  drafted next to the proposed label, its rationale, and the **party-presence guard verdict**, so the
+  DROP RATE is visible: a meaningful one is the guard working (W8 U3 dropped ~52% on this same gap and
+  that rate WAS the finding), not the run failing. Full writeup:
+  `docs/audits/P140_ROLE_LABEL_GRADE_DRYRUN_2026-08-26.md`. **The flag is still off** — the grade
+  decides it. Three durable lessons:
+  - **⚠️ THE OBVIOUS WIRING WOULD HAVE GRADED ZERO ROWS AND READ AS A CLEAN RUN.** The tick prepares
+    from `fresh` = open ∧ **undrafted**, which is what the WRITE path needs. Measured 2026-08-26: all
+    **545** open lane rows already carry a proposal (P131/P133 drained the lane in one pass, 15:50–16:02),
+    so `fresh` is **0** and a grade reading `prepared` returns `sample_taken: 0` — indistinguishable
+    from a clean grade. Layer 2 labels a chain that ALREADY EXISTS, so an already-drafted row is the
+    IDEAL candidate; the grade prepares from the open lane and names its source
+    (`candidate_source: 'open_lane_including_already_drafted'`). **A grading tool is not exempt from
+    the failure-looks-like-success rule.**
+  - **⚠️ A SAMPLE OFF THE VALUE-RANKED HEAD GRADES ONE SHAPE AND CALLS IT ACCURACY.** Measured over
+    the 453 draftable chains: **173 priced / 133 single-link / 119 affiliate-name-overlap / 22
+    nominal-price (≤$100) / 6 multi-link**. The last two — **26% and 5%** — are exactly the cases the
+    grade exists to test (an SPE reshuffle must not read arms-length; a nominal deed must be flagged
+    non-arm's-length). `pickGradeSample` round-robins across shape buckets, rarest-first, and is
+    deterministic so two runs are comparable. **The shape classifier is SELECTION ONLY** — never
+    identity, never a write — which is why `affiliateNameOverlap` may use the loose generic-token
+    comparison banned for identity; and the buckets are named for what is OBSERVABLE
+    (`nominal_price`, `priced_transfer`), never for the answer under test.
+  - **ONE OWNER PER LABEL DECISION, AND IMMUTABILITY PROVEN NOT ASSERTED.** `evaluateRoleLabel` is the
+    sole verdict; `applyRoleLabels` = evaluate+mutate, `gradeRoleLabels` = evaluate+report, and a test
+    pins that they agree — otherwise the grade describes something other than what ships. Each sample
+    fingerprints its chain, runs the REAL applier over a copy and re-fingerprints
+    (`chains_altered_by_layer2` must be **0**). Read `providers` too: a sample rescued by the cloud
+    fallback is not a grade of the on-box layer the flag turns on. And party-presence is evaluated for
+    every resolvable index — including labels already dropped for another reason — or the guard's own
+    rate is measured only on the labels that got past every other check.
 - **⚠️ A QUEUE IS THE RESIDUE THE AUTOMATION ALREADY PICKED OVER — MEASURE THE QUEUE, NOT THE SOURCE.**
   `owner_contact_manual` (316 open / 0 completions) was to be drafted from SOS `manager_name` +
   signature blocks + notice address. At SOURCE that looks fine: gov has 1,482 owners with a manager, 966
