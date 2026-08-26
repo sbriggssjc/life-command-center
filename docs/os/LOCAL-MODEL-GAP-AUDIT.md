@@ -140,6 +140,14 @@ the real value:
   **R2–R9 below were written before this lens — re-measure each against it before building; several may be (a)
   or (c), not (b).** (This is the re-measure-the-dated-blocker doctrine applied to my own audit.)
 
+**✅ R1 ACTIVATED 2026-08-24 (ownership-history half).** Dry-run sample graded 15/15 clean by Cowork — real
+dated sourced chains, gaps honestly "Not on file," 3 no-transition rows correctly undraftable, plus **73 rows
+flagging a current-owner-vs-deed MISMATCH** ("Boyd Watterson Asset Mgmt vs Global — reconcile") = a free
+data-integrity signal. **`OWNERSHIP_CHAIN_DRAFT` flipped ON in the registry.** Scope: **453 draftable / 92 not**
+(74 no-transitions, 18 all-guarded). `OWNERSHIP_CHAIN_ROLE_LABELS` (the Ollama label layer) held OFF pending a
+separate label-grading. ⏭ confirm via a non-dry-run tick + watch the lane drain (`completions > 0`). Lane B
+(`owner_contact_manual`) is NOT drafted (unanswerable residue) — decidability view surfaces the 6 answerable.
+
 ## Tackle order (most impactful first) — and the first concrete action for each
 1. **R3 first (fast, high, low-risk):** dry-run review + flip the dormant Decision Center `*_ASSIST` lanes in
    value order (`NEXT_STEP_AI` → `PROPERTY_TWIN_ASSIST` → `W9_3_SF_ASSIST` → the rest). No new build. → *first
