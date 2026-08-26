@@ -119,4 +119,15 @@ test('ASC routes are mounted and never invoke the dialysis/government propagator
   }
   assert.doesNotMatch(handler, /propagateToDomainDb|processSidebarExtraction|sf_sync_queue|bd_opportunities|touchpoint_cadence/);
   assert.match(sidepanel, /sessionCtx\?\.address\s*&&\s*sessionCtx\?\.state\s*\?\s*sessionCtx\s*:\s*ctx/);
+  assert.match(sidepanel, /toErrorMessage\(\s*capture\.data\?\.detail/);
+});
+
+test('capture retries receive only the column update privilege required by the invoker RPC', async () => {
+  const sql = await readFile(
+    new URL('../supabase/migrations/20261001120500_lcc_asc_capture_retry_privilege.sql', import.meta.url),
+    'utf8',
+  );
+  assert.match(sql, /grant\s+update\s*\(\s*source_url\s*\)\s+on\s+public\.healthcare_research_captures\s+to\s+service_role/is);
+  assert.doesNotMatch(sql, /grant\s+update\s+on\s+public\.healthcare_research_captures/i);
+  assert.doesNotMatch(sql, /security\s+definer/i);
 });

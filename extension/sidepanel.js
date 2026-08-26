@@ -299,14 +299,18 @@ async function wireAscResearchAction(ctx, actions) {
         } else {
           complete.disabled = false;
           complete.textContent = 'Complete property capture';
-          detail.textContent = advanced.data?.detail || advanced.data?.error || advanced.error || 'Could not advance candidate';
+          detail.textContent = toErrorMessage(
+            advanced.data?.detail || advanced.data?.error || advanced.error
+          ) || 'Could not advance candidate';
         }
       });
     } else {
       button.disabled = false;
       button.textContent = 'Capture blocked — retry';
       button.className = 'btn btn-sm btn-danger';
-      detail.textContent = capture.data?.detail || capture.data?.error || capture.error || 'Capture failed';
+      detail.textContent = toErrorMessage(
+        capture.data?.detail || capture.data?.error || capture.error
+      ) || 'Capture failed';
     }
   });
 }
