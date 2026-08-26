@@ -201,6 +201,26 @@ not-built, and it *tests* as success: 142/142 guards passed on a button at page 
 DOWN (below the old default). A blanket promotion of the whole lane would have inverted the
 noise rather than removed it.
 
+**⚠️ REFINEMENT (P179, 2026-08-26): "unreachable" does not always mean "rank it higher", and
+assuming it does will make you demote healthy work.** Ranking `establish_ownership_history`
+from a flat 100 to priority 30 left it at **row 1,528 — page 62** of the global list. The
+tempting next move is to push down whatever sits above. Measured first: the 1,527 rows ahead
+were two lanes with **4,772 and 595 lifetime completions**, one of them completing rows that
+same day. They are not noise; they are the system working.
+
+So the question "why can't the operator reach this?" has at least three different answers, and
+they need different fixes:
+
+| cause | fix |
+|---|---|
+| the lane is unranked / flat-defaulted | rank it (P174) |
+| the lane is ranked but genuinely behind more valuable work | a FILTER or lane picker, not a re-rank |
+| the lane is ranked and reachable but has no way to answer | a capture path (Class 3 / P173 / P179) |
+
+**Before promoting anything, measure the throughput of what it would displace.** A lane one
+filter-click away with its best work on page 1 is reachable; a lane at page 62 of an
+undifferentiated list is not — and the difference is navigation, not priority.
+
 ---
 
 ## Class 8 — a producer re-creates what the cleanup cleaned
@@ -527,11 +547,42 @@ Ordered by expected yield, not by ease:
 
    **⚠️ ORDER MATTERS AND THE OBVIOUS ORDER IS WRONG.** Re-ranking first would promote 214
    owners' worth of *unanswerable* work onto page 1, displacing the contact lane P174 just
-   made reachable — strictly worse than leaving it buried. **Capture path first
-   (`openUnifiedDetail(domain, source_record_id, null, 'Ownership')`, mirroring P173's
-   open-the-existing-surface pattern — the property panel already has an Ownership tab), then
-   rank.** Prerequisite to check: the research queue payload must carry `domain` and
-   `source_record_id`; if it does not, that is the first change.
+   made reachable — strictly worse than leaving it buried. **Capture path first, then rank.**
+
+   **✅ BOTH DONE 2026-08-26 (P179), in that order.** The card now offers "Open ownership →"
+   (`researchOpenOwnership`), reusing the property panel's existing Ownership tab — no second
+   write surface, mirroring P173. It routes on `domain` + `source_record_id` (the payload uses
+   `select=*`, so both were already there); **a test asserts it is NOT wired to `entity_id`**,
+   because the task's subject is a property whose ownership chain is unresolved, which makes
+   the linked owner the disputed thing rather than the destination. Then ranked by owner rent,
+   deduped: 30 / 45 / 65 / 85 → 36 owners ≥ $5M lifted off the flat 100.
+
+   **⚠️⚠️ AND THE RANK ALONE DID NOT MAKE IT REACHABLE — Class 7 again, caught by measuring
+   instead of declaring victory.** After ranking to priority 30 the first card still sat at
+   **row 1,528, page 62** of the global list.
+
+   **The fix was NOT to demote what sat above it, and checking that is the whole lesson.** The
+   1,527 rows ahead are `true_owner_needs_salesforce` (816) and `property_missing_recorded_owner`
+   (665) — and **both lanes are healthy and actively worked**, 4,772 and 595 lifetime
+   completions, the former completing rows the same day. Demoting drained, real work to surface
+   a newer lane would have been the actual defect. P174's note that page 1 was "25 of 25
+   true_owner_needs_salesforce, 0 actionable" was about the *contact* lane's actionability, not
+   a claim that those cards are noise — and it would have been easy to misread it as licence.
+
+   **Reachability for this lane is the page's `research_type` FILTER, not the global rank.**
+   With the lane selected, page 1 now holds **19 distinct owners / $395.0M**, top owner $179.8M.
+   *(The naive per-task sum said $809.8M — a 2× double-count. Rank and report per OWNER.)*
+   **A ranked lane one filter-click away is a different thing from a lane buried at page 62;
+   do not conflate them, and do not "fix" page 1 by demoting healthy work.**
+5b. **NEW (P179): the Research page has a type filter but no LANE PICKER.** Five lanes with
+   very different cadences share one priority-ordered list, so a lane's reachability depends on
+   the operator already knowing to filter for it. P179 showed why that matters: a correctly
+   ranked, newly-answerable lane still reads as "page 62" until you filter. **A picker showing
+   per-lane open count + total value (deduped per owner) would make all five navigable without
+   any further priority juggling** — and priority juggling is the move that risks demoting the
+   healthy lanes. This is navigation work, not ranking work, and it is the highest-value
+   remaining item on this list.
+
 6. **The observability gap (blocks Class 6, Class 8, and any future Class-4 detector)** —
    `lcc_reusable_owner_contacts` (10,430 rows), `lcc_owner_evidence_cache` (43,161) and
    `lcc_sf_comp_on_market` (1,696) have **no `_at` column at all**. No age, SLA, freshness or
