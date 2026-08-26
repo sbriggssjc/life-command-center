@@ -1284,6 +1284,29 @@ Related invariants from the same round:
   person's FUNCTION — demonstrated live: Easterly's panel read "— none" while we held **71
   emails with Andrew Pulliam** (closings/press) and **51 with Lucas Shuler** (prorations),
   neither linked to the owner, while 7 competitor brokers were.
+  - **⚠️ THE PURSUIT TARGET IS THE ACQUISITIONS CONTACT, NOT THE HIGHEST-VOLUME ONE.** We
+    prospect a buyer by SHOWING THEM DEALS, so the buy-side pitch belongs with acquisitions
+    (Easterly: Andy Pulliam, EVP-Acquisitions, 71 emails — pursue; Lucas Shuler, DD/transaction
+    manager for one deal, 51 emails — do not). The funnel: the acquisitions contact recommends
+    us into disposition conversations, because disposition teams ask their own acquisitions
+    team who the best brokers are; the disposition name we then earn is kept **IN ADDITION**,
+    pursued in an institutional/REIT disposition tone. Role buckets — acquisitions (buy-side) /
+    disposition (seller BD tone) / transaction-DD-asset-mgmt (never a target) / broker (never a
+    target, Tier-4 intelligence). **The discriminating signal is which person INITIATED each
+    deal-flow thread (the initial showing)**, not message volume.
+  - **⚠️ MATCH A PERSON TO AN ACCOUNT BY EMAIL DOMAIN, NEVER COMPANY NAME.** Salesforce already
+    holds these buyer principals (`lcc_sf_list_membership`, campaign `GSA Buyer`) — Pulliam is
+    filed under **"Government Investment Partners LLC"**, so `company_name ilike '%easterly%'`
+    returns NOTHING. Same identity-vs-fuzzy discipline as `lcc_owner_strict_core`: the
+    human-entered label is unreliable, the machine key is not. Verified live: the principals for
+    Easterly, NGP Capital and Elman Investors are all in SF as entities with
+    **`linked_to_owner = false`** — the names were never missing, the LINKS were.
+  - **⚠️ NAME-KEYED WEB/LINKEDIN ENRICHMENT WILL CONFIDENTLY MOVE PEOPLE TO THE WRONG FIRM.** A
+    2026-08-26 search for Pulliam returned a DIFFERENT Andrew Pulliam ("VP Financial Operations
+    at Integra"). Key on email domain + employer corroboration, record `source_url`/`confidence`/
+    `as_of`, and never overwrite a correspondence-derived employer on a name match. **Do not
+    scrape LinkedIn** (ToS); use the user's own connections export, company team pages, SEC
+    filings, or a licensed API — see the design doc §5a.
   - **⚠️ AN EXCLUSION NEEDS A COUNTERPART THAT PROMOTES.** `v_owner_contact_worklist` excludes
     owners that already have a linked person (correct — they need no *acquisition*), and
     nothing writes that person into `owner_contact_pivot`. Result: **11 owners, $240.5M,
