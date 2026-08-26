@@ -42,6 +42,17 @@ genuine ties. P137 = add `current_priority` + `priority_ladder` to the view (app
 `select=` (the exact "diff view columns vs select" lesson). Turns ~95% of the lane from punt into a
 grounded keep_current/accept_attempted.
 
+**P137 SHIPPED (PR #1782 merged).** View columns (`current_priority`, `priority_ladder`) live on LCC Opps
+now; `select=` change + tick cursor shipped on the redeploy. Data layer PROVEN (join resolves 454/454,
+433 decidable). **But the live payoff is currently MASKED by a rank-scale issue (CC caveat 2):** the 65-row
+`dia_xref` backlog ranks `1001` (`1000 + severity`) — ABOVE every ladder-bearing `field_provenance` row
+(`_provImportance` ≤ 1000) — so the cursor drains xref first, and xref has **no ladder by design** (dia
+sales-price cross-ref, correctly `uncertain`). Re-grade runs so far only reached xref rows (correctly
+abstaining, one now naming the specific fields + "registered field_source_priority" = enrichment IS
+reaching the model). **Ladder-bearing verification is gated on draining ~50 more xref rows** (hourly cron
+200 does this over ~a day) OR a small follow-up to re-rank the xref constant so the two interleave — left as
+Scott's call because `rank_value` also orders the human-facing Decision Center lane.
+
 **Assist production-health is now GREEN across the board** — 6 were already healthy, the 2 stalled lanes are
 fixed (P135 live, P136 merged), clean-assist enriched + re-graded + flipped ON. The recurring lesson, now proven
 three times in one arc: a producer keyed on "already processed" needs a marker/cursor that ADVANCES, or it
