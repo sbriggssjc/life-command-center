@@ -2059,6 +2059,23 @@ function computeEngagementScore(lastCallDate, lastEmailDate, lastMeetingDate, to
 // stanjohnsonco.com and northmarq.com while his companyName reads "Newmark" — no ordering
 // rule can resolve that, and guessing would silently pick a firm he has left. The aliases
 // preserve the full history so a later, evidence-based pass can decide.
+// ⚠️ SUPERSEDED DOMAINS — a firm that no longer exists must lose to one that does.
+//
+// These are FACTUAL business events (acquisitions), not heuristics, which is why an explicit
+// list is the right shape rather than a similarity score. Measured 2026-08-26: **101 contacts
+// carried a dead `@stanjohnsonco.com` primary, 52 of them with a live `@northmarq.com`
+// address already on file** — `pickBestEmail` chose the dead firm purely because it sorts
+// first in the Outlook `emailAddresses` array. Ken Hedrick is the worked example.
+//
+// Scope note: this decides which address is the IDENTITY key. The superseded address is never
+// discarded — it stays in `email_aliases`, because the employer trail is exactly the
+// "where did this person go" signal the BD doctrine wants.
+//
+// Add a line when a firm we deal with is acquired. Do NOT infer this from name similarity.
+const SUPERSEDED_DOMAINS = new Map([
+  ['stanjohnsonco.com', 'northmarq.com'],   // Stan Johnson Company -> Northmarq
+]);
+
 export function pickBestEmail(candidates, explicitEmail) {
   const norm = (v) => {
     if (!v) return null;
@@ -2077,13 +2094,23 @@ export function pickBestEmail(candidates, explicitEmail) {
 
   if (!list.length) return { email: null, aliases: [], basis: 'none' };
 
-  const isConsumer = (e) => PERSONAL_DOMAINS.has((e.split('@')[1] || '').toLowerCase());
-  const business = list.find((e) => !isConsumer(e));
-  const chosen = business || list[0];
+  const domainOf = (e) => (e.split('@')[1] || '').toLowerCase();
+  const isConsumer = (e) => PERSONAL_DOMAINS.has(domainOf(e));
+  const isSuperseded = (e) => SUPERSEDED_DOMAINS.has(domainOf(e));
+
+  // Preference order: a LIVE business domain, then a superseded one, then consumer.
+  // A dead firm still beats a personal address — it is at least a work identity.
+  const live = list.find((e) => !isConsumer(e) && !isSuperseded(e));
+  const dead = list.find((e) => !isConsumer(e) && isSuperseded(e));
+  const chosen = live || dead || list[0];
+  const basis = live ? 'live_business_domain'
+    : dead ? 'superseded_business_domain_only'
+    : 'all_consumer_domains';
   return {
     email: chosen,
+    // The superseded address is KEPT — it is the employer trail, not noise.
     aliases: list.filter((e) => e !== chosen),
-    basis: business ? 'first_business_domain' : 'all_consumer_domains',
+    basis,
   };
 }
 
