@@ -699,6 +699,41 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
       'must NOT be wired to entity_id — that is the disputed owner, not the subject');
   });
 
+  // ── P180: the research lane picker, and its honest-count rules ────────────
+  it('the research lane picker exists and reports counts honestly', () => {
+    const ops = readFileSync(join(root, 'ops.js'), 'utf8');
+    const queue = readFileSync(join(root, 'api', 'queue.js'), 'utf8');
+
+    assert.match(ops, /function\s+researchLanePickerHTML\b/, 'ops.js renders the picker');
+    assert.match(ops, /window\.setResearchLane\s*=/,
+      'the chip reaches its handler from an inline onclick at CLICK time');
+    assert.match(ops, /onclick="setResearchLane\(/, 'the chips are clickable');
+    assert.match(ops, /view=research_lanes/, 'it reads the lane summary endpoint');
+    assert.match(queue, /case 'research_lanes'/, 'queue.js serves that view');
+    assert.match(queue, /v_lcc_research_lane_summary/, 'backed by the summary view');
+
+    // ⚠️ RULE 1 — a failed picker must not strand the queue. Promise.all would
+    // reject the whole render on one bad response; the Overview tiles were
+    // broken this exact way.
+    assert.match(ops, /Promise\.allSettled\(\[\s*\n?\s*opsApi\(`\/api\/queue\?view=research/,
+      'the two fetches use allSettled, never Promise.all');
+
+    // ⚠️ RULE 2 — NULL rent means "cannot be sized", not "$0". Six lanes carry
+    // no entity_id, and two of them are the highest-throughput work we have;
+    // rendering "$0" would invite exactly the wrong triage. The null check must
+    // come BEFORE any numeric coercion (Number(null) === 0).
+    assert.match(ops, /if\s*\(v === null \|\| v === undefined\) return '<span title="no owner link/,
+      'null/undefined rent short-circuits to an em-dash before Number() is applied');
+
+    // ⚠️ RULE 3 — a lane with no capture path is marked, not silently offered.
+    assert.match(ops, /l\.answerable \?/, 'the chip distinguishes answerable lanes (Class 3)');
+
+    // Selecting a lane must reset paging, or the operator lands on page N of a
+    // shorter lane and reads an empty list as "no work".
+    assert.match(ops, /function setResearchLane\(type\)\s*\{[^}]*opsResearchPage = 1/,
+      'selecting a lane resets to page 1');
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
