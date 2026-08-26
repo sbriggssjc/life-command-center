@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 import {
   classifyTwinDeterministic, twinEvidenceText, buildTwinAssistPrompt,
   parseTwinAssistJson, normalizeTwinAssistProposal, twinAssistSortKey,
-  twinAssistAgreement, buildProposalFromLayers,
+  twinAssistAgreement, buildProposalFromLayers, selectFreshTwinRows,
   PT_ASSIST_SOURCE, PT_ASSIST_KIND, PT_ASSIST_DECISION_TYPE,
 } from '../api/_shared/property-twin-assist-planner.js';
 
@@ -183,6 +183,97 @@ describe('store namespacing constants', () => {
     assert.equal(PT_ASSIST_SOURCE, 'property_twin_assist');
     assert.equal(PT_ASSIST_KIND, 'review_triage');
     assert.equal(PT_ASSIST_DECISION_TYPE, 'property_twin');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Prompt 135 — the working set must ADVANCE PAST the annotated window.
+//
+// Regression guard for the silent stall found live 2026-08-26: the tick pulled a
+// FIXED first page of pending rows and filtered annotated ones in JS, so once
+// that page was fully annotated `fresh` was 0 forever. The assist wrote 200 rows
+// on 2026-08-19 and NOTHING in the 7 days since, against 1,095 pending, while the
+// nightly cron reported healthy. Assert on the DELTA the worker can still drain,
+// never on the flag state.
+// ---------------------------------------------------------------------------
+describe('selectFreshTwinRows — drains past the annotated first page', () => {
+  // A pending slice of `total` rows, closest-first by id, served in pages.
+  const pager = (total, calls) => async (limit, offset) => {
+    if (calls) calls.push({ limit, offset });
+    const out = [];
+    for (let i = offset; i < Math.min(offset + limit, total); i += 1) {
+      out.push({ id: i + 1, classification: 'review_name', distance_miles: i * 0.001, detail: {} });
+    }
+    return out;
+  };
+
+  it('THE STALL: annotated ⊇ the first page still yields fresh rows from deeper pages', async () => {
+    // 1,095 pending, the first 200 (closest-first) already annotated — the exact
+    // live shape. The old fixed-window pull returned fresh = 0 here.
+    const annotated = new Set();
+    for (let i = 1; i <= 200; i += 1) annotated.add('twin:dia:' + i);
+    const r = await selectFreshTwinRows({
+      fetchPage: pager(1095),
+      isAnnotated: (row) => annotated.has('twin:dia:' + row.id),
+      want: 40, pageSize: 100, maxScan: 5000,
+    });
+    assert.ok(r.fresh.length > 0, 'must see past the annotated window');
+    assert.equal(r.fresh.length, 40);              // bounded by `want`
+    assert.equal(r.fresh_total, 895);              // 1095 pending - 200 annotated = honest remaining
+    assert.equal(r.scan_capped, false);
+    // Closest-first ordering preserved: the first unannotated row is id 201.
+    assert.equal(r.fresh[0].id, 201);
+    assert.equal(r.fresh[39].id, 240);
+  });
+
+  it('fresh > 0 whenever pending > annotated_total, for annotated prefixes of any depth', async () => {
+    for (const annotatedThrough of [0, 200, 999, 1000, 1094]) {
+      const annotated = new Set();
+      for (let i = 1; i <= annotatedThrough; i += 1) annotated.add('twin:dia:' + i);
+      const r = await selectFreshTwinRows({
+        fetchPage: pager(1095),
+        isAnnotated: (row) => annotated.has('twin:dia:' + row.id),
+        want: 40, pageSize: 1000, maxScan: 5000,
+      });
+      assert.ok(r.fresh.length > 0, 'annotatedThrough=' + annotatedThrough + ' must still find fresh rows');
+      assert.equal(r.fresh_total, 1095 - annotatedThrough);
+    }
+  });
+
+  it('a fully-annotated backlog honestly reports nothing left (0 fresh, 0 remaining)', async () => {
+    const annotated = { has: () => true };
+    const r = await selectFreshTwinRows({
+      fetchPage: pager(1095),
+      isAnnotated: (row) => annotated.has('twin:dia:' + row.id),
+      want: 40, pageSize: 1000, maxScan: 5000,
+    });
+    assert.equal(r.fresh.length, 0);
+    assert.equal(r.fresh_total, 0);
+    assert.equal(r.scan_capped, false);   // exhausted, not windowed — the two are different facts
+  });
+
+  it('the scan is BOUNDED and says so, so `remaining` reads as a floor not a total', async () => {
+    const annotated = new Set();
+    for (let i = 1; i <= 3000; i += 1) annotated.add('twin:dia:' + i);
+    const r = await selectFreshTwinRows({
+      fetchPage: pager(100000),
+      isAnnotated: (row) => annotated.has('twin:dia:' + row.id),
+      want: 40, pageSize: 1000, maxScan: 5000,
+    });
+    assert.equal(r.scan_capped, true);
+    assert.equal(r.scanned, 5000);
+    assert.equal(r.fresh_total, 2000);   // a FLOOR within the window, not the true backlog
+  });
+
+  it('stops paging as soon as the pending slice is exhausted (no runaway requests)', async () => {
+    const calls = [];
+    await selectFreshTwinRows({
+      fetchPage: pager(1095, calls),
+      isAnnotated: () => false,
+      want: 40, pageSize: 1000, maxScan: 5000,
+    });
+    assert.equal(calls.length, 2);                       // 1000 + 95, then a short page ends it
+    assert.deepEqual(calls.map((c) => c.offset), [0, 1000]);
   });
 });
 

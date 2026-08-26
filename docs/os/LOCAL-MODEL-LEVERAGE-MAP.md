@@ -51,13 +51,20 @@ reversible.
 | match-disambig | `MATCH_DISAMBIG_ASSIST` | on | 1,270 total, 33 in 7d, 0 unannotated | ✅ healthy (caught up) |
 | sf-link assist | `W9_3_RESCORE` (source `w9_3_sf_assist`) | on | 247 total, 47 in 7d, caught up | ✅ healthy (caught up) |
 | next-step | `NEXT_STEP_AI` | on | inline (no proposal table) | ✅ on |
-| **property-twin** | `PROPERTY_TWIN_ASSIST` | on | **200, 0 in 7d, 895 unreached** | ❌ STUCK → Prompt 135 |
+| **property-twin** | `PROPERTY_TWIN_ASSIST` | on | **200, 0 in 7d, 895 unreached** | 🔧 **FIXED (P135, 2026-08-26)** — window lifted; verify by the proposal-count DELTA past 200 |
 | **reachability harvest** | `W9_2_REACHABILITY_HARVEST` | on | **16 ever, 0 in 11d** vs ~15k pool; diagnostic POST = fixed 120-target window, 0 evidence for those 120 while 5k intake + 4.3k comms names + 2k signature phones sit unused | ❌ STUCK (target window doesn't advance) → Prompt 136 |
 | ollama clean-assist | `OLLAMA_CLEAN_ASSIST` | off | held (thin context) | ⚪ off → Prompt 134 |
 
-**Structural tell:** the two stalled lanes are the ONLY ones without a keyset **scan cursor** — every
-healthy assist paginates through its backlog; property-twin uses a fixed first-200 window (Prompt 135) and
-reachability-harvest may have the same shape (verify whether its 16 is a narrow-source floor or a stall).
+**Structural tell:** the two stalled lanes were the ONLY ones without a **paging scan** over their backlog —
+every healthy assist pages through its own; property-twin used a fixed first-200 window (**fixed in P135**:
+`selectFreshTwinRows` pages past the annotated prefix, bounded by `PROPERTY_TWIN_ASSIST_SCAN_MAX`, reporting
+`fresh_this_run` / `remaining` / `scan_capped` so an exhausted backlog is distinguishable from a windowed one)
+and reachability-harvest may have the same shape (verify whether its 16 is a narrow-source floor or a stall).
+
+**⚠️ The generalised check for the rest of this table:** a `state=on` flag whose annotation count is FLAT is
+the same silent stall wearing a healthy badge. For each remaining assist ask *what advances its working set*,
+and assert on the write delta over the last 7 days — never on `state`, and never on the worker's own tally
+(a re-discovery counter like `already_annotated` reads exactly like throughput while nothing moves).
 Note the SF-assist flag is `W9_3_RESCORE` in code, NOT `W9_3_SF_ASSIST` as older docs said.
 
 Each is **annotation-only** (proposes into a review lane / `metadata.assist`, never an auto-write or a verdict),
@@ -75,9 +82,9 @@ reversible. Activation gate (historical): `OLLAMA_URL` set on Railway + flag on 
 
 > ✅ **`NEXT_STEP_AI` activated 2026-08-26** (moved to §1 LIVE). Was the top of this list.
 
-**Recommended activation order (highest value / lowest surprise first):** ~~`NEXT_STEP_AI`~~ (DONE) →
-`PROPERTY_TWIN_ASSIST` (bounded lane, P106-tested) → `W9_3_SF_ASSIST` (largest lane) →
-`MATCH_DISAMBIG_ASSIST` → the rest. Each: pull a dry-run sample, eyeball 10–20 proposals for precision, flip,
+**~~Recommended activation order~~ — SUPERSEDED 2026-08-26 (see §2): every flag in this list is already
+`on` except `OLLAMA_CLEAN_ASSIST`. There is nothing left to activate; the table above is retained only as a
+description of what each assist DOES. The remaining work is production health, per §2.** Each: pull a dry-run sample, eyeball 10–20 proposals for precision, flip,
 watch the queue drain by value. **⚠️ Before flipping any lane-ranking assist, confirm the lane's SURFACE
 actually renders** — the Research page task list was 500-dead until P132 (2026-08-26), so a ranked lane
 would have promoted work onto a screen no operator could see.

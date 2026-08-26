@@ -1771,6 +1771,11 @@ async function handleMatchDisambigAssistTick(req, res) {
 const PT_ASSIST_BATCH = Math.max(1, parseInt(process.env.PROPERTY_TWIN_ASSIST_BATCH || '40', 10));
 const PT_ASSIST_BUDGET_MS = Math.max(5000, parseInt(process.env.PROPERTY_TWIN_ASSIST_BUDGET_MS || '110000', 10));
 const PT_ASSIST_INLINE_N = Math.max(1, parseInt(process.env.PROPERTY_TWIN_ASSIST_INLINE_N || '20', 10));
+// Prompt 135 — how deep into the pending slice one invocation may look for
+// unannotated rows. Bounded so a run is cheap; when the ceiling is hit the run
+// reports scan_capped and `remaining` is a FLOOR, never a total.
+const PT_ASSIST_SCAN_MAX = Math.max(PT.TWIN_SCAN_PAGE,
+  parseInt(process.env.PROPERTY_TWIN_ASSIST_SCAN_MAX || String(PT.TWIN_SCAN_MAX_ROWS), 10) || PT.TWIN_SCAN_MAX_ROWS);
 
 // subject_refs that already carry a property_twin_assist annotation (resumable
 // cursor). A verdict-consumed row leaves the pending slice, so the pool is finite
@@ -1792,10 +1797,14 @@ async function fetchTwinAssistAnnotated() {
 }
 
 // Pending twin review rows (closest-first), with the `detail` the classifier reads.
-async function fetchPendingTwinRows(limit) {
+// Prompt 135: takes an OFFSET so the caller can page PAST the already-annotated
+// window. Closest-first ordering is deliberate and preserved — this is a
+// prioritization assist, so the highest-likelihood twins are annotated first.
+async function fetchPendingTwinRows(limit, offset = 0) {
   const r = await domainQuery('dia', 'GET',
     'dia_property_twin_review?select=id,classification,distance_miles,detail'
-    + '&status=eq.pending&order=distance_miles.asc,id.asc&limit=' + Math.max(1, limit));
+    + '&status=eq.pending&order=distance_miles.asc,id.asc&limit=' + Math.max(1, limit)
+    + '&offset=' + Math.max(0, offset));
   return (r.ok && Array.isArray(r.data)) ? r.data : [];
 }
 
@@ -1903,11 +1912,23 @@ async function handlePropertyTwinAssistTick(req, res) {
     undefined, { Prefer: 'count=exact' });
   const pendingCount = (pendingCntR.ok && typeof pendingCntR.count === 'number') ? pendingCntR.count : null;
 
-  // Pull a working slice, drop already-annotated (resumable cursor).
-  let rows = [];
-  try { rows = await fetchPendingTwinRows(Math.max(limit, 200)); }
-  catch (e) { scanErrors.push('fetch_pending: ' + (e?.message || String(e))); }
-  const fresh = rows.filter((r) => !annotated.has('twin:dia:' + r.id));
+  // Prompt 135 — page THROUGH the pending slice skipping annotated rows, rather
+  // than filtering a fixed first page (which pinned `fresh` at 0 forever once
+  // that page was annotated: 200 written 2026-08-19, then 0 for 7 days against
+  // 1,095 pending, with the cron reporting healthy throughout).
+  let scan = { fresh: [], fresh_total: 0, scanned: 0, scan_capped: false };
+  try {
+    scan = await PT.selectFreshTwinRows({
+      fetchPage: (n, off) => fetchPendingTwinRows(n, off),
+      isAnnotated: (r) => annotated.has('twin:dia:' + r.id),
+      want: PT_ASSIST_SCAN_MAX,   // collect every fresh row in the window so the counts are honest
+      maxScan: PT_ASSIST_SCAN_MAX,
+    });
+  } catch (e) { scanErrors.push('fetch_pending: ' + (e?.message || String(e))); }
+  const fresh = scan.fresh;
+  // `remaining` = unannotated pending rows still to drain (a FLOOR when capped).
+  const remaining = scan.fresh_total;
+  const freshThisRun = Math.min(limit, fresh.length);
 
   // Deterministic pre-classify EVERY fresh row in-memory (no LLM) for honest counts.
   const byClass = {}; const bySuggest = { merge: 0, not: 0, uncertain: 0 };
@@ -1923,8 +1944,13 @@ async function handlePropertyTwinAssistTick(req, res) {
   // ---- GET dry-run --------------------------------------------------------
   if (req.method === 'GET') {
     const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing', limit,
-      surface: 'property_twin_assist', pending: pendingCount, annotated_existing: annotated.size,
-      fresh: fresh.length, deterministic_decisive: detDecisive, llm_residue: llmResidue,
+      surface: 'property_twin_assist', pending: pendingCount,
+      // annotated_total is the TRUE uncapped count (fetchTwinAssistAnnotated pages
+      // at 1000); annotated_existing is kept as its long-standing alias.
+      annotated_total: annotated.size, annotated_existing: annotated.size,
+      fresh: fresh.length, fresh_this_run: freshThisRun, remaining,
+      scanned: scan.scanned, scan_capped: scan.scan_capped,
+      deterministic_decisive: detDecisive, llm_residue: llmResidue,
       bulk_confirmable_merges: bulkConfirmableMerges, by_class: byClass, by_suggest: bySuggest,
       scan_errors: scanErrors,
       note: 'Annotation-only. Deterministic classifier decides the bulk (NO LLM); the residue is scored by Ollama with a verbatim evidence quote. NEVER merges — the merge RPC is only ever a HUMAN verdict.' };
@@ -1952,12 +1978,16 @@ async function handlePropertyTwinAssistTick(req, res) {
     await recordTwinAssistHealth({ status: 'amber', count: 0,
       lastError: 'PROPERTY_TWIN_ASSIST feature flag is off',
       details: { enabled: false, flag_state: flag?.state || 'missing', pending: pendingCount, fresh: fresh.length } });
-    return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false, pending: pendingCount, fresh: fresh.length });
+    return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false, pending: pendingCount,
+      fresh: fresh.length, fresh_this_run: freshThisRun, remaining, scan_capped: scan.scan_capped });
   }
 
   const sourceRunId = 'p106_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
-  const summary = { source_run_id: sourceRunId, pending: pendingCount, annotated_existing: annotated.size,
-    fresh: fresh.length, candidates: 0, annotated_new: 0, deterministic: 0, llm: 0, dropped: 0,
+  const summary = { source_run_id: sourceRunId, pending: pendingCount,
+    annotated_total: annotated.size, annotated_existing: annotated.size,
+    fresh: fresh.length, fresh_this_run: freshThisRun, remaining,
+    scanned: scan.scanned, scan_capped: scan.scan_capped,
+    candidates: 0, annotated_new: 0, deterministic: 0, llm: 0, dropped: 0,
     failed: 0, budget_exhausted: false, by_suggest: { merge: 0, not: 0, uncertain: 0 }, scan_errors: scanErrors };
   const start = Date.now();
   for (const r of fresh.slice(0, limit)) {
