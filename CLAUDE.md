@@ -1234,9 +1234,23 @@ about what can honestly be drafted.
   carry a grantor), and **W8 U3 already ships an Ollama proposer for this exact gap and is already ON**
   (32 cards, 27 decided, against **35 dropped `quote_not_verbatim`** ≈ 52% hallucinated citations).
   Result: the drafter is DETERMINISTIC and its citation is a RECORD REFERENCE (ownership_history row id
-  + `data_source`), which cannot be hallucinated. `OWNERSHIP_CHAIN_DRAFT` (off) →
+  + `data_source`), which cannot be hallucinated. `OWNERSHIP_CHAIN_DRAFT` (**on**) →
   `GET/POST /api/ownership-chain-draft-tick`; planner `api/_shared/ownership-chain-draft-planner.js`;
   drafts land in `lcc_clean_assist_proposals` (source `ownership_chain_draft`) and render on the card.
+  **P133 — the lane is a RECURRING producer, so the hand-drain is paired with a sweep:** pg_cron
+  `lcc-ownership-chain-draft` (jobid 239, **06:45 UTC**, `lcc_cron_post` → POST apply=true limit=100).
+  06:45 was picked because it was the only free minute in the block (05:45, 06:20/25/30/35/40 and 06:50
+  each already carry 1–4 jobs) **and** it lands after `generate-research-tasks` (06:35), which is what
+  mints new lane rows — so a row minted tonight is drafted tonight. The cron is deliberately **NOT gated
+  on the flag**: with the flag off the tick no-ops and the run log records the skip, whereas an
+  unscheduled job is invisible. Observability is `lcc_ownership_chain_draft_run_log` /
+  `v_lcc_ownership_chain_draft_run_health` on the P123 lifecycle — the row is **opened before the work**
+  (`status='started'`) and closed on the way out, so a run that dies mid-flight leaves a stalled row
+  (`v_lcc_ownership_chain_draft_stalled_runs`) instead of nothing. **Read `written_draftable`, never
+  `already_drafted`** — the latter is a re-discovery tally that reads exactly like throughput while
+  nothing moves (P159a), and on a correct quiet night it is the WHOLE population against 0 written.
+  `capped`/`backlog_remaining` keep a batch-capped night from reading "done"; `lane_scan_capped` marks
+  the backlog as a floor rather than a total.
   Honest counts: **453 draftable / 92 not** (74 `no_transitions_on_file`, 18 `all_transitions_guarded`).
   **A break in the chain is REPORTED ("Not on file"), never bridged** — an unrecorded intermediate owner
   is precisely the thing that must not be invented. Ollama survives only as an optional Layer 2 that

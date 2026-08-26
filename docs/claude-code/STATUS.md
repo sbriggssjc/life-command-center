@@ -32,11 +32,18 @@ verified red-on-break. Full suite 4406/0/6-skip. CLAUDE.md footgun entry added. 
 `GET /api/queue?view=research&status=active&research_type=establish_ownership_history` → `count=545,
 items=50, err=None`** — the entire Research page (and the R1 review surface) is now reachable.
 
-**Prompt 133 — SHIPPED + LIVE.** pg_cron **`lcc-ownership-chain-draft` jobid 239, `45 6 * * *`, active**
-on LCC Opps (`lcc_cron_post` → `/api/ownership-chain-draft-tick` apply, cap 100, idempotent). Run-log
-migration + `OWNERSHIP_CHAIN_DRAFT` registry row (`state=on`) applied live; test red-on-break. 06:45
-chosen (after `generate-research-tasks` 06:35, which mints new lane rows). Tick dry-run healthy:
-`open_lane_rows:545, already_drafted:545, fresh:0`.
+**Prompt 133 — SHIPPED + APPLIED LIVE.** pg_cron `lcc-ownership-chain-draft` (jobid **239**,
+`45 6 * * *` — 06:45 UTC, not the proposed 06:50, which is `lcc-owner-deed-autofix`; 06:45 was the only
+free minute in the block and lands after `generate-research-tasks` at 06:35, which mints the lane rows)
+POSTs `/api/ownership-chain-draft-tick` via `lcc_cron_post` with `{"apply":true,"limit":100,
+"trigger_source":"cron"}`. Verified end-to-end by firing the exact cron command: HTTP **200**,
+`timed_out=false`, `open_lane_rows:545 / already_drafted:545 / fresh:0 / written_draftable:0` — the
+correct quiet-night disposition, 0 rows written. Registry note updated (`OWNERSHIP_CHAIN_DRAFT` was
+already `state='on'`); the cron is deliberately NOT gated on the flag. New observability
+`lcc_ownership_chain_draft_run_log` + `v_lcc_ownership_chain_draft_run_health` /
+`_stalled_runs` on the P123 open-before-the-work lifecycle. **DB side is live now; the run-log WRITE is
+JS and ships on the next Railway redeploy of merged `main`** — until then runs are observable only via
+`lcc_cron_post_log` + `net._http_response`. Reverse: `SELECT cron.unschedule('lcc-ownership-chain-draft');`
 
 **NEXT_STEP_AI — FLIPPED ON (env already set; registry flipped by Cowork).** Inline-only (no standalone
 tick) — runs inside `deal-comms-propagate-tick` / `intake-tagged-comm` / `intake-correspondence`,
@@ -64,9 +71,21 @@ to activate. The work is now PRODUCTION HEALTH, and the first check already foun
 **`PROPERTY_TWIN_ASSIST` is ON but produced 200 annotations in one run (2026-08-19) and 0 since, while
 1,095 rows are pending** — the tick pulls the first-200 window, finds all 200 annotated (`fresh:0`), and
 no-ops forever (never paginates to rows 201–1,095). → **Prompt 135** (query-level anti-join / keyset cursor
-+ honest `remaining` count + guard). Follow-up: the other 6 ON assists write to their own lane tables and
-each needs the same write-delta check (not `state=on`). Reinforces the doctrine: assert on the produced
-delta, never the flag.
++ honest `remaining` count + guard). Reinforces the doctrine: assert on the produced delta, never the flag.
+
+**Production-health pass complete (2026-08-26).** Checked all 9 ON assists by write-delta: **6 healthy** —
+`ownership_chain_draft` (545, today), `junk-prescreen` / `naming-hygiene` / `dup-pair` (cursor-advancing),
+`match-disambig` (1,270; 33 in 7d; caught up), `sf-link-assist` (247; 47 in 7d; caught up) — plus
+`NEXT_STEP_AI` (inline). **2 stalled:** `PROPERTY_TWIN_ASSIST` (confirmed stuck → P135) and
+`W9_2_REACHABILITY_HARVEST` (**16 ever / 0 in 11d** vs ~15k unreachable pool — investigate; may be the same
+no-cursor shape). **Structural tell: the two stalled lanes are the only ones without a keyset scan cursor.**
+Doc note: the SF-assist flag is `W9_3_RESCORE` in code, not `W9_3_SF_ASSIST`. Full table in
+`docs/os/LOCAL-MODEL-LEVERAGE-MAP.md` §2.
+
+**Git state (2026-08-26):** a merge of origin `2d205aff` (P132/P133) into local `main` is in progress with a
+STATUS.md conflict — **markers resolved by Cowork** (kept P132 + origin's richer P133, dropped the dupe). The
+`.git/index.lock` is held by the Windows-side process (`Operation not permitted` from the sandbox), so Scott
+must clear the lock + finish the merge commit (see chat for the exact PowerShell).
 
 **Net:** R1 is now genuinely reachable (P132 was the hidden gate). Manual review path for the 453 drafts:
 Research page → `establish_ownership_history` lane → each card shows its drafted chain (`chainDraftHTML`)

@@ -36,10 +36,29 @@ the flag). First check already found one silently stalled:
   twins will never be annotated. Cron fires nightly, writes nothing, looks healthy. → **Prompt 135**
   (paginate the working set / advance the cursor past the annotated window).
 
-**→ Next real work is NOT more flips.** It is (a) a production-health pass over the 8 remaining ON assists
-(each writes to its own lane table — `junk_entity_review`, `sf_link_candidate`, `match_disambiguation`,
-etc. — verify recent production, not just `state=on`), and (b) the §4 NEW builds (R8). Each assist remains
-annotation-only (proposes into a review lane, never auto-writes), reversible.
+**→ Next real work is NOT more flips.** It is (a) fixing the stalled producers found below, and (b) the §4
+NEW builds (R8). Each assist remains annotation-only (proposes into a review lane, never auto-writes),
+reversible.
+
+### Production-health pass — measured 2026-08-26 (assert on write delta, not `state=on`)
+
+| assist | flag | state | production | verdict |
+|---|---|---|---|---|
+| ownership-chain draft | `OWNERSHIP_CHAIN_DRAFT` | on | 545 total, 545 in 7d, last today | ✅ healthy |
+| junk pre-screen | `W8_U1_JUNK_PRESCREEN` | on | scanning, cursor advancing | ✅ healthy |
+| naming hygiene | `W8_U5_NAMING_HYGIENE` | on | fresh/slice, cursor advancing | ✅ healthy |
+| dup-pair | `W8_U2_DUP_PAIRS` | on | 149 fresh/slice, cursor advancing | ✅ healthy |
+| match-disambig | `MATCH_DISAMBIG_ASSIST` | on | 1,270 total, 33 in 7d, 0 unannotated | ✅ healthy (caught up) |
+| sf-link assist | `W9_3_RESCORE` (source `w9_3_sf_assist`) | on | 247 total, 47 in 7d, caught up | ✅ healthy (caught up) |
+| next-step | `NEXT_STEP_AI` | on | inline (no proposal table) | ✅ on |
+| **property-twin** | `PROPERTY_TWIN_ASSIST` | on | **200, 0 in 7d, 895 unreached** | ❌ STUCK → Prompt 135 |
+| **reachability harvest** | `W9_2_REACHABILITY_HARVEST` | on | **16 ever, 0 in 11d** vs ~15k unreachable pool | ⚠️ investigate |
+| ollama clean-assist | `OLLAMA_CLEAN_ASSIST` | off | held (thin context) | ⚪ off → Prompt 134 |
+
+**Structural tell:** the two stalled lanes are the ONLY ones without a keyset **scan cursor** — every
+healthy assist paginates through its backlog; property-twin uses a fixed first-200 window (Prompt 135) and
+reachability-harvest may have the same shape (verify whether its 16 is a narrow-source floor or a stall).
+Note the SF-assist flag is `W9_3_RESCORE` in code, NOT `W9_3_SF_ASSIST` as older docs said.
 
 Each is **annotation-only** (proposes into a review lane / `metadata.assist`, never an auto-write or a verdict),
 reversible. Activation gate (historical): `OLLAMA_URL` set on Railway + flag on (env + `feature_flags_registry`).
