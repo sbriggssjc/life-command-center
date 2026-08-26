@@ -81,13 +81,16 @@ export async function handleAscResearchCapture(req, res) {
   const targetRows = await opsQuery('GET',
     `healthcare_research_candidates?run_id=eq.${pgFilterVal(target.run_id)}` +
     `&candidate_fingerprint=eq.${pgFilterVal(target.candidate_fingerprint)}` +
-    '&select=run_id,candidate_fingerprint,address_token,status&limit=1', null, { countMode: 'none' });
+    '&select=run_id,candidate_fingerprint,cms_identity,address_token,status&limit=1', null, { countMode: 'none' });
   const storedTarget = targetRows.ok ? targetRows.data?.[0] : null;
   if (!storedTarget) return fail(res, 404, 'frozen_target_not_found');
   let built;
   try { built = buildAscStructuredCapture(storedTarget, context || {}); }
   catch (error) { return fail(res, 409, 'capture_blocked', error.message); }
-  const reconciliation = await readOnlyReconciliation(context || {}, auth.workspaceId);
+  const reconciliation = {
+    ...await readOnlyReconciliation(context || {}, auth.workspaceId),
+    asc_identity_match: built.identity_match,
+  };
   const result = await opsQuery('POST', 'rpc/lcc_capture_asc_research_evidence', {
     p_run_id: storedTarget.run_id,
     p_candidate_fingerprint: storedTarget.candidate_fingerprint,

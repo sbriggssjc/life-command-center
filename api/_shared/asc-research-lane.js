@@ -71,6 +71,39 @@ export function normalizeAscAddressToken({ address, city, state, zip } = {}) {
   return [street, cityToken, stateToken, zipToken].join('|');
 }
 
+function hasAscSublocation(address) {
+  return /\b(?:suite|ste|unit|\d+(?:st|nd|rd|th)\s+floor|floor\s+[a-z0-9-]+|fl\s+[a-z0-9-]+)\b/i
+    .test(clean(address));
+}
+
+export function normalizeAscBuildingAddressToken(identity = {}) {
+  const address = clean(identity.address).replace(
+    /\s*,?\s*\b(?:\d+(?:st|nd|rd|th)\s+floor|floor\s+[a-z0-9-]+|fl\s+[a-z0-9-]+|suite|ste|unit)\b.*$/i,
+    '',
+  ).trim();
+  return normalizeAscAddressToken({ ...identity, address });
+}
+
+function normalizeFacilityName(value) {
+  return clean(value).toUpperCase().replace(/[^A-Z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function contextTenantNames(context) {
+  const names = [context.tenant_name, context.primary_tenant];
+  for (const tenant of Array.isArray(context.tenants) ? context.tenants : []) {
+    names.push(typeof tenant === 'string' ? tenant : tenant?.name || tenant?.tenant_name);
+  }
+  return names.map(normalizeFacilityName).filter(Boolean);
+}
+
+function hasCorroboratingTenant(facilityName, context) {
+  const facility = normalizeFacilityName(facilityName);
+  if (!facility) return false;
+  return contextTenantNames(context).some((tenant) =>
+    tenant === facility || facility.startsWith(`${tenant} AT `),
+  );
+}
+
 export function assertAscResearchImport({ release_id, selection_fingerprint, candidate_pool_fingerprint, candidates } = {}) {
   for (const [name, value] of Object.entries({ release_id, selection_fingerprint, candidate_pool_fingerprint })) {
     if (!SHA256_RE.test(clean(value).toLowerCase())) throw new Error(`${name} must be a lowercase SHA-256 fingerprint`);
@@ -107,7 +140,20 @@ export function buildAscStructuredCapture(target, context = {}) {
   if (!ALLOWED_SOURCES.has(source)) throw new Error('ASC capture source must be CoStar, RCA, public records, or Salesforce');
   const addressToken = normalizeAscAddressToken(context);
   if (!addressToken) throw new Error('Captured page requires an address and state');
-  if (addressToken !== target.address_token) throw new Error('Captured page does not match the active frozen ASC candidate');
+  let identityMatch = { mode: 'exact_address_token' };
+  if (addressToken !== target.address_token) {
+    const cmsIdentity = target.cms_identity || {};
+    const parentBuildingMatch = hasAscSublocation(cmsIdentity.address)
+      && normalizeAscBuildingAddressToken(cmsIdentity) === normalizeAscBuildingAddressToken(context)
+      && hasCorroboratingTenant(cmsIdentity.facility_name, context);
+    if (!parentBuildingMatch) throw new Error('Captured page does not match the active frozen ASC candidate');
+    identityMatch = {
+      mode: 'tenant_corroborated_parent_building',
+      cms_sublocation_preserved: clean(cmsIdentity.address),
+      captured_building_address: clean(context.address),
+      facility_name: clean(cmsIdentity.facility_name),
+    };
+  }
 
   const structured = {};
   for (const field of CAPTURE_FIELDS) {
@@ -126,7 +172,10 @@ export function buildAscStructuredCapture(target, context = {}) {
     city: clean(context.city) || null,
     state: clean(context.state).toUpperCase(),
     zip: clean(context.zip) || null,
-    address_token: addressToken,
+    // The database remains bound to the frozen candidate token. A parent-
+    // building capture may omit the CMS suite/floor only after the separate
+    // base-address + tenant corroboration gate above succeeds.
+    address_token: target.address_token,
     structured_payload: structured,
   };
   capture.payload_sha256 = createHash('sha256').update(JSON.stringify(structured)).digest('hex');
@@ -138,7 +187,7 @@ export function buildAscStructuredCapture(target, context = {}) {
     observed_at: capturedAt,
     confidence: source === 'salesforce' ? 0.6 : 0.7,
   }));
-  return { capture, evidence };
+  return { capture, evidence, identity_match: identityMatch };
 }
 
 export function buildAscImportRpcBody(input, workspaceId, userId) {

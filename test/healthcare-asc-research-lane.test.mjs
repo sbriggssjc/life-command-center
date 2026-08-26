@@ -107,6 +107,42 @@ test('multi-token CMS suite suffixes bind to building-level research pages', () 
   assert.equal(cmsToken, costarToken);
 });
 
+test('shared-address parent buildings require explicit ASC tenant corroboration', () => {
+  const target = {
+    candidate_fingerprint: sha('f'),
+    address_token: '100 CAMPUS DR 1ST FLOOR|TESTVILLE|MI|48000',
+    cms_identity: {
+      facility_name: 'Synthetic Endoscopy Center at Research Campus',
+      address: '100 Campus Dr, 1st Floor, Suite D110',
+      city: 'Testville', state: 'MI', zip: '48000',
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/shared-campus',
+    address: '100 Campus Dr', city: 'Testville', state: 'MI', zip: '48000',
+    building_name: 'Synthetic Medical Center',
+    square_footage: '193,678',
+    tenants: [
+      { name: 'Synthetic Health System', occupied_sf: '193,678' },
+      { name: 'Synthetic Endoscopy Center', occupied_sf: '5,000' },
+    ],
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.identity_match.mode, 'tenant_corroborated_parent_building');
+  assert.equal(built.identity_match.cms_sublocation_preserved, target.cms_identity.address);
+
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenants: [{ name: 'Synthetic Health System' }] }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, address: '100 Campus Dr', city: 'Other City' }),
+    /does not match/,
+  );
+});
+
 test('migration is private, RLS-protected, exact-50, and hard-blocks prohibited writes', async () => {
   const sql = await readFile(new URL('../supabase/migrations/20261001120000_lcc_asc_research_swim_lane.sql', import.meta.url), 'utf8');
   for (const table of ['runs', 'candidates', 'captures', 'evidence', 'reviews']) {
