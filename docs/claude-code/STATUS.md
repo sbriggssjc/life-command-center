@@ -17,6 +17,41 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-26 (Cowork) — DIVISION OF LABOUR: Scott works the lane, the builds run in parallel
+
+Scott asked whether to work the Decision Center lane now or wait. **Work it now — the two tracks do
+not block each other.**
+
+**Scott's track (nothing I build changes these judgements):** the 98 `ask` cards, top-down. Top of
+queue today — Easterly ×2 → **attach Pulliam, not Shuler** (acquisitions vs deal execution);
+TIAA-CREF (2 candidates); RMR Group (19 candidates at rmrgroup.com, Adam Portnoy among them, plus a
+separate `rmrgroupinc.com` card that is a **different firm** — reject it on its own merits);
+Prologis; Cunningham; Genesis Financial; Cambridge (two domains, one is Cambridge Management Ltd —
+likely a different firm). Two `auto` cards (AVG Partners, Agree Realty → Joey Agree) are
+one-click confirms.
+
+**Duplicate-entity exposure at the top is small and known: 2 of the top 20 cards** (the two Easterly
+entities asking the same question). Answering both is not wasted — the P189 merge consolidates them
+afterwards. ⚠️ Note the naive check under-reports it: grouping the queue by `lcc_owner_domain_core`
+returns "no duplicates" because Easterly's two entities produce *different* cores
+(`easterlygovproperties` vs `easterlygovernmentproperties`). **Same blind spot as
+`lcc_normalize_entity_name`, one function over** — a wording difference defeats any single
+normalizer, which is why P189 needs a fallback key AND a wording pass.
+
+**Build track (parallel, no operator input needed):** prompt 189 (duplicate entities — now the top
+priority, `v_lcc_merge_candidates` blind to 1,089 orgs) and prompt 192 (auto-attach sweep through
+the existing JS verdict path + the living-loop signals).
+
+**Newly surfaced while ranking:** `Truist Bank → truist.com` ($6.2M, **15 candidates**) and other
+bank/trustee owners are in the queue. A bank appearing as owner-of-record is usually a trustee or
+lender, not a prospect — worth its own scope question rather than 15 person-picks.
+
+**Folder cleanup:** prompts **139** (clean-assist xref interleave — shipped, CLAUDE.md carries the
+P139 section) and **141** (docs consolidation — commit `07b2f845`) moved to `prompts/done/`.
+**140** stays live: `OWNERSHIP_CHAIN_ROLE_LABELS` is still ungraded and still off. Live queue is now
+exactly three files: 140, 189, 192.
+
+
 ## 2026-08-26 (Cowork) — P192: stop asking questions the data already answers. 255 cards → 109.
 
 Scott, after working the lane: *"only propose the strongest candidates… only asking the human when

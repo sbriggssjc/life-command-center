@@ -70,6 +70,26 @@ and currently reports **5,222 groups, 3,053 of them `auto_mergeable`**. Re-keyin
 changes which 3,053 auto-merge. That is a gated decision with its own named-row proof, not a side
 effect of making a blind spot visible.
 
+## 1b. ⚠️ A THIRD confirmation that ONE normalizer can never carry this
+
+While ranking the live queue (2026-08-26) I grouped it by `lcc_owner_domain_core` to count
+duplicate exposure and got **"no duplicates in the top 20"** — while Easterly sat at rows 1 AND 2.
+The two entities produce **different cores**: `easterlygovproperties` vs
+`easterlygovernmentproperties`.
+
+That is the same failure as `lcc_normalize_entity_name` (Class 11), one function over, and it
+means the fix in §2 is **two mechanisms, not one**:
+
+| blind spot | needs |
+|---|---|
+| the name reduces to nothing (RMR, GI, AVG — 1,089 orgs) | a **fallback grouping key** (`lcc_owner_domain_core`) |
+| the names differ in wording (`Gov` vs `Government`) | a **wording pass** — token-set overlap on the *unsorted* cores, or the shared email domain as the grouping key |
+
+**The shared DOMAIN is the strongest available signal here and is already computed:** both Easterly
+entities produce cards for `easterlyreit.com`. Two owner entities whose benches resolve to the same
+firm domain are duplicate candidates with far better evidence than any name comparison — and it
+sidesteps the normalizer question entirely. **Consider grouping on that first.**
+
 ## 2. What to build next
 
 1. **Fix the detector before touching data.** Give `v_lcc_merge_candidates` a fallback grouping key
