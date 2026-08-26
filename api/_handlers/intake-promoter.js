@@ -1812,6 +1812,8 @@ async function checkBrokerMergeCandidates(unifiedId, snapshot) {
   }
 
   const queued = [];
+  // Rejected inserts are reported, never swallowed — see the write below.
+  const failed = [];
   for (const cand of candidates.data) {
     let score  = 0;
     let reason = '';
@@ -1841,10 +1843,22 @@ async function checkBrokerMergeCandidates(unifiedId, snapshot) {
     }
 
     if (score >= 0.85 && reason) {
-      // Insert into the shared contact_merge_queue (lives on gov DB per
-      // existing convention in contacts-handler.js). contact_a / contact_b
-      // are unified_ids.
-      const insertRes = await domainQuery('government', 'POST', 'contact_merge_queue', {
+      // ⚠️ THIS WRITE USED TO GO TO **gov** WHILE THE CANDIDATE READ ABOVE GOES TO **ops**
+      // (2026-08-26). Three stacked failures, and `contact_merge_queue` has held ZERO rows
+      // on either project as a result:
+      //   1. SPLIT WRITE — `contact_a`/`contact_b` are `unified_id`s read from ops via
+      //      opsQuery above, posted into gov's table.
+      //   2. FK VIOLATION — gov's contact_merge_queue FKs gov's unified_contacts, and the
+      //      A9b cutover (CONTACTS_HUB=ops) means new contacts exist only on ops. The gov
+      //      copy is a frozen 2026-08-17 snapshot, so the referenced row is absent.
+      //   3. THE ERROR WAS SWALLOWED — `if (insertRes.ok)` discarded the failure with no
+      //      log. PostgREST reports an FK violation (23503) as **HTTP 409**, which reads
+      //      like a duplicate-key conflict and not like the routing bug it actually was
+      //      (the P116 lesson: never diagnose a 409 from the status code).
+      // The comment this replaces said the queue "lives on gov DB per existing convention
+      // in contacts-handler.js" — that convention was reversed by the A9b cutover and the
+      // comment was never updated. It now writes where it reads.
+      const insertRes = await opsQuery('POST', 'contact_merge_queue', {
         contact_a:    unifiedId,
         contact_b:    cand.unified_id,
         match_score:  score,
@@ -1853,11 +1867,21 @@ async function checkBrokerMergeCandidates(unifiedId, snapshot) {
       });
       if (insertRes.ok) {
         queued.push({ unified_id: cand.unified_id, reason, score });
+      } else {
+        // Never silent again: a rejected merge candidate is a finding, not a no-op.
+        console.warn('[intake-promoter] contact_merge_queue insert failed', {
+          status: insertRes.status,
+          detail: insertRes.data?.message || insertRes.data?.code || insertRes.data,
+          contact_a: unifiedId, contact_b: cand.unified_id, reason, score,
+        });
+        failed.push({ unified_id: cand.unified_id, reason, score, status: insertRes.status });
       }
     }
   }
 
-  return { ok: true, candidates_found: candidates.data.length, queued };
+  // `failed` is surfaced deliberately: a caller that sees queued:0 alongside failed:3 knows
+  // the matcher worked and the WRITE broke — the distinction this function lost for months.
+  return { ok: true, candidates_found: candidates.data.length, queued, failed };
 }
 
 // ============================================================================
