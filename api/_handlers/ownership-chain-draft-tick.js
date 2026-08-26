@@ -5,6 +5,11 @@
 //   GET  → dry-run (NO writes). Honest counts: how many of the open lane rows
 //          can be drafted, how many cannot, and WHY not (per-reason breakdown).
 //          `?sample=N` renders N real drafts inline for human grading.
+//          `?role_labels=1&generate=1` additionally runs the OPTIONAL Layer-2
+//          role-labeller over a shape-spread sample and returns every proposed
+//          label next to the guard verdict it would receive — still NO writes,
+//          and it does NOT require the flag (P140; mirrors the P138 analyst-take
+//          `?generate=1` grading path).
 //   POST → write the drafts (flag-gated OWNERSHIP_CHAIN_DRAFT), bounded batch,
 //          resumable (already-drafted subject_refs are skipped).
 //
@@ -54,6 +59,24 @@ const BUDGET_MS = 45_000;
 // one are on. Layer 1 carries the volume; Layer 2 is a nicety that must never be
 // the reason a draft is missing.
 const ROLE_LABEL_FLAG = 'OWNERSHIP_CHAIN_ROLE_LABELS';
+
+// P140 — the dry-run grading pass. 18 sits inside the 15–20 the grade calls for
+// and is spread across chain shapes rather than taken off the value-ranked head.
+const GRADE_SAMPLE_DEFAULT = 18;
+const GRADE_SAMPLE_MAX = 25;
+// Concurrency, not a bigger timeout: 18 sequential local-model calls is minutes.
+const GRADE_CONCURRENCY = 3;
+// A manual grading GET is not on the pg_net 60 s leash, but it must still end.
+// A truncated grade REPORTS itself (`budget_stopped`) rather than reading as a
+// complete sample that happened to be small.
+const GRADE_BUDGET_MS = 150_000;
+// How much of the open lane the grade classifies before spreading its sample.
+// Big enough that every chain shape is represented (measured live: the 453
+// draftable rows are 173 priced / 133 single-link / 119 affiliate-overlap /
+// 22 nominal-price / 6 multi-link), bounded so a manual GET stays cheap.
+const GRADE_LANE_SCAN = 200;
+
+const truthy = (v) => v === true || v === 1 || v === '1' || v === 'true';
 
 function intParam(v, dflt, max) {
   const n = parseInt(v, 10);
@@ -194,6 +217,159 @@ async function draftOne(task, transitions, ctx, opts) {
   return { draft, meta };
 }
 
+// ---------------------------------------------------------------------------
+// P140 — LAYER 2 DRY-RUN GRADER. Runs the role-labeller and returns what it
+// proposed WITHOUT writing anything and WITHOUT requiring the flag.
+//
+// WHY THE FLAG IS NOT THE GATE HERE. `OWNERSHIP_CHAIN_ROLE_LABELS` is off and the
+// grade is what decides whether it should be flipped; gating the grade on the
+// flag would make the layer ungradeable until after it shipped. Same shape as the
+// P138 analyst-take tick, whose `?generate=1` is deliberately ungated and never
+// writes. The APPLY path (POST) still honours the flag exactly as before.
+//
+// WHY IT REPORTS THE DROPS INSTEAD OF DROPPING THEM. W8 U3 shipped 32 cards over
+// this same gap while dropping 35 proposals `quote_not_verbatim` — the ~52% drop
+// rate WAS the finding, and it was only visible because someone counted it. A
+// grade that silently discarded the rejects would report the survivors' quality
+// and call it the model's accuracy. So every proposed label comes back with its
+// link, its rationale and its party-presence verdict, and a MEANINGFUL drop rate
+// is the guard working, not the run failing.
+//
+// WHY IT PROVES IMMUTABILITY RATHER THAN ASSERTING IT. Each sample fingerprints
+// its deterministic chain, runs the REAL production applier (`applyRoleLabels`)
+// over a deep copy, and re-fingerprints. `chain_unchanged:false` on any row means
+// Layer 2 altered a link and the flag must not be flipped — a claim in a comment
+// would not have caught that.
+// ---------------------------------------------------------------------------
+async function gradeOneSample(entry) {
+  const draft = OCD.buildChainDraft(entry.transitions, entry.ctx || {});
+  const out = {
+    subject_ref: OCD.ocdSubjectRef(entry.task.domain, entry.task.source_record_id),
+    property_id: entry.task.source_record_id,
+    address: entry.ctx.address || null,
+    chain_shape: OCD.classifyChainShape(draft),
+    link_count: draft.links.length,
+    chain_confidence: draft.confidence,
+    // The chain AS DRAFTED — the facts every label is graded against. This is the
+    // deterministic Layer-1 output and the model may not touch any of it.
+    chain: draft.links.map((l, i) => ({
+      index: i, date: l.date, grantor: l.from, grantee: l.to, price: l.price,
+      data_source: (l.citation && l.citation.data_source) || null,
+      ownership_id: (l.citation && l.citation.ownership_id) || null,
+      gap_before: l.gap_before === true,
+    })),
+  };
+
+  const prompt = OCD.buildRoleLabelPrompt(draft, entry.ctx || {});
+  out.prompt_chars = prompt.length;
+  out.prompt_hash = createHash('sha256').update(prompt).digest('hex').slice(0, 16);
+
+  let ai = null;
+  try {
+    ai = await invokeExtractionAI({ prompt, surface: 'clean_assist' });
+  } catch (e) {
+    out.model = { ok: false, error: String(e?.message || e).slice(0, 200) };
+    out.grade = { rows: [], summary: null, parsed: false };
+    return out;
+  }
+
+  // Which seam actually answered matters to the grade: the local box and the
+  // cloud fallback are different models, so a sample rescued by cloud is NOT a
+  // grade of the on-box layer the flag would turn on.
+  out.model = {
+    ok: !!ai?.ok, provider: ai?.provider || null, name: ai?.data?.model || null,
+    tried: Array.isArray(ai?.tried) ? ai.tried : [],
+    status: ai?.status ?? null,
+  };
+  const raw = ai?.data?.response || '';
+  out.raw_response_chars = String(raw).length;
+  const labels = OCD.parseRoleLabels(raw);
+  if (!labels) {
+    // "The model answered nothing usable" and "the model proposed no labels" are
+    // different facts; the first is a parse failure, the second is an abstention.
+    out.grade = { rows: [], summary: null, parsed: false };
+    out.parse_failure = raw ? String(raw).slice(0, 200) : 'empty_response';
+    return out;
+  }
+
+  out.grade = OCD.gradeRoleLabels(draft, labels);
+
+  // Immutability proof, through the REAL applier on a throwaway copy.
+  const before = OCD.chainFingerprint(draft);
+  const copy = OCD.buildChainDraft(entry.transitions, entry.ctx || {});
+  OCD.applyRoleLabels(copy, labels);
+  out.chain_unchanged = OCD.chainFingerprint(copy) === before;
+  out.would_render = copy.links
+    .filter((l) => l.role_label)
+    .map((l) => ({ date: l.date, grantor: l.from, grantee: l.to, role_label: l.role_label, role_why: l.role_why }));
+  return out;
+}
+
+// Bounded worker pool. Sequential would be minutes for 18 local-model calls;
+// unbounded would hammer the single on-box GPU the whole system shares.
+async function runGradePool(entries, concurrency, deadlineMs) {
+  const results = [];
+  let next = 0;
+  let stopped = false;
+  const worker = async () => {
+    for (;;) {
+      if (Date.now() >= deadlineMs) { stopped = true; return; }
+      const i = next; next += 1;
+      if (i >= entries.length) return;
+      try { results.push(await gradeOneSample(entries[i])); } catch (e) {
+        results.push({
+          subject_ref: OCD.ocdSubjectRef(entries[i].task.domain, entries[i].task.source_record_id),
+          model: { ok: false, error: String(e?.message || e).slice(0, 200) },
+          grade: { rows: [], summary: null, parsed: false },
+        });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, concurrency) }, worker));
+  return { results, budget_stopped: stopped };
+}
+
+// Roll the per-sample grades into the numbers the flip decision is actually made
+// on. Deliberately keeps `party_presence_fail` separate from the other drops:
+// the ask is specifically whether the party-presence guard is catching the
+// hallucinated-rationale cases, and burying it inside a total would answer a
+// different question.
+export function summariseGrade(samples) {
+  const agg = {
+    samples: samples.length,
+    samples_with_model_response: 0,
+    samples_parse_failed: 0,
+    labels_proposed: 0, labels_would_apply: 0, labels_dropped: 0,
+    drop_reasons: {}, labels_by_kind: {},
+    party_presence: { pass: 0, fail: 0, no_rationale: 0, unresolvable_index: 0 },
+    by_chain_shape: {},
+    providers: {},
+    chains_altered_by_layer2: 0,
+  };
+  for (const s of samples) {
+    if (s.model && s.model.ok) agg.samples_with_model_response += 1;
+    if (s.grade && s.grade.parsed === false) agg.samples_parse_failed += 1;
+    if (s.model && s.model.provider) {
+      agg.providers[s.model.provider] = (agg.providers[s.model.provider] || 0) + 1;
+    }
+    if (s.chain_shape) agg.by_chain_shape[s.chain_shape] = (agg.by_chain_shape[s.chain_shape] || 0) + 1;
+    if (s.chain_unchanged === false) agg.chains_altered_by_layer2 += 1;
+    const sum = s.grade && s.grade.summary;
+    if (!sum) continue;
+    agg.labels_proposed += sum.proposed;
+    agg.labels_would_apply += sum.would_apply;
+    agg.labels_dropped += sum.dropped;
+    for (const [k, v] of Object.entries(sum.drop_reasons || {})) agg.drop_reasons[k] = (agg.drop_reasons[k] || 0) + v;
+    for (const [k, v] of Object.entries(sum.labels_by_kind || {})) agg.labels_by_kind[k] = (agg.labels_by_kind[k] || 0) + v;
+    for (const k of Object.keys(agg.party_presence)) agg.party_presence[k] += (sum.party_presence?.[k] || 0);
+  }
+  agg.drop_rate = agg.labels_proposed
+    ? Number((agg.labels_dropped / agg.labels_proposed).toFixed(3)) : null;
+  const ppSeen = agg.party_presence.pass + agg.party_presence.fail;
+  agg.party_presence_fail_rate = ppSeen ? Number((agg.party_presence.fail / ppSeen).toFixed(3)) : null;
+  return agg;
+}
+
 async function upsertDraft(task, draft, meta, ctx, sourceRunId) {
   const subjectRef = OCD.ocdSubjectRef(task.domain, task.source_record_id);
   return opsQuery('POST',
@@ -278,6 +454,35 @@ async function closeRunLog(runId, row) {
   }
 }
 
+// Group by domain so each domain DB is queried once, then attach each task's
+// transitions + current-owner context. Shared by the write path (which prepares
+// the UNDRAFTED slice) and the P140 grade path (which deliberately does not —
+// see the note at the grade branch).
+async function prepareTasks(tasks, scanErrors) {
+  const byDomain = new Map();
+  for (const t of tasks) {
+    const d = OCD.normDomain(t.domain);
+    if (!byDomain.has(d)) byDomain.set(d, []);
+    byDomain.get(d).push(t);
+  }
+  const prepared = [];
+  for (const [domain, group] of byDomain) {
+    const ids = group.map((t) => t.source_record_id).filter(Boolean);
+    const { byProp, errors, truncated } = await fetchTransitionsFor(domain, ids);
+    if (errors.length) scanErrors.push(...errors);
+    if (truncated) scanErrors.push(`transitions_page_cap_hit:${domain}`);
+    const ctxMap = await fetchChainContext(domain, ids);
+    for (const t of group) {
+      prepared.push({
+        task: t,
+        transitions: byProp.get(String(t.source_record_id)) || [],
+        ctx: ctxMap.get(String(t.source_record_id)) || {},
+      });
+    }
+  }
+  return prepared;
+}
+
 // ---------------------------------------------------------------------------
 export async function handleOwnershipChainDraftTick(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
@@ -312,29 +517,7 @@ export async function handleOwnershipChainDraftTick(req, res) {
   if (laneScanCapped) scanErrors.push(`lane_scan_capped:${laneScanLimit}`);
   const fresh = openRows.filter((t) => !existing.has(OCD.ocdSubjectRef(t.domain, t.source_record_id)));
 
-  // Group by domain so each domain DB is queried once.
-  const byDomain = new Map();
-  for (const t of fresh) {
-    const d = OCD.normDomain(t.domain);
-    if (!byDomain.has(d)) byDomain.set(d, []);
-    byDomain.get(d).push(t);
-  }
-
-  const prepared = [];
-  for (const [domain, tasks] of byDomain) {
-    const ids = tasks.map((t) => t.source_record_id).filter(Boolean);
-    const { byProp, errors, truncated } = await fetchTransitionsFor(domain, ids);
-    if (errors.length) scanErrors.push(...errors);
-    if (truncated) scanErrors.push(`transitions_page_cap_hit:${domain}`);
-    const ctxMap = await fetchChainContext(domain, ids);
-    for (const t of tasks) {
-      prepared.push({
-        task: t,
-        transitions: byProp.get(String(t.source_record_id)) || [],
-        ctx: ctxMap.get(String(t.source_record_id)) || {},
-      });
-    }
-  }
+  const prepared = await prepareTasks(fresh, scanErrors);
 
   // Deterministic classification of the WHOLE slice, in memory, for honest counts.
   // No LLM is spent to produce these numbers.
@@ -366,10 +549,92 @@ export async function handleOwnershipChainDraftTick(req, res) {
       note: 'Annotation-only, NO writes in dry-run. The chain is assembled DETERMINISTICALLY from '
         + 'gov.ownership_history via v_ownership_transitions_portfolio (P138 guards re-applied); the '
         + 'citation is a record reference, not a model quote. A gap in the chain is reported, never '
-        + 'bridged. Confirming a draft stays a HUMAN action on the P179 capture path.',
+        + 'bridged. Confirming a draft stays a HUMAN action on the P179 capture path. '
+        + 'Add ?role_labels=1&generate=1 to grade the optional Layer-2 role-labeller (still no writes, '
+        + 'flag not required, flag not changed).',
     };
+    // ---- P140 Layer-2 role-label GRADE (ungated, still no writes) ---------
+    const wantGenerate = truthy(req.query.generate);
+    const forceRoleLabels = truthy(req.query.role_labels);
+    const gradeMode = wantGenerate && (forceRoleLabels || roleLabels);
+    if (wantGenerate && !gradeMode) {
+      // `generate=1` with the flag off and no `role_labels=1` is a request that
+      // cannot be honoured silently — say which knob is missing rather than
+      // returning a dry run that looks like it ran the model.
+      out.generate_skipped = `role_labels_off: pass role_labels=1 to grade Layer 2 while ${ROLE_LABEL_FLAG} is off`;
+    }
+    if (gradeMode) {
+      const want = intParam(req.query.sample, GRADE_SAMPLE_DEFAULT, GRADE_SAMPLE_MAX);
+
+      // ⚠️ THE GRADE DOES NOT READ `prepared`, AND THAT IS THE WHOLE POINT.
+      // `prepared` covers only the UNDRAFTED (`fresh`) slice, because that is
+      // what the write path needs. Measured live 2026-08-26: all 545 open lane
+      // rows already carry a draft (P131/P133 drained the lane in one pass), so
+      // `fresh` is 0 and a grade wired to `prepared` would have returned
+      // `sample_taken: 0` — an empty grade block that renders exactly like a
+      // clean one. Layer 2 labels a chain that ALREADY EXISTS, so an
+      // already-drafted row is the ideal candidate, not an excluded one.
+      const gradeErrors = [];
+      const gradePool = await prepareTasks(openRows.slice(0, GRADE_LANE_SCAN), gradeErrors);
+
+      // Candidates are the DRAFTABLE rows only — a row with no chain has no link
+      // to label, and sending it would grade the model on a question it was never
+      // asked (and burn an on-box call to hear "no transfers").
+      const candidates = [];
+      for (const p of gradePool) {
+        const d = OCD.buildChainDraft(p.transitions, p.ctx);
+        if (!d.draftable) continue;
+        candidates.push({ ...p, shape: OCD.classifyChainShape(d) });
+      }
+      const chosen = OCD.pickGradeSample(candidates, want);
+      const { results, budget_stopped } = await runGradePool(
+        chosen, GRADE_CONCURRENCY, Date.now() + GRADE_BUDGET_MS);
+      // Restore the deterministic pick order (the pool finishes out of order, and
+      // a grader reading a shape-spread sample should see it spread).
+      const order = new Map(chosen.map((c, i) => [OCD.ocdSubjectRef(c.task.domain, c.task.source_record_id), i]));
+      results.sort((a, b) => (order.get(a.subject_ref) ?? 0) - (order.get(b.subject_ref) ?? 0));
+
+      out.role_label_grade = {
+        mode: 'dry_run_grade',
+        written: false,
+        flag: {
+          name: ROLE_LABEL_FLAG, enabled: roleLabels,
+          registry_state: roleFlag?.state || 'missing',
+          // Say plainly that the grade ran with the flag off, so nobody reads a
+          // populated grade block as evidence the layer is live.
+          forced_by_query: forceRoleLabels && !roleLabels,
+        },
+        // Named so nobody re-derives the grade from the write path's slice and
+        // silently grades nothing once the lane is drafted.
+        candidate_source: 'open_lane_including_already_drafted',
+        lane_rows_scanned: Math.min(openRows.length, GRADE_LANE_SCAN),
+        lane_scan_cap: GRADE_LANE_SCAN,
+        draftable_candidates: candidates.length,
+        not_draftable_skipped: gradePool.length - candidates.length,
+        sample_requested: want,
+        sample_taken: results.length,
+        budget_stopped,
+        scan_errors: gradeErrors,
+        shape_buckets: candidates.reduce((m, c) => { m[c.shape] = (m[c.shape] || 0) + 1; return m; }, {}),
+        summary: summariseGrade(results),
+        samples: results,
+        how_to_read: 'A DROP is the guard working, not the run failing — W8 U3 dropped ~52% of its '
+          + 'proposals on this same gap and that rate was the finding. Read `party_presence_fail_rate` '
+          + 'for the hallucinated-rationale cases specifically, `chains_altered_by_layer2` (must be 0 — '
+          + 'it is measured by re-running the real applier over a copy and comparing chain fingerprints), '
+          + 'and `providers` to confirm the on-box model answered rather than the cloud fallback. '
+          + 'Grade the surviving labels against each link\u2019s own facts: an affiliate/SPE reshuffle must '
+          + 'not read as an arms-length sale, and a $0/nominal transfer must not read as arms-length. '
+          + 'NOTHING was written and the flag was not changed.',
+      };
+    }
+
+    // `sample` doubles as the grade's size knob, so the deterministic sample
+    // block is suppressed in grade mode — the grade already carries each
+    // sampled chain in full, and rendering both would be one payload showing
+    // two different slices of the lane under one name.
     const n = intParam(req.query.sample, 0, 25);
-    if (n) {
+    if (n && !gradeMode) {
       out.samples = prepared.slice(0, n).map((p) => {
         const d = OCD.buildChainDraft(p.transitions, p.ctx);
         return {
