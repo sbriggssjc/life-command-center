@@ -468,6 +468,29 @@ A sweep of all-zero columns with no populated control is measuring the query, no
 nothing handles it. The exclusion is correct in isolation; the system has a hole where the
 handler was assumed to be.
 
+> **⚠️ AND WHEN YOU FIX ONE, THE RELEASE GATE IS THE HARD PART — NOT THE DETECTION.**
+> P182a, 2026-08-26. The fix for this class is a sweep that closes items whose premise
+> cleared. Written against "the owner now has an `active_contact_entity_id` that doesn't
+> restate the owner name", it matched **115 tasks. Only 5 qualified.** Reading them:
+> **104 were SELF-ECHOES with zero email and zero phone** — the owner's own name copied into
+> the contact slot ("Alan Cohen" → Alan Cohen, "Avalon Companies" → Avalon Companies). Closing
+> those would have suppressed 104 owners from the acquisition lane while nobody could be
+> called: the premise had not cleared at all. That is the **P164 phantom-contact shape**, one
+> apply away.
+>
+> **A NAME IS NOT A CONTACT. REACHABILITY IS.** Gate on email-or-phone, not on the presence of
+> a row.
+>
+> **And the obvious discriminator was also wrong.** Splitting "an individual owner is
+> legitimately their own contact" from "an org as its own contact" via
+> `lcc_owner_name_has_org_marker` put **PS Business Parks, Rexford Industrial, Sterling Bay,
+> Foulger Pratt and FD Stonewater** in the INDIVIDUAL bucket — a firm without a legal suffix
+> reads as a person. Class 4 inside a Class 10 fix.
+>
+> **Close as `skipped`, never `completed`.** The premise cleared; nobody did the work. Marking
+> them completed credits the lane with completions that never happened **and corrupts the
+> Class 2 detector**, which keys on that exact status.
+
 **First run (2026-08-26).** `v_owner_contact_worklist` excludes any owner that already has a
 linked person — correct, they need no contact *acquisition*. But **nothing promotes that person
 into `owner_contact_pivot`**, which is what the engine and the panel actually read. Measured
