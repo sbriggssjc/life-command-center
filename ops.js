@@ -5601,6 +5601,7 @@ async function renderResearchPage(page = opsResearchPage) {
           <button class="q-action" onclick="_opsBtnGuard(this, exportResearchTaskBrief, decodeURIComponent('${encodeURIComponent(item.id)}'),'chatgpt')">ChatGPT</button>
           <button class="q-action" onclick="_opsBtnGuard(this, exportResearchTaskBrief, decodeURIComponent('${encodeURIComponent(item.id)}'),'claude')">Claude</button>
         </div>
+        ${chainDraftHTML(item)}
         ${researchAssistantPanelHTML(item.id)}
       </div>`;
     });
@@ -5639,6 +5640,53 @@ async function renderResearchPage(page = opsResearchPage) {
   }
   perf.end();
 }
+
+// ─── P131 — render the ownership-chain DRAFT on the card ─────────────────────
+// P179 gave `establish_ownership_history` a capture path; P131 gives the card
+// something to confirm. The draft is assembled DETERMINISTICALLY from
+// gov.ownership_history (see api/_shared/ownership-chain-draft-planner.js), so
+// each line is a recorded transfer, not a model guess. A break in the chain is
+// shown as an explicit gap — never bridged — and a last grantee that disagrees
+// with the owner LCC shows is called out for reconciliation rather than resolved.
+//
+// Renders NOTHING when there is no draft, so with the drafter flag off (the
+// default) the card is byte-identical to today's.
+function chainDraftHTML(item) {
+  const d = item && item.chain_draft;
+  if (!d) return '';
+  if (!d.draftable) {
+    // Honest, and deliberately not silent: "we looked and there is nothing on
+    // file" is a different fact from "nobody has looked yet", and conflating them
+    // is what let this lane sit at 0 completions.
+    return '<div class="chain-draft chain-draft-none">'
+      + '<div class="chain-draft-head">No chain on file</div>'
+      + '<div class="chain-draft-why">' + esc(d.reason || '') + '</div></div>';
+  }
+  const conf = d.confidence == null ? '' : Math.round(Number(d.confidence) * 100) + '%';
+  let rows = '';
+  (d.links || []).forEach(function (l) {
+    if (l.gap_before) {
+      rows += '<div class="chain-gap">\u22ee gap \u2014 intermediate owner Not on file</div>';
+    }
+    const price = l.price ? ' <span class="chain-price">$' + Number(l.price).toLocaleString('en-US') + '</span>' : '';
+    const role = l.role_label ? ' <span class="chain-role">' + esc(String(l.role_label).replace(/_/g, ' ')) + '</span>' : '';
+    rows += '<div class="chain-link"><span class="chain-date">' + esc(l.date || '') + '</span>'
+      + '<span class="chain-party">' + esc(l.from || '') + '</span>'
+      + '<span class="chain-arrow">\u2192</span>'
+      + '<span class="chain-party">' + esc(l.to || '') + '</span>' + price + role + '</div>';
+  });
+  const mismatch = d.terminates_at_current_owner === false && d.current_owner_name
+    ? '<div class="chain-warn">Last recorded grantee is not the owner on file ('
+      + esc(d.current_owner_name) + ') \u2014 confirm which is right.</div>'
+    : '';
+  return '<div class="chain-draft">'
+    + '<div class="chain-draft-head">Drafted chain of title'
+    + (conf ? ' <span class="chain-conf">' + esc(conf) + ' confidence</span>' : '') + '</div>'
+    + rows + mismatch
+    + '<div class="chain-draft-src">Source: government ownership records. Confirm or edit on the Ownership tab \u2014 nothing is written until you do.</div>'
+    + '</div>';
+}
+window.chainDraftHTML = chainDraftHTML;
 
 // ─── P173 — make the research lane ANSWERABLE ────────────────────────────────
 // The research page had SIX buttons and ZERO input fields: Complete posts only

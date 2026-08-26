@@ -9,15 +9,51 @@ auto-write) and reversible.
 
 ## Ranked gaps (impact = stalled volume × frequency × downstream unlock; effort/risk noted)
 
-**R1 — Dead research queues: draft-then-confirm the ownership-history + manual-contact lanes.** *(MANUAL-RESEARCH
-+ FEEDBACK-LOOP)* `establish_ownership_history` **545 open / 0 lifetime completions**, `owner_contact_manual`
-**316 / 0**, `npi_missing_inventory` **203 / 0** — ~1,064 stalled rows across 7 never-consumed research types
-(DEAD_END_AUDIT_PLAYBOOK Class 2). The evidence to work them is ALREADY on-box (deeds, SOS `manager_name`,
-signatures, `activity_events`); `manual-research-worklist.js` even pre-assembles the breadcrumbs + Google
-queries — a human then researches from scratch. **Unlock:** Ollama drafts the chain-of-title / most-likely
-decision-maker + rationale into the review card, flipping the operator from "research" to "confirm." **Impact:
-highest raw** — the single largest never-consumed inventory. **Effort: medium** (new draft-generator over
-existing data; annotation-only).
+**R1 — Dead research queues: draft-then-confirm the ownership-history + manual-contact lanes.**
+*(MANUAL-RESEARCH + FEEDBACK-LOOP)* — **DONE 2026-08-26 (P131), and the premise was CORRECTED by measurement.**
+
+Original framing: "the evidence is already on-box (deeds, SOS `manager_name`, signatures, `activity_events`);
+have Ollama draft the chain-of-title / most-likely decision-maker into the review card." Live measurement
+changed the answer for BOTH lanes. Shipped state:
+
+* **`establish_ownership_history` (545 open / 0 completions) — DRAFTER BUILT, and it is DETERMINISTIC, not
+  Ollama.** 544 of the 545 queued properties already have `gov.ownership_history` rows, and **453 yield a
+  clean, dated, guard-passing chain (707 links)** through the P138 view `v_ownership_transitions_portfolio`.
+  LCC never read it: the LCC-side gap is literally `owner_links <= 1` in `lcc_entity_portfolio_facts`, and the
+  P138–P141 feeder only ever fed `is_latest_for_property` (the CURRENT owner), so the HISTORY was never
+  populated. Three findings killed the LLM framing outright: **(a)** the deed prose to quote does not exist —
+  `gov.deed_records` holds **ZERO** `legal_description` characters across 5,804 rows, and of the 92
+  undraftable properties exactly **one** has a named+dated deed; **(b)** an Ollama proposer for this same gap
+  was **already built and already ON** (W8 U3 / `W8_U3_LINK_PROPAGATION`) — 32 cards shipped, 27 decided,
+  against **35 proposals dropped `quote_not_verbatim`** (~52% hallucinated citations), quiet since
+  2026-08-14; **(c)** the answer was sitting in structured form the whole time. The drafter's citation is
+  therefore a RECORD REFERENCE (ownership_history row id + data_source), which cannot be hallucinated.
+  Honest counts: **453 draftable / 92 not** (74 `no_transitions_on_file`, 18 `all_transitions_guarded`);
+  349 single-link, 104 multi-link, 56 with 3+. A break in the chain is REPORTED ("Not on file"), never
+  bridged. Ollama survives only as an optional Layer 2 that LABELS a transfer type on links it may not
+  alter (`OWNERSHIP_CHAIN_ROLE_LABELS`, off).
+  Flag `OWNERSHIP_CHAIN_DRAFT` (off) · `GET/POST /api/ownership-chain-draft-tick` · annotation-only.
+
+* **`owner_contact_manual` (316 open / 0 completions) — NO DRAFTER, DELIBERATELY. It is not answerable
+  on-box, and saying so is the deliverable.** Measured across all 316: **0** carry a notice address, **0**
+  have a linked person, **1** has any `activity_events` (so there is no signature corpus for these parties),
+  and every row's `tried` reads sos/address/web = `unconfigured`. The pivot bench holds 202 candidates over
+  192 owners of which **173 (86%) are SELF-ECHOES** — the SOS registry naming the LLC as its own manager
+  ("Browman Development Co." as manager of "Browman Development Co.") — wrongly stamped
+  `is_named_individual` on 176 of 202; the rest are OM-extraction row labels minted as people ("Capital
+  Expenditures", "Debt Service", "Fund Name", "Toronto, ON M5K 2A1"). At source gov has 1,482 managers of
+  which 966 are person-shaped, but of the 212 gov-linked owners **in this queue** only 15 have a manager
+  distinct from the owner — the queue IS the residue the automation already picked over, which is exactly
+  why it never drains. Drafting here would fabricate (the P124 `else`-branch failure), so P131 ships the
+  P181 remedy instead: **`v_lcc_owner_contact_decidability`** classifies every open row —
+  **6 decidable / 310 blocked** (186 `bench_restates_owner_or_row_labels`, 123 `no_candidate_on_file`,
+  1 `public_body_not_prospected`) — so the handful a human can answer stop being buried. The lane's real
+  blocker is external acquisition (SOS-direct, §25 bot-wall), an operator gate, not a modelling gap.
+
+* **Capture paths were already in place** — P173 for `owner_contact_manual`, P179 for
+  `establish_ownership_history` — so no capture path had to be built; both were verified live and wired.
+
+*(`npi_missing_inventory` 203/0 is unchanged by P131 and was separately gated by P181.)*
 
 **R2 — Correspondence-first ORE + OM-economics write-back (the spine that self-resolves per deal).**
 *(CODE-CONNECTIVITY)* On an emailed listing OM, the owner arrives as name fragments with ZERO ownership edges
@@ -108,7 +144,7 @@ the real value:
 1. **R3 first (fast, high, low-risk):** dry-run review + flip the dormant Decision Center `*_ASSIST` lanes in
    value order (`NEXT_STEP_AI` → `PROPERTY_TWIN_ASSIST` → `W9_3_SF_ASSIST` → the rest). No new build. → *first
    action: pull a dry-run proposal sample for the top lane.*
-2. **R1 (biggest raw impact):** build the Ollama draft-generator for the dead research lanes
+2. ~~**R1 (biggest raw impact):** build the Ollama draft-generator for the dead research lanes~~ — **DONE 2026-08-26 (P131)**, but NOT as an Ollama drafter: the ownership lane turned out to be answerable deterministically from gov records LCC already held, and the contact lane turned out not to be answerable on-box at all. See R1 above for the measured numbers.
    (ownership-history + owner_contact_manual) → *first action: draft a CC prompt.*
 3. **R2 (biggest connectivity unlock):** correspondence-first ORE dedupe + OM-economics write-back → *CC prompt.*
 4. **R4** going-cold/next-touch (folds R3's `NEXT_STEP_AI` flip + a new draft). 5. **R5** edge substance-check.
