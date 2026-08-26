@@ -646,6 +646,32 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
     assert.deepEqual(offenders, [], `ops-metrics.js must declare only functions; found: ${offenders.join(' | ')}`);
   });
 
+  // ── P173: the research lane must be ANSWERABLE ───────────────────────────
+  it('the research card offers a capture path, and reuses the owner picker', () => {
+    const ops = readFileSync(join(root, 'ops.js'), 'utf8');
+    const detail = readFileSync(join(root, 'detail.js'), 'utf8');
+    // The defect: the research page had 6 buttons and 0 inputs, so `Complete`
+    // closed a task without recording an answer — 316 open / 0 completed ever.
+    assert.match(ops, /function\s+researchFindContact\b/, 'ops.js defines the capture action');
+    assert.match(ops, /window\.researchFindContact\s*=/,
+      'it must be on window — the card reaches it from an inline onclick at CLICK time');
+    assert.match(ops, /onclick="researchFindContact\(/, 'the research card renders the button');
+    // ⚠️ It must REUSE the owner panel's picker, never introduce a second way to
+    // record a contact. Two capture paths is how the phantom/duplicate contact
+    // problems started.
+    assert.match(ops, /openEntityDetail\(entityId\)/, 'it opens the owner panel');
+    // ⚠️ Match the CALL, not the bare word. The first version of this assertion
+    // matched /_entityAcquireContact/, which the explanatory COMMENT above the
+    // function also satisfies — so deleting the actual call passed 39/39. A
+    // guard a comment can satisfy is not a guard.
+    assert.match(ops, /setTimeout\(_entityAcquireContact,/,
+      'it must actually INVOKE the existing picker, not merely mention it');
+    assert.match(detail, /window\._entityAcquireContact\s*=/, 'that picker is exported from detail.js');
+    // Scoped: only the lane that actually asks an open question gets the button.
+    assert.match(ops, /item\.research_type === 'owner_contact_manual'/,
+      'the button is scoped to owner_contact_manual — a binary verdict needs no field');
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');

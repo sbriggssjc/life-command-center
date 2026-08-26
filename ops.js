@@ -5514,6 +5514,7 @@ async function renderResearchPage(page = opsResearchPage) {
           ${freshnessHTML(item.updated_at || item.created_at)}
         </div>
         <div class="q-actions">
+          ${item.status !== 'completed' && item.research_type === 'owner_contact_manual' && item.entity_id ? `<button class="q-action primary" onclick="researchFindContact(decodeURIComponent('${encodeURIComponent(item.entity_id)}'))">Find the contact &rarr;</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action primary" onclick="_opsBtnGuard(this, completeResearch, decodeURIComponent('${encodeURIComponent(item.id)}'))">Complete</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action" onclick="_opsBtnGuard(this, createFollowup, decodeURIComponent('${encodeURIComponent(item.id)}'))">Follow-up</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action" onclick="_opsBtnGuard(this, dismissResearch, decodeURIComponent('${encodeURIComponent(item.id)}'))">Dismiss</button>` : ''}
@@ -5559,6 +5560,29 @@ async function renderResearchPage(page = opsResearchPage) {
   }
   perf.end();
 }
+
+// ─── P173 — make the research lane ANSWERABLE ────────────────────────────────
+// The research page had SIX buttons and ZERO input fields: Complete posts only
+// { research_task_id }, so working a card destroyed the task and captured
+// nothing. That is why owner_contact_manual sat at 316 open / 0 completed ever
+// — not operator neglect, a surface that could notify but not capture.
+//
+// This does NOT build a new form. The Decision Center already solves the same
+// problem (binary verdicts as buttons, lccPrompt where an open answer is
+// needed), and the owner panel already has the working capture path:
+//   Contacts tab -> 'Select contact' -> picker -> select_prospecting_contact,
+//   with '+ Add new' for someone not yet in the graph.
+// So the card just OPENS that path on the right owner. No new write surface, no
+// second way for a contact to be recorded, nothing to drift.
+async function researchFindContact(entityId) {
+  if (!entityId) { showToast('This task has no linked owner', 'error'); return; }
+  if (typeof openEntityDetail !== 'function') { showToast('Owner panel unavailable', 'error'); return; }
+  await openEntityDetail(entityId);
+  // The picker needs the Contacts tab mounted; _entityAcquireContact switches to
+  // it itself, but only once the panel has rendered.
+  if (typeof _entityAcquireContact === 'function') setTimeout(_entityAcquireContact, 250);
+}
+window.researchFindContact = researchFindContact;
 
 async function completeResearch(id) {
   const res = await opsPost('/api/workflows?action=research_followup', {
