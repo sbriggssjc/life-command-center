@@ -26,6 +26,27 @@ existing `briefing-data.js` fetchers, generates a 2–4 paragraph take in Scott'
 before the ~12:30 UTC send. Doctrine: private synthesis stays on-box; public market/news sections keep their
 cloud path. First net-new on-box GENERATION build (vs the annotation assists).
 
+**P138 SHIPPED (PR #1783, commit 9614a6f) + GRADED CLEAN (Cowork, live).** Tick `/api/briefing-analyst-take-tick`,
+flag `BRIEFING_ANALYST_TAKE_ONPREM` (OFF), cron 240 (10:18 UTC, no-ops while off), doc
+`docs/architecture/briefing-analyst-take-onprem.md`. **Correction:** the cloud path failed on Anthropic
+**BILLING** (credit balance too low), NOT a missing key — my P138 diagnosis was wrong; capital_markets is
+empty for the same reason (untouched). I ran the `?generate=1` dry-run through Railway (which has OLLAMA_URL;
+the sandbox does not, so CC couldn't) → **583-char, 2-paragraph take, every claim traceable to a real signal
+(hot contacts Fadi Seman/Joseph Zehia, work-queue state, Archbold/Valley MOB correspondence deltas, cadence),
+no fabrication.** Voice is slightly generic-assistant (tuning follow-up, not a blocker). **Gate steps
+remaining (Scott):** (1) `supabase functions deploy briefing-intel-snapshot --project-ref
+xengecqvemvfknjvbvrq --no-verify-jwt` (the omit-when-null guard — do BEFORE any manual snapshot re-fire);
+(2) flip `BRIEFING_ANALYST_TAKE_ONPREM` on. Then the brief renders a real Analyst's Take nightly.
+
+**Two small follow-ups drafted (139, 140) + a consolidation prompt (141):**
+- **P139** — interleave the clean-assist provenance lane so P137's 433 ladder-decidable cards surface ahead
+  of the no-ladder `dia_xref` backlog (two incomparable rank scales sharing one budget; xref `1001` >
+  field_provenance ≤1000). Low urgency (cron drains xref over ~a day).
+- **P140** — grade the dormant `OWNERSHIP_CHAIN_ROLE_LABELS` Layer-2 (Ollama labels a transfer type on chain
+  links, never alters them; party-presence guard). Dry-run sample → grade → flip if clean.
+- **P141** — docs consolidation: slim STATUS + one current-state index + one lossless Planned/Backlog list
+  (never drop a contemplated feature), archive older narratives to `docs/history/`.
+
 ## 2026-08-26 (Cowork) — P134/P135/P136 SHIPPED (assist production-health fixes); folder cleaned
 
 All three stalled-assist prompts merged and reconciled:
