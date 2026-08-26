@@ -1774,6 +1774,77 @@ via `lcc_tier0_confirm_log`. **Human verdicts only — never an unattended promo
   `already_linked`) — for them the graph was never the gap, the pivot naming nobody was; their gain
   is the pivot write. A count of clicks is not throughput (P159a).
 
+## P194 — the Tier 0 auto-attach sweep, and three traps it hit on the way (2026-08-26)
+
+P192 classified the Tier 0 lane and left `decidability='auto'` (EXACT domain↔owner-core match, exactly
+ONE eligible candidate) visible because no sweep wrote it. P194 is that sweep:
+`api/_handlers/tier0-auto-attach-tick.js`, flag `TIER0_AUTO_ATTACH` (**off**), cron 241 (06:55, scheduled
+anyway per P133). GET is an **ungated dry run**; POST writes. Population re-measured **9 cards / $10.4M,
+read 9/9 correct on named rows**. Deliberately NOT extended to `domain_is_core_prefix` (~9/12; it proposes
+*JP Morgan Chase CMBS Trust 2018PTC → jpmorgan.com* and *Frontier Hub LLC → frontier.net*). Full writeup:
+`docs/audits/P194_TIER0_AUTO_ATTACH_AND_LIVING_LOOP_2026-08-26.md`.
+
+- **⚠️ WHEN YOU ADD A VALUE TO A COLUMN THAT AN EXCLUSION TESTS WITH `<>`, GO READ THE EXCLUSION.**
+  The lane view hid an owner whose pivot contact came from outside the lane
+  (`coalesce(pv.active_source,'') <> 'tier0_confirm'`). The sweep's new `active_source='tier0_auto'`
+  **satisfies that inequality**, so the first auto attach on an owner would have hidden EVERY OTHER open
+  card for that owner — no error, no log line. Measured before shipping: **3 of the 9 auto owners hold a
+  second card, two of them live `ask` questions** (Healthcare Realty Trust's `healthcarerea.com`, Capital
+  Square 1031's `capitalsq.com`). Worse, the honest-count metric would have *lied in the safe direction*:
+  `cards_drained` would rise because questions were DELETED, not answered. A new enum member silently
+  changes the meaning of every `<>` written against the old one; the predicate is now a SET.
+- **⚠️ "READ THE LIVE DEFINITION AS THE AUTHORITY" IS NOT A SUBSTITUTE FOR COMMITTING THE VIEW.**
+  P190 applied two changes to `v_lcc_tier0_owner_contact_candidates` LIVE — the `sponsor_map` arm and the
+  `lcc_owner_name_is_not_prospected` gate — and deliberately did not commit the body, *"to avoid two
+  copies drifting apart."* The newest COMMITTED source (P188) therefore no longer described the shipped
+  view, and P194's rebuild from it silently dropped both: predicted diff **1 row**, actual **20 removed /
+  1 added** (13 `ngpv.com`, 5 `uirc.com`, 1 `jbg.com`; George Washington University resurrected). **A
+  migration that changes a view must carry the WHOLE view** — a second copy that is correct beats no copy
+  at all, because the alternative makes the repo an unreliable source and guarantees the next rebuild
+  regresses. **And the equivalence gate is what caught it**: a predicted 1 against an actual 21 is the
+  entire value of running the diff both directions before believing a rebuild.
+- **The consumer-mailbox stoplist now has ONE owner** — `lcc_is_consumer_mailbox_domain(text)`, IMMUTABLE.
+  It previously existed as copies in three migrations and had already drifted (`frontier.com` listed,
+  `frontier.net` not, which is what proposed an ISP as a Tier 0 card). Widening was **measured before
+  shipping**, per the P158a `&` lesson: 41 people leave the pool and **exactly ONE card leaves the lane**,
+  the known false positive. ⚠️ Note `~` binds tighter than `||`, so a concatenated regex parses as
+  `(x ~ 'first') || 'rest'` and fails **42804 naming OR**, not the operator that mis-bound — keep the whole
+  alternation in one literal.
+- **⚠️ THE LANE'S "PARKED CARDS SELF-UNPARK WHEN EVIDENCE LANDS" CLAIM IS TRUE FOR ONE OF THE SIX SIGNALS
+  P192 LISTS.** A `weak_partial` card is un-parked only by `n_link_evidence > 0` — a candidate's
+  `contact_company` matching the OWNER — or by a `lcc_owner_sponsor_domain` row. Correspondence, SF
+  campaign membership, an SF contact record, an Outlook entry and a job title all move
+  `n_person_evidence`, **which the decidability CASE never reads**: measured, **95 of 146 parked cards
+  ($118M) already carry person evidence and are parked anyway, permanently.** Class 10 in disguise — the
+  exclusion IS self-clearing, but the only event that clears it is not among the events anyone expects.
+  **Do NOT "fix" it by un-parking on person evidence**: that is the P188 Gary George finding (green on
+  three person signals for George Washington University, employed by a poultry company) and would restore
+  exactly the noise P192 removed. The instrument is `v_lcc_tier0_park_watch`; the one genuinely
+  link-shaped unwired signal is *a deal shown to that buyer* (`lcc_listing_events`) — a stated gap.
+- **⚠️ "LEARN FROM THE REJECTS" HAS NO INPUT, AND THE ATTACH ANALOGUE IS REFUTED.**
+  `lcc_tier0_confirm_log` holds **27 attaches and zero rejects** (the 6 `reject` rows in `lcc_decisions`
+  are `status='superseded'` — the `owner_already_reachable` no-op, not an operator saying "wrong firm"),
+  so a demotion engine there is a consumer with no producer (P137). And the tempting substitute — treat a
+  domain already attached to owner A as evidence against owner B — was measured over every colliding pair:
+  **16 open cards collide with an attached domain and 0 of 16 are contradictions** (13 NGP SPEs on
+  `ngpv.com`; `Cunningham Development`/`Cunningham Development Co`; `Kb Exchange Trust`/`Exchangeright`;
+  `Genesis Kc Dev`/`Genesis Financial Group`). **A shared domain across owners is CORROBORATION or a merge
+  signal, never a contradiction** — the same 25%-precision trap P189 measured and rejected for
+  domain-keyed merge grouping, and demoting them would suppress the sponsor inheritance P193 delivers.
+  ⚠️ A **lexical** classifier gets this backwards: `lcc_owner_domain_core` buckets the NGP SPEs as
+  "genuinely different" (`ngpviessexvt` vs `ngpcapital`), reporting 14 conflicts where reading the names
+  gives 0 — verify on named rows, not on the aggregate.
+- **ONE WRITER, TWO CALLERS.** `_shared/tier0-attach-effect.js::applyTier0Attach` owns the pivot write,
+  the ledger and the person→owner edge; `admin.js`'s human verdict and the sweep both call it, and a test
+  pins that the verdict block no longer PATCHes `owner_contact_pivot` itself. Copying the block into the
+  tick would have satisfied the letter of "build it in the JS verdict path" and created the second writer
+  this file warns about a dozen times. **Deliberate behaviour change:** the human path now ABORTS when the
+  ledger write fails (it previously continued) — the ledger is what closes the card AND what makes the
+  write reversible, so a pivot write without one is an irreversible write to the field the whole outreach
+  chain reads, on a card that stays open.
+- **Judge it by `cards_drained`, never `attached`** (`v_lcc_tier0_auto_attach_run_health`); every
+  `skipped_*` is a re-discovery tally. Reverse a batch by `batch_tag LIKE 't0auto_%'`.
+
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
 Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration
@@ -1968,9 +2039,12 @@ Related invariants from the same round:
     nothing writes that person into `owner_contact_pivot`. Result: **11 owners, $240.5M,
     suppressed AND invisible.** Whenever a surface excludes a population on the grounds that
     it is "already handled", name the thing that handles it and verify that it does.
-- **Tier 0 owner-contact confirm lane (P186→P188):** `docs/audits/P186_TIER0_VIEW_FIX_AND_BENCH_REVIEW_2026-08-26.md`
+- **Tier 0 owner-contact confirm lane (P186→P188→P194):** `docs/audits/P186_TIER0_VIEW_FIX_AND_BENCH_REVIEW_2026-08-26.md`
   (the bench, its precision curve, and the decision not to build a promoter) →
-  `docs/audits/P188_TIER0_CONFIRM_LANE_2026-08-26.md` (the lane that turns it into calls).
+  `docs/audits/P188_TIER0_CONFIRM_LANE_2026-08-26.md` (the lane that turns it into calls) →
+  `docs/audits/P194_TIER0_AUTO_ATTACH_AND_LIVING_LOOP_2026-08-26.md` (the auto-attach sweep, the
+  `<>`-exclusion trap that would have hidden live cards, and the measured refutation of P192's
+  un-park and learn-from-rejects claims).
 - **On-box daily-brief narrative (Analyst's Take), R8 Stage 1:** `docs/architecture/briefing-analyst-take-onprem.md` — the first net-new on-prem GENERATION surface, its fabrication guard, and the operator gate.
 - **Ownership Resolution Engine:** government-lease `docs/OWNERSHIP_RESOLUTION_ENGINE.md`.
 - **Property-owner subsystem + SF-as-a-source doctrine:** `docs/architecture/property-owner-subsystem.md`

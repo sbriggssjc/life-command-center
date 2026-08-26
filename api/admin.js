@@ -45,6 +45,9 @@ import {
   buildTier0Card, tier0SubjectRef, validateTier0Verdict, rentBand as tier0RentBand,
 } from './_shared/tier0-confirm-planner.js';
 import {
+  applyTier0Attach, tier0BatchTag, TIER0_SOURCE_CONFIRM,
+} from './_shared/tier0-attach-effect.js';
+import {
   DUP_PAIR_TARGETS, findDupPairTarget, dupSideRef, dupPairKey, dupPairSubjectRef,
   generateCandidatePairs, excludeKnownPairs, buildDupPairPrompt, normalizeDupPairProposal,
   parseDupPairJson, isProposablePair, dupPairDisposition, DUP_PAIR_NEEDS_HUMAN_SIM,
@@ -102,6 +105,7 @@ import { buildNameBackfillPatch, reverseNameBackfillPatch, senderEmailFromMetada
 import { artifactSafeName } from './_shared/artifact-storage.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 import { handleOwnershipChainDraftTick } from './_handlers/ownership-chain-draft-tick.js';
+import { handleTier0AutoAttachTick } from './_handlers/tier0-auto-attach-tick.js';
 import { handleBriefingAnalystTakeTick } from './_handlers/briefing-analyst-take-tick.js';
 import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
 import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
@@ -221,6 +225,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'match-disambig-assist-tick': return handleMatchDisambigAssistTick(req, res);
     case 'property-twin-assist-tick': return handlePropertyTwinAssistTick(req, res);
     case 'ownership-chain-draft-tick': return handleOwnershipChainDraftTick(req, res);
+    case 'tier0-auto-attach-tick':    return handleTier0AutoAttachTick(req, res);
     case 'briefing-analyst-take-tick': return handleBriefingAnalystTakeTick(req, res);
     case 'sf-link-assist-tick':        return handleSfLinkAssistTick(req, res);
     case 'sf-link-rescore-tick':       return handleSfLinkRescoreTick(req, res);
@@ -12557,7 +12562,7 @@ async function handleDecisionVerdict(req, res) {
       const action = gate.verdict;
 
       const nowIso = new Date().toISOString();
-      const batchTag = 't0cl_' + nowIso.slice(0, 10).replace(/-/g, '');
+      const batchTag = tier0BatchTag(TIER0_SOURCE_CONFIRM, nowIso);
       const band = tier0RentBand(card.owner_rent);
       const ledgerBase = {
         batch_tag: batchTag, subject_ref: decision.subject_ref, verdict: action,
@@ -12601,92 +12606,35 @@ async function handleDecisionVerdict(req, res) {
       }
 
       // ---- attach -----------------------------------------------------------
+      // P194: the effect itself lives in _shared/tier0-attach-effect.js so the
+      // unattended sweep (tier0-auto-attach-tick) writes through EXACTLY this
+      // code rather than a second copy that drifts. What stays here is the part
+      // that is genuinely about a HUMAN verdict: the lcc_decisions record.
       const person = gate.person;
-      const pivotR = await opsQuery('GET', 'owner_contact_pivot?select=entity_id,owner_name,workspace_id,'
-        + 'active_contact_entity_id,active_contact_name,active_contact_role,active_authority_level,'
-        + 'active_source,confidence&entity_id=eq.' + pgFilterVal(ownerId) + '&limit=1');
-      const pivot = (pivotR.ok && Array.isArray(pivotR.data)) ? pivotR.data[0] : null;
+      const eff = await applyTier0Attach({
+        card, person, ownerId, domain,
+        subjectRef: decision.subject_ref,
+        source: TIER0_SOURCE_CONFIRM,
+        actor: user.id || null,
+        rentBandName: band.band,
+        workspaceIdFallback: decision.workspace_id || null,
+        batchTag,
+      });
 
-      // Fill-blanks, re-checked HERE rather than on the card: the owner may have
-      // gained a contact from another source since the card was rendered, and
-      // this lane must never clobber it.
-      if (pivot && pivot.active_contact_entity_id) {
-        const rr = await record('reject', 'superseded', { domain, reason: 'owner_already_reachable' },
-          { tier0: 'no_longer_actionable', existing_contact_entity_id: pivot.active_contact_entity_id });
-        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      if (eff.action === 'no_longer_actionable') {
+        const rr0 = await record('reject', 'superseded', { domain, reason: 'owner_already_reachable' },
+          { tier0: 'no_longer_actionable', existing_contact_entity_id: eff.existing_contact_entity_id });
+        if (!rr0.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr0.data });
         return res.status(200).json({ ok: true, verdict: 'attach', action: 'no_longer_actionable',
-          existing_contact_entity_id: pivot.active_contact_entity_id });
+          existing_contact_entity_id: eff.existing_contact_entity_id });
       }
-
-      const workspaceId = (pivot && pivot.workspace_id) || card.owner_workspace_id || decision.workspace_id || null;
-      // authority_level 5 = "captured", the same rung a related_person carries.
-      // Deliberately NOT promoted from a job title: this ladder means legal or
-      // control authority (1 signatory > 2 controlling > 3 economic > 4 agent >
-      // 5 captured), and "President" in a CRM title field does not establish it.
-      // The role bucket rides in active_contact_role instead, where it belongs.
-      const contactRole = card.people.length && person.role_bucket && person.role_bucket !== 'no_title'
-        ? person.role_bucket : 'prospecting_contact';
-      const led = await ledgerWrite({
-        ...ledgerBase,
-        person_entity_id: person.person_id, person_name: person.person_name,
-        person_email: person.email,
-        link_evidence: person.link_evidence || [], person_evidence: person.person_evidence || [],
-        prior_active_contact_entity_id: pivot ? pivot.active_contact_entity_id : null,
-        prior_active_contact_name: pivot ? pivot.active_contact_name : null,
-        prior_active_contact_role: pivot ? pivot.active_contact_role : null,
-        prior_active_authority_level: pivot ? pivot.active_authority_level : null,
-        prior_active_source: pivot ? pivot.active_source : null,
-        prior_confidence: pivot ? pivot.confidence : null,
-        pivot_row_created: !pivot,
-        relationship_role: contactRole,
-      });
-      const logId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].log_id : null;
-
-      const pivotFields = {
-        active_contact_entity_id: person.person_id,
-        active_contact_name: person.person_name,
-        active_contact_role: contactRole,
-        active_authority_level: 5,
-        active_source: 'tier0_confirm',
-        // A human confirmed the LINK; the person's authority inside the firm is
-        // still unknown. 'medium' is the honest rung, not 'high'.
-        confidence: 'medium',
-        enrichment_action: null,
-        updated_at: nowIso,
-      };
-      const wr = pivot
-        ? await opsQuery('PATCH', 'owner_contact_pivot?entity_id=eq.' + pgFilterVal(ownerId), pivotFields)
-        : await opsQuery('POST', 'owner_contact_pivot',
-          { entity_id: ownerId, owner_name: card.owner_name, workspace_id: workspaceId, ...pivotFields });
-      if (!wr.ok) {
-        if (logId != null) {
-          await opsQuery('PATCH', 'lcc_tier0_confirm_log?log_id=eq.' + logId,
-            { reverted_at: nowIso }).catch(() => {});
-        }
-        await recordEffectFailure({ pivot_write: false, error: wr.data });
-        return res.status(502).json({ error: 'tier0_owner_contact: pivot_write_failed', detail: wr.data });
+      if (!eff.ok) {
+        await recordEffectFailure(eff.action === 'ledger_failed'
+          ? { ledger_write: false, error: eff.detail }
+          : { pivot_write: false, error: eff.detail });
+        return res.status(502).json({ error: 'tier0_owner_contact: ' + eff.action, detail: eff.detail });
       }
-
-      // The edge is what makes the owner reachable in the GRAPH (and what
-      // owner-reachable-via reads). Best-effort: the pivot write is the primary
-      // effect, and a duplicate edge is a no-op inside the helper.
-      const { linkPersonToEntity } = await import('./_shared/contact-attach.js');
-      const link = await linkPersonToEntity({
-        workspaceId, entityId: ownerId, contactEntityId: person.person_id,
-        role: contactRole, via: 'tier0_confirm_p188',
-      });
-      let relationshipId = null;
-      try {
-        const relR = await opsQuery('GET', 'entity_relationships?select=id&relationship_type=eq.associated_with'
-          + '&from_entity_id=eq.' + pgFilterVal(ownerId)
-          + '&to_entity_id=eq.' + pgFilterVal(person.person_id)
-          + '&order=created_at.desc&limit=1');
-        relationshipId = (relR.ok && Array.isArray(relR.data) && relR.data[0]) ? relR.data[0].id : null;
-      } catch (_e) { /* soft — the ledger still names the pair */ }
-      if (logId != null) {
-        await opsQuery('PATCH', 'lcc_tier0_confirm_log?log_id=eq.' + logId,
-          { relationship_id: relationshipId, relationship_created: !!(link && link.linked) }).catch(() => {});
-      }
+      const logId = eff.log_id;
       try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
 
       const rr = await record('attach', 'decided',
@@ -12694,15 +12642,15 @@ async function handleDecisionVerdict(req, res) {
         {
           tier0: 'attached', owner_entity_id: ownerId, domain,
           person_entity_id: person.person_id, person_name: person.person_name,
-          pivot_row_created: !pivot,
-          relationship: (link && link.existed) ? 'existed' : ((link && link.linked) ? 'created' : 'failed'),
+          pivot_row_created: eff.pivot_row_created,
+          relationship: eff.relationship,
           rent_band: band.band, link_evidence: person.link_evidence,
         });
       if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
       return res.status(200).json({
         ok: true, verdict: 'attach', owner_entity_id: ownerId, domain,
         person_entity_id: person.person_id, person_name: person.person_name,
-        relationship: (link && link.existed) ? 'existed' : ((link && link.linked) ? 'created' : 'failed'),
+        relationship: eff.relationship,
         log_id: logId, batch_tag: batchTag,
       });
     }

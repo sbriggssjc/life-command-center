@@ -17,6 +17,66 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-26 (Cowork) — P194: the Tier 0 auto-attach sweep, and what a "living loop" actually needs
+
+Prompt 192 asked for four things. **One was built as specified; two came back different from the
+brief when measured; the fourth has no input at all.** Full writeup:
+[`docs/audits/P194_TIER0_AUTO_ATTACH_AND_LIVING_LOOP_2026-08-26.md`](../audits/P194_TIER0_AUTO_ATTACH_AND_LIVING_LOOP_2026-08-26.md).
+
+**Re-measure first — the brief was two hours old and already stale.** P192's header says *ask 98 /
+auto 11 / parked 146*. Live: **ask 78 / auto 9 / parked 146**. The 9 auto cards were re-read row by
+row: **9/9 correct** (Deke Hunter @ hunterproperties.com, Joseph Paolino @ paolinoproperties.com,
+John Bryant @ healthcarerealty.com, …). Four carry no link evidence and are still right — an exact
+domain↔core match beats a CRM `company_name` string.
+
+**⭐ §1 the sweep — `api/_handlers/tier0-auto-attach-tick.js`.** GET = ungated dry run, POST =
+flag-gated (`TIER0_AUTO_ATTACH`, **off**), cron 241 at 06:55 (scheduled anyway, per P133 — an
+unscheduled job is invisible). The prompt's "build it in the existing verdict path" was applied one
+level deeper than written: the effect is extracted ONCE into
+`_shared/tier0-attach-effect.js::applyTier0Attach`, and **`admin.js` now calls it too**, so the human
+click and the sweep cannot drift. A test pins that the tier0 verdict block no longer PATCHes the pivot.
+
+**⚠️ AND THE SWEEP WOULD HAVE SILENTLY DELETED TWO LIVE OPERATOR QUESTIONS.** The lane view excluded
+owners whose pivot source was `<> 'tier0_confirm'`. `'tier0_auto'` satisfies that inequality, so the
+first auto attach on an owner would have hidden **every other open card for that owner**. Measured
+before shipping: **3 of 9 auto owners hold a second card, two of them live `ask`** — Healthcare
+Realty Trust's `healthcarerea.com` and Capital Square 1031's `capitalsq.com`. The drain metric would
+have *overstated* the work, because cards_open would fall by deletion rather than by answer.
+**Durable rule: when you add a value to a column an exclusion tests with `<>`, go read the exclusion.**
+
+**§2 the stoplist — now ONE function** (`lcc_is_consumer_mailbox_domain`); it was copied across three
+migrations and had already drifted. Widening measured first: 41 people leave the pool, **exactly ONE
+card leaves the lane** — `Frontier Hub LLC → frontier.net`, the known false positive.
+
+**⚠️ The equivalence gate caught a regression I had already made.** The first rebuild predicted a
+1-row diff and produced **20 removed / 1 added** (13 ngpv.com, 5 uirc.com, 1 jbg.com; George
+Washington University resurrected). Cause: **P190 applied its `sponsor_map` arm and its
+`is_not_prospected` gate LIVE and deliberately did not commit the view body** ("read the LIVE
+definition as the authority"). The newest *committed* source therefore no longer described the
+shipped view. **A migration that changes a view must carry the whole view** — "read the live
+definition" makes the repo an unreliable source and guarantees the next rebuild regresses. Both are
+now committed; the repo file is hash-verified against the applied statement.
+
+**§2 of the prompt (the living loop) — the headline claim is true for ONE of the six signals it
+lists.** A `weak_partial` card is un-parked only by `n_link_evidence > 0` (a candidate's
+`contact_company` matching the OWNER) or a sponsor-map row. Correspondence, SF campaigns, SF
+contacts, Outlook entries and titles all move `n_person_evidence`, **which the CASE never reads**:
+**95 of 146 parked cards ($118M) already carry person evidence and are parked anyway.** The fix is
+NOT to un-park on person evidence — that is the P188 Gary George finding (green on three person
+signals for George Washington University, works at a poultry company) and would restore exactly the
+noise P192 removed. Shipped the instrument instead: `v_lcc_tier0_park_watch`.
+
+**§4 "start with the reject signal" — there are ZERO rejects.** `lcc_tier0_confirm_log` holds 27
+attaches and nothing else; the 6 `reject` rows in `lcc_decisions` are `superseded` no-ops. Not built.
+**And the obvious substitute is destructive:** running the rule on the 27 attaches, **16 open cards
+collide with an already-attached domain and 0 of 16 are contradictions** — 13 are the NGP SPE family
+on `ngpv.com`, the rest duplicate entities / sponsor↔program. A shared domain is corroboration or a
+merge signal, never a contradiction. Note a lexical classifier gets this WRONG (`lcc_owner_domain_core`
+buckets the NGP SPEs as "genuinely different"); the answer came from reading the names.
+
+Suite **4,592 tests / 0 fail**; the new guard verified RED on the pre-fix predicate.
+
+
 ## 2026-08-26 (Cowork) — P193: SPE subsidiaries should inherit the sponsor's answer (Scott, from the lane)
 
 Scott, working the lane: *"I'm seeing duplicates that are subsidiaries and matching the correct
