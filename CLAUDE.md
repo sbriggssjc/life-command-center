@@ -1499,17 +1499,76 @@ that actually produced the symptom** — the first would not have changed a sing
   cannot starve it), and reports `lane_cursor` per lane. **Read `taken`, never `already_annotated`** —
   the latter is a re-discovery tally that reads exactly like throughput (P159a); `window_exhausted`
   distinguishes "nothing left to annotate" from "lane is empty".
-- **The 65-row xref backlog still sits ahead of every field_provenance row.** The cursor drains it
-  instead of looping on it, but at `perType = 4` that is ~17 ticks before the first ladder-bearing
-  card. The rank scales themselves are **NOT changed here** — `rank_value` also orders the
-  human-facing Decision Center lane, so re-ranking it is Scott's call, not a side effect of a wiring
-  fix. Run the verification with a larger `limit` (see below) rather than assuming one tick shows it.
+- **~~The 65-row xref backlog still sits ahead of every field_provenance row.~~ FIXED IN P139
+  (below) — the note above was correct when written; the rank scales HAVE now been collapsed.**
+  P137 deliberately left them alone because `rank_value` also orders the human Decision Center lane;
+  P139 is that deliberate follow-up decision.
 - Guard: `test/provenance-conflict-ladder-wiring.test.mjs` asserts the handler's `select=` carries
   every column the evidence gate reads, anchored on the **VIEW NAME** rather than a line number or a
   source slice (per the block-slice footgun). Verified to go RED on the exact pre-fix select and green
   after. The recurring lesson it encodes is P134's own: **diff the view's columns against the
   handler's `select=`** — and, now, **diff the consumer's reads against what any producer actually
   writes**.
+
+## P139 — two incomparable rank scales sharing one budget (2026-08-26)
+
+P137's ladder work (433 of 454 cross-source conflicts ladder-decidable) was invisible on every
+surface, and the cause was ORDERING, not wiring. The `provenance_conflict` lane carries two
+structurally different sub-populations and ranked them on **two incomparable scales**:
+`field_provenance` on `_provImportance` (ceiling **1000**), dia sales-price xref on
+**`1000 + severity`**. Measured live: the dia view hard-codes `1::int AS severity` on that arm, so
+`1000 + severity` is the **CONSTANT 1001** for all 65 rows — never a value expression, just an
+offset one point above the other scale's ceiling. Every xref row outranked every field_provenance
+row, permanently.
+
+- **⚠️ A CONSTANT WEARING A VALUE EXPRESSION'S CLOTHES IS THE HARDEST KIND TO SEE.**
+  `1000 + severity` reads as "rank by how bad it is". It is a hard-coded 1 on the producer side,
+  6,000 lines away in a dia migration. Same family as the P159 note that "a value gate can be
+  present in code and completely inert in the data" — **before trusting a rank term, go read what
+  the producer actually puts in it.** The real value signal was on the row all along and unread:
+  the disputed sale price spans **$780,915 – $22,750,000** (29×).
+- **⚠️ RE-RANKING ALONE ONLY INVERTS WHICH POPULATION IS INVISIBLE.** Both surfaces that read this
+  lane are BOUNDED WINDOWS — the human Decision Center fetches `limit=50` and **does not page**
+  (`dc-lanes.js renderFederatedLane`), the assist tick takes `perType` (3–20). On the new single
+  scale, **155** field_provenance rows score above the xref band (673–691) and 299 below, so strict
+  rank order puts **50 of 50 shown cards on field_provenance and drops xref off the operator's
+  surface entirely** — the exact mirror of the bug. A homogeneous sub-population plus a bounded
+  window means rank decides ORDER but never decides REACH.
+- **The fix is therefore two halves, and each fails silently alone:** (1) one comparable 0–1000
+  band — *what is in dispute* (money 600 / identity 250 / other 80) + *can it be answered*
+  (+300 when the registered ladder decides it, read from the SHARED `CA.laddersSay` so the order
+  the operator sees and the answer the model gets cannot drift) + a 0–99 log-scaled magnitude
+  tiebreak; and (2) an **explicit interleave key** (`interleaveByKind`, `api/admin.js`) that merges
+  the sub-populations on a position key instead of concatenating them. Element *i* of a bucket of
+  size *m* in a list of *T* claims position `(i + 0.5) · T/m`.
+- **Two fairness modes, because the two windows are different sizes.** `'proportional'` for the
+  human lane (share tracks population, so the 50-card window renders **44 field_provenance + 6
+  xref**, first xref at position 4, highest-value card still #1); `'equal'` round-robin for the
+  assist tick, because at `perType = 3` proportional rounds the smaller population to **zero** and
+  it would take ~39 runs to reach the first xref card. A single-kind lane is returned UNCHANGED in
+  both modes, so this can only ever affect a genuinely mixed lane.
+- **The magnitude tiebreak is a strict SUB-band term.** Every band gap (350, 170) and the
+  decidability bonus (300) exceed its 99 ceiling, so a year (`year_built` 1985) or a parcel number
+  can never out-rank its own band. `provRankBandsAreSeparable()` asserts that invariant rather than
+  leaving it to the constants staying in the right order.
+- **A ranked-but-behind population needs a FILTER, not a re-rank (P179 Class 2).** The lane now
+  returns `parts { field_provenance, sales_price_xref }` and `dc-lanes.js` renders the same seeder
+  chips `owner_reconcile` already uses, so the smaller population is one click away wherever its
+  top row lands. **The chip count was made honest in the same change** — the filter is CLIENT-side
+  over the cards on the page while `parts` is the whole-lane universe, so a chip reading "65" that
+  filters to 6 visible cards is the badge-that-lies failure; it now reads `6 of 65`.
+- **Read `taken_by_kind`, never `taken`.** The tick's per-lane cursor now reports `fresh_by_kind` /
+  `taken_by_kind`. A lane whose head is one kind and a lane that is genuinely interleaving produce
+  the SAME `taken` — the same "looks like success" the cursor exists to prevent (P159a).
+- Guard: `test/provenance-lane-interleave.test.mjs` (9 tests) exercises the exported pure functions
+  directly and anchors its one source check on the `subject_ref` prefix literals (`prov:` /
+  `prov:dia_xref:`) — stable identity tokens, never a line or a sliced region (block-slice footgun).
+  It pins the inversion explicitly (*strict rank alone drops xref off the visible page*) so a future
+  "simplification" back to plain rank order goes red with the reason attached. Verified RED on the
+  pre-fix code and green after; full suite 4,527 pass / 0 fail.
+- **NOT changed:** the 21 genuine equal-priority ties still abstain (that is the correct answer),
+  the xref arm still earns no decidability bonus (it has no ladder by design), and no verdict path,
+  auto-write, or field classification moved — only the order and the share.
 
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
