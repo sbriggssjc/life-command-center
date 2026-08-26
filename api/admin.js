@@ -1503,6 +1503,19 @@ async function upsertCleanAssistProposal(item, proposal, meta) {
     { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
 }
 
+// P139 — the assist tick's fair share. Rank alone cannot guarantee REACH: it
+// takes only `perType` (3–20) items per lane per run, so whichever
+// sub-population ranks higher takes the whole window. `interleaveByKind` in
+// 'equal' mode round-robins the kinds present, in rank order within each, so a
+// mixed lane hands the model both every run. Single-kind lanes are untouched.
+//
+// Doctrine note: this is REACH, not ranking — the human Decision Center lane
+// keeps its own ('proportional') order and nothing an operator works is hidden.
+function takeInterleavedByKind(items, n) {
+  if (n <= 0) return [];
+  return interleaveByKind(items, 'equal').slice(0, n);
+}
+
 async function handleOllamaCleanAssistTick(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
   const user = await authenticate(req, res);
@@ -1528,13 +1541,19 @@ async function handleOllamaCleanAssistTick(req, res) {
   // writes to lcc_clean_assist_proposals, NOT lcc_decisions — so an annotated
   // subject is NOT excluded by fetchExcludedRefs and stays at the head. Measured
   // live 2026-08-26 on provenance_conflict: the 65 dia sales-price xref rows
-  // carry rank_value = 1000 + severity = 1001, and the max _provImportance for a
-  // field_provenance row is 1000 — so EVERY xref row outranks EVERY one of the
-  // 454 field_provenance rows, permanently. With perType = 4 the tick re-read the
-  // same 4 xref cards on every run (all 4 proposals in the re-grade were
-  // `prov:dia_xref:*`), and no field_provenance conflict has ever reached the
+  // carried rank_value = 1000 + severity = 1001, and the max _provImportance for
+  // a field_provenance row was 1000 — so EVERY xref row outranked EVERY one of
+  // the 454 field_provenance rows, permanently. With perType = 4 the tick re-read
+  // the same 4 xref cards on every run (all 4 proposals in the re-grade were
+  // `prov:dia_xref:*`), and no field_provenance conflict had ever reached the
   // model. Exactly the class CLAUDE.md documents: a worker whose only exclusion
   // is its own output, where the output is not what the selector reads.
+  //
+  // ⚠️ That rank imbalance is FIXED (P139) — both sub-populations are now on one
+  // 0–1000 band and the lane interleaves them, so the description above is the
+  // HISTORY of this cursor, not the current state. The cursor is still required:
+  // it is what stops an ANNOTATED subject from sitting at the head forever, which
+  // is a separate defect from which population owns the head.
   //
   // The durable marker already exists — lcc_clean_assist_proposals is UNIQUE on
   // (decision_type, subject_ref, proposal_kind, source) and listFederatedLane
@@ -1554,8 +1573,18 @@ async function handleOllamaCleanAssistTick(req, res) {
       const lane = await listFederatedLane(type, laneWindow, 0, type === 'intake_disposition' ? { intakeView: 'all' } : undefined);
       const laneItems = lane.items || [];
       const fresh = laneItems.filter((it) => !(it.clean_assist && it.clean_assist.source === CLEAN_ASSIST_SOURCE));
-      const taken = fresh.slice(0, perType);
+      // P139: round-robin across the lane's sub-populations instead of taking
+      // the top `perType` by rank. A single-kind lane is unaffected.
+      const taken = takeInterleavedByKind(fresh, perType);
       for (const item of taken) candidates.push(item);
+      // Per-sub-population accounting. Without it a lane whose head is one kind
+      // reads identically to a lane that is genuinely interleaving — the same
+      // "looks like success" failure the whole cursor exists to prevent.
+      const tally = (arr) => arr.reduce((acc, it) => {
+        const k = (it && it.context && it.context.kind) ? String(it.context.kind) : '_unkeyed';
+        acc[k] = (acc[k] || 0) + 1;
+        return acc;
+      }, {});
       laneCursor[type] = {
         window: laneItems.length,
         already_annotated: laneItems.length - fresh.length,
@@ -1563,6 +1592,8 @@ async function handleOllamaCleanAssistTick(req, res) {
         // A full window with nothing fresh means the tick has annotated
         // everything it can currently see — say so rather than reporting 0 work.
         window_exhausted: laneItems.length >= laneWindow && taken.length === 0,
+        fresh_by_kind: tally(fresh),
+        taken_by_kind: tally(taken),
       };
     } catch (e) {
       console.warn('[ollama-clean-assist] lane read failed', type, e?.message || e);
@@ -7467,8 +7498,160 @@ const INTAKE_LANE_SELECT = 'intake_id,source_type,status,created_at,'
   + 'match_status:raw_payload->extraction_result->>match_status,'
   + 'match_domain:raw_payload->extraction_result->>match_domain,'
   + 'match_property_id:raw_payload->extraction_result->>match_property_id';
-const _provImportance = (f) => /(?:price|rent|cap|noi|value|sold|owner)/i.test(String(f || '')) ? 1000
-  : /(?:tenant|address|agency|name|sf_)/i.test(String(f || '')) ? 300 : 50;
+// ── P139 — ONE COMPARABLE RANK SCALE FOR THE provenance_conflict LANE ────────
+// The lane carries two structurally different sub-populations: LCC
+// `field_provenance` cross-source conflicts (454 live) and dia sales-price xref
+// conflicts (65 live). They were ranked on two INCOMPARABLE scales sharing one
+// budget — field_provenance on `_provImportance` (ceiling 1000), xref on
+// `1000 + severity`.
+//
+// Measured live 2026-08-26: the dia view hard-codes `1::int AS severity` on the
+// xref arm, so `1000 + severity` is the CONSTANT 1001 for all 65 rows. It was
+// never a value expression — just an offset one point above the other scale's
+// ceiling, which parked the WHOLE xref population permanently ahead of the WHOLE
+// field_provenance population. That is what masked P137: 433 of 454
+// field_provenance rows are ladder-decidable, and not one had ever reached the
+// head of the lane or the clean-assist model, because xref (which has no ladder
+// BY DESIGN — three unlabelled numbers) always went first and always answers
+// `uncertain`.
+//
+// Both sub-populations now score on ONE 0–1000 band, on the same two axes:
+//
+//   WHAT IS IN DISPUTE   money/valuation 600 · identity/party 250 · other 80
+//   CAN IT BE ANSWERED   +300 when the registered ladder actually decides it
+//   (tiebreak)           +0–99 by the magnitude of the thing being argued about
+//
+// The magnitude term is a strict SUB-band tiebreak — the band gaps (350, 170)
+// and the decidability bonus (300) all exceed 99, so it can never move a row
+// across a band. `provRankBandsAreSeparable()` asserts that invariant.
+//
+// The xref arm scores as money (it IS a sale price) and earns NO decidability
+// bonus, so a ladder-decidable price conflict outranks it while a $22.7M xref
+// row outranks a $780k one — the 29× spread the constant threw away.
+//
+// This REORDERS the human Decision Center lane; it HIDES nothing. Both
+// sub-populations interleave through the head instead of one monopolising it.
+// The clean-assist tick additionally takes a per-sub-population FAIR SHARE (see
+// takeInterleavedByKind) so neither can starve the other on rank alone — rank
+// decides order, fair share guarantees reach.
+const PROV_BAND_MONEY = 600;
+const PROV_BAND_IDENTITY = 250;
+const PROV_BAND_OTHER = 80;
+const PROV_DECIDABLE_BONUS = 300;
+const PROV_TIEBREAK_MAX = 99;
+
+// What KIND of thing is in dispute. Field classification is deliberately
+// unchanged from the pre-P139 `_provImportance` regexes — only the band values
+// were rescaled to leave room for the two new terms.
+const _provBand = (f) => /(?:price|rent|cap|noi|value|sold|owner)/i.test(String(f || '')) ? PROV_BAND_MONEY
+  : /(?:tenant|address|agency|name|sf_)/i.test(String(f || '')) ? PROV_BAND_IDENTITY : PROV_BAND_OTHER;
+
+// In-band magnitude tiebreak from whatever numbers the row is arguing about.
+// log-scaled and capped, so $22.7M vs $780k separates but a year (1985) or a
+// parcel number can never outrun its own band.
+export function _provMagnitudeTiebreak(values) {
+  let max = 0;
+  for (const v of values) {
+    const n = Math.abs(Number(String(v == null ? '' : v).replace(/[$,\s]/g, '')));
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  if (!(max > 1)) return 0;
+  // log10 8 == $100M == full tiebreak.
+  return Math.max(0, Math.min(PROV_TIEBREAK_MAX, Math.round((Math.log10(max) / 8) * PROV_TIEBREAK_MAX)));
+}
+
+// ── P139 — THE EXPLICIT INTERLEAVE KEY ───────────────────────────────────────
+// A single comparable rank scale is necessary but NOT sufficient, because the
+// two sub-populations are internally homogeneous and the surfaces that read the
+// lane are BOUNDED WINDOWS:
+//
+//   · the human Decision Center lane fetches `limit=50` and does not page
+//     (dc-lanes.js renderFederatedLane), and
+//   · the clean-assist tick takes `perType` (3–20) items per run.
+//
+// Measured live 2026-08-26 on the new scale: 155 field_provenance rows score
+// above the xref band (673–691) and 299 below it. So strict rank order would put
+// all 50 shown cards on field_provenance and drop xref off the human surface
+// entirely — the exact mirror of the bug being fixed, where all 50 were xref and
+// no field_provenance conflict was reachable. A re-rank alone just swaps which
+// population is invisible.
+//
+// So the sub-populations are merged on an explicit POSITION key rather than
+// concatenated: each bucket keeps its own rank order and is spread evenly across
+// the whole list, so any prefix of length N carries both in (near) proportion.
+// Element i of a bucket of size m within a list of size T claims position
+// (i + 0.5) · T/m; ties fall back to rank. With 454 field_provenance and 65
+// xref rows that puts the first xref card at ~position 4 and ~6 of them in the
+// visible 50 — value-ordered, and neither population starved.
+//
+// `mode`:
+//   'proportional' — bucket share tracks bucket size. Right for the human lane,
+//                    whose window (50) is large enough to represent the real mix.
+//   'equal'        — strict round-robin. Right for the assist tick, whose window
+//                    is 3–20, where proportional rounds the smaller population to
+//                    ZERO and it would take ~39 runs to reach the first xref card.
+//
+// A list with one bucket (or none) is returned UNCHANGED in both modes, so this
+// can only ever affect a genuinely mixed lane.
+export function interleaveByKind(items, mode) {
+  const list = Array.isArray(items) ? items : [];
+  const buckets = new Map();
+  for (const it of list) {
+    const k = (it && it.context && it.context.kind) ? String(it.context.kind) : '_unkeyed';
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(it);
+  }
+  if (buckets.size <= 1) return list.slice();
+  const queues = [...buckets.values()];
+  if (mode === 'equal') {
+    const out = [];
+    for (let round = 0; out.length < list.length; round += 1) {
+      let progressed = false;
+      for (const q of queues) {
+        if (round >= q.length) continue;
+        out.push(q[round]);
+        progressed = true;
+      }
+      if (!progressed) break;
+    }
+    return out;
+  }
+  const total = list.length;
+  const keyed = [];
+  for (const q of queues) {
+    const stride = total / q.length;
+    q.forEach((it, i) => keyed.push({ it, pos: (i + 0.5) * stride, rank: Number(it && it.rank_value) || 0 }));
+  }
+  keyed.sort((a, b) => (a.pos - b.pos) || (b.rank - a.rank));
+  return keyed.map((k) => k.it);
+}
+
+// A field_provenance row's rank. Decidability reads the SHARED `laddersSay`
+// judgement the clean-assist gate uses, so the order the operator sees and the
+// answer the model gets can never drift apart.
+export function _provRankFieldProvenance(row) {
+  const says = CA.laddersSay(
+    row.attempted_priority == null ? null : Number(row.attempted_priority),
+    row.current_priority == null ? null : Number(row.current_priority));
+  const decidable = says === 'attempted_source_outranks_current' || says === 'current_source_outranks_attempted';
+  return _provBand(row.field_name)
+    + (decidable ? PROV_DECIDABLE_BONUS : 0)
+    + _provMagnitudeTiebreak([row.attempted_value, row.current_value]);
+}
+
+// A dia sales-price xref row's rank. `severity` is a hard-coded constant on the
+// source view, so it is deliberately NOT read here — the disputed sale price is
+// the only real value signal the row carries.
+export function _provRankSalesXref(row) {
+  return PROV_BAND_MONEY + _provMagnitudeTiebreak([row.detail_2, row.detail_3]);
+}
+
+// Invariant the tiebreak depends on: no magnitude term can promote a row out of
+// its band, and no undecidable row can outrank the same band decided.
+export function provRankBandsAreSeparable() {
+  const gaps = [PROV_BAND_MONEY - PROV_BAND_IDENTITY, PROV_BAND_IDENTITY - PROV_BAND_OTHER, PROV_DECIDABLE_BONUS];
+  return gaps.every((g) => g > PROV_TIEBREAK_MAX);
+}
 
 // Set of subject_refs already decided (decided/skipped/superseded) for a lane.
 // Pages in 1000-row strides: PostgREST caps EVERY response at 1000 rows
@@ -8260,7 +8443,7 @@ async function fetchFederatedSource(type, cap, opts) {
     const pvItems = pvRows.map((row) => ({
       subject_ref: 'prov:' + row.provenance_id,
       subject_domain: row.target_database || null, subject_property_id: null, subject_entity_id: null,
-      rank_value: _provImportance(row.field_name),
+      rank_value: _provRankFieldProvenance(row),
       context: { kind: 'field_provenance', provenance_id: row.provenance_id,
         target_database: row.target_database, target_table: row.target_table,
         record_pk_value: row.record_pk_value, field_name: row.field_name,
@@ -8282,12 +8465,25 @@ async function fetchFederatedSource(type, cap, opts) {
     const xrItems = xrRows.map((row) => ({
       subject_ref: 'prov:dia_xref:' + row.record_id,
       subject_domain: 'dia', subject_property_id: String(row.record_id), subject_entity_id: null,
-      rank_value: 1000 + (Number(row.severity) || 0),
+      rank_value: _provRankSalesXref(row),
       context: { kind: 'sales_price_xref', record_id: row.record_id,
         detail_1: row.detail_1, detail_2: row.detail_2, detail_3: row.detail_3, severity: row.severity,
         issue_narration: row.suggested_action },
     }));
-    out.items = pvItems.concat(xrItems).sort((a, b) => b.rank_value - a.rank_value);
+    // P139: rank first on the ONE comparable scale — ties are now REAL (an
+    // undecidable money conflict and an xref row of the same magnitude score
+    // identically), so break them on subject_ref rather than leaving the head to
+    // concat order, which is exactly how one sub-population monopolised it.
+    const ranked = pvItems.concat(xrItems)
+      .sort((a, b) => (b.rank_value - a.rank_value) || String(a.subject_ref).localeCompare(String(b.subject_ref)));
+    // Then merge the two sub-populations on the explicit interleave key, so the
+    // bounded 50-card window the Decision Center actually renders carries both.
+    out.items = interleaveByKind(ranked, 'proportional');
+    // Sub-population counts for the lane's filter chips — the P179 answer to
+    // "ranked but behind other work": a filter, so the smaller population is one
+    // click away regardless of where its highest-value row lands.
+    out.parts = { field_provenance: (pc == null ? pvItems.length : pc),
+                  sales_price_xref: (xc == null ? xrItems.length : xc) };
     out.total = (pc == null && xc == null) ? null : (pc || 0) + (xc || 0);
     return out;
   }

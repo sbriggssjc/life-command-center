@@ -917,11 +917,18 @@ async function renderFederatedLane(type, view) {
   // returns per-seeder sub-counts (res.data.parts); render one-click seeder chips so
   // the Ollama pairs are immediately reachable. Filtering is client-side on the
   // shown cards (via each card's data-seeder attribute).
-  if (type === 'owner_reconcile') {
+  // P139: provenance_conflict folds the SAME shape — two sub-populations (LCC
+  // field_provenance ladder conflicts, dia sales-price xref conflicts) in one
+  // lane, where whichever ranks higher used to take all 50 shown cards. The
+  // backend now interleaves them proportionally AND returns the same `parts`
+  // sub-counts, so the chips work here unchanged.
+  if (type === 'owner_reconcile' || type === 'provenance_conflict') {
     const parts = (res.data && res.data.parts) || {};
     const shownByKind = {};
     items.forEach(function (it) { var k = (it.context && it.context.kind) || 'other'; shownByKind[k] = (shownByKind[k] || 0) + 1; });
-    const SEEDER_LABELS = {
+    const SEEDER_LABELS = (type === 'provenance_conflict') ? {
+      field_provenance: 'Field provenance (ladder)', sales_price_xref: 'Sale-price cross-ref (dia)',
+    } : {
       w8_u2_ollama_pair: 'Ollama pairs', ore: 'ORE multi-signal',
       owner_unification: 'Owner unification (gov)', entity_match_candidate: 'Entity match (gov+dia)',
     };
@@ -936,9 +943,18 @@ async function renderFederatedLane(type, view) {
       html += '<div class="pq-chips" id="ownRecSeederChips" style="margin:6px 0">';
       html += '<button class="pq-chip active" data-seeder-chip="" onclick="dcFedSeederFilter(\'\')">All <b>' + esc(String(totalCount.toLocaleString())) + '</b></button>';
       chipKeys.forEach(function (k) {
-        const n = (parts[k] != null) ? parts[k] : (shownByKind[k] || 0);
+        // P139 — HONEST CHIP COUNT. The filter is CLIENT-side over the cards on
+        // this page, but `parts[k]` is the whole-lane universe. A chip reading
+        // "65" that filters down to 6 visible cards is the badge-that-lies
+        // failure. Show what clicking it will actually give you, with the
+        // universe behind it when the two differ.
+        const shown = shownByKind[k] || 0;
+        const universe = (parts[k] != null) ? Number(parts[k]) : shown;
+        const label = (universe > shown)
+          ? (shown.toLocaleString() + ' of ' + universe.toLocaleString())
+          : shown.toLocaleString();
         html += '<button class="pq-chip" data-seeder-chip="' + esc(k) + '" onclick="dcFedSeederFilter(\'' + esc(k) + '\')">'
-          + esc(SEEDER_LABELS[k]) + ' <b>' + esc(String(Number(n).toLocaleString())) + '</b></button>';
+          + esc(SEEDER_LABELS[k]) + ' <b>' + esc(label) + '</b></button>';
       });
       html += '</div>';
     }
