@@ -81,6 +81,29 @@ stalled?" glance). Others write to other stores — not verified inert. **So R3 
 remaining lanes, and spot-check the on-lanes actually drain.** The REAL top untapped leverage is R1 + R2 (both
 net-new, genuinely unbuilt). **Re-ranked #1 = R1.**
 
+## ⚠️ P131 VERDICT (2026-08-24) — R1 was misframed; a durable LENS for the whole audit
+Building R1 (PR #1774, both flags OFF) re-measured both premises and **both were wrong** — the corrections are
+the real value:
+- **Ownership-history was NOT an LLM gap — it was a deterministic data-plumbing gap.** The chain of title is
+  ALREADY on-box, structured, and unread: 544/545 rows have `gov.ownership_history`; **453 yield a clean dated
+  chain (707 links)** via the P138 view. LCC never read it (the P138–P141 feeder only fed `is_latest_for_property`
+  = the current owner). Fix = **deterministic** chain drafter (`ownership-chain-draft-planner.js`, flag
+  `OWNERSHIP_CHAIN_DRAFT`), citation = a record reference, breaks = "Not on file". Ollama is confined to a safe
+  LABEL layer only (`OWNERSHIP_CHAIN_ROLE_LABELS`) — it can't add/remove/reorder/re-date/rename a link.
+  Two hard stops on the LLM framing: **`gov.deed_records` holds 0 legal-description chars across 5,804 rows**
+  (no deed text to quote), and **an Ollama proposer for this exact gap already exists + is ON (W8 U3) with a
+  ~52% quote-not-verbatim hallucination rate** — a second would duplicate it and inherit that floor.
+- **`owner_contact_manual` is NOT answerable on-box at all** — 0/316 have a notice address, 0 a linked person,
+  1 any correspondence; the bench is 86% self-echoes (SOS naming the LLC as its own manager) + OM row-labels
+  minted as people. It's the residue automation already picked over. **A drafter here would FABRICATE — CC
+  correctly built none;** instead `v_lcc_owner_contact_decidability` (6 decidable / 310 blocked) surfaces the
+  answerable few so they stop being buried.
+- **DURABLE LENS — classify EVERY gap before proposing a local-model unlock:** (a) answer already on-box &
+  STRUCTURED → deterministic plumbing, NOT the LLM (ownership-history); (b) on-box but UNSTRUCTURED text → LLM
+  fits (drafting, summaries, role-labels); (c) NOT on-box → neither; an LLM would fabricate (owner_contact_manual).
+  **R2–R9 below were written before this lens — re-measure each against it before building; several may be (a)
+  or (c), not (b).** (This is the re-measure-the-dated-blocker doctrine applied to my own audit.)
+
 ## Tackle order (most impactful first) — and the first concrete action for each
 1. **R3 first (fast, high, low-risk):** dry-run review + flip the dormant Decision Center `*_ASSIST` lanes in
    value order (`NEXT_STEP_AI` → `PROPERTY_TWIN_ASSIST` → `W9_3_SF_ASSIST` → the rest). No new build. → *first
