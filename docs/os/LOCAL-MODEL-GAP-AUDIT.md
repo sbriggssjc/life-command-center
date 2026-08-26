@@ -151,6 +151,17 @@ separate label-grading. ⏭ confirm via a non-dry-run tick + watch the lane drai
 (`r1_cron` null), so the 453 drafts don't auto-write — run an **apply** pass (POST the tick) to write them, and
 add a cron if the lane should keep drafting as new rows arrive. `already_drafted` = 0 until then.
 
+**✅ R1 FULLY DRAFTED + REACHABLE 2026-08-26.** Scott ran the apply passes → `already_drafted:545, fresh:0`
+(all 453 chains + 92 insufficient written to `lcc_clean_assist_proposals` source `ownership_chain_draft`).
+**P133 added the cron** (`lcc-ownership-chain-draft` jobid 239, `45 6 * * *`, LCC Opps) so the lane keeps
+drafting as new rows arrive — `r1_cron` no longer null. **⚠️ The drafts were UNREACHABLE until P132:** the
+Research-page task list 500'd for every lane (PostgREST dual-`users` embed alias collision in `api/queue.js`
++ a third instance in `getOversight`), so the badges read healthy while the list itself errored — the reason
+every lane showed "0 completions ever." P132 shipped + live-verified (`view=research` → count 545 / 50 items),
+so the review path (Research lane → card w/ drafted chain → property Ownership tab → Save, P179) now works.
+Prioritize the ~73 current-owner mismatch flags. Lane B (`owner_contact_manual`) remains undrafted
+(unanswerable residue; decidability view surfaces the 6 answerable).
+
 **✅ R2 RE-MEASURED 2026-08-24 — NOT a local-model gap; it's deterministic connectivity plumbing.** OM economics
 are ALREADY extracted on-box (**3,955 staged items carry `asking_price`/`cap_rate`**), a canonical store EXISTS
 (`lcc_property_attributes`), and owner names are extracted — the LLM (extraction) already ran. What's missing is
@@ -158,15 +169,25 @@ the deterministic **write-back** (extraction_result → canonical economics) and
 the fragments + write asset→owner from the extracted owner). Category (a). **→ R2 moves to the engine-connectivity
 track (still high-value, unblocks offer-context/cadence/dossiers), OUT of the local-model rollout.**
 
-**Genuine local-model (category b) gaps remaining, re-ranked:** R4 (`NEXT_STEP_AI` — built+off — + going-cold
-thread prose), R8 (recurring-artifact drafting: daily-briefing prose / CM book copy / BOV-OM narratives — biggest
-new-build value), R5 (wrong-party edge substance second-look), R6 (undecidable owner-attach rationale), R7
-(signals learning loop — compounding). R3 leftovers: flip `NEXT_STEP_AI` + `OLLAMA_CLEAN_ASSIST` after a dry-run.
+**Genuine local-model (category b) gaps remaining, re-ranked:** R4 (~~`NEXT_STEP_AI` — built+off~~ **ON
+2026-08-26** — remaining half = going-cold/next-touch thread prose), R8 (recurring-artifact drafting:
+daily-briefing prose / CM book copy / BOV-OM narratives — biggest new-build value), R5 (wrong-party edge
+substance second-look), R6 (undecidable owner-attach rationale), R7 (signals learning loop — compounding).
+
+> **✅ `NEXT_STEP_AI` FLIPPED ON 2026-08-26** (env was already set; Cowork flipped the `feature_flags_registry`
+> row to `state=on`). Zero-spend dry-run of the deterministic classifier: 6/6 clear-intent messages correct,
+> 4 ambiguous correctly deferred to Ollama; fails null → today's generic to-do (low-risk). Remaining R3
+> leftover to review + flip: **`OLLAMA_CLEAN_ASSIST`** (dry-run first).
 
 ## Tackle order (most impactful first) — and the first concrete action for each
 1. **R3 first (fast, high, low-risk):** dry-run review + flip the dormant Decision Center `*_ASSIST` lanes in
-   value order (`NEXT_STEP_AI` → `PROPERTY_TWIN_ASSIST` → `W9_3_SF_ASSIST` → the rest). No new build. → *first
-   action: pull a dry-run proposal sample for the top lane.*
+   value order. ✅ `NEXT_STEP_AI` **DONE 2026-08-26**. ⚠️ `OLLAMA_CLEAN_ASSIST` **dry-run 2026-08-26 → HELD OFF**
+   (12-item inert sample: 6/12 content-free "insufficient evidence" from a thin `context` payload; safe but
+   low-value — flipped back off + sample deleted; **Prompt 134** enriches the context before re-enabling). Next
+   actionable flip: `PROPERTY_TWIN_ASSIST` (P106-tested, bounded lane) → `W9_3_SF_ASSIST` → the rest. → *first
+   action: dry-run sample `PROPERTY_TWIN_ASSIST`.* ⚠️ Confirm each lane's SURFACE renders before ranking it —
+   the Research list was 500-dead until P132. **Lesson reinforced: a "just flip it" assist can still be a
+   noise producer — grade the sample against the Consumption-Layer bar, not just the safety bar.**
 2. ~~**R1 (biggest raw impact):** build the Ollama draft-generator for the dead research lanes~~ — **DONE 2026-08-26 (P131)**, but NOT as an Ollama drafter: the ownership lane turned out to be answerable deterministically from gov records LCC already held, and the contact lane turned out not to be answerable on-box at all. See R1 above for the measured numbers.
    (ownership-history + owner_contact_manual) → *first action: draft a CC prompt.*
 3. **R2 (biggest connectivity unlock):** correspondence-first ORE dedupe + OM-economics write-back → *CC prompt.*

@@ -17,29 +17,51 @@ go to a cloud model; the local model is the on-box path for exactly those. All t
   gated on `PA_OUTLOOK_DRAFT_URL`) — the whole email arc this session.
 - **Voice:** `scripts/voice-distill.mjs` (on-box only, refuses without `OLLAMA_URL`).
 - **Junk pre-screen:** `W8_U1_JUNK_PRESCREEN` (live, nightly 03:40, ~25/night).
+- **Next-step derivation:** `NEXT_STEP_AI` (**live 2026-08-26**) — inline in `deal-comms-propagate-tick`
+  / `intake-tagged-comm` / `intake-correspondence`; deterministic-first (zero-spend keyword classifier
+  resolves clear intents, dry-run measured 6/6 correct), Ollama only on the ambiguous residue, fails
+  null → generic to-do. Auto-titles/types/dates the self-updating cadence to-do from what the
+  correspondent actually said.
 - **Chat (optional):** Ollama is a selectable `invokeChatProvider` provider (only under `AI_CHAT_POLICY=balanced`).
 
-## 2. ⭐ BUILT BUT DORMANT — the leverage already engineered, awaiting a dry-run review + flip
+## 2. ⚠️ CORRECTED 2026-08-26 — these are ALREADY ON, not dormant. The work is PRODUCTION HEALTH, not activation.
+**Measured sweep of `feature_flags_registry` (2026-08-26, Cowork): 9 of 10 assist flags are `state=on`.**
+The only one off is `OLLAMA_CLEAN_ASSIST` (held off after a dry-run — thin context, Prompt 134). So the
+"flip these for fast leverage" framing below is **stale** — there is essentially nothing left to activate.
+The real question is now whether each ON assist is actually **producing** (assert on the state delta, not
+the flag). First check already found one silently stalled:
+- **`PROPERTY_TWIN_ASSIST` — ON but STUCK.** Produced 200 annotations in one run on 2026-08-19, **0 in the
+  7 days since**, while **1,095 rows are pending**. The tick pulls the first-200 pending window, finds all
+  200 already annotated (`fresh:0`), and no-ops — it never paginates past the first 200, so ~895 pending
+  twins will never be annotated. Cron fires nightly, writes nothing, looks healthy. → **Prompt 135**
+  (paginate the working set / advance the cursor past the annotated window).
+
+**→ Next real work is NOT more flips.** It is (a) a production-health pass over the 8 remaining ON assists
+(each writes to its own lane table — `junk_entity_review`, `sf_link_candidate`, `match_disambiguation`,
+etc. — verify recent production, not just `state=on`), and (b) the §4 NEW builds (R8). Each assist remains
+annotation-only (proposes into a review lane, never auto-writes), reversible.
+
 Each is **annotation-only** (proposes into a review lane / `metadata.assist`, never an auto-write or a verdict),
-reversible, and designed to be flipped after reviewing a dry-run sample. **Flipping these is the fastest way to
-increase leverage — no new build, just review + activate.** Activation gate for all: `OLLAMA_URL` set on
-Railway + flip the flag (env + `feature_flags_registry`).
+reversible. Activation gate (historical): `OLLAMA_URL` set on Railway + flag on (env + `feature_flags_registry`).
 
 | flag | what it does | value |
 |---|---|---|
 | `PROPERTY_TWIN_ASSIST` | pre-ranks the ~1,245-row dia property-twin review lane (P106) | operator works real twins first |
 | `MATCH_DISAMBIG_ASSIST` | nightly pre-rank of the `match_disambiguation` lane (P80) | fewer minutes per merge decision |
-| `OLLAMA_CLEAN_ASSIST` | triage / record-link / field-conflict proposals into `lcc_clean_assist_proposals` | clears review-lane noise |
+| `OLLAMA_CLEAN_ASSIST` | triage / record-link / field-conflict proposals into `lcc_clean_assist_proposals` | ⚠️ **dry-run 2026-08-26: HELD OFF** — 6/12 sample proposals were content-free "insufficient evidence" (thin `context` payload); safe but low-value. Needs context enrichment first → **Prompt 134**. Cron 200 exists + no-ops while off. |
 | `W9_3_SF_ASSIST` | ranks the ~3.3k `sf_link_candidate` lane | drains the biggest single lane |
 | `W8_U2_DUP_PAIRS` | same-party/distinct second-look on near-miss owner pairs | feeds owner reconciliation |
 | `W9_2_REACHABILITY_HARVEST` | attributes contact reachability from intake snapshots/signatures (verbatim-quoted) | more owners reachable |
 | `W8_U5_NAMING_HYGIENE` | abbreviation-expansion proposals | cleaner entity names → better merges |
-| `NEXT_STEP_AI` | derives the specific to-do (type/title/due) from inbound correspondence | auto-populates cadence next-step |
 
-**Recommended activation order (highest value / lowest surprise first):** `NEXT_STEP_AI` (already feeds the
-email arc) → `PROPERTY_TWIN_ASSIST` (bounded lane, P106-tested) → `W9_3_SF_ASSIST` (largest lane) →
+> ✅ **`NEXT_STEP_AI` activated 2026-08-26** (moved to §1 LIVE). Was the top of this list.
+
+**Recommended activation order (highest value / lowest surprise first):** ~~`NEXT_STEP_AI`~~ (DONE) →
+`PROPERTY_TWIN_ASSIST` (bounded lane, P106-tested) → `W9_3_SF_ASSIST` (largest lane) →
 `MATCH_DISAMBIG_ASSIST` → the rest. Each: pull a dry-run sample, eyeball 10–20 proposals for precision, flip,
-watch the queue drain by value.
+watch the queue drain by value. **⚠️ Before flipping any lane-ranking assist, confirm the lane's SURFACE
+actually renders** — the Research page task list was 500-dead until P132 (2026-08-26), so a ranked lane
+would have promoted work onto a screen no operator could see.
 
 ## 3. Planned but untouched (local-model work designed, not built)
 - **Template library** (ROLLOUT_STATUS W10 Stage 3, `⬜`): cluster the sent corpus by draft-type, synthesize

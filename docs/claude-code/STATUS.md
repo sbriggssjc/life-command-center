@@ -10,32 +10,68 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
-## 2026-08-26 (Cowork) — Research page task list is DEAD (blocker for R1); prompts 132/133; NEXT_STEP_AI dry-run
+## 2026-08-26 (Cowork) — Research page task list was DEAD (P132, SHIPPED); P133 cron; NEXT_STEP_AI ON
 
-**Finding while walking Scott to the R1 review cards.** The Research page renders "0 tasks" for EVERY
-lane/status — the lane picker (`?view=research_lanes`) is healthy (establish_ownership_history 545 open,
-answerable) but the task-fetch itself 500s. v2 leaked the cause: PostgREST **`table name
-"research_tasks_users_1" specified more than once`** — `api/queue.js` embeds `users` twice
-(assignee + creator) with no distinct alias, in BOTH the v1 (`case 'research'`, ~L154) and v2
-(`v2GetResearch`, ~L468) branches. So the entire operator-facing research list has been unreachable —
-which is exactly why every lane reads "0 completions ever" (Dead-End Class 3/7: exists but can't
-display). The 453 P131 ownership-chain drafts are fine in `lcc_clean_assist_proposals`; they just render
-onto cards that never appear. **→ Prompt 132** (named-alias fix `assignee:users!…` / `creator:users!…`
-in both paths + regression test + sweep for the same pattern; JS-only redeploy). This gates the whole R1
-review.
+**Finding while walking Scott to the R1 review cards.** The Research page rendered "0 tasks" for EVERY
+lane/status — the lane picker (`?view=research_lanes`) was healthy (establish_ownership_history 545 open,
+answerable) but the task-fetch itself 500'd. v2 leaked the cause: PostgREST **`table name
+"research_tasks_users_1" specified more than once`** — `api/queue.js` embedded `users` twice
+(assignee + creator) with no distinct alias, in BOTH the v1 (`case 'research'`) and v2 (`v2GetResearch`)
+branches. So the entire operator-facing research list had been unreachable — which is exactly why every
+lane read "0 completions ever" (Dead-End Class 3/7: exists but can't display). The 453 P131
+ownership-chain drafts were fine in `lcc_clean_assist_proposals` the whole time; they rendered onto cards
+that never appeared.
 
-**Prompt 133** — schedule the P131 drafter (`POST /api/ownership-chain-draft-tick`) as a nightly
-pg_cron on LCC Opps (~06:50 UTC via `lcc_cron_post`), idempotent/bounded, so new lane rows get drafted
-without manual re-runs. DB-only.
+**Prompt 132 — SHIPPED + LIVE-VERIFIED (2026-08-26).** Named-alias fix (`assignee:users!…` /
+`creator:users!…`) in both research paths. CC's `select=` parser sweep found a **THIRD** instance of the
+same bug: `getOversight` in `api/operations.js` embedded `users` twice for escalated_by/escalated_to —
+worse because it's read as `escalations.data || []` with **no `.ok` check**, so the 400 silently rendered
+as "no open escalations." All three aliased (`escalated_by_user:users!…` / `escalated_to_user:…`).
+General-invariant guard test added (no `select=` in `api/` may embed two relations to one response key),
+verified red-on-break. Full suite 4406/0/6-skip. CLAUDE.md footgun entry added. **Live check:
+`GET /api/queue?view=research&status=active&research_type=establish_ownership_history` → `count=545,
+items=50, err=None`** — the entire Research page (and the R1 review surface) is now reachable.
 
-**NEXT_STEP_AI dry-run (zero-spend).** It's inline-only (no standalone tick) — runs inside
-`deal-comms-propagate-tick` / `intake-tagged-comm` / `intake-correspondence`, deterministic-first, fails
-null → today's generic to-do. Ran `classifyDeterministic` over 10 real inbound messages: **6/6
-clear-intent classified correctly** (wants_call→schedule_call, declined→log_pass, accepted→
-advance_to_contract, requests_docs→send_info, will_get_back→follow_up, counter_offer→review_offer); the
-4 escalations were the genuinely ambiguous ones (correctly deferred to Ollama). Verdict: **low-risk to
-flip** (worst case = null → unchanged behavior). Recommend flipping `NEXT_STEP_AI` (env + registry) after
-132 ships.
+**Prompt 133 — SHIPPED + LIVE.** pg_cron **`lcc-ownership-chain-draft` jobid 239, `45 6 * * *`, active**
+on LCC Opps (`lcc_cron_post` → `/api/ownership-chain-draft-tick` apply, cap 100, idempotent). Run-log
+migration + `OWNERSHIP_CHAIN_DRAFT` registry row (`state=on`) applied live; test red-on-break. 06:45
+chosen (after `generate-research-tasks` 06:35, which mints new lane rows). Tick dry-run healthy:
+`open_lane_rows:545, already_drafted:545, fresh:0`.
+
+**NEXT_STEP_AI — FLIPPED ON (env already set; registry flipped by Cowork).** Inline-only (no standalone
+tick) — runs inside `deal-comms-propagate-tick` / `intake-tagged-comm` / `intake-correspondence`,
+deterministic-first, fails null → today's generic to-do. Zero-spend dry-run of `classifyDeterministic`
+over 10 real inbound messages: **6/6 clear-intent classified correctly** (wants_call→schedule_call,
+declined→log_pass, accepted→advance_to_contract, requests_docs→send_info, will_get_back→follow_up,
+counter_offer→review_offer); the 4 escalations were the genuinely ambiguous ones (correctly deferred to
+Ollama). `feature_flags_registry.NEXT_STEP_AI` now `state=on`.
+
+**OLLAMA_CLEAN_ASSIST dry-run — HELD OFF (2026-08-26).** No GET dry-run mode, so generated a 12-item
+**inert** sample (flag on → `POST` limit=12 → 12 proposed / 0 failed), graded it, then flipped OFF +
+deleted the sample (reversible, nothing canonical touched). Grade: safe (abstains, never fabricates) but
+**low-value** — 6/12 (`property_merge` + `provenance_conflict`) were content-free "insufficient evidence"
+because the candidate lanes hand the model a thin `context` payload; 3/12 `owner_reconcile` correctly
+abstained on initials-only pairs; 1 `sf_link` `merge` had an incoherent `0.00` confidence. Flipping it on
+(hourly cron 200 exists, no-ops while off) would flood the Decision Center with uncertain noise — the
+Consumption-Layer failure. **→ Prompt 134** enriches the per-lane context (real competing values) + adds
+a verdict/confidence coherence guard; re-validate a sample before re-enabling. Lesson: a "just flip it"
+assist can still be a noise producer — grade against the Consumption-Layer bar, not just the safety bar.
+
+**Assist-flag sweep — the "dormant lanes to flip" plan is essentially DONE (2026-08-26).** Measured
+`feature_flags_registry`: **9 of 10 assist flags are `on`** (only `OLLAMA_CLEAN_ASSIST` off, held pending
+Prompt 134). So the LOCAL-MODEL-LEVERAGE-MAP §2 "flip for fast leverage" framing is stale — nothing left
+to activate. The work is now PRODUCTION HEALTH, and the first check already found a silent stall:
+**`PROPERTY_TWIN_ASSIST` is ON but produced 200 annotations in one run (2026-08-19) and 0 since, while
+1,095 rows are pending** — the tick pulls the first-200 window, finds all 200 annotated (`fresh:0`), and
+no-ops forever (never paginates to rows 201–1,095). → **Prompt 135** (query-level anti-join / keyset cursor
++ honest `remaining` count + guard). Follow-up: the other 6 ON assists write to their own lane tables and
+each needs the same write-delta check (not `state=on`). Reinforces the doctrine: assert on the produced
+delta, never the flag.
+
+**Net:** R1 is now genuinely reachable (P132 was the hidden gate). Manual review path for the 453 drafts:
+Research page → `establish_ownership_history` lane → each card shows its drafted chain (`chainDraftHTML`)
+→ open property → Ownership tab → set recorded/true owner → Save (P179 capture). Prioritize the
+~73 current-owner mismatch flags.
 
 ## W6.5 Stage 2 Units 1–5 (2026-08-20, Cowork) — detail.js 18,481 → 16,203 lines, byte-identical
 
