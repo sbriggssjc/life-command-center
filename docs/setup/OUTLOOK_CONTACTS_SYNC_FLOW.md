@@ -47,23 +47,73 @@ they are personal contacts.
 This is the same trap as **P124**, where "exclude consumer-domain recipients" looked obviously
 right and would have deleted the best BD exemplars from the voice corpus.
 
-**Two ways to handle it — do ONE of them before the first real run:**
+### ✅ RESOLVED SERVER-SIDE 2026-08-26 — no flow-side workaround needed
 
-1. **(Preferred, and the durable fix)** change `autoClassify` so a consumer domain alone
-   cannot decide when there is business evidence — `jobTitle` or `companyName` present, or the
-   person is a Salesforce campaign member / a resolved owner contact. Domain becomes a
-   tiebreak, not the rule.
-2. **(Flow-side, immediate)** send `contact_class` **explicitly** from the flow:
-   `business` when the Outlook contact has a `companyName` or `jobTitle`, otherwise omit it and
-   let the classifier decide. This is what step **B4** below does.
+`autoClassify` now treats **business evidence (a job title or a company) as outranking the
+email domain**; the domain is a tiebreak used only when nothing else is known. Fixed in the
+handler rather than in the flow, deliberately, for three reasons:
 
-Either way, **never filter at ingest.** Write everything and mark provenance — a contact
-wrongly dropped at ingest is invisible forever, whereas a wrongly-classified one is
+1. The domain rule also governs the `iphone` and `calendar` paths — a flow-side fix would
+   leave those broken.
+2. **406 resolved-owner contacts and 2,468 campaign members are ALREADY misclassified** in
+   existing rows; a flow-side fix cannot touch them.
+3. Duplicating the rule into a PA flow is the normaliser-drift this codebase repeatedly warns
+   about — one classifier, one definition.
+
+Guarded by `test/contact-autoclassify.test.mjs` (6 tests, mutation-verified). It pins **both**
+directions: evidence must win, **and** the domain tiebreak must survive for contacts we
+genuinely know nothing about — making everything `business` would just be the opposite defect.
+`icloud`'s personal default is deliberately unchanged, and the legacy 2-arg `calendar` caller
+is unaffected.
+
+**Still true regardless: never filter at ingest.** Write everything and mark provenance — a
+contact wrongly dropped at ingest is invisible forever, whereas a wrongly-classified one is
 measurable and fixable.
+
+**⚠️ Not yet done: the existing rows.** The fix is forward-only. The 406 + 2,468 already
+carrying `contact_class='personal'` need a separate, reversible backfill, and it must be
+evidence-gated the same way — see the follow-up item. Do not blanket-flip them (the P164
+lesson: a broadly-applied "obvious" rule cleared 103 individual owners and had to be reverted).
 
 ---
 
-## A. Graph query
+## A. Getting the contacts — TWO routes, use route 1
+
+### ⚠️ No Graph Explorer needed (and Scott cannot use it)
+
+Northmarq restricts Graph Explorer for sales/production accounts. **You do not need it.** The
+**Office 365 Outlook** connector has a first-class **`Get contacts (V2)`** action whose
+**Folder id** parameter is a **dropdown that lists your contact folders** in the PA designer.
+That single control answers "which folders do I have?" — the question Graph Explorer would
+have answered — and it runs under your own Outlook connection with no admin rights.
+
+Prefer this route. It also avoids the raw-Graph `$select` / `$filter` fx pitfalls that have
+bitten the other Outlook flows.
+
+### Route 1 (PREFERRED) — `Get contacts (V2)`
+
+1. **Recurrence** trigger, every 6 hours.
+2. Action → **Office 365 Outlook → `Get contacts (V2)`**.
+   - **Folder id:** open the dropdown. **Screenshot / note every folder it lists** — if
+     LinkedIn syncs into its own folder you will see it here. Start with `Contacts`.
+   - **Top:** `100`.
+   - **Order By:** `lastModifiedDateTime desc` *(optional but keeps batches deterministic)*.
+   - **Filter Query:** `lastModifiedDateTime ge @{variables('hwMark')}` *(add once the first
+     full backfill has completed; leave empty for the initial run)*.
+3. If the dropdown shows **more than one folder**, duplicate the action per folder (or loop an
+   array of folder ids) — `Contacts` alone will not cover a LinkedIn-specific folder.
+
+The action returns a typed contact list; the fields we need are on it — `Id`, `GivenName`,
+`Surname`, `EmailAddresses`, `BusinessPhones`, `MobilePhone`, **`JobTitle`**,
+**`CompanyName`**, `BusinessAddress`. **Confirm the exact casing in the designer's dynamic
+content panel before wiring the body** — connector field names differ from raw Graph
+(`JobTitle` vs `jobTitle`), and a silently-null title is the one failure this whole flow
+exists to avoid.
+
+### Route 2 (fallback) — raw Graph via "Send an HTTP request"
+
+Only if `Get contacts (V2)` proves unusable. Same connector, so the same permissions; this is
+just a lower-level call.
 
 ### A1. Trigger
 **Recurrence**, every 6 hours (an address book changes slowly). Add a `hwMark` string variable
