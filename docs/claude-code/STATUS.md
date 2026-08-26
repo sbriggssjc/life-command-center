@@ -17,6 +17,54 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-26 (Cowork) — P192: stop asking questions the data already answers. 255 cards → 109.
+
+Scott, after working the lane: *"only propose the strongest candidates… only asking the human when
+we absolutely need it… this is not a final determination but an ongoing pursuit… a dynamic and
+living thing."* Plus: *"I still see a number of duplicate firms."*
+
+**⚠️ Both observations have ONE cause.** Most apparent "duplicate firms" are one owner shown twice
+because its SECOND domain card is a weak match nobody should be asked about — *Cunningham
+Development Co → cunninghamdevco.com* (real) sitting directly above *Cunningham Development Co →
+cunninghamwalters.com* (a different firm, zero evidence). **Gating on decidability removed most of
+the apparent duplication without touching entity resolution.**
+
+**The missing axis: "link evidence" was never sufficient on its own, in either direction.**
+Prologis → prologis.com has ZERO link evidence and is near-certain; Westlake Village Natomas →
+`westlakefarmsinc.com` HAS link evidence and is **a farm**. What was missing is how strongly the
+domain identifies the owner, computed from the P187 order-preserving core: `exact` /
+`domain_is_core_prefix` / `core_is_domain_prefix` / `curated_sponsor` / `weak_partial`.
+
+| decidability | cards | owners | rent |
+|---|---|---|---|
+| `ask` — the operator's queue | 98 | 90 | $394M |
+| `auto` — exact match, ONE candidate | 11 | 11 | $26M |
+| `parked_domain_only` — never shown | 146 | 105 | $231M |
+
+**Operator queue 255 → 109 (−57%) with no strong card lost.** Verified on named rows:
+Easterly/easterlyreit.com still visible, Prologis still visible, while `crystalmgmt.com` and
+`cunninghamwalters.com` — the two weak cards at the top of Scott's screenshot — are gone.
+
+**⚠️ Auto-attach is `exact` ONLY, and one tier of match strength is the whole difference.** The 11
+exact/single-candidate cards read **11/11 correct** (Agree Realty → Joey Agree, Paolino Properties
+→ Joseph Paolino, AVG Partners → Arnold Schlesinger). The next tier down, `domain_is_core_prefix`,
+reads ~9/12 and its failures are severe: **JP Morgan Chase CMBS Trust → jpmorgan.com** (a
+securitization vehicle, not the bank, not a prospect) and **Frontier Hub LLC → frontier.net** (an
+ISP — `frontier.com` is in the consumer stoplist, `.net` is not).
+
+**⚠️ The 11 `auto` cards STAY VISIBLE and flagged** until the sweep that writes them exists. Hiding
+a card nobody attaches is Class 7 (correct-and-invisible = not built).
+
+**The living half is designed, not built** — `docs/claude-code/prompts/192-*.md`. Key property
+already true: decidability is **computed live, never stored**, so a parked card returns to the
+queue automatically the moment correspondence, an SF campaign, a title or a sponsor entry lands.
+**Converting it to a stored status without building the sweep that clears it would be Class 10 +
+Class 12**, both already paid for here.
+
+**Still needs prompt 189 in parallel** — P192 removes *apparent* duplication only. Easterly is 2
+real entities and "NGP Capital" is 5; no card triage fixes that.
+
+
 ## 2026-08-26 (Cowork) — P191: the lane closed cards it had no business closing (found by working it)
 
 **Scott worked the first five Tier 0 cards and noticed duplicate companies. Reviewing what was
