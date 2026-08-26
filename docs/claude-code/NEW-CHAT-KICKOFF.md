@@ -11,10 +11,17 @@ You're helping Scott Briggs run **Life Command Center (LCC)** — a CRE business
 **Read these first, in order, before doing anything (don't rebuild from scratch):**
 1. `C:\Users\scott\...\.claude\CLAUDE.md` (global instructions) + the project `CLAUDE.md` (architecture
    invariants, DB topology, the durable footguns).
-2. `docs/claude-code/STATUS.md` — the running reconcile log; the newest dated block at the top is current state.
-3. `docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md` — surfaces/comps/deploy map.
-4. `docs/os/LOCAL-MODEL-LEVERAGE-MAP.md` + `docs/os/LOCAL-MODEL-GAP-AUDIT.md` — where the on-prem Ollama
-   model is live/dormant/planned, and the ranked gap backlog (R1–R9).
+2. **`docs/os/CURRENT-STATE.md`** — the one-page "where are we": what is LIVE, what is flag-gated OFF and
+   **why**, the live flag snapshot, the assist production-health table, and the canonical-doc map.
+3. **`docs/os/PLANNED-BACKLOG.md`** — the one ranked list of everything unbuilt-but-intended, every row
+   citing its source. **Read it before proposing anything new** — it is probably already there, possibly
+   already measured and refuted.
+4. `docs/claude-code/STATUS.md` — the running reconcile log, newest first. It is a *log*, not the state;
+   pre-2026-08-13 entries are archived at `docs/history/STATUS_claude-code_2026-08-03_to_2026-08-12.md`.
+5. `docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md` — surfaces/comps/deploy map (its §4 "DEPLOY-PENDING" is
+   historical; the live answer is `PLANNED-BACKLOG.md`).
+6. `docs/os/LOCAL-MODEL-LEVERAGE-MAP.md` + `docs/os/LOCAL-MODEL-GAP-AUDIT.md` — where the on-prem Ollama
+   model is live/dormant/planned, and the ranked gap backlog (R1–R9) with the refuted premises.
 
 **Standing workflow:** Scott pastes Cowork-drafted prompts to "Claude Code" (CC), then pastes CC's responses
 (as .docx) into `docs/claude-code/responses/`. Cowork reviews each against LIVE Supabase data, reconciles,

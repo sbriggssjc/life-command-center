@@ -1,5 +1,13 @@
 # Build Status — where the OS architecture actually stands
 
+> **⚠️ Dated 2026-07-28. The consolidated, current backlog is
+> [`PLANNED-BACKLOG.md`](PLANNED-BACKLOG.md); live system state is
+> [`CURRENT-STATE.md`](CURRENT-STATE.md).** Every unbuilt row in this file was swept into that
+> backlog on 2026-08-26 (Prompt 141) — see the manifest in
+> `docs/history/DOCS_CONSOLIDATION_2026-08-26.md` §5. This file is kept for its **reasoning,
+> dependency ordering and design pointers**, which the backlog deliberately does not duplicate.
+> **Re-measure any row here before acting on it.**
+
 One honest answer to "are we done?" Legend: ✅ built/live · ⏳ built in repo, pending a manual apply ·
 📐 designed/specced, not built · 🚫 excluded by decision · 🔮 roadmap. Last updated: 2026-07-28.
 

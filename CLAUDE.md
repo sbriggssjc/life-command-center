@@ -1,6 +1,9 @@
 # Claude Code / Cowork Instructions — Life Command Center
 
 > **🧭 START HERE for architecture: [`LCC-OS.md`](LCC-OS.md) → `docs/os/README.md`.**
+> **START HERE for "where are we / what's left": [`docs/os/CURRENT-STATE.md`](docs/os/CURRENT-STATE.md)
+> (LIVE · flag-gated OFF and why · canonical-doc map) + [`docs/os/PLANNED-BACKLOG.md`](docs/os/PLANNED-BACKLOG.md)
+> (every unbuilt-but-intended item, with provenance).**
 > **Operational reference (surfaces, comps engine, deploy map, Cowork setup):** [`docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md`](docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md) + [`docs/os/COWORK-SETUP-AND-FUTUREPROOFING.md`](docs/os/COWORK-SETUP-AND-FUTUREPROOFING.md).
 > One brain (LCC + Cortex), one instruction/policy canon (`docs/os/canon/`), many surfaces (Copilot, Claude
 > Personal/Cowork, Northmarq Claude, ChatGPT). Edit rules in the canon, bump the version, run
@@ -1340,7 +1343,10 @@ about what can honestly be drafted.
 The daily brief has rendered a `renderAnalystTake` section since v2 and the column has
 been EMPTY since **2026-07-07** (11 of 67 `briefing_intel_snapshot` rows ever carried a
 take). Generation now happens on the GaryBuilt box via `invokeOnPremGeneration`, behind
-**`BRIEFING_ANALYST_TAKE_ONPREM`** (registered, **off**), tick
+**`BRIEFING_ANALYST_TAKE_ONPREM`** — ⚠️ **re-measured 2026-08-26: the flag now reads `on` in
+`feature_flags_registry`, and today's `briefing_intel_snapshot` carries a 774-char take with
+`analyst_take_meta.source = 'onprem_ollama'` (every prior day is length 0). The "off / awaiting
+the gate" wording below was true when written and is now stale** — tick
 `GET/POST /api/briefing-analyst-take-tick`, planner
 `api/_shared/briefing-analyst-take.js`, cron **240** (`18 10 * * 1-5`, between the 10:00
 snapshot and the 12:30 send). Full writeup:
@@ -1383,8 +1389,11 @@ snapshot and the 12:30 send). Full writeup:
   the ON CONFLICT UPDATE list from the payload KEYS, so omitted columns are preserved).
   And the edge fn now does `if (row.analyst_take == null) delete row.analyst_take;` —
   without it a manual re-fire after 10:18 upserts NULL over the on-box take and the brief
-  goes silently empty again. **That edge-fn change is committed but NOT deployed** — see
-  the gate in the doc; deploy it before flipping the flag.
+  goes silently empty again. **That edge-fn change was committed and NOT deployed when this was
+  written; as of 2026-08-26 the `briefing-intel-snapshot` fn is at v21 with an `updated_at` of the
+  same day, which is consistent with the deploy having been run — CONFIRM the deployed source
+  carries the `delete row.analyst_take` line before any manual snapshot re-fire** (a re-fire without
+  it upserts NULL over the on-box take). Tracked as backlog **V4**.
 - **`flag_off` deliberately raises NO health alert**, while `model_unavailable` /
   `fabrication_rejected` / `write_failed` each open a deduped
   `lcc_health_alerts(alert_kind='briefing_analyst_take_empty')` that a successful write
@@ -1392,9 +1401,10 @@ snapshot and the 12:30 send). Full writeup:
   `feature_flags_registry` + Dormant Capabilities; an alert describing a decision sits
   open forever, which is the badge-that-is-noise failure.
 - **Verify on `length(analyst_take) > 0` AND `analyst_take_meta->>'source' = 'onprem_ollama'`,
-  then READ IT — never on "the tick ran."** No live take has been generated yet: the
-  sandbox has no `OLLAMA_URL`, so all 30 tests stub the model. Grade a real sample via
-  `GET …?generate=1` (ungated, never writes) before flipping the flag.
+  then READ IT — never on "the tick ran."** ✅ **Measured 2026-08-26: 774 chars,
+  `source = 'onprem_ollama'` — the first live on-box take has landed.** (The sandbox has no
+  `OLLAMA_URL`, so all 30 tests stub the model; grade real output via `GET …?generate=1`, which is
+  ungated and never writes.)
 
 ## P134 — an LLM assist is only as good as the CONTEXT payload (2026-08-26)
 

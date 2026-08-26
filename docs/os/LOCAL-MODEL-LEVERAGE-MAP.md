@@ -1,5 +1,8 @@
 # Local Model (GaryBuilt / Ollama) Leverage Map
 
+> **System-wide state:** [`CURRENT-STATE.md`](CURRENT-STATE.md) · **all unbuilt work (this file's
+> §3 and §4 included, consolidated):** [`PLANNED-BACKLOG.md`](PLANNED-BACKLOG.md).
+
 Last updated: 2026-08-24 (Cowork audit). Single source of truth for where the on-prem Ollama local model
 (`qwen2.5:14b` on GaryBuilt, tunnel `garybuilt.briggscrelccopps.com`) is used, is built-but-dormant, is
 planned, and could expand. **Doctrine:** private corpora (voice, deal correspondence, buyer LOIs, comps) NEVER
@@ -105,10 +108,17 @@ actually renders** — the Research page task list was 500-dead until P132 (2026
 would have promoted work onto a screen no operator could see.
 
 ## 3. Planned but untouched (local-model work designed, not built)
-- **Template library** (ROLLOUT_STATUS W10 Stage 3, `⬜`): cluster the sent corpus by draft-type, synthesize
+- **Template library** (W10 Stage 3 — ⚠️ **the `⬜` this used to cite does not exist in
+  `ROLLOUT_STATUS.md`**; the intention lives in the prose of that file's **W10.1** row, and is now
+  carried as backlog row **L5**): cluster the sent corpus by draft-type, synthesize
   Scott-voiced parameterized templates + triggers (new listing → announcement; LOI → offer-submission).
 - **LoRA fine-tune** on the 10-yr sent corpus (`garybuilt-local-model.md` Phase 3) — never started.
-- **Daily-briefing narrative → SCOPED as R8 Stage 1 (Prompt 138, 2026-08-26).** The brief already has an
+- **~~Daily-briefing narrative~~ → SHIPPED AND LIVE (R8 Stage 1, Prompt 138). Measured 2026-08-26:**
+  `BRIEFING_ANALYST_TAKE_ONPREM` reads **`on`** in the registry and today's `briefing_intel_snapshot`
+  carries a **774-char** take with `analyst_take_meta.source = 'onprem_ollama'` (every prior day is
+  length 0). Kept below for the scoping reasoning; **it is no longer planned work.** Remaining check:
+  the `briefing-intel-snapshot` edge fn must carry the omit-when-null guard (backlog V4).
+- **Daily-briefing narrative — original scoping (Prompt 138, 2026-08-26).** The brief already has an
   "Analyst's Take" section + `briefing_intel_snapshot.analyst_take` column + renderer — but the field is
   **EMPTY** (0 length, 3 days running): the generator is a **cloud Claude** call in the
   `briefing-intel-snapshot` edge fn, gated on `ANTHROPIC_API_KEY` (unset → silently skipped). P138 moves it

@@ -1,5 +1,10 @@
 # Local-Model Gap Audit — value-ranked, tackle most-impactful first
 
+> **The surviving gaps (R4–R9) are also carried in [`PLANNED-BACKLOG.md`](PLANNED-BACKLOG.md)**
+> alongside every other unbuilt item, so a fresh chat sees them ranked against the rest of the work.
+> This file keeps the **reasoning and the measurements** — including the premises that were refuted,
+> which are the more valuable half. System state: [`CURRENT-STATE.md`](CURRENT-STATE.md).
+
 Last updated: 2026-08-24 (Cowork whole-system audit). Companion to `LOCAL-MODEL-LEVERAGE-MAP.md` (which maps
 where the on-prem model is live/dormant). THIS doc inventories the **manual-research, feedback-loop, and
 code-connectivity gaps** where the local Ollama model could unlock a business-process step, **ranked by

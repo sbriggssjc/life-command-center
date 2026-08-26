@@ -1,12 +1,18 @@
 # AI Surfaces & Comps Engine — Operational Reference
 
+> **For "where are we?" read [`CURRENT-STATE.md`](CURRENT-STATE.md) first** (what is LIVE, what is
+> flag-gated OFF and why, the canonical-doc map). **For "what's left?" read
+> [`PLANNED-BACKLOG.md`](PLANNED-BACKLOG.md)** (every unbuilt-but-intended item, with provenance).
+> **This file is the durable HOW — surfaces, the comps engine, and deploy mechanics.**
+
 **Read this before touching instructions, the comps engine, or a deploy.** Consolidated 2026-08-03 from a long
 working session so future chats don't re-derive it. Chronology lives in
 `docs/architecture/DOSSIER-PROGRAM-STATE-OF-PLAY.md`; this is the durable "how it actually works" map.
 
 ## 1. Instructions are a managed single-source system — never hand-write per surface
 - **Source of truth:** `docs/os/canon/blocks/*.md` (one file per rule block). Version:
-  `docs/os/canon/00-INDEX.md` `CANON_VERSION` (currently **1.2.2**).
+  `docs/os/canon/00-INDEX.md` `CANON_VERSION` (**1.5.0**, 2026-08-20 — corrected 2026-08-26; this line read
+  1.2.2 for weeks, so verify it against `00-INDEX.md` rather than trusting any copy of it).
 - **Renderer:** `docs/os/tools/render-surfaces.mjs` (config `docs/os/render.manifest.json`). Run:
   `node docs/os/tools/render-surfaces.mjs --root=docs/os --write-live`. It writes per-surface bundles to
   `docs/os/surfaces/*.canon.md` and, for surfaces with a `liveArtifact`, splices the `CANON:BEGIN…END` region
@@ -69,7 +75,16 @@ Instruction/canon changes do NOT need a deploy — they're paste/upload.
   and NOT invent tenant/metro/date filters — the engine expands. (This was the ChatGPT "1 comp" cause before the
   instruction fix.)
 
-## 4. DEPLOY-PENDING (the single most important "what's left")
+## 4. DEPLOY-PENDING — ⚠️ HISTORICAL (2026-08-04), superseded as the "what's left" answer
+> **Do not read this section as current.** It was the deploy-gate snapshot on **2026-08-04**, during the
+> comps arc; the app has shipped through ~P188 since. The live "what's left" is
+> [`PLANNED-BACKLOG.md`](PLANNED-BACKLOG.md), and the live flag/runtime state is
+> [`CURRENT-STATE.md`](CURRENT-STATE.md). Two items below were **not** re-measured during the 2026-08-26
+> consolidation and are carried forward as open in the backlog rather than declared resolved:
+> **rotate `LCC_API_KEY`** (backlog SEC1) and the **Census key** (backlog: third-party keys). The rest is
+> retained verbatim for the reasoning trail. Full chronology:
+> `docs/history/STATUS_claude-code_2026-08-03_to_2026-08-12.md`.
+
 **Updated 2026-08-04 (reconcile of prompts 31–35).**
 
 - ✅ **MCP OAuth mounted + DEPLOYED (prompt 33, `ef8cc6a6`).** `/mcp` + OAuth discovery + `/register`/`/authorize`/
@@ -99,4 +114,7 @@ prompt 19.
   Phase 2 (shared Subject/Entity Resolver) = prompt 25, done. BOV is the next adopter.
 - Comps triage detail: `docs/comps-rollout/comps-query-shaping-triage-2026-08-03.md`.
 - MS surfaces / MCP pivot: `docs/comps-rollout/ms-surface-triage-and-mcp-pivot.md` + `mcp-copilot-readiness.md`.
-- Claude Code prompt/response workflow + STATUS: `docs/claude-code/`.
+- Claude Code prompt/response workflow + STATUS: `docs/claude-code/` (STATUS entries for 2026-08-03→12
+  are archived at `docs/history/STATUS_claude-code_2026-08-03_to_2026-08-12.md`).
+- **Current state / backlog:** `docs/os/CURRENT-STATE.md` · `docs/os/PLANNED-BACKLOG.md`.
+- **Local model:** `docs/os/LOCAL-MODEL-LEVERAGE-MAP.md` (where it runs) · `docs/os/LOCAL-MODEL-GAP-AUDIT.md` (ranked gaps).
