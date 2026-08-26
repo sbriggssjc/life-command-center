@@ -151,7 +151,7 @@ export default withErrorHandler(async function handler(req, res) {
     }
 
     case 'research': {
-      let path = `research_tasks?workspace_id=eq.${workspaceId}&select=*,entities(name),users!research_tasks_assigned_to_fkey(display_name),users!research_tasks_created_by_fkey(display_name)`;
+      let path = `research_tasks?workspace_id=eq.${workspaceId}&select=*,entities(name),assignee:users!research_tasks_assigned_to_fkey(display_name),creator:users!research_tasks_created_by_fkey(display_name)`;
       if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
       if (req.query.assigned_to) path += `&assigned_to=eq.${pgFilterVal(req.query.assigned_to)}`;
       if (req.query.research_type) path += `&research_type=eq.${pgFilterVal(req.query.research_type)}`;
@@ -167,7 +167,8 @@ export default withErrorHandler(async function handler(req, res) {
       const items = rows.map(r => ({
         ...r,
         entity_name: r.entities?.name || null,
-        assignee_name: r.users?.display_name || r['users!research_tasks_assigned_to_fkey']?.display_name || null
+        assignee_name: r.assignee?.display_name || null,
+        creator_name: r.creator?.display_name || null
       }));
       const withDrafts = await attachOwnershipChainDrafts(items);
       return res.status(200).json({ items: withDrafts, count: result.count, view: 'research' });
@@ -465,7 +466,7 @@ async function v2GetResearch(req, user, workspaceId) {
   const { status, domain, research_type } = req.query;
   const order = v2SortParam(req.query, 'priority.asc,created_at.asc');
 
-  let path = `research_tasks?workspace_id=eq.${workspaceId}&select=*,entities(name),users!research_tasks_assigned_to_fkey(display_name),users!research_tasks_created_by_fkey(display_name)`;
+  let path = `research_tasks?workspace_id=eq.${workspaceId}&select=*,entities(name),assignee:users!research_tasks_assigned_to_fkey(display_name),creator:users!research_tasks_created_by_fkey(display_name)`;
   if (status) {
     if (status === 'active') path += `&status=in.(queued,in_progress)`;
     else path += `&status=eq.${pgFilterVal(status)}`;
@@ -482,8 +483,8 @@ async function v2GetResearch(req, user, workspaceId) {
   const items = rows.map(r => ({
     ...r,
     entity_name: r.entities?.name || null,
-    assignee_name: r['users!research_tasks_assigned_to_fkey']?.display_name || null,
-    creator_name: r['users!research_tasks_created_by_fkey']?.display_name || null
+    assignee_name: r.assignee?.display_name || null,
+    creator_name: r.creator?.display_name || null
   }));
   const withDrafts = await attachOwnershipChainDrafts(items);
   return { view: 'research', items: withDrafts, pagination: v2PaginationMeta(page, perPage, result.count || 0) };

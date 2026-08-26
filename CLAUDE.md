@@ -1022,6 +1022,34 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   `api/_handlers/contact-acquisition-engine.js`) is flag-gated `W9_1_SOS_DIRECT`, proposal-only
   (`contact_acquisition_review` — confirm never auto), and no-ops honest-blocked while off. Adapter
   re-verification through the proxy + the flag flip are Scott's live post-install steps.
+- **⚠️ TWO EMBEDS OF ONE TABLE MUST EACH CARRY AN ALIAS, OR PostgREST ABORTS THE WHOLE QUERY
+  (P132, 2026-08-26).** `select=*,users!a_fkey(x),users!b_fkey(x)` gives BOTH embeds the same
+  internal alias (`<table>_users_1`) and errors *"table name … specified more than once"* — the FK
+  hint disambiguates the JOIN, it does NOT name the relation. Correct form is
+  **`alias:table!fkey(cols)`** on every embed (the Supabase docs' own two-FKs-to-one-table example:
+  `start_scan:scans!scan_id_start(...)` + `end_scan:scans!scan_id_end(...)`); `cadence-engine.js`
+  already had it right (`from_entity:`/`to_entity:entities!…`).
+  - **It killed the ENTIRE Research page for every lane and every status filter**, because both
+    `api/queue.js` research branches (v1 `case 'research':` and v2 `v2GetResearch`) embedded `users`
+    twice for assignee + creator. **The badge and the list read different sources**, so
+    `?view=research_lanes` kept reporting healthy open counts (e.g. `establish_ownership_history`
+    545) off `v_lcc_research_lane_summary` while the list itself 500'd — the surface looked
+    populated and produced nothing. That is why every research lane reads "0 completions ever"
+    (Dead-End playbook classes 3 + 7), and it also hid the 453 P131 ownership-chain drafts, which
+    only render attached to a card. **Assert on `items.length`, never the lane badge.**
+  - **v1 swallowed the cause and v2 leaked it.** `case 'research':` returned a generic
+    `{"error":"Failed to fetch research tasks"}`; `v2GetResearch` passed `result.data?.message`
+    through, which is the only reason the real error was ever seen. A handler that discards the
+    DB's own message turns a one-line fix into an outage of unknown duration — same lesson as the
+    409-is-not-a-conflict note below.
+  - **The same shape was live in `api/operations.js::getOversight`** (escalations embedding `users`
+    twice for `escalated_by`/`escalated_to`), and there it is read as `escalations.data || []` with
+    **no `.ok` check** — so the 400 rendered as "no open escalations", silently. A full sweep of
+    `api/` found exactly these three selects; nothing else embeds one table twice.
+  - Guard: `test/research-view-embed.test.mjs` parses every `select=` in `api/` and fails when two
+    embeds resolve to the same response key — a general invariant over the whole API surface, not a
+    line-anchored grep (see the block-slice footgun above). Verified to go red on the original code.
+
 - **PostgREST's write surface is NARROWER than SQL's, and it reports the difference badly.** Three
   distinct traps, all hit live in one session (P136a/P136b/P141), all costing real rows:
   - **An EXPRESSION or PARTIAL unique index is invisible to PostgREST.** `on_conflict=` takes COLUMN
