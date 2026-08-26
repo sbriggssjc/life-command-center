@@ -10,6 +10,33 @@
 > — prompt 29 if wanted). Also: rotate `LCC_API_KEY`; Census key (invalid) for prompt 19.
 
 
+## 2026-08-26 (Cowork) — Research page task list is DEAD (blocker for R1); prompts 132/133; NEXT_STEP_AI dry-run
+
+**Finding while walking Scott to the R1 review cards.** The Research page renders "0 tasks" for EVERY
+lane/status — the lane picker (`?view=research_lanes`) is healthy (establish_ownership_history 545 open,
+answerable) but the task-fetch itself 500s. v2 leaked the cause: PostgREST **`table name
+"research_tasks_users_1" specified more than once`** — `api/queue.js` embeds `users` twice
+(assignee + creator) with no distinct alias, in BOTH the v1 (`case 'research'`, ~L154) and v2
+(`v2GetResearch`, ~L468) branches. So the entire operator-facing research list has been unreachable —
+which is exactly why every lane reads "0 completions ever" (Dead-End Class 3/7: exists but can't
+display). The 453 P131 ownership-chain drafts are fine in `lcc_clean_assist_proposals`; they just render
+onto cards that never appear. **→ Prompt 132** (named-alias fix `assignee:users!…` / `creator:users!…`
+in both paths + regression test + sweep for the same pattern; JS-only redeploy). This gates the whole R1
+review.
+
+**Prompt 133** — schedule the P131 drafter (`POST /api/ownership-chain-draft-tick`) as a nightly
+pg_cron on LCC Opps (~06:50 UTC via `lcc_cron_post`), idempotent/bounded, so new lane rows get drafted
+without manual re-runs. DB-only.
+
+**NEXT_STEP_AI dry-run (zero-spend).** It's inline-only (no standalone tick) — runs inside
+`deal-comms-propagate-tick` / `intake-tagged-comm` / `intake-correspondence`, deterministic-first, fails
+null → today's generic to-do. Ran `classifyDeterministic` over 10 real inbound messages: **6/6
+clear-intent classified correctly** (wants_call→schedule_call, declined→log_pass, accepted→
+advance_to_contract, requests_docs→send_info, will_get_back→follow_up, counter_offer→review_offer); the
+4 escalations were the genuinely ambiguous ones (correctly deferred to Ollama). Verdict: **low-risk to
+flip** (worst case = null → unchanged behavior). Recommend flipping `NEXT_STEP_AI` (env + registry) after
+132 ships.
+
 ## W6.5 Stage 2 Units 1–5 (2026-08-20, Cowork) — detail.js 18,481 → 16,203 lines, byte-identical
 
 The highest-value W6 unit (it de-risks the Edit-truncation incidents). Five regions extracted from
