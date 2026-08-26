@@ -239,6 +239,7 @@ what it found on first run. Summary:
 | a count that measures state, not throughput | "what changes if the system idles a week?" | queue read 1,406 vs a real working set of 160; rent double-counted 4.65× |
 | **a capability that exists but is UNREACHABLE** | after building, ask what is on **page 1** | P173's new button sat at **row 1,869 — page 75**; 142/142 guards passed on a fix no operator could reach |
 | **a PRODUCER re-creates what the cleanup cleaned** | was the row written **after** the cleanup? (`max(child.updated_at) > entity.updated_at`) | **119 tombstones carrying 198 live portfolio facts, $71.8M**, re-upserted DAILY — the merge path was correct all along |
+| **a WORKER whose cursor is its own OUTPUT** | diff the working set across two consecutive runs — identical ids twice IS the diagnosis | property-twin **0 writes in 7d** behind 1,095 pending (P135); reachability-harvest **16 rows EVER, 0 in 11d** behind ~15k, re-checking the same 120 nightly (P136) |
 
 **Two traps the merge-path detector had to survive, each of which gave a wrong answer first:**
 declared FKs alone MISS `owner_contact_pivot.active_contact_entity_id` (no FK constraint — match
@@ -249,6 +250,27 @@ on column NAME); and the merge path is **more than one function**, so checking o
 **Repair per column, never blanket.** P167 proved "repoint to the survivor" is the obvious and
 wrong answer — all three survivors were organisations, and repointing would have made Boyd
 Watterson its own contact.
+
+**⚠️ A WORKER THAT LEAVES NO TRACE ON AN EMPTY TARGET CANNOT PAGE PAST IT (P136, 2026-08-26).**
+P135 unstuck the property-twin assist by lifting a fixed window, because *an annotation is
+that lane's cursor* — an annotated row self-excludes. The reachability harvest looked
+identical and was not: its proposals are keyed `(arm, contact, field)`, so a target that
+yields nothing leaves **no row anywhere**, is re-selected the next night, and yields nothing
+again — **16 review rows EVER, 0 in 11 days, behind a ~15k pool**, cron green throughout.
+Paging alone would not have fixed it; it needed a NEGATIVE marker
+(`reachability_harvest_target_marker` — *checked, and empty*), dated and **expiring** so the
+exclusion clears when new evidence lands. Before declaring a paging fix sufficient, ask **what
+makes a target stop being selected** — if the only answer is "it produces output", every empty
+target is permanent residue.
+- **And the ordering was never the bug — the JOIN was missing.** The same diagnostic response
+  carried `targets:120, with_evidence:0` next to `evidence_sources {intake:5000,
+  comms_names:4305}` and `comms_scan.harvestable:7926`. The tick ranked the unreachable pool
+  and *then* asked whether evidence existed for the winners. Selection now joins the evidence
+  index first. **Ask what a producer JOINS on, not just what it orders by** — the producer-side
+  form of the P179 "three causes of unreachable" lesson.
+- **A bigger window is not the fix.** Raising 120 → 1,000 proposes once and stalls at row
+  1,001, with the failure now more expensive to see. Cursor that advances + selection that
+  joins. Full class: `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md` Class 12.
 
 ### The failure mode that matters looks exactly like success
 

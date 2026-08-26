@@ -52,14 +52,29 @@ reversible.
 | sf-link assist | `W9_3_RESCORE` (source `w9_3_sf_assist`) | on | 247 total, 47 in 7d, caught up | ✅ healthy (caught up) |
 | next-step | `NEXT_STEP_AI` | on | inline (no proposal table) | ✅ on |
 | **property-twin** | `PROPERTY_TWIN_ASSIST` | on | **200, 0 in 7d, 895 unreached** | 🔧 **FIXED (P135, 2026-08-26)** — window lifted; verify by the proposal-count DELTA past 200 |
-| **reachability harvest** | `W9_2_REACHABILITY_HARVEST` | on | **16 ever, 0 in 11d** vs ~15k pool; diagnostic POST = fixed 120-target window, 0 evidence for those 120 while 5k intake + 4.3k comms names + 2k signature phones sit unused | ❌ STUCK (target window doesn't advance) → Prompt 136 |
+| **reachability harvest** | `W9_2_REACHABILITY_HARVEST` | on | **16 ever, 0 in 11d** vs ~15k pool; diagnostic POST = fixed 120-target window, 0 evidence for those 120 while 5k intake + 4.3k comms names + 2k signature phones sit unused | 🔧 **FIXED (P136, 2026-08-26)** — checked targets are marked (`reachability_harvest_target_marker`) so the window advances, AND targets are chosen by an evidence JOIN; verify by the proposal-count DELTA past 16 |
 | ollama clean-assist | `OLLAMA_CLEAN_ASSIST` | off | held (thin context) | ⚪ off → Prompt 134 |
 
-**Structural tell:** the two stalled lanes were the ONLY ones without a **paging scan** over their backlog —
-every healthy assist pages through its own; property-twin used a fixed first-200 window (**fixed in P135**:
-`selectFreshTwinRows` pages past the annotated prefix, bounded by `PROPERTY_TWIN_ASSIST_SCAN_MAX`, reporting
-`fresh_this_run` / `remaining` / `scan_capped` so an exhausted backlog is distinguishable from a windowed one)
-and reachability-harvest may have the same shape (verify whether its 16 is a narrow-source floor or a stall).
+**Structural tell (CONFIRMED on both, now both fixed):** the two stalled lanes were the ONLY ones without a
+**paging scan** over their backlog — every healthy assist pages through its own. property-twin used a fixed
+first-200 window (**fixed in P135**: `selectFreshTwinRows` pages past the annotated prefix, bounded by
+`PROPERTY_TWIN_ASSIST_SCAN_MAX`, reporting `fresh_this_run` / `remaining` / `scan_capped` so an exhausted
+backlog is distinguishable from a windowed one). reachability-harvest had the same shape and **its 16 was a
+stall, not a narrow-source floor** (**fixed in P136**, and note it needed TWO fixes where property-twin needed
+one):
+
+- **A paging cursor alone was not enough.** property-twin's annotations ARE its cursor — an annotated row is
+  self-excluding, so lifting the window was the whole fix. reachability-harvest's proposals are keyed
+  `(arm, contact, field)`, so a target that yields NOTHING leaves no trace at all: it is re-selected forever
+  and nothing about it ever changes. **A lane whose only cursor is its own output cannot page past work that
+  produces no output** — it needs a NEGATIVE marker (`reachability_harvest_target_marker`, dated and
+  expiring) recording *checked, and empty*.
+- **Blind rank picked targets that could not be resolved.** The tick ranked the unreachable pool and then
+  asked "is there evidence for these?" — `donors_found:0 / with_evidence:0` on 120 targets, while 5,000
+  intake records and 7,926 harvestable comms rows sat unread. Selection now JOINS the evidence index first
+  (name in intake/comms, or an SF identity a donor could match) and tops the batch up with no-evidence rows
+  so those get marked too. **Ask what the producer JOINS on, not just what it orders by** — the ordering was
+  never the problem.
 
 **⚠️ The generalised check for the rest of this table:** a `state=on` flag whose annotation count is FLAT is
 the same silent stall wearing a healthy badge. For each remaining assist ask *what advances its working set*,

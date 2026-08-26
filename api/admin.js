@@ -4682,6 +4682,24 @@ async function handleOutlookNameBackfill(req, res) {
 // Doctrine: deterministic-first (arm=deterministic, arithmetic exact-identity fills,
 // confidence 1.0, NO LLM) + LLM-attributed (arm=llm, verbatim-quote validator).
 // Proposal-only — a human verdict applies via the fill-blanks writer. Never fabricates.
+//
+// P136 (2026-08-26) — THE TARGET WINDOW ADVANCES. The tick used to take a FIXED
+// top-120 slice of the ~15k unreachable pool, ask "is there evidence for these?"
+// (donors_found:0 / with_evidence:0), write nothing, and re-select the SAME 120 the
+// next night — 16 review rows EVER, 0 in 11 days, while 5,000 intake records and
+// 7,926 harvestable comms rows sat unused. Two fixes, both live here:
+//   (1) a SELECTED target that produced no fresh work is MARKED
+//       (reachability_harvest_target_marker) and drops out of the window until its
+//       dated recheck_after passes — the cursor moves;
+//   (2) targets are chosen by an EVIDENCE JOIN (name in the intake/comms index, or
+//       an SF identity a donor could match) ahead of blind unreachability rank —
+//       targeting owners that can actually be resolved is what turns evidence into
+//       proposals. The remainder of the batch is topped up with no-evidence targets
+//       so they too get checked and marked (that is what advances a scarce night).
+// Honest counts: targets_selected / targets_with_evidence / targets_marked_no_evidence
+// / remaining_untargeted / target_scan_capped — a drained pool must be
+// distinguishable from a stuck window. Judge the unit by the PROPOSAL DELTA, never
+// by the flag or the tick's own tally.
 // ============================================================================
 const HARVEST_MAX_TARGETS = Math.max(20, parseInt(process.env.HARVEST_MAX_TARGETS || '120', 10));
 const HARVEST_SCORE_BUDGET_MS = Math.max(5000, parseInt(process.env.HARVEST_SCORE_BUDGET_MS || '150000', 10));
@@ -4692,6 +4710,13 @@ const HARVEST_INTAKE_INDEX_CAP = Math.max(500, parseInt(process.env.HARVEST_INTA
 // W9.4 comms-harvest — bounded scan of the correspondence spine (activity_events).
 const HARVEST_COMMS_INDEX_CAP = Math.max(500, parseInt(process.env.HARVEST_COMMS_INDEX_CAP || '8000', 10));
 const HARVEST_CREATE_CONTACT_BATCH_SIZE = Math.max(1, parseInt(process.env.HARVEST_CREATE_CONTACT_BATCH_SIZE || '40', 10));
+// P136 — the target-window scan. The window is a WINDOW: the tick pages through the
+// ranked unreachable slice skipping ACTIVE markers, and reports scan_capped so a
+// floor is never quoted as a total.
+const HARVEST_TARGET_SCAN_PAGE = Math.max(50, Math.min(RH.HARVEST_TARGET_SCAN_PAGE,
+  parseInt(process.env.HARVEST_TARGET_SCAN_PAGE || String(RH.HARVEST_TARGET_SCAN_PAGE), 10) || RH.HARVEST_TARGET_SCAN_PAGE));
+const HARVEST_TARGET_SCAN_MAX = Math.max(HARVEST_TARGET_SCAN_PAGE,
+  parseInt(process.env.HARVEST_TARGET_SCAN_MAX || String(RH.HARVEST_TARGET_SCAN_MAX), 10) || RH.HARVEST_TARGET_SCAN_MAX);
 const HARVEST_MIN_CONF = (() => {
   const v = parseFloat(process.env.HARVEST_MIN_CONFIDENCE || String(RH.HARVEST_MIN_CONFIDENCE));
   return Number.isFinite(v) && v > 0 && v <= 1 ? v : RH.HARVEST_MIN_CONFIDENCE;
@@ -4737,15 +4762,58 @@ async function fetchHarvestScoredMarkers() {
   return set;
 }
 
+// P136 — ACTIVE target markers (reachability_harvest_target_marker). A target the
+// tick already checked and found to yield no fresh work is excluded from the next
+// window until its recheck_after passes. FAILS OPEN: an unreadable marker table
+// means "nothing is excluded" (a read error must never suppress the whole pool).
+async function fetchHarvestTargetMarkers() {
+  const set = new Set();
+  const errors = [];
+  const PAGE = 1000;
+  try {
+    const nowIso = new Date().toISOString();
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'reachability_harvest_target_marker'
+        + '?select=domain,target_contact_id&recheck_after=gt.' + encodeURIComponent(nowIso)
+        + '&order=marker_id.asc&limit=' + PAGE + '&offset=' + off, undefined, { countMode: 'none' });
+      if (!r.ok) { errors.push({ source: 'target_markers', status: r.status || null, detail: _harvestErrDetail(r.data) }); break; }
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const x of rows) set.add(RH.targetMarkerKey(x.domain, x.target_contact_id));
+      if (rows.length < PAGE) break;
+    }
+  } catch (e) { errors.push({ source: 'target_markers', detail: e?.message || String(e) }); }
+  return { markers: set, errors };
+}
+
+// Upsert the checked-and-empty markers for this run. Chunked; best-effort (a marker
+// write failure costs a repeated check, never a wrong proposal) but COUNTED, so a
+// window that silently stops advancing is visible instead of inferred.
+async function writeHarvestTargetMarkers(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const out = { written: 0, failed: 0 };
+  const CHUNK = 200;
+  for (let i = 0; i < list.length; i += CHUNK) {
+    const chunk = list.slice(i, i + CHUNK);
+    try {
+      const r = await opsQuery('POST',
+        'reachability_harvest_target_marker?on_conflict=domain,target_contact_id', chunk,
+        { headers: { Prefer: 'return=minimal,resolution=merge-duplicates' } });
+      if (r.ok) out.written += chunk.length; else out.failed += chunk.length;
+    } catch (_e) { out.failed += chunk.length; }
+  }
+  return out;
+}
+
 function _harvestBlank(v) { return v == null || String(v).trim() === ''; }
 
 // Fetch target contacts (missing BOTH email and phone) for one domain, value-ranked
 // (owner-linked first — a coarse but honest proxy for owner portfolio value; the
 // domain contacts carry no portfolio rollup). Returns normalized target rows.
-async function fetchHarvestTargets(domain, cap) {
+async function fetchHarvestTargets(domain, cap, offset = 0) {
   const d = RH.normDomain(domain);
   const errors = [];
   const targets = [];
+  let raw = 0;   // the DB page size before the '' -blank post-filter (paging truth)
   try {
     const sel = d === 'dia'
       ? 'contact_id,contact_name,contact_email,contact_phone,sf_contact_id,salesforce_id,true_owner_id,recorded_owner_id,property_id'
@@ -4753,9 +4821,12 @@ async function fetchHarvestTargets(domain, cap) {
     const emailCol = RH.domainContactColumn(d, 'email');
     const phoneCol = RH.domainContactColumn(d, 'phone');
     // Missing BOTH: email null AND phone null. Ordered owner-linked first.
+    // P136: contact_id is the STABLE tiebreak — the rank columns tie for thousands
+    // of rows, and an unstable order makes OFFSET paging skip and repeat rows.
     const q = 'contacts?select=' + sel
       + '&' + emailCol + '=is.null&' + phoneCol + '=is.null'
-      + '&order=true_owner_id.desc.nullslast,property_id.desc.nullslast&limit=' + cap;
+      + '&order=true_owner_id.desc.nullslast,property_id.desc.nullslast,contact_id.asc'
+      + '&limit=' + cap + (offset ? '&offset=' + offset : '');
     const r = await domainQuery(d, 'GET', q);
     if (r.ok && Array.isArray(r.data)) {
       for (const row of r.data) {
@@ -4777,8 +4848,9 @@ async function fetchHarvestTargets(domain, cap) {
         });
       }
     } else if (!r.ok) { errors.push({ source: 'targets_' + d, status: r.status || null, detail: _harvestErrDetail(r.data) }); }
+    if (r.ok && Array.isArray(r.data)) raw = r.data.length;
   } catch (e) { errors.push({ source: 'targets_' + d, detail: e?.message || String(e) }); }
-  return { targets: RH.valueGateTargets(targets), errors };
+  return { targets: RH.valueGateTargets(targets), errors, raw };
 }
 
 function _harvestErrDetail(data) {
@@ -5114,34 +5186,97 @@ async function buildFreshHarvestItems(opts = {}) {
   const scanErrors = [];
   const skipMarkers = [];
   const pushErrors = (errs) => { for (const e of (errs || [])) scanErrors.push(e); };
+  // P136: which selected targets produced FRESH work this run. Everything else is
+  // checked-and-empty and gets a marker so the window advances (see step 6).
+  const producedTargetKeys = new Set();
+  const noteProduced = (t) => producedTargetKeys.add(RH.targetMarkerKey(t.domain, t.target_contact_id));
 
-  // 1. Targets (both domains, value-ranked).
-  const dia = await fetchHarvestTargets('dia', perDomain);
-  const gov = await fetchHarvestTargets('gov', perDomain);
-  pushErrors(dia.errors); pushErrors(gov.errors);
-  counts.targets.dia = dia.targets.length;
-  counts.targets.gov = gov.targets.length;
-  const allTargets = RH.valueGateTargets(dia.targets.concat(gov.targets));
-  counts.targets.total = allTargets.length;
-
-  // 2. Deterministic donor maps (batched, both domains).
-  const donor = await harvestBuildDonorMaps(allTargets);
-  pushErrors(donor.errors);
-  counts.evidence_sources.sf_contact_id = donor.sources.sf_contact_id;
-  counts.evidence_sources.salesforce_id = donor.sources.salesforce_id;
-
-  // 3. LLM intake index (one bounded scan).
+  // 1. Evidence indexes FIRST — target selection joins against them (P136). Blind
+  //    unreachability rank picked 120 owners with zero evidence, nightly, forever.
   const intake = await harvestBuildIntakeIndex();
   pushErrors(intake.errors);
   counts.evidence_sources.intake = intake.count;
 
-  // 3b. W9.4 comms index (ARM 3) — ONE bounded scan of the correspondence spine.
+  // 1b. W9.4 comms index (ARM 3) — ONE bounded scan of the correspondence spine.
   const comms = await harvestBuildCommsIndex();
   pushErrors(comms.errors);
   counts.comms.index_names = comms.nameIndex.size;
   counts.comms.index_participants = comms.ownerParticipants.size;
   counts.evidence_sources.comms_names = comms.counts.header_name_pairs;
   counts.comms_scan = comms.counts;
+
+  // 2. Targets — paged THROUGH the ranked unreachable slice, skipping ACTIVE
+  //    markers, evidence-bearing first (P136). `targetMarkers` is injectable so
+  //    the selector is testable without a DB.
+  let targetMarkers = opts.targetMarkers instanceof Set ? opts.targetMarkers : null;
+  if (!targetMarkers) {
+    const tm = await fetchHarvestTargetMarkers();
+    targetMarkers = tm.markers;
+    pushErrors(tm.errors);
+  }
+  const evidenceOf = (t) => RH.targetEvidenceSignal(t, {
+    hasIntakeName: (nm) => intake.index.has(nm),
+    hasCommsName: (nm) => comms.nameIndex.has(nm),
+  });
+  // Per-domain active-marker count drives the adaptive scan ceiling (a fixed one
+  // silently refills with markers and re-stalls — see harvestTargetScanCeiling).
+  const markersForDomain = (dom) => {
+    const pfx = RH.normDomain(dom) + ':';
+    let n = 0;
+    for (const k of targetMarkers) if (k.startsWith(pfx)) n += 1;
+    return n;
+  };
+  const selectDomain = async (dom) => {
+    const errs = [];
+    const sel = await RH.selectHarvestTargets({
+      fetchPage: async (lim, off) => {
+        const page = await fetchHarvestTargets(dom, lim, off);
+        for (const e of (page.errors || [])) errs.push(e);
+        // `raw` (the DB page size) decides exhaustion, not the post-filtered list.
+        return { rows: page.targets, raw: page.raw };
+      },
+      isMarked: (t) => targetMarkers.has(RH.targetMarkerKey(t.domain, t.target_contact_id)),
+      evidenceOf,
+      want: perDomain,
+      pageSize: HARVEST_TARGET_SCAN_PAGE,
+      maxScan: RH.harvestTargetScanCeiling(markersForDomain(dom), perDomain, HARVEST_TARGET_SCAN_MAX),
+    });
+    return { sel, errs };
+  };
+  const diaSel = await selectDomain('dia');
+  const govSel = await selectDomain('gov');
+  pushErrors(diaSel.errs); pushErrors(govSel.errs);
+  counts.targets.dia = diaSel.sel.targets.length;
+  counts.targets.gov = govSel.sel.targets.length;
+  const allTargets = RH.valueGateTargets(diaSel.sel.targets.concat(govSel.sel.targets));
+  counts.targets.total = allTargets.length;
+  // Honest window counts — a genuinely quiet night (pool drained) must be
+  // distinguishable from a stuck window. `remaining_untargeted` is a FLOOR when
+  // the scan capped, a TOTAL when it exhausted the slice.
+  counts.target_window = {
+    selected: allTargets.length,
+    with_evidence: diaSel.sel.targets_with_evidence + govSel.sel.targets_with_evidence,
+    without_evidence: diaSel.sel.targets_without_evidence + govSel.sel.targets_without_evidence,
+    remaining_untargeted: diaSel.sel.remaining_untargeted + govSel.sel.remaining_untargeted,
+    marker_skipped: diaSel.sel.marker_skipped + govSel.sel.marker_skipped,
+    scanned: diaSel.sel.scanned + govSel.sel.scanned,
+    scan_capped: !!(diaSel.sel.scan_capped || govSel.sel.scan_capped),
+    active_markers: targetMarkers.size,
+    by_domain: {
+      dia: { selected: diaSel.sel.targets.length, with_evidence: diaSel.sel.targets_with_evidence,
+        remaining_untargeted: diaSel.sel.remaining_untargeted, marker_skipped: diaSel.sel.marker_skipped,
+        scanned: diaSel.sel.scanned, scan_capped: diaSel.sel.scan_capped },
+      gov: { selected: govSel.sel.targets.length, with_evidence: govSel.sel.targets_with_evidence,
+        remaining_untargeted: govSel.sel.remaining_untargeted, marker_skipped: govSel.sel.marker_skipped,
+        scanned: govSel.sel.scanned, scan_capped: govSel.sel.scan_capped },
+    },
+  };
+
+  // 3. Deterministic donor maps (batched, both domains) for the SELECTED batch.
+  const donor = await harvestBuildDonorMaps(allTargets);
+  pushErrors(donor.errors);
+  counts.evidence_sources.sf_contact_id = donor.sources.sf_contact_id;
+  counts.evidence_sources.salesforce_id = donor.sources.salesforce_id;
 
   // 4. Per target × missing field: deterministic-first (SF donor → comms header),
   //    else LLM (intake + comms signature evidence), else no_evidence.
@@ -5169,6 +5304,7 @@ async function buildFreshHarvestItems(opts = {}) {
         const marker = RH.harvestScoredKeyFor(RH.HARVEST_ARM_DETERMINISTIC, t.domain, t.target_contact_id, field, evHash);
         if (markers.has(marker)) continue;
         counts.deterministic.proposed += 1;
+        noteProduced(t);
         deterministic.push({ arm: RH.HARVEST_ARM_DETERMINISTIC, subjectRef, target: t, field, proposal: prop,
           evHash, marker, domain: t.domain });
         continue; // deterministic wins — do not also LLM this field
@@ -5197,6 +5333,7 @@ async function buildFreshHarvestItems(opts = {}) {
           const marker = RH.harvestScoredKeyFor(RH.HARVEST_ARM_DETERMINISTIC, t.domain, t.target_contact_id, field, evHash);
           if (!markers.has(marker)) {
             counts.comms.header_fills += 1;
+            noteProduced(t);
             deterministic.push({ arm: RH.HARVEST_ARM_DETERMINISTIC, subjectRef, target: t, field, proposal: prop,
               evHash, marker, domain: t.domain, provenanceSource: RH.HARVEST_SOURCE_COMMS });
           }
@@ -5234,6 +5371,7 @@ async function buildFreshHarvestItems(opts = {}) {
       if (markers.has(marker)) continue;
       counts.llm.with_evidence += 1;
       counts.llm.fresh += 1;
+      noteProduced(t);
       llmItems.push({ arm: RH.HARVEST_ARM_LLM, subjectRef, target: t, field, assembled, evHash, marker, domain: t.domain });
     }
   }
@@ -5299,7 +5437,18 @@ async function buildFreshHarvestItems(opts = {}) {
     }
   }
 
-  return { deterministic, llmItems, createContact, counts, scan_errors: scanErrors, skip_markers: skipMarkers };
+  // 6. P136 — plan the target markers. A SELECTED target that produced no fresh
+  //    deterministic/LLM item is checked-and-empty; marking it is what makes run
+  //    N+1 see a different window. (create_contact is owner-keyed, not target-
+  //    keyed, so it deliberately does not clear a contact target's marker.)
+  const targetMarkerRows = RH.planHarvestTargetMarkers(allTargets, producedTargetKeys,
+    { sourceRunId: opts.sourceRunId || null });
+  counts.target_window.marked_no_evidence = targetMarkerRows.filter((m) => m.reason === 'no_evidence').length;
+  counts.target_window.marked_no_fresh_work = targetMarkerRows.filter((m) => m.reason === 'no_fresh_work').length;
+  counts.target_window.produced_fresh = producedTargetKeys.size;
+
+  return { deterministic, llmItems, createContact, counts, scan_errors: scanErrors,
+    skip_markers: skipMarkers, target_markers: targetMarkerRows };
 }
 
 // Cheap pool counts for the plain dry-run (no evidence assembly): the reachability
@@ -5417,7 +5566,8 @@ async function handleReachabilityHarvestTick(req, res) {
     const sourceRunId = 'w92_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
     const known = await fetchHarvestKnownSubjects();
     const markers = await fetchHarvestScoredMarkers();
-    const { deterministic, llmItems, createContact, counts, scan_errors: scanErrors, skip_markers: skipMarkers } = await buildFreshHarvestItems({ known, markers });
+    const { deterministic, llmItems, createContact, counts, scan_errors: scanErrors,
+      skip_markers: skipMarkers, target_markers: targetMarkerRows } = await buildFreshHarvestItems({ known, markers, sourceRunId });
     const createBatchArr = Array.isArray(createContact) ? createContact : [];
     let scanBatchId = null;
     try {
@@ -5438,6 +5588,15 @@ async function handleReachabilityHarvestTick(req, res) {
       create_fanout_suppressed: counts.comms.fanout_suppressed, create_brokerage_suppressed: counts.comms.brokerage_contact_suppressed,
       det_proposed: 0, det_failed: 0, create_proposed: 0, create_failed: 0, scored: 0, proposed: 0, no_evidence_found: 0,
       dropped_not_verbatim: 0, dropped_below_conf: 0, failed: 0,
+      // P136 honest window counts — a quiet night (pool drained) vs a stuck window.
+      targets_selected: counts.target_window.selected,
+      targets_with_evidence: counts.target_window.with_evidence,
+      targets_marked_no_evidence: counts.target_window.marked_no_evidence,
+      targets_marked_no_fresh_work: counts.target_window.marked_no_fresh_work,
+      remaining_untargeted: counts.target_window.remaining_untargeted,
+      target_scan_capped: counts.target_window.scan_capped,
+      target_markers_active: counts.target_window.active_markers,
+      target_markers_written: 0, target_markers_failed: 0,
       budget_exhausted: false, remaining_unscored: llmItems.length, by_verdict: {} };
     const newMarkers = [];
 
@@ -5484,6 +5643,13 @@ async function handleReachabilityHarvestTick(req, res) {
     summary.budget_exhausted = budgetRun.budget_exhausted;
     summary.remaining_unscored = Math.max(0, llmItems.length - summary.scored - summary.failed);
 
+    // P136 — persist the checked-and-empty markers LAST, so a target is only
+    // excluded once this run has genuinely finished with it. Without this the same
+    // 120 targets are re-selected every night and the harvest never advances.
+    const markerWrite = await writeHarvestTargetMarkers(targetMarkerRows || []);
+    summary.target_markers_written = markerWrite.written;
+    summary.target_markers_failed = markerWrite.failed;
+
     if (scanBatchId != null) {
       try {
         const merged = Array.from(new Set([...markers, ...newMarkers, ...(skipMarkers || [])])).slice(-8000);
@@ -5501,6 +5667,13 @@ async function handleReachabilityHarvestTick(req, res) {
   // ---- GET dry-run: reachability gap counts. ?score=1 adds inline proposals. --
   const poolCounts = await harvestPoolCounts();
   const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing', pool_counts: poolCounts };
+  // P136 — cheap window health: how many targets the tick has checked-and-parked.
+  // A marker count that never moves while the pool is large IS the stall signature.
+  try {
+    const mk = await opsQuery('GET', 'reachability_harvest_target_marker?select=domain,reason,recheck_after'
+      + '&order=marker_id.desc&limit=1', undefined, { countMode: 'exact' });
+    out.target_markers_total = (mk && typeof mk.count === 'number') ? mk.count : null;
+  } catch (_e) { out.target_markers_total = null; }
   if (req.query.score === '1' || req.query.score === 'true') {
     const inlineN = Math.min(30, Math.max(1, parseInt(req.query.n || String(HARVEST_INLINE_DEFAULT_N), 10) || HARVEST_INLINE_DEFAULT_N));
     const { deterministic, llmItems, createContact, counts, scan_errors: scanErrors } = await buildFreshHarvestItems({ cap: Math.max(HARVEST_MAX_TARGETS, inlineN * 6) });
@@ -5509,6 +5682,13 @@ async function handleReachabilityHarvestTick(req, res) {
     out.evidence_sources = counts.evidence_sources;
     out.comms_scan = counts.comms_scan || null;
     out.comms_counts = counts.comms;
+    // P136 — the advancing target window (dry-run READS markers, never writes them).
+    out.target_window = counts.target_window;
+    out.targets_selected = counts.target_window.selected;
+    out.targets_with_evidence = counts.target_window.with_evidence;
+    out.targets_marked_no_evidence = counts.target_window.marked_no_evidence;
+    out.targets_would_mark = counts.target_window.marked_no_evidence + counts.target_window.marked_no_fresh_work;
+    out.remaining_untargeted = counts.target_window.remaining_untargeted;
     out.scan_errors = scanErrors;
     out.deterministic_fresh = deterministic.length;
     out.llm_fresh = llmItems.length;
@@ -5564,7 +5744,7 @@ async function handleReachabilityHarvestTick(req, res) {
     out.dropped_below_conf = droppedBelowConf;
     out.would_propose = proposals.filter((p) => p.would_propose).length;
     out.proposals = proposals;
-    out.note = 'dry-run scoring — NO rows written. THREE arms: (1) deterministic fills carry an exact source pointer — an SF exact-identity donor OR a correspondence header binding name+value (provenance comms_observed); (2) LLM fills (intake + comms signatures) carry a VERBATIM evidence_quote (quote_verbatim=true, the value is a substring of the assembled evidence); a value not in the quote is DROPPED (→ reachability_harvest_dropped_log); (3) create_contact proposals (target_kind=owner) shape a NEW contact for an owner with none on file — minted ONLY via a human verdict, never auto. no_evidence_found is honest/counted. Review, then POST (with the flag ON).'
+    out.note = 'dry-run scoring — NO rows written. THREE arms: (1) deterministic fills carry an exact source pointer — an SF exact-identity donor OR a correspondence header binding name+value (provenance comms_observed); (2) LLM fills (intake + comms signatures) carry a VERBATIM evidence_quote (quote_verbatim=true, the value is a substring of the assembled evidence); a value not in the quote is DROPPED (→ reachability_harvest_dropped_log); (3) create_contact proposals (target_kind=owner) shape a NEW contact for an owner with none on file — minted ONLY via a human verdict, never auto. no_evidence_found is honest/counted. TARGETS are chosen by an EVIDENCE JOIN and checked targets are MARKED on the POST path so the window advances (P136) — read targets_with_evidence / targets_would_mark / remaining_untargeted, and judge the unit by the proposal DELTA, never by this tally. Review, then POST (with the flag ON).'
       + (budgetRun.budget_exhausted ? ' Scoring stopped at the ' + HARVEST_SCORE_BUDGET_MS + 'ms budget.' : '');
   }
   return res.status(200).json(out);

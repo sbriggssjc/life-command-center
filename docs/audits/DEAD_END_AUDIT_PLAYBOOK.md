@@ -612,6 +612,60 @@ pattern like `~* '\bEXISTS\b'` silently returns **0 matches** rather than errori
 class, one layer down.
 
 
+## Class 12 — a WORKER whose cursor is its own output, re-checking the same residue
+
+**Symptom:** a scheduled worker fires on time, reports success, and its output table has not
+grown in weeks. The backlog behind it is enormous. Nothing errors, and the flag reads `on`.
+
+**First runs (2026-08-26).** Two of ten local-model assists, and they were the only two
+without a paging scan:
+
+| lane | flag | output | pool behind it |
+|---|---|---|---|
+| property-twin assist (P135) | `PROPERTY_TWIN_ASSIST` on | 200 rows, **0 in 7d** | 1,095 pending twin reviews |
+| reachability harvest (P136) | `W9_2_REACHABILITY_HARVEST` on | 16 rows EVER, **0 in 11d** | ~15k unreachable contacts |
+
+**The distinction that matters, and P136 is why it is a separate class from P135.** Both took
+a fixed first window; only one of them could be fixed by paging.
+
+- **property-twin's annotations ARE its cursor.** An annotated row self-excludes, so lifting
+  the window was the whole fix.
+- **reachability-harvest's proposals are keyed `(arm, contact, field)` — a target that yields
+  NOTHING leaves no trace.** Its diagnostic read `targets:120, donors_found:0,
+  with_evidence:0` against a 15k pool: the same 120 selected, found empty, and silently
+  forgotten, every night for eleven days. **A worker whose only cursor is its own output
+  cannot page past work that produces no output.** It needs a NEGATIVE marker — *checked, and
+  empty* — dated and expiring, so the exclusion clears when new evidence lands (Class 10
+  refinement, applied to the worker's own window).
+
+**And the second half: blind rank picked targets that could not be resolved.** The harvest
+ranked the unreachable pool and *then* asked whether evidence existed for the top 120 —
+`with_evidence: 0` — while `evidence_sources` on the very same response read
+`{ intake: 5000, comms_names: 4305 }` and `comms_scan.harvestable: 7926`. The evidence was
+never scarce; nothing joined the two sides. **Ask what a producer JOINS on, not just what it
+orders by.** Ranking an unjoined pool is the P179 lesson (three causes of "unreachable", only
+one fixed by ranking) arriving from the producer side.
+
+**Detector — run it against every scheduled worker with an output table:**
+
+1. `max(created_at)` on the output vs the cron's last successful run. A worker green for N
+   days with output frozen for N days is this class until proven otherwise.
+2. **Diff the working set across two consecutive runs.** Identical target ids twice is the
+   whole diagnosis. This is what the P135/P136 regression guards assert.
+3. Ask **what would make a target stop being selected.** If the only answer is "it produces
+   output", every empty target is permanent residue.
+4. Read the worker's own counters for a *re-discovery* tally (`already_annotated`,
+   `already_attributed`, `already_drafted`, `no_donor`). A large one against zero writes is
+   the cost of confirming nothing changed, not throughput (P123/P159a).
+5. Report `remaining_untargeted` and `scan_capped` so a **drained pool** is distinguishable
+   from a **stuck window**. Neither P135 nor P136 could tell the two apart before the fix,
+   which is precisely why both survived.
+
+**⚠️ Do not fix this with a bigger window.** Raising the 120 to 1,000 would have produced
+proposals once and stalled again at row 1,001, with the failure now more expensive to see.
+The fix is a cursor that advances and a selection that joins.
+
+
 ## What to audit next
 
 Ordered by expected yield, not by ease:
