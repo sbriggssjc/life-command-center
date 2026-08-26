@@ -630,6 +630,27 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   prompt-78 `property_documents.source` fix, 2026-08-08: migrations correct, failures continued
   until a manual reload). Fix: `NOTIFY pgrst, 'reload schema';` on the affected project. When a
   write 400s on a column you JUST added, check the cache before re-diagnosing the migration.
+- **⚠️ `pg_views.definition` IS DEPARSED, NOT WHAT YOU WROTE — a grep over it can be
+  STRUCTURALLY UNABLE TO MATCH (P182, 2026-08-26).** Postgres re-renders a view when it
+  stores it: `NOT EXISTS (...)` becomes **`NOT (EXISTS (...)`** and `x NOT IN (...)` becomes
+  `NOT (x IN (...)` / `<> ALL`. An audit querying `definition ~* 'NOT\s+EXISTS'` therefore
+  matched **0 of 210 views** on LCC Opps — including `v_owner_contact_worklist`, which
+  carries four exclusions — and reported a clean bill of health. Same family as the P157
+  `reloptions` trap, where testing for `'%security_invoker=true%'` returns the exact
+  opposite of the truth because the stored value is `security_invoker=on`. **Before
+  trusting a zero from any text-matching detector, point it at a known positive**; an
+  implausibly clean result is a bug signal, not a finding. Full class + the corrected
+  detector: `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md` Class 11, and the sweep that found it
+  in `docs/audits/P182_SILENT_DISCONNECTION_SWEEP_2026-08-26.md`.
+- **⚠️ AN EXCLUSION KEYED ON AN OPEN STATE NEEDS SOMETHING THAT CLEARS THAT STATE (P182).**
+  `v_owner_contact_enrich_queue` correctly excludes owners with an OPEN
+  `owner_contact_manual` task (the automated worker cannot resolve them) — but **all 316 of
+  those tasks are `queued` and none has ever changed status**, so the exclusion never
+  expires and the owner is permanently removed from automated processing. Measured: **115
+  owners ($102.4M) already carry a genuine named active contact** in `owner_contact_pivot`
+  while their card still says "find the contact". This is the auto-retire doctrine (rule 2)
+  applied to the EXCLUSION rather than the queue: ask *what event sets this state false, and
+  does anything ever fire it?*
 - **`CREATE OR REPLACE VIEW` is append-only for columns** (Postgres 42P16 if you insert a column mid-list). All
   view edits add new columns at the END of the SELECT.
 - **Profile a slow endpoint with the handler's REAL query shape — `LIMIT 5` without the `ORDER BY` lies.**

@@ -445,6 +445,21 @@ so the next sweep does not re-litigate it.
 the write path, then count the rows. A receiver is cheap to build and invisible when unused,
 which is why these accumulate.
 
+**VERDICTS RECORDED 2026-08-26 (P182) — do not re-litigate these:**
+
+| candidate | populated | verdict |
+|---|---|---|
+| `unified_contacts.last_synced_calendar` + the whole `meetings` table | 0 / 32,833 | **DEFECT — fixed target identified.** The receiver is built and P116-hardened; a live sync points at another project with a schema that drops attendees. See the Class 9 refinement above. |
+| `unified_contacts.teams_user_id` | 0 / 32,833 | **Not a defect.** `sendTeamsMessage` resolves via `contact.email \|\| contact.teams_user_id`; email is the primary path and is populated. Teams is used; the column is an unused optimisation. |
+| `unified_contacts.webex_person_id` | 0 / 32,833 | **Not a defect — but invisible.** Needs `WEBEX_CLIENT_ID`/`_ACCESS_TOKEN`, no flow, no evidence Webex is used (Northmarq uses Teams). **Absent from `feature_flags_registry`** — add a row so Class 5 can see it. |
+| `unified_contacts.icloud_contact_id` | 0 / 32,833 | **Not a defect.** No sender, no stated intent. |
+| `lcc_sf_list_membership.sf_lead_id` | 0 / 7,186 | **Not a defect.** All 7,186 carry `sf_contact_id`, **zero carry neither** — the lists in scope are Contact-based campaigns. |
+| `listing_bd_runs.sf_deal_id` | 0 / 1,472 | **Not a defect.** Table is live (254 runs/30d); CLAUDE.md documents the `sf_deal_id` stamp as gated on a live SF connector, and it is written to `sf_deal_staging`. |
+
+**Use a CONTROL column.** These zeros are only trustworthy because `last_synced_outlook`
+(2,809) and `last_email_date` (880) prove the same query shape finds data when data exists.
+A sweep of all-zero columns with no populated control is measuring the query, not the system.
+
 ---
 
 ## Class 10 — an EXCLUSION with no counterpart that PROMOTES
@@ -463,16 +478,31 @@ Their panels read "— none" while a person sat in the graph.
 
 **Detector — find the exclusions, then ask what promotes:**
 
+> **⚠️ THE DETECTOR ORIGINALLY PUBLISHED HERE COULD NOT FIRE. It is corrected below.**
+> It grepped `pg_views.definition` for `NOT\s+EXISTS`, but **Postgres deparses view
+> definitions when it stores them** — `NOT EXISTS (...)` becomes `NOT (EXISTS (...)`, and
+> `x NOT IN (...)` becomes `NOT (x IN (...)` / `<> ALL`. The published regex requires
+> whitespace between the tokens; the stored form has `(`. Measured on LCC Opps 2026-08-26:
+> **0 of 210 views matched**, including `v_owner_contact_worklist` — the very view this class
+> was written to describe, which contains four exclusions. See Class 11.
+
 ```sql
--- Candidate exclusions across every view.
+-- Candidate exclusions across every view. Matches the DEPARSED forms Postgres stores,
+-- plus the LEFT JOIN / IS NULL anti-join idiom the original detector never considered.
 select viewname,
-       (regexp_match(definition, '(NOT\s+EXISTS|NOT\s+IN)[^)]{0,120}'))[1] as exclusion_kind
+       (length(definition) - length(replace(definition,'NOT (EXISTS','')))/11        as n_not_exists,
+       (length(upper(definition)) - length(replace(upper(definition),'<> ALL','')))/6 as n_not_in_all,
+       definition ~* 'NOT \(\w[\w.]* IN '                                            as has_not_in_subq
 from pg_views
 where schemaname = 'public'
-  and definition ~* '(NOT\s+EXISTS|NOT\s+IN)'
-  and viewname ~* '(worklist|queue|candidates|review|prospect)'
-order by viewname;
+  and (definition ~* 'NOT \(EXISTS' or definition ~* '<> ALL' or definition ~* 'NOT \(\w[\w.]* IN ')
+  and viewname ~* '(worklist|queue|candidate|review|prospect|target|actionable|unreach|gap)'
+order by n_not_exists desc, viewname;
 ```
+
+**Corrected first run (2026-08-26): 22 views**, where the published detector found zero.
+For reference, the three idioms across all 210 public views: `NOT (EXISTS` 21,
+`<> ALL` 10, `LEFT JOIN … IS NULL` 72.
 
 For each hit, ask the two questions the detector cannot: **what population does this exclude,
 and what is supposed to serve it?** Then verify that thing actually does, by counting the
@@ -485,6 +515,102 @@ from broker links we may not call (measured fleet-wide: **zero** owners suppress
 broker-only links). Either would have produced a confident, wrong fix.
 
 ---
+
+### Class 10 refinement — an exclusion keyed on an OPEN state that nothing ever CLEARS (P182)
+
+The first instance was *"excluded because it is already handled, and nothing handles it."*
+The second shape is nastier because the exclusion is genuinely correct when written:
+
+`v_owner_contact_enrich_queue` excludes owners with an **open** `owner_contact_manual`
+task — added by P159 so the automated worker stops burning ticks on rows only a human can
+resolve. Correct. But **all 316 of those tasks are `status='queued'` and not one has moved
+to any other status in two months.** There is no auto-retire sweep for the lane, so the
+exclusion never expires: the owner is removed from automated processing *permanently*, by a
+state that nothing in the system clears.
+
+Measured: **115 owners ($102.4M) already have a genuine named active contact in
+`owner_contact_pivot`** — the exact field the panel and the engine read — while their card
+still says *find the contact*. Gba Associates LP ($27.2M, Vincent Forte) and Reston Va II FGF
+($25.3M, Joseph Capra) have been queued **43 days**.
+
+**The rule: an exclusion that keys on a mutable state needs a counterpart that clears that
+state.** This is doctrine rule 2 (auto-retire) applied to the *exclusion* rather than to the
+queue. Ask: *what event sets this state false, and does anything ever fire it?*
+
+**Two guards it had to survive, either of which would have inflated the number:**
+`works_at` is the weak Salesforce org edge (P161) — split by type before calling an owner
+reachable (here: **all 185 edges `associated_with`, zero `works_at`**, so the trap did not
+apply); and a pivot contact that merely restates the owner name is not a contact (P131) —
+5 of 120 were self-echoes, leaving 115.
+
+**And report the number the consumer sees.** Lane-wide 115/316 = 36% are already answered,
+but on **page 1 only 3 of 25** are. Both are true; only the second describes the operator's
+experience.
+
+### Class 9 refinement — the sender exists, and writes to the WRONG receiver (P182)
+
+Class 9's first instance was *no sender at all*. The harder variant: a sender is live,
+healthy and fresh — pointed at a different datastore with a **lossy schema**.
+
+The LCC calendar bridge (`calendar.event.link`) is fully built: attendee→contact matching,
+`entity_links`, a `meetings` upsert, an `activity_events` append, and the **P116**
+`resolveSourceUserId` fix applied to `meetings.source_user_id`. Measured: `meetings`
+**0 rows**, `last_meeting_date` **0/32,833**, `last_call_date` **0/32,833** — against
+controls that prove the method (`last_synced_outlook` 2,809, `last_email_date` 880).
+
+Meanwhile both calendar flows POST to **a different Supabase project** — `dia.calendar_events`,
+**1,007 rows synced the same day** — and *that table has no `attendees` column*. The meetings
+are captured and **every attendee is discarded at ingest**: the ORE Unit C shape, where the
+parser found the addresses and then stripped them.
+
+**So "is there a sender?" is the wrong question on its own.** Ask **"is there a sender, where
+does it point, and does the schema it writes keep the field this receiver exists to consume?"**
+A live green sync is not evidence that the signal survives.
+
+---
+
+## Class 11 — a DETECTOR that cannot fire
+
+**Symptom:** an audit query returns empty, and empty reads as *clean*. The detector is
+subtly unable to match anything, so it certifies health forever — the playbook's own
+failure mode (*a surface that answers confidently instead of erroring*) turned on the
+audit tooling itself.
+
+**First run (2026-08-26).** The Class 10 detector above greps `pg_views.definition` for
+`NOT\s+EXISTS`. Postgres **deparses** a view when it stores it, so the text is
+`NOT (EXISTS (` — never `NOT EXISTS`. It matched **0 of 210 views**, including the one
+view Class 10 was written from. Corrected, it matches 22. The zero was not a finding; it
+was the instrument.
+
+**The same trap in other clothes** (all three have bitten this codebase):
+
+- **the stored form differs from the written form** — `pg_views` deparsing here;
+  `reloptions` storing `security_invoker=on` so a test for `'%security_invoker=true%'`
+  returns the exact opposite of the truth (P157).
+- **the signal is not emitted in the path being measured** — counting rows in
+  `r40_merge_reconcile_backup` to prove merges ran through the reconcile, when
+  `lcc_merge_entity` passes `p_snapshot := false` and the table is empty for every
+  normal merge (Class 8).
+- **the column checked is not the column that exists** — reporting three tables
+  "unmeasurable, no `updated_at`" when all three carry `created_at` (P177).
+
+**Detector for the detector — run before trusting any zero:**
+
+1. **Point it at a known positive.** Name a row/view/table you are certain should match. If
+   it does not, the instrument is broken, not the system. (`v_owner_contact_worklist` has
+   four exclusions; a Class 10 detector that misses it is wrong by construction.)
+2. **Compare against a coarser count.** 0 of 210 views containing *no* anti-join of any
+   kind is not plausible for a mature schema. An implausibly clean result is a bug signal.
+3. **Ask what the datastore normalises.** SQL text, reloptions, JSON key order, case
+   folding, whitespace — anything you grep as text may not be stored as written.
+4. **Use a control column.** F1's zeros were only trustworthy because `last_synced_outlook`
+   (2,809) proved the same query shape finds data when data exists.
+
+**⚠️ A regex bug found while writing this, worth keeping:** Postgres POSIX regex does
+**not** use `\b` for a word boundary (`\b` is backspace) — it is `\y` / `\m` / `\M`. A
+pattern like `~* '\bEXISTS\b'` silently returns **0 matches** rather than erroring. Same
+class, one layer down.
+
 
 ## What to audit next
 
