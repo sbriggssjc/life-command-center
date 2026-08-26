@@ -103,12 +103,54 @@ bitten the other Outlook flows.
 3. If the dropdown shows **more than one folder**, duplicate the action per folder (or loop an
    array of folder ids) — `Contacts` alone will not cover a LinkedIn-specific folder.
 
-The action returns a typed contact list; the fields we need are on it — `Id`, `GivenName`,
-`Surname`, `EmailAddresses`, `BusinessPhones`, `MobilePhone`, **`JobTitle`**,
-**`CompanyName`**, `BusinessAddress`. **Confirm the exact casing in the designer's dynamic
-content panel before wiring the body** — connector field names differ from raw Graph
-(`JobTitle` vs `jobTitle`), and a silently-null title is the one failure this whole flow
-exists to avoid.
+### ⚠️⚠️ `Title` IS NOT `JobTitle` — the trap that would silently defeat this flow
+
+Confirmed against Scott's tenant (2026-08-26), the `Get contacts (V2)` dynamic-content panel
+offers BOTH:
+
+| connector field | what it actually is |
+|---|---|
+| **`Title`** | *"The contact's title"* — the **personal honorific**: Mr. / Ms. / Dr. |
+| **`JobTitle`** | *"The contact's job title"* — **this is the one we want** |
+
+They sit a few rows apart in the picker. Mapping `Title` → `unified_contacts.title` would fill
+the column the pursuit taxonomy reads (acquisitions vs disposition vs DD) with honorifics —
+and it would look like a *successful* sync, because title coverage would jump from 1.9% while
+the values were useless. **Map `JobTitle`. Verify a real value lands (gate 2 below).**
+
+### Fields confirmed present in this tenant
+
+`Id`, `Display Name`, `Given name`, `Surname`, `Middle name`, `Nickname`, `File as`,
+`Email addresses` (array of `{name, address}`), `Company name`, **`JobTitle`**, `Department`,
+`Office location`, `Profession`, `Manager`, `Assistant name`, `Business phones` (array),
+`Home phones` (array), `Mobile phone`, `businessAddress` / `homeAddress` / `otherAddress`
+(each `{Street, City, State, Country Or Region, Postal code}`), `Business home page`,
+`Categories`, `Birthday`, `Created time`, **`Last modified time`**, `Parent folder id`.
+
+**Available and valuable but with NO home in the current ingest contract:** `Department`,
+`Manager`, `Office location`, `Profession`. `Department` in particular is a strong signal for
+the acquisitions/disposition/DD split — arguably stronger than a free-text job title. The
+`POST /api/contacts?action=ingest` body has no `department` field today. **Do not cram it into
+`title`** (that corrupts the field the taxonomy reads). Logged as a follow-up to extend the
+contract; `Business home page` maps cleanly to the existing `website`.
+
+### ⚠️ TWO folders in this tenant, not one
+
+The Folder id dropdown shows **`Contacts`** and **`Shared Contacts Folder`**. `Contacts` alone
+does not cover it. Run the action once per folder (or loop the two ids) — a shared folder is
+exactly where a colleague-maintained or LinkedIn-fed list would live, and skipping it is
+silent, invisible data loss.
+
+### ⚠️ Confirm the real JSON keys before wiring expressions — without Graph Explorer
+
+The picker shows DISPLAY names (`Given name`, `Company name`); the underlying JSON keys are
+usually camelCase (`givenName`, `companyName`), but **do not assume**. A wrong key does not
+error — it returns null, and the flow reports success while writing empty fields.
+
+**Self-verifying step, no Graph Explorer needed:** inside the Apply-to-each, add a **Compose**
+action with input `@{items('Apply_to_each')}`, run the flow ONCE, then open the run history and
+read the Compose output. That is the actual JSON for one of your contacts, with the real keys.
+Wire the body from that. Delete the Compose afterwards (or leave it — it is harmless).
 
 ### Route 2 (fallback) — raw Graph via "Send an HTTP request"
 
@@ -204,6 +246,19 @@ select count(*) filter (where title is not null and title <> '') as with_title,
        count(*) as total,
        round(100.0*count(*) filter (where title is not null and title <> '')/count(*),1) as pct
 from unified_contacts;
+
+-- 2b. ⚠️ DID WE MAP `Title` INSTEAD OF `JobTitle`? Coverage would rise either way.
+--     Honorifics here means the wrong field was wired. Expect ZERO.
+select count(*) as honorific_titles
+from unified_contacts
+where outlook_contact_id is not null
+  and lower(regexp_replace(coalesce(title,''), '[^a-zA-Z]', '', 'g'))
+      in ('mr','mrs','ms','miss','dr','prof','rev','sir','mx');
+
+-- 2c. Eyeball what actually landed — job titles should look like jobs.
+select title, count(*) from unified_contacts
+where outlook_contact_id is not null and title is not null and title <> ''
+group by 1 order by 2 desc limit 20;
 
 -- 3. ⚠️ THE CLASSIFIER GATE — business contacts must not be filed personal.
 --    Expect ~0. If this is large, the prerequisite fix did not take.
