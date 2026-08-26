@@ -18,6 +18,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
+import { OCD_SOURCE, OCD_DECISION_TYPE, ocdSubjectRef } from './_shared/ownership-chain-draft-planner.js';
 import { opsQuery, paginationParams, pgFilterVal, requireOps, withErrorHandler, isOpsConfigured } from './_shared/ops-db.js';
 import { getAiConfig } from './_shared/ai.js';
 import {
@@ -168,7 +169,8 @@ export default withErrorHandler(async function handler(req, res) {
         entity_name: r.entities?.name || null,
         assignee_name: r.users?.display_name || r['users!research_tasks_assigned_to_fkey']?.display_name || null
       }));
-      return res.status(200).json({ items, count: result.count, view: 'research' });
+      const withDrafts = await attachOwnershipChainDrafts(items);
+      return res.status(200).json({ items: withDrafts, count: result.count, view: 'research' });
     }
 
     // P180: per-lane summary for the Research lane picker. Five+ lanes with very
@@ -402,6 +404,62 @@ async function v2GetInbox(req, user, workspaceId) {
 
 // ---- V2 RESEARCH ----
 
+// ---------------------------------------------------------------------------
+// P131 — attach the ownership-chain DRAFT to each research card.
+//
+// A draft nobody can see is the Class-3 failure this lane already suffered from
+// ("surface notifies but cannot capture"), so the read path carries the draft to
+// the card. READ-ONLY: it never changes a task's status and never writes. Tasks
+// without a draft come back exactly as before, so a drafter that is off (the
+// default) changes nothing about this response.
+//
+// Keyed by the SAME subject_ref builder the writer uses, imported rather than
+// re-derived — a second copy of that shape is the normaliser drift this repo
+// keeps getting bitten by.
+// ---------------------------------------------------------------------------
+async function attachOwnershipChainDrafts(items) {
+  const targets = (items || []).filter(
+    (t) => t && t.research_type === OCD_DECISION_TYPE && t.source_record_id && t.domain
+  );
+  if (!targets.length) return items;
+  try {
+    const refs = [...new Set(targets.map((t) => ocdSubjectRef(t.domain, t.source_record_id)))].slice(0, 200);
+    if (!refs.length) return items;
+    const inList = '("' + refs.map((r) => String(r).replace(/"/g, '\\"')).join('","') + '")';
+    const r = await opsQuery('GET',
+      'lcc_clean_assist_proposals?select=subject_ref,verdict,confidence,reason,proposed_link,updated_at'
+      + `&source=eq.${OCD_SOURCE}&decision_type=eq.${OCD_DECISION_TYPE}&status=eq.proposed`
+      + `&subject_ref=in.${encodeURIComponent(inList)}&order=proposal_id.desc`,
+      undefined, { countMode: 'none' });
+    if (!r.ok || !Array.isArray(r.data)) return items;
+    const by = new Map();
+    for (const row of r.data) if (!by.has(row.subject_ref)) by.set(row.subject_ref, row); // desc => first is latest
+    return items.map((t) => {
+      if (!t || t.research_type !== OCD_DECISION_TYPE || !t.source_record_id || !t.domain) return t;
+      const d = by.get(ocdSubjectRef(t.domain, t.source_record_id));
+      if (!d) return t;
+      const link = (d.proposed_link && typeof d.proposed_link === 'object') ? d.proposed_link : {};
+      return {
+        ...t,
+        chain_draft: {
+          draftable: !!link.draftable,
+          insufficient_reason: link.insufficient_reason || null,
+          confidence: d.confidence,
+          reason: d.reason,
+          draft_text: link.draft_text || null,
+          links: Array.isArray(link.links) ? link.links : [],
+          continuity: link.continuity || null,
+          terminates_at_current_owner: link.terminates_at_current_owner,
+          current_owner_name: link.current_owner_name || null,
+          drafted_at: d.updated_at || null,
+        },
+      };
+    });
+  } catch (_e) {
+    return items; // best-effort: a draft-read failure must never break the queue
+  }
+}
+
 async function v2GetResearch(req, user, workspaceId) {
   const { page, perPage, offset } = v2PageParams(req.query);
   const { status, domain, research_type } = req.query;
@@ -427,7 +485,8 @@ async function v2GetResearch(req, user, workspaceId) {
     assignee_name: r['users!research_tasks_assigned_to_fkey']?.display_name || null,
     creator_name: r['users!research_tasks_created_by_fkey']?.display_name || null
   }));
-  return { view: 'research', items, pagination: v2PaginationMeta(page, perPage, result.count || 0) };
+  const withDrafts = await attachOwnershipChainDrafts(items);
+  return { view: 'research', items: withDrafts, pagination: v2PaginationMeta(page, perPage, result.count || 0) };
 }
 
 // ---- V2 WORK COUNTS ----

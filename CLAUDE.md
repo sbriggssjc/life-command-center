@@ -1167,6 +1167,69 @@ already-modelled samples). Reverse by `metadata->>'mint_batch'` — identities b
 
 ---
 
+## P131 — the dead research queues: draft-then-confirm (2026-08-26)
+
+Two never-consumed research lanes (Dead-End playbook Class 2) were told to become
+confirm-a-draft surfaces via the local model. **Both premises were refuted by measurement, and the
+corrections are the durable lesson.** Capture paths already existed (P173 / P179), so this is purely
+about what can honestly be drafted.
+
+- **⚠️ BEFORE BUILDING AN LLM DRAFTER, CHECK WHETHER THE ANSWER IS ALREADY ON-BOX IN STRUCTURED FORM
+  — AND WHETHER SOMEONE ALREADY BUILT THE LLM ONE.** `establish_ownership_history` (545 open / 0
+  completions) reads "pull county deeds", so an LLM-over-deed-text drafter looks obviously right. Live:
+  **544 of 545 properties already have `gov.ownership_history` rows and 453 yield a clean, dated,
+  guard-passing chain (707 links)** via the P138 view `v_ownership_transitions_portfolio`. LCC never
+  read it — the LCC gap is literally `owner_links <= 1` in `lcc_entity_portfolio_facts`, and the
+  P138–P141 feeder only ever fed `is_latest_for_property` (the CURRENT owner), so the HISTORY was never
+  populated. Two more facts made the LLM framing untenable: **`gov.deed_records` holds ZERO
+  `legal_description` characters across 5,804 rows** (there is no prose to quote — only 876 rows even
+  carry a grantor), and **W8 U3 already ships an Ollama proposer for this exact gap and is already ON**
+  (32 cards, 27 decided, against **35 dropped `quote_not_verbatim`** ≈ 52% hallucinated citations).
+  Result: the drafter is DETERMINISTIC and its citation is a RECORD REFERENCE (ownership_history row id
+  + `data_source`), which cannot be hallucinated. `OWNERSHIP_CHAIN_DRAFT` (off) →
+  `GET/POST /api/ownership-chain-draft-tick`; planner `api/_shared/ownership-chain-draft-planner.js`;
+  drafts land in `lcc_clean_assist_proposals` (source `ownership_chain_draft`) and render on the card.
+  Honest counts: **453 draftable / 92 not** (74 `no_transitions_on_file`, 18 `all_transitions_guarded`).
+  **A break in the chain is REPORTED ("Not on file"), never bridged** — an unrecorded intermediate owner
+  is precisely the thing that must not be invented. Ollama survives only as an optional Layer 2 that
+  LABELS a transfer type on links it may not add, remove, reorder, re-date or re-name
+  (`OWNERSHIP_CHAIN_ROLE_LABELS`, off; a label whose rationale names a party absent from that link is
+  dropped).
+- **⚠️ A QUEUE IS THE RESIDUE THE AUTOMATION ALREADY PICKED OVER — MEASURE THE QUEUE, NOT THE SOURCE.**
+  `owner_contact_manual` (316 open / 0 completions) was to be drafted from SOS `manager_name` +
+  signature blocks + notice address. At SOURCE that looks fine: gov has 1,482 owners with a manager, 966
+  person-shaped. **In the queue: only 15 of 212 gov-linked owners have a manager distinct from the owner
+  name.** Also 0/316 carry a notice address, 0/316 have a linked person, **1/316** has any
+  `activity_events` (so no signature corpus), and every row's `tried` reads sos/address/web
+  `unconfigured`. The pivot bench holds 202 candidates of which **173 (86%) are SELF-ECHOES** — the SOS
+  registry naming the LLC as its own manager ("Browman Development Co." managing "Browman Development
+  Co.") — wrongly stamped `is_named_individual` on 176 of 202; the remainder are OM-extraction row
+  labels minted as contacts ("Capital Expenditures", "Debt Service", "Fund Name", "Toronto, ON M5K
+  2A1"). **So no drafter was built for this lane — drafting there is fabrication, the P124 `else`-branch
+  failure.** Shipped instead: `v_lcc_owner_contact_decidability` (**6 decidable / 310 blocked**: 186
+  `bench_restates_owner_or_row_labels`, 123 `no_candidate_on_file`, 1 `public_body_not_prospected`) so
+  the answerable few stop being buried (P181). The real blocker is external acquisition (SOS-direct,
+  §25 bot-wall) — an operator gate, not a modelling gap.
+- **⚠️ `lcc_owner_name_is_credible_person` IS NOT SUFFICIENT ON ITS OWN — verified on named rows.** It
+  correctly accepts Bill Rothacker / Kyle Frances China / Adel B. Bareh and rejects "Fund Name" /
+  "Capital Expenditures", but **accepts "Debt Service" and "Income & Expenses"** (two capitalised
+  tokens, no org marker). The decidability gate therefore requires FOUR things together — distinct
+  strict core, not an owner-name restatement, credible person, no org marker, not a document row label
+  (`lcc_p131_is_document_row_label`, a narrow stoplist scoped to this gate, **not** a general name
+  filter). **The obvious guard was again the destructive one:** excluding the OM-extraction source
+  wholesale would have killed the row labels AND the real people it also carries — same shape as the
+  P124 consumer-domain trap. `lcc_p131_candidate_restates_owner` blocks truncations ("Boyd Watterson"
+  for "Boyd Watterson Global") while exempting joint-individual owners (P158a: `&` is a married couple,
+  so "Adel B. Bareh" inside "Adel B & Gihan M Bareh" is a real extraction) and honorific-only
+  differences ("Robert Robles" / "Robert Robles Md"). It has one **deliberate** false negative —
+  "Trammell Crow" vs "Trammell Crow Co" reads decidable — because that is the single-member-LLC case
+  `isOwnerNameRestated` deliberately allows: missing a phantom costs one rejectable row, blocking a real
+  individual owner deletes a decision-maker.
+- **Verify by the drain, not the tally.** The lane's own metric is `completed > 0` for the first time;
+  the drafter's tally is not throughput. Note the two producers over this one gap (the W8 U3 decision
+  lane and the research lane) drain independently — 27 U3 cards decided did NOT move
+  `establish_ownership_history` off 0.
+
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
 Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration
