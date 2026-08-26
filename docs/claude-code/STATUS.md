@@ -17,6 +17,41 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-26 (Cowork) — P190: Scott's two Tier 0 decisions, applied live
+
+**Decision 1 — "drop all universities."** Scott's explicit call, made with the cost stated: it
+removes **George Washington ($23.8M) and Georgetown ($8.0M)** along with the public ones. Coherent
+with doctrine — a university is an institutional owner-occupier, not a net-lease investor we show
+deals to. **Prospecting only; ownership reconciliation is untouched.**
+New `lcc_owner_name_is_not_prospected()` = public body OR university, composed rather than
+overloading `lcc_owner_name_is_public_body` (Georgetown is not a public body, and that predicate
+has two other consumers). University test measured fleet-wide: **87 organisations, all read and
+confirmed genuine**; the trailing-"University" arm needed a negative guard because
+`Nahmco Llc-s Series 2015 University` is a private LLC. 15/15 named-row gate including the
+place-name traps ("Boyd College Station TX LLC", "University Park Plaza LLC").
+
+**Decision 2 — the curated sponsor→domain map, 4 of 6 confirmed.** `lcc_owner_sponsor_domain`
+(human rows only, `confirmed_by` required) seeded with **ngp→ngpv.com, uirc→uirc.com,
+hpi→hpitx.com, jbg→jbg.com**. Scott explicitly **deferred fcp and tmg** — *"I'm unsure on that
+fourth one and would need to google and check SF and our records to confirm"* — so they are NOT
+seeded. This is the replacement for the acronym RULE that P187 measured at ~30–40% and rejected.
+
+**Result:** candidate pairs **558 → 650**, owners **208 → 226**, open lane cards **237 → 260**.
+The sponsor arm alone contributes **93 pairs / 25 owners / $123.4M**, of which **NGP is 17 owners
+and $105.5M** across its SPE variants — the single largest coverage gain of the whole Tier 0 arc,
+and unreachable by any rule. GWU → 0 ✓, Georgetown → 0 ✓, Boyd Watterson → 2 ✓, RMR → 20 ✓.
+
+**⚠️ A deliberate inconsistency held for one round:** `v_lcc_top_seller_prospects` (4,118 rows,
+would drop 17) and `v_lcc_owner_contact_decidability` (311 rows, would drop 2) still call
+`lcc_owner_name_is_public_body` directly, so universities remain in THEIR scope. Repointing a
+4,118-row seller surface blind at the end of a session was the wrong trade; **close it next.**
+
+**⚠️ Postgres caught a real mistake here.** The first attempt at the view rewrite dropped
+`match_arm`/`match_key`, which P188 had appended, and failed with `42P16 cannot drop columns from
+view`. `CREATE OR REPLACE VIEW` is append-only for columns — re-read the live column list before
+rewriting a view someone else has extended.
+
+
 ## 2026-08-26 (Cowork) — Tier 0 owner-contact arc COMPLETE: P186 → P187 → P188 (all merged, live)
 
 **The bench that reads "— none" on top owners now has a working consumer.** Three prompts, each
