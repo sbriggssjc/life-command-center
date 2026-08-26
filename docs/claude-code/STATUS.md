@@ -298,9 +298,19 @@ this session never touched:**
   slice-a-source-region stale test in one arc (P126 `</table>`, P128 U3, P129) — durable footgun line added to
   `CLAUDE.md` (§W6.5 Step 5b corollary). **2 behavioural failures remain** (`auto-scrape-listings` — scrape URL
   missing −3y bound, handler 502s; `folder-feed-enrich-mode` — enrich+no-match emits no disambiguation) — real
-  gaps, separate follow-ups → **prompt 130 drafted** (classify real-bug vs stale-test PER failure, fix at the
-  right layer or honestly `it.skip` an intentionally-unbuilt path; suite → 4,367/0; closes the test-hygiene
-  segment, then key rotation).
+  gaps, separate follow-ups → **P130 DONE (PR #1773, test-only): BOTH were STALE tests asserting SUPERSEDED
+  intent, ZERO code defects.** (1) `auto-scrape-listings` — the 502 was self-inflicted (the test's own fetch
+  stub threw an assert that the handler caught → errors>0 → 502); the −3y bound it demanded is EXACTLY what was
+  removed to fix the **June-2026 dia off_market backdating incident** (`api/admin.js:12383` comment) — "fixing"
+  the handler would have re-shipped it. Re-anchored on the `on_market_date` market-entry floor + a guard so the
+  pre-entry bound can't return; mutation-proved. (2) `folder-feed-enrich-mode` — asserting PRE-P91 intent; P91's
+  producer guard suppresses a zero-candidate disambiguation card (asking a human to pick nothing + inflating the
+  badge = Consumption-Layer failure). Re-anchored to pin both arms of the P91 contract. **Suite now GREEN:
+  4,373 tests · 4,367 pass · 0 fail · 6 pre-existing skips.** ✅ **TEST-HYGIENE SEGMENT CLOSED.**
+  **Arc tally: 4 stale tests, 1 real defect** — every one looked like a code defect from the assertion text
+  alone; in each case the superseding commit had left a full explanatory comment directly above the code, and
+  reading it WAS the diagnosis. (CC corrected the P128-era table, which had read all 3 by assertion text —
+  all 3 readings were wrong; historical entry left with a superseded-note.)
 - `auto-scrape-listings.test.js` — URL missing the −3y lower bound; handler 502s.
 - `folder-feed-enrich-mode.test.mjs` — enrich + no-match emits no disambiguation decision.
 
