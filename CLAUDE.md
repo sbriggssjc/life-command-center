@@ -1385,6 +1385,61 @@ the Decision Center with content-free cards, which is the Consumption-Layer nois
   actual evidence, `uncertain` only on genuine ties). Cron 200 (`22 * * * *`) already exists and no-ops
   while off. Enrichment is read-only GETs; proposals remain human-confirmed and never auto-write.
 
+## P137 — the provenance lane punted because the ITEMS NEVER ARRIVED (2026-08-26)
+
+All 4 `provenance_conflict` proposals in the P134 re-grade punted with *"the evidence does not
+specify which source is more authoritative"*. Two independent defects, and **the second is the one
+that actually produced the symptom** — the first would not have changed a single proposal on its own.
+
+- **⚠️ A CONSUMER WIRED TO A PRODUCER THAT DOES NOT EXIST FAILS EXACTLY LIKE A CONSUMER BUG.**
+  `clean-assist-context.js::assessProvenanceConflict` computes
+  `ladder_says = laddersSay(c.attempted_priority, c.current_priority)` and reads `c.priority_ladder`.
+  P134's writeup said the current-source rung "resolves 454/454" — but that join was **never wired
+  into the data path**: `v_field_provenance_conflict_classified` joins `field_source_priority` on the
+  ATTEMPTED source only and carried **neither `current_priority` nor `priority_ladder`**, so
+  `laddersSay(ap, undefined)` always returned `unregistered_source_no_ladder_answer` and the model
+  correctly refused to guess. Fixed by APPENDING both columns to the view (migration
+  `20260826231000`, append-only per the `CREATE OR REPLACE VIEW` rule) and selecting them in
+  `api/admin.js`. Measured live: **454/454 cross-source rows resolve a `current_priority`, 433 are
+  ladder-decidable, 21 are genuine equal-priority ties** (e.g. `costar_sidebar`@45 vs
+  `om_extraction`@45 on `dia.properties.parcel_number`) that must keep abstaining. Both verdict
+  directions occur, so a lane that only ever says `keep_current` is echoing a default, not reading
+  the ladder. `field_source_priority` is UNIQUE on `(target_table, field_name, source)`, so the
+  LEFT JOIN cannot fan rows out — verified: view row count unchanged at 1,162.
+- **⚠️ AND THE ITEMS THAT PUNTED WERE NOT THE ONES BEING FIXED — READ THE SUBJECT_REFS BEFORE
+  ACCEPTING A ROOT CAUSE.** All 4 were **`prov:dia_xref:*`** — the dia sales-price cross-reference
+  arm, which has no ladder BY DESIGN (it is three unlabelled numbers plus a narration, not a
+  `field_source_priority` question). **Zero `field_provenance` conflicts have ever reached the
+  model.** Cause: `fetchFederatedSource` ranks xref items `1000 + severity` and every live severity
+  is **1** → 1001, while `_provImportance` maxes at **1000** — so all 65 xref rows outrank all 454
+  field_provenance rows, permanently. Two incomparable rank scales sharing one budget, decided by a
+  hard-coded constant one point above the other scale's ceiling.
+- **⚠️ AND THE TICK HAD NO CURSOR, SO THAT HEAD JAMMED FOREVER.**
+  `handleOllamaCleanAssistTick` asked each lane for exactly `perType` items at **offset 0** and took
+  them verbatim. An annotation writes to `lcc_clean_assist_proposals`, **not `lcc_decisions`**, so
+  `fetchExcludedRefs` never excludes an annotated subject and it stays at the head — the tick re-read
+  the same 4 cards every run, forever. Same class as P135/P136: *what makes a target stop being
+  selected?* Here the durable marker already existed — `lcc_clean_assist_proposals` is UNIQUE on
+  `(decision_type, subject_ref, proposal_kind, source)` and `listFederatedLane` already attaches it as
+  `item.clean_assist` — the selector simply never read it. The tick now over-fetches a window (capped
+  at **100**, because `attachCleanAssistProposals` resolves at most 100 refs — beyond that an
+  annotated item reads as un-annotated and the head jams again), drops subjects **this source**
+  already annotated (`clean_assist.source === CLEAN_ASSIST_SOURCE`, so another producer's annotation
+  cannot starve it), and reports `lane_cursor` per lane. **Read `taken`, never `already_annotated`** —
+  the latter is a re-discovery tally that reads exactly like throughput (P159a); `window_exhausted`
+  distinguishes "nothing left to annotate" from "lane is empty".
+- **The 65-row xref backlog still sits ahead of every field_provenance row.** The cursor drains it
+  instead of looping on it, but at `perType = 4` that is ~17 ticks before the first ladder-bearing
+  card. The rank scales themselves are **NOT changed here** — `rank_value` also orders the
+  human-facing Decision Center lane, so re-ranking it is Scott's call, not a side effect of a wiring
+  fix. Run the verification with a larger `limit` (see below) rather than assuming one tick shows it.
+- Guard: `test/provenance-conflict-ladder-wiring.test.mjs` asserts the handler's `select=` carries
+  every column the evidence gate reads, anchored on the **VIEW NAME** rather than a line number or a
+  source slice (per the block-slice footgun). Verified to go RED on the exact pre-fix select and green
+  after. The recurring lesson it encodes is P134's own: **diff the view's columns against the
+  handler's `select=`** — and, now, **diff the consumer's reads against what any producer actually
+  writes**.
+
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
 Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration

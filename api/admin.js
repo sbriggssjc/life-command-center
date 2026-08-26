@@ -1505,13 +1505,51 @@ async function handleOllamaCleanAssistTick(req, res) {
 
   const sourceRunId = 'p32_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
   const perType = Math.max(1, Math.ceil(limit / CLEAN_ASSIST_TYPES.length));
+  // P137 — THE TICK NEEDS A CURSOR THAT ADVANCES, OR THE HEAD OF A LANE JAMS
+  // FOREVER. It used to ask each lane for exactly `perType` items at offset 0
+  // and take them verbatim. A federated lane is value-ranked and an annotation
+  // writes to lcc_clean_assist_proposals, NOT lcc_decisions — so an annotated
+  // subject is NOT excluded by fetchExcludedRefs and stays at the head. Measured
+  // live 2026-08-26 on provenance_conflict: the 65 dia sales-price xref rows
+  // carry rank_value = 1000 + severity = 1001, and the max _provImportance for a
+  // field_provenance row is 1000 — so EVERY xref row outranks EVERY one of the
+  // 454 field_provenance rows, permanently. With perType = 4 the tick re-read the
+  // same 4 xref cards on every run (all 4 proposals in the re-grade were
+  // `prov:dia_xref:*`), and no field_provenance conflict has ever reached the
+  // model. Exactly the class CLAUDE.md documents: a worker whose only exclusion
+  // is its own output, where the output is not what the selector reads.
+  //
+  // The durable marker already exists — lcc_clean_assist_proposals is UNIQUE on
+  // (decision_type, subject_ref, proposal_kind, source) and listFederatedLane
+  // already attaches it as item.clean_assist. So over-fetch a window, drop the
+  // subjects THIS source has already annotated, and take perType of the rest.
+  // Capped at 100 because attachCleanAssistProposals resolves at most 100 refs —
+  // beyond that an annotated item would read as un-annotated and we would be back
+  // to re-proposing the head.
+  const laneWindow = Math.min(100, perType * 8 + 20);
   const candidates = [];
+  // Honest per-lane accounting: a lane that yields nothing because everything in
+  // its window is already annotated is DRAINED, which is a different fact from a
+  // lane that is empty — never let the two read the same.
+  const laneCursor = {};
   for (const type of CLEAN_ASSIST_TYPES) {
     try {
-      const lane = await listFederatedLane(type, perType, 0, type === 'intake_disposition' ? { intakeView: 'all' } : undefined);
-      for (const item of lane.items || []) candidates.push(item);
+      const lane = await listFederatedLane(type, laneWindow, 0, type === 'intake_disposition' ? { intakeView: 'all' } : undefined);
+      const laneItems = lane.items || [];
+      const fresh = laneItems.filter((it) => !(it.clean_assist && it.clean_assist.source === CLEAN_ASSIST_SOURCE));
+      const taken = fresh.slice(0, perType);
+      for (const item of taken) candidates.push(item);
+      laneCursor[type] = {
+        window: laneItems.length,
+        already_annotated: laneItems.length - fresh.length,
+        taken: taken.length,
+        // A full window with nothing fresh means the tick has annotated
+        // everything it can currently see — say so rather than reporting 0 work.
+        window_exhausted: laneItems.length >= laneWindow && taken.length === 0,
+      };
     } catch (e) {
       console.warn('[ollama-clean-assist] lane read failed', type, e?.message || e);
+      laneCursor[type] = { error: String(e?.message || e) };
     }
   }
 
@@ -1526,7 +1564,11 @@ async function handleOllamaCleanAssistTick(req, res) {
   }
 
   const summary = { source_run_id: sourceRunId, candidates: selected.length, proposed: 0, failed: 0,
-    skipped: 0, skipped_no_evidence: 0, coherence_downgraded: 0, by_type: {}, no_evidence_reasons: {} };
+    skipped: 0, skipped_no_evidence: 0, coherence_downgraded: 0, by_type: {}, no_evidence_reasons: {},
+    // P137: how far each lane's cursor got. `already_annotated` is a
+    // RE-DISCOVERY tally, never throughput — read `taken` for work done and
+    // `window_exhausted` for a lane the tick can no longer advance.
+    lane_cursor: laneCursor };
   for (const item of selected) {
     const kind = cleanAssistKind(item.decision_type);
     // The evidence gate. No comparative evidence => no model call: a proposal
@@ -8165,9 +8207,13 @@ async function fetchFederatedSource(type, cap, opts) {
       // current_recorded_at were ALREADY on this view and simply never selected —
       // without them the clean-assist model was asked "which source wins?" with
       // no ladder position and no writer narration to reason from.
+      // P137: current_priority / priority_ladder are the OTHER half of that
+      // ladder — appended to the view (migration 20260826231000) because they did
+      // not exist on it at all, then selected here. Diff the view's columns
+      // against this select whenever the lane's evidence reads thin.
       opsQuery('GET', 'v_field_provenance_conflict_classified?select=provenance_id,target_database,target_table,'
         + 'record_pk_value,field_name,attempted_value,attempted_source,attempted_priority,attempted_confidence,'
-        + 'current_value,current_source,current_recorded_at,'
+        + 'current_value,current_source,current_recorded_at,current_priority,priority_ladder,'
         + 'decision,decision_reason,enforce_mode,recorded_at&conflict_class=eq.cross_source&order=recorded_at.desc&limit=' + cap),
       // suggested_action is the VIEW's own narration of which detail column is
       // which — the three detail_* numbers are unlabelled on their own.
@@ -8189,6 +8235,15 @@ async function fetchFederatedSource(type, cap, opts) {
         attempted_priority: row.attempted_priority, attempted_confidence: row.attempted_confidence,
         current_value: row.current_value, current_source: row.current_source,
         current_recorded_at: row.current_recorded_at,
+        // P137: the CURRENT source's rung + the whole registered ladder. P134
+        // wired the CONSUMER (assessProvenanceConflict reads both and computes
+        // `ladder_says`) but never the PRODUCER — the view had no current-side
+        // priority and no ladder, so `laddersSay(ap, undefined)` always returned
+        // `unregistered_source_no_ladder_answer` and every proposal punted with
+        // "the evidence does not specify which source is more authoritative".
+        // Measured live: 454/454 cross-source rows resolve a current_priority,
+        // 433 are ladder-decidable, 21 are genuine equal-priority ties.
+        current_priority: row.current_priority, priority_ladder: row.priority_ladder,
         decision: row.decision, decision_reason: row.decision_reason, enforce_mode: row.enforce_mode },
     }));
     const xrItems = xrRows.map((row) => ({
@@ -8603,7 +8658,9 @@ async function attachCleanAssistProposals(items) {
   const refs = [...new Set((items || []).map((it) => it.subject_ref).filter(Boolean))].slice(0, 100);
   if (!refs.length) return items;
   try {
-    const r = await opsQuery('GET', 'v_lcc_clean_assist_latest?select=decision_type,subject_ref,proposal_kind,verdict,reason,confidence,proposed_link,conflict_summary,source_run_id,model_provider,model_name,created_at'
+    // P137: `source` rides along so the clean-assist tick can tell an annotation
+    // IT wrote from one another producer wrote, and page past only its own.
+    const r = await opsQuery('GET', 'v_lcc_clean_assist_latest?select=decision_type,subject_ref,proposal_kind,source,verdict,reason,confidence,proposed_link,conflict_summary,source_run_id,model_provider,model_name,created_at'
       + '&subject_ref=in.' + encodeURIComponent(cleanAssistInList(refs)), undefined, { countMode: 'none' });
     if (!r.ok || !Array.isArray(r.data)) return items;
     const byKey = new Map();
