@@ -230,14 +230,21 @@ pre-merge id and the finalizer resurrects it.
 it?":**
 
 ```sql
--- any table X with an entity_id and an updated_at
-select case when max(f.updated_at) > e.updated_at
-            then 'RE-CREATED by a live writer' else 'historical residue' end,
-       count(*)
+-- PREFER created_at. "Was this row CREATED after the merge?" is unambiguous;
+-- updated_at can move on an unconditional touch (see the ON CONFLICT caveat below).
+select case when f.created_at > e.updated_at
+            then 'CREATED after the merge -> a live producer'
+            else 'historical residue' end as verdict,
+       count(*),
+       count(*) filter (where f.created_at > now() - interval '30 days') as last_30d,
+       max(f.created_at)::date as newest
 from entities e join <table> f on f.entity_id = e.id
 where e.merged_into_entity_id is not null
 group by 1;
 ```
+
+`entities` has no `merged_at`, so `e.updated_at` is the merge-time proxy. Any later touch of the
+entity pushes it forward, which makes the test **conservative** — it under-reports, never invents.
 
 All 92 then-measured ghosts returned **written after the merge, most recent = today**. That
 single result is what separates "clean it up" from "find the producer" — and it is the whole
@@ -270,6 +277,73 @@ toward the stale side. The aggregate split (183/3) hid it completely; only readi
 with a stated expectation exposed it. Final disposition: 3 repoint, 183 dedup-delete, **12
 conflicts surfaced in `v_lcc_portfolio_ownership_conflict` and not decided**.
 
+### Class 8, second instance — it ate my own repair inside 24 hours (P176, 2026-08-26)
+
+**P172 superseded 78 `junk_entity_name` cards whose subject had been merged away, and reported
+80 → 2 open. By the next morning 10 of those exact cards were open again.** Not similar cards
+— the same subjects, re-minted the same day, including the very names P172's own header quotes
+as examples (JBG SMITH | Ares Management, Terreno Realty, InCommercial Property Group). 10 of
+10 re-opened cards had a P172-superseded sibling.
+
+**Cause: closing a card is not closing a lane.** The junk lane does not seed from
+`lcc_decisions`; it seeds from a flag on the *entity*, `metadata->>'junk_name_flagged'`. P172
+closed the symptom and left the seed, so the nightly seeder did exactly its job. The full
+re-mint surface was **78 — precisely the number P172 had closed**; 10 had fired, 68 were queued
+for later nights.
+
+**The durable rule: when you retire an item, find the predicate the PRODUCER selects on and
+clear that too.** Ask "what would make this row get created again tomorrow?" The B9 bulk worker
+already knew this and says so in a comment — `delete meta.junk_name_flagged; // drop out of the
+lane (seed predicate fails)`. The knowledge was in the codebase and the repair did not use it.
+**Grep for how a lane is *seeded* before writing anything that closes its items.**
+
+**Pair every such repair with a standing sweep** (cron 238, daily 06:40). A one-shot fix for a
+recurring producer is a chore you repeat silently forever. Idempotent, so a no-op day is free.
+
+**⚠️ Scope held narrow twice, and both mattered.** Only `junk_entity_name` —
+**`exact_name_merge` (62 stranded, 0 open) has a tombstone subject BY DESIGN**, because the card
+records *which* entity was merged away; "fixing" it would falsify the history it exists to
+preserve. And only already-merged entities: **712 LIVE entities carry the same flag and were
+left untouched**, because this is a merge-staleness fix, not a way to drain the junk lane.
+
+**Also measured, not a defect:** 211 further junk cards on tombstones were minted BEFORE their
+subject was merged, and are all already decided — ordinary staleness in closed history.
+
+**⚠️ The meta-lesson: a verified result has a shelf life.** P172's write-up was true at the
+moment of measurement and false by morning. Nothing in the verification gate was wrong; the
+gate simply could not see the producer. For any repair of a populated table, **the gate should
+be re-run a day later**, or replaced by a standing sweep that makes the question permanent.
+
+### Class 8, third instance — and the detector's own blind spot (P177, 2026-08-26)
+
+The sweep reported `entity_relationships` (184 stranded), `lcc_owner_reconcile_evidence` (203)
+and `external_identities` (45) as **"unmeasurable — no `updated_at`"**, and I filed that as an
+observability gap needing schema work. **All three have `created_at`**, which is the *better*
+signal for this exact question. Re-running the detector against it answered all three
+immediately, no migration required.
+
+**Before declaring something unmeasurable, check the columns that ARE there.** A detector that
+looks for one column name and reports absence as "unknowable" manufactures a blocker.
+
+What it then found: `entity_relationships` had **131 edges created after their party was merged,
+125 in the last 30 days** — in the party-role store the deal spine and reachability read, so
+unlike a log table these are not inert. The population is transaction history
+(listing_broker 48, true_seller 20, buyer 17, owner 12, …), so the BD cost is concrete:
+**41 distinct survivors were under-reporting their own deal history**, which is precisely the
+signal prospecting ranks on.
+
+**Fix pattern worth reusing: a BEFORE INSERT trigger, not a patched caller.**
+`insertEntityRelationship` is the single JS choke point, but a trigger also covers SQL writers,
+costs no extra round trip, and cannot be bypassed by the next producer someone adds. It must
+**skip rather than raise** in two cases — a resolved self-loop (which a CHECK constraint would
+reject, breaking the ingestion that wrote it) and a duplicate of an edge the survivor already
+holds (there is no unique constraint, so nothing else would catch the double-count).
+
+**⚠️ And the first repair was half a repair — caught by its own gate.** It selected only rows
+whose FROM endpoint was a tombstone; verification then read 0 stranded on `from` and **14 still
+stranded on `to`**. An edge has two ends. (P118: fix every layer, not the one the error names.)
+Write the gate to check every side of the thing you repaired, not the side you happened to fix.
+
 ---
 
 ## What to audit next
@@ -285,9 +359,11 @@ Ordered by expected yield, not by ease:
    | **`lcc_decisions.subject_entity_id`** | **296** | **CLASS 8 — 81 genuinely re-created, 11 STILL OPEN, 10 created in the last 7 days** |
    | `lcc_entity_portfolio_facts.entity_id` | 12 | the held P175a conflicts (expected) |
    | `lcc_owner_evidence.entity_id` | 3 | Class 8, trivial volume |
-   | `entity_relationships.from_entity_id` | 184 | **unmeasurable — no `updated_at`** |
-   | `lcc_owner_reconcile_evidence.*` | 203 | unmeasurable — no `updated_at` |
-   | `external_identities.entity_id` | 45 | unmeasurable — no `updated_at` |
+   | **`entity_relationships.from_entity_id`** | **184** | ~~unmeasurable~~ → **CLASS 8: 131 created after the merge, 125 in the last 30 days. FIXED by P177** |
+   | `entity_relationships.to_entity_id` | 14 | Class 8 — missed by the first repair, fixed in P177b |
+   | `external_identities.entity_id` | 45 | ~~unmeasurable~~ → 26 created after the merge — **STILL OPEN, next up** |
+   | `lcc_owner_reconcile_evidence.*` | 203 | ~~unmeasurable~~ → 0 created after the merge (historical residue) |
+   | `lcc_boyd_reconcile_2026_07.entity_id` | 50 | one-off reconcile table, correctly historical |
    | 30 further columns | 1–50 each | mostly logs/backups (correctly historical) |
 
    **⚠️ The headline number was wrong on first read and self-inflicted.** The raw detector
@@ -296,12 +372,26 @@ Ordered by expected yield, not by ease:
    "was this written after X" detector, exclude your own batch first*, or you will discover
    your own footprints and report them as the defect.
 
-   **NEXT (P176): `lcc_decisions` needs the same treatment as P175.** P172 drained the
-   backlog and said explicitly it "does not prevent recurrence" — this is the measured
-   recurrence, ~10/week. The minter (`lcc_open_decision` and its callers) must resolve
-   `subject_entity_id` through `lcc_entity_survivor()` or refuse a tombstone subject. Note
-   this is worse than a stale queue: `lcc_decisions` is HEALTHY and actively worked, so these
-   cards get real verdicts against entities that do not exist.
+   ~~**NEXT (P176): `lcc_decisions` needs the same treatment as P175.**~~ — **DONE
+   2026-08-26, and the diagnosis was wrong in an instructive way.** The predicted fix was "the
+   minter must resolve `subject_entity_id` through `lcc_entity_survivor()`" — but the minter
+   already filters `merged_into_entity_id=is.null` at scan time. Measuring instead of
+   assuming split the 229 stranded junk cards cleanly: **211 were minted BEFORE their subject
+   was merged** (ordinary staleness, all decided) and **18 while it was already a tombstone**,
+   10 of them still open. Those 18 came from the *seed flag on the entity*, not from the
+   minter. See "Class 8, second instance" above — the real fix was clearing
+   `metadata->>'junk_name_flagged'`, plus cron 238. **A plausible root cause named before
+   measurement pointed at the wrong function entirely.**
+
+   **NEXT (P178): `external_identities`** — 45 stranded, **26 created after their entity was
+   merged**, dominated by the CoStar sidebar (`costar/company` 18, `salesforce/Account` 3,
+   `rca/company` 3; newest 2026-08-10). `lcc_reconcile_tombstone_backrefs` DOES move identities
+   on merge, so this is Class 8 again: a producer re-minting them. The P177 pattern applies
+   directly — a BEFORE INSERT trigger resolving `entity_id` through `lcc_entity_survivor()`.
+   Note the `chk_external_identities_source_system` CHECK and the canonical-scheme rules in
+   CLAUDE.md must be respected; and an identity is keyed `(source_system, source_type,
+   external_id)`, so resolution can collide with the survivor's existing identity — skip, don't
+   raise, exactly as P177 does.
 
    **Also still open:** `lcc_sync_property_owner_to_portfolio` carries the identical
    existence-not-liveness guard. It has no cron and no caller today (checked), so it was
@@ -385,14 +475,20 @@ Ordered by expected yield, not by ease:
    throughput measure over them is possible by any method. Cheap to add, and it is the
    prerequisite for the silent-cron question ever being answerable.
 
-   **Widened by the 2026-08-26 Class-8 sweep, which is now blocked on it.** The Class-8
-   detector asks "was this row written after the merge?" and therefore needs `updated_at`.
-   Three of the largest stranded populations cannot be classified at all without it:
-   **`entity_relationships` (184 + 14 stranded)**, **`lcc_owner_reconcile_evidence` (203)**
-   and **`external_identities` (45)**. `entity_relationships` is the notable one — it is the
-   party-role store the deal spine and reachability both read, so a stranded edge there is
-   not inert. Until these carry `updated_at`, "is a producer re-creating these?" is
-   unanswerable for the three tables where the answer matters most.
+   ~~**Widened by the 2026-08-26 Class-8 sweep, which is now blocked on it.**~~ —
+   **RETRACTED the same day. This was my detector's blind spot, not a schema gap.** I claimed
+   `entity_relationships` (184 stranded), `lcc_owner_reconcile_evidence` (203) and
+   `external_identities` (45) were unmeasurable for lack of `updated_at`. **All three have
+   `created_at`**, which answers the Class-8 question *better* — "was this row CREATED after
+   the merge?" is unambiguous where `updated_at` can move on a no-op touch. Re-running against
+   it classified all three instantly and found P177's 131 live strands. No migration was ever
+   needed. **A detector that looks for one column name and reports absence as "unknowable"
+   manufactures a blocker** — and this one nearly sent a schema change up the priority list
+   ahead of the real defect it was hiding.
+
+   The genuine gap is narrower than stated: `lcc_reusable_owner_contacts`,
+   `lcc_owner_evidence_cache` and `lcc_sf_comp_on_market` have **no `_at` column of any kind**,
+   so freshness/throughput over them remains unanswerable.
 7. **Two queues that close without a closure timestamp** — `action_items.completed_at`,
    `lcc_owner_contact_propagate_review.decided_at`. Same family as (6).
 8. **Duplicate entities surfaced by the ranked contact lane** — "George Washington University"
