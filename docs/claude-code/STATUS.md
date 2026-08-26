@@ -164,8 +164,85 @@ stale greps — each is worth its own look, and none is in scope here:
 The third is the one to look at first — it is the P106-class invariant that the assist layer **annotates
 and never writes canonical data**, and the guard is red.
 
+> **⚠️ Superseded — all three "shape" readings in the table above were wrong, and the errors ran the same
+> way each time: the assertion text was read as a description of the code.** P129 found #3 was a drifted
+> block-grep, not a P106 breach. P130 found #1's 502 was the test's own assertion thrown inside the
+> handler's `try/catch` (the −3y bound it demands is what the June-2026 backdating fix deliberately
+> REMOVED), and #2's producer does route ambiguity to the review lane — it correctly declines only the
+> ZERO-candidate card, per the Prompt 91 producer guard. **All four were stale tests; zero were code
+> defects.** See the P130 entry.
+
 **Close-out:** test-only; no runtime code, no migration, nothing waits on a redeploy. Branch
 `claude/fix-conflict-card-test-grep-sm7lav`.
+
+---
+## P130 (2026-08-26) — the last two suite failures: BOTH stale tests, suite is 4,367 / 0
+
+Verdict per failure, each measured independently before any edit. **Neither was a code defect; no handler
+byte changed** (`git status` = exactly the two test files). The prompt's prior on #1 — "a 502 smells like a
+real handler defect, start here" — was wrong, and the way it was wrong is the reusable lesson.
+
+### 1. `auto-scrape-listings.test.js` — the 502 was the TEST's own assertion, thrown inside the handler
+
+**Classification: stale test, superseded intent.** The failing assertion was
+`assert.ok(target.includes('sale_date=gte.2023-01-1'), 'expected ±3y lower bound in URL')` — raised inside
+the test's `global.fetch` stub. `handleAutoScrapeListings` wraps each listing in `try/catch`, so the stub's
+`AssertionError` landed in `summary.errors` as `{stage:'process'}`, and the handler's own status rule
+(`totalErrs > 0 && 0 successes → 502`) returned 502. **The 502 was manufactured by the assertion it was
+reporting** — a self-inflicted error, not an independent defect. Read the error message inside the JSON
+body before treating an HTTP status from a stubbed handler as evidence.
+
+The `−3y` lower bound the test demanded is exactly what was REMOVED to fix the **June-2026 dia off_market
+backdating incident**: it matched a pre-listing sale (a prior owner's deal), and the RPC then stamped
+`off_market_date` = run date, collapsing years of exits into one month. `api/admin.js:12383-12394` carries
+the full incident comment. The window is now floored at the listing's **market-entry date**
+(`on_market_date`, fallback `listing_date`) with the 3y recency headroom kept on the upper bound only.
+Making that test green by "fixing" the handler would have re-shipped the incident.
+
+**Fix (test-only):** re-anchored on the entry-floored window, and turned into a real regression guard —
+it now asserts the lower bound IS the market-entry date, adds an explicit
+`assert.ok(!/sale_date=gte\.202[0-3]/…)` so the pre-entry bound cannot come back, and gives the fixture an
+`on_market_date` distinct from `listing_date` so the test proves the floor reads market-entry while the
+closest-sale distance still measures from `listing_date`. The out-of-window `sale_id:'old'` (2024-12-01)
+fixture row was dropped — PostgREST would never return it under the real filter, so keeping it made the
+stub lie about the DB. **Proved non-vacuous by mutation:** re-introducing `entryMs − windowDays` in the
+handler turns the test red (7/8) with `expected market-entry lower bound in URL: …gte.2023-01-15`;
+`api/admin.js` restored byte-identical afterwards.
+
+### 2. `folder-feed-enrich-mode.test.mjs` — asserting the pre-Prompt-91 intent
+
+**Classification: stale test, superseded intent.** `assert.equal(res.emitted_disambiguation, true)` failed
+because `emitMatchDisambiguation` (`api/_handlers/intake-matcher.js:672`) carries an explicit **Prompt 91
+producer guard**: zero candidates → `{emitted:false, skipped:'empty_candidates'}`, no `lcc_open_decision`.
+A card with no candidates asks a human to "pick one of nothing" — unworkable by construction, and it still
+inflates the lane badge (honest-counts violation). The test's `UNMATCHED` fixture carries no `candidates`,
+so it drove exactly the branch P91 exists to suppress. The promoter already reads the returned `{emitted}`
+so `emitted_disambiguation` stays honest — the flag was right; the assertion was a round behind.
+
+This is **not** an intentionally-unbuilt path, so no `it.skip` was warranted, and inventing an emit to
+satisfy the test would have been fabrication against this repo's own Consumption-Layer doctrine.
+
+**Fix (test-only):** the single `it()` now pins BOTH branches of the P91 contract — zero candidates →
+`emitted_disambiguation === false` **and** `lcc_open_decision` NOT called (guarding P91 against
+regression), then a second arm with two real candidates → `emitted_disambiguation === true`,
+`lcc_open_decision` called, candidates carried onto `p_context`, and still nothing created. Folded into
+one `it()` deliberately so the suite total stays 4,373 and "no other test moved" is checkable by count.
+
+### Verification (by the pass/fail LIST, not the exit code)
+
+`npm test` → **tests 4373 · pass 4367 · fail 0 · skipped 6 · todo 0**. Baseline was 4,365 pass / 2 fail /
+6 skip = the same 4,373 total, so no test was added, removed, or skipped. All 6 skips are pre-existing and
+unrelated (1 chart-spec, 5 RCA parsers gated on a local file path); **zero `it.skip` was added this round**
+— green means green. The two target files: 11 tests, 11 pass, 0 skip.
+
+**Close-out:** test-only. No runtime code, no migration, nothing waits on a Railway redeploy. This closes
+the test-hygiene segment (P126 → P128 → P129 → P130); **next item is key rotation.**
+
+**Durable lesson for the arc tally — the stale-vs-real score is now 4 stale, 1 real.** P126 `</table>`,
+P128 U3 `out.total`, P129 drifted block boundary, and now BOTH of P130's. Every one of them looked like a
+code defect from the assertion text, and P130's #1 wore an HTTP 502 on top. **Classify before you fix, and
+when a red test names an intent, go read whether that intent was deliberately superseded** — in both P130
+cases the superseding commit had left a full explanatory comment sitting directly above the code.
 
 ---
 ## P126 (2026-08-25) — draft-assist appends Scott's real branded signature; the draft is send-ready
@@ -313,6 +390,9 @@ this session never touched:**
   all 3 readings were wrong; historical entry left with a superseded-note.)
 - `auto-scrape-listings.test.js` — URL missing the −3y lower bound; handler 502s.
 - `folder-feed-enrich-mode.test.mjs` — enrich + no-match emits no disambiguation decision.
+  → **BOTH CLOSED by P130 (test-only). Suite 4,365/2 → 4,367/0.** Verdict on both: **STALE TEST asserting a
+  SUPERSEDED intent** — neither handler is defective, and the P130 prompt's framing ("a 502 smells like a real
+  handler defect") did not survive measurement. See the P130 entry below.
 
 CC left all three (P128 was scoped test-only) and offered to take the ollama-clean-assist one next. **Doctrine
 reminder this whole P126→128 run reinforced: read the pass/fail LIST, never `node --test`'s exit code** (it
