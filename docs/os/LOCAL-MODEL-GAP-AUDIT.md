@@ -32,7 +32,8 @@ changed the answer for BOTH lanes. Shipped state:
   349 single-link, 104 multi-link, 56 with 3+. A break in the chain is REPORTED ("Not on file"), never
   bridged. Ollama survives only as an optional Layer 2 that LABELS a transfer type on links it may not
   alter (`OWNERSHIP_CHAIN_ROLE_LABELS`, off).
-  Flag `OWNERSHIP_CHAIN_DRAFT` (off) · `GET/POST /api/ownership-chain-draft-tick` · annotation-only.
+  Flag `OWNERSHIP_CHAIN_DRAFT` (**on**) · `GET/POST /api/ownership-chain-draft-tick` · annotation-only
+  · nightly pg_cron `lcc-ownership-chain-draft` 06:45 UTC (P133).
 
 * **`owner_contact_manual` (316 open / 0 completions) — NO DRAFTER, DELIBERATELY. It is not answerable
   on-box, and saying so is the deliverable.** Measured across all 316: **0** carry a notice address, **0**
@@ -147,9 +148,12 @@ data-integrity signal. **`OWNERSHIP_CHAIN_DRAFT` flipped ON in the registry.** S
 (74 no-transitions, 18 all-guarded). `OWNERSHIP_CHAIN_ROLE_LABELS` (the Ollama label layer) held OFF pending a
 separate label-grading. ⏭ confirm via a non-dry-run tick + watch the lane drain (`completions > 0`). Lane B
 (`owner_contact_manual`) is NOT drafted (unanswerable residue) — decidability view surfaces the 6 answerable.
-**⚠️ R1 write mechanism:** GET defaults to dry-run and there is **NO cron** for `ownership-chain-draft-tick`
-(`r1_cron` null), so the 453 drafts don't auto-write — run an **apply** pass (POST the tick) to write them, and
-add a cron if the lane should keep drafting as new rows arrive. `already_drafted` = 0 until then.
+**⚠️ R1 write mechanism — RESOLVED 2026-08-26 (P133); the note below was true when written.** GET defaults to
+dry-run, so the 453 drafts needed an **apply** pass (POST). That was run by hand (six POSTs → `already_drafted:545,
+fresh:0`) and is now **scheduled**: pg_cron `lcc-ownership-chain-draft` (jobid 239, 06:45 UTC) POSTs the tick
+nightly with `apply=true, limit=100`, so rows minted after the drain get drafted without a manual re-run. Runs are
+ledgered in `lcc_ownership_chain_draft_run_log` (opened before the work, closed after) — read `written_draftable`,
+not `already_drafted`.
 
 **✅ R2 RE-MEASURED 2026-08-24 — NOT a local-model gap; it's deterministic connectivity plumbing.** OM economics
 are ALREADY extracted on-box (**3,955 staged items carry `asking_price`/`cap_rate`**), a canonical store EXISTS
