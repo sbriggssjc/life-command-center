@@ -426,6 +426,14 @@ app.all('/api/folder-feed-tick', (req, res) => { req.query._route = 'folder-feed
 // Phase 2 Slice 2d (Unit 3): bounded async extraction drain. GET=dry-run, POST=drain.
 app.all('/api/intake-extract-drain', (req, res) => { req.query._route = 'intake-extract-drain'; intakeHandler(req, res); });
 
+// Restricted ASC research overlay. These routes write only to the private
+// frozen-50 research ledger; they never invoke the dia/gov sidebar propagator
+// or any Salesforce/outreach writer.
+app.all('/api/asc-research-import', (req, res) => { req.query._route = 'asc-research-import'; intakeHandler(req, res); });
+app.all('/api/asc-research-target', (req, res) => { req.query._route = 'asc-research-target'; intakeHandler(req, res); });
+app.all('/api/asc-research-capture', (req, res) => { req.query._route = 'asc-research-capture'; intakeHandler(req, res); });
+app.all('/api/asc-research-complete', (req, res) => { req.query._route = 'asc-research-complete'; intakeHandler(req, res); });
+
 // Phase 2 Slice 2b: write an LCC-generated deliverable INTO a property folder.
 app.all('/api/property-doc-writeback', (req, res) => { req.query._route = 'property-doc-writeback'; intakeHandler(req, res); });
 // R15 Phase 2: backfill CRE property owners from master-sheet/BOV docs. GET=dry-run, POST=drain.

@@ -1,0 +1,135 @@
+import { createHash } from 'node:crypto';
+
+export const ASC_RESEARCH_LANE_VERSION = 'healthcare_asc_research_lane:1.0';
+export const ASC_RESEARCH_SAMPLE_SIZE = 50;
+
+const SHA256_RE = /^[a-f0-9]{64}$/;
+const ALLOWED_SOURCES = new Set(['costar', 'rca', 'public_records', 'salesforce']);
+
+// Deliberately structured-only. Page HTML, cookies, tokens, and other licensed
+// session material never enter the research tables.
+const CAPTURE_FIELDS = [
+  'building_name', 'property_subtype', 'building_class', 'square_footage',
+  'year_built', 'year_renovated', 'lot_size', 'land_sf', 'stories', 'parking',
+  'zoning', 'occupancy', 'ownership_type', 'location_type', 'parcel_number',
+  'county', 'assessed_value', 'land_value', 'improvement_value', 'tenant_name',
+  'primary_tenant', 'tenancy_type', 'owner_occupied', 'lease_type', 'lease_term',
+  'remaining_term', 'lease_expiration', 'lease_commencement', 'rent_per_sf',
+  'annual_rent', 'expense_structure', 'renewal_options', 'guarantor',
+  'rent_escalations', 'asking_price', 'list_price', 'cap_rate', 'noi',
+  'price_per_sf', 'sale_price', 'sale_date', 'listing_broker', 'listing_firm',
+  'listing_email', 'listing_phone', 'tenants', 'contacts', 'sales_history',
+  'loans', 'document_links', 'documents', 'investment_highlights',
+];
+
+function clean(value) {
+  return String(value ?? '').normalize('NFKC').trim();
+}
+
+export function normalizeAscAddressToken({ address, city, state, zip } = {}) {
+  const street = clean(address)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\b(STREET|ST)\b/g, 'ST')
+    .replace(/\b(AVENUE|AVE)\b/g, 'AVE')
+    .replace(/\b(BOULEVARD|BLVD)\b/g, 'BLVD')
+    .replace(/\b(ROAD|RD)\b/g, 'RD')
+    .replace(/\b(DRIVE|DR)\b/g, 'DR')
+    .replace(/\b(LANE|LN)\b/g, 'LN')
+    .replace(/\b(HIGHWAY|HWY)\b/g, 'HWY')
+    .replace(/\bNORTH\b/g, 'N')
+    .replace(/\bSOUTH\b/g, 'S')
+    .replace(/\bEAST\b/g, 'E')
+    .replace(/\bWEST\b/g, 'W')
+    .replace(/\b(SUITE|STE|UNIT)\s+[A-Z0-9-]+\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const cityToken = clean(city).toUpperCase().replace(/[^A-Z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const stateToken = clean(state).toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+  const zipToken = clean(zip).match(/\d{5}/)?.[0] || '';
+  if (!street || !stateToken) return null;
+  return [street, cityToken, stateToken, zipToken].join('|');
+}
+
+export function assertAscResearchImport({ release_id, selection_fingerprint, candidate_pool_fingerprint, candidates } = {}) {
+  for (const [name, value] of Object.entries({ release_id, selection_fingerprint, candidate_pool_fingerprint })) {
+    if (!SHA256_RE.test(clean(value).toLowerCase())) throw new Error(`${name} must be a lowercase SHA-256 fingerprint`);
+  }
+  if (!Array.isArray(candidates) || candidates.length !== ASC_RESEARCH_SAMPLE_SIZE) {
+    throw new Error(`ASC research import requires exactly ${ASC_RESEARCH_SAMPLE_SIZE} candidates`);
+  }
+  const fingerprints = new Set();
+  return candidates.map((row, index) => {
+    const fingerprint = clean(row?.candidate_fingerprint).toLowerCase();
+    if (!SHA256_RE.test(fingerprint)) throw new Error(`candidate ${index + 1} has an invalid fingerprint`);
+    if (fingerprints.has(fingerprint)) throw new Error(`candidate ${index + 1} duplicates a fingerprint`);
+    fingerprints.add(fingerprint);
+    const identity = row.cms_identity || {};
+    const addressToken = normalizeAscAddressToken(identity);
+    if (!addressToken) throw new Error(`candidate ${index + 1} requires an address and two-letter state`);
+    if (!clean(identity.ccn)) throw new Error(`candidate ${index + 1} requires a CMS facility ID`);
+    return {
+      candidate_fingerprint: fingerprint,
+      sample_ordinal: index + 1,
+      sampling_cell: clean(row.sampling_cell),
+      cms_identity: identity,
+      cms_evidence: row.cms_evidence || {},
+      address_token: addressToken,
+    };
+  });
+}
+
+export function buildAscStructuredCapture(target, context = {}) {
+  if (!target || !SHA256_RE.test(clean(target.candidate_fingerprint).toLowerCase())) {
+    throw new Error('A frozen ASC candidate target is required');
+  }
+  const source = clean(context.source || context.domain).toLowerCase().replace(/-/g, '_');
+  if (!ALLOWED_SOURCES.has(source)) throw new Error('ASC capture source must be CoStar, RCA, public records, or Salesforce');
+  const addressToken = normalizeAscAddressToken(context);
+  if (!addressToken) throw new Error('Captured page requires an address and state');
+  if (addressToken !== target.address_token) throw new Error('Captured page does not match the active frozen ASC candidate');
+
+  const structured = {};
+  for (const field of CAPTURE_FIELDS) {
+    const value = context[field];
+    if (value == null || value === '' || (Array.isArray(value) && value.length === 0)) continue;
+    structured[field] = value;
+  }
+  if (Object.keys(structured).length === 0) throw new Error('Captured page contains no approved structured research fields');
+
+  const capturedAt = new Date().toISOString();
+  const capture = {
+    source,
+    source_url: clean(context.page_url) || null,
+    captured_at: capturedAt,
+    address: clean(context.address),
+    city: clean(context.city) || null,
+    state: clean(context.state).toUpperCase(),
+    zip: clean(context.zip) || null,
+    address_token: addressToken,
+    structured_payload: structured,
+  };
+  capture.payload_sha256 = createHash('sha256').update(JSON.stringify(structured)).digest('hex');
+  const evidence = Object.entries(structured).map(([field_name, value]) => ({
+    field_name,
+    asserted_value: value,
+    source,
+    source_url: capture.source_url,
+    observed_at: capturedAt,
+    confidence: source === 'salesforce' ? 0.6 : 0.7,
+  }));
+  return { capture, evidence };
+}
+
+export function buildAscImportRpcBody(input, workspaceId, userId) {
+  const candidates = assertAscResearchImport(input);
+  return {
+    p_workspace_id: workspaceId || null,
+    p_release_id: input.release_id.toLowerCase(),
+    p_selection_fingerprint: input.selection_fingerprint.toLowerCase(),
+    p_candidate_pool_fingerprint: input.candidate_pool_fingerprint.toLowerCase(),
+    p_packet_id: clean(input.packet_id).toLowerCase() || null,
+    p_candidates: candidates,
+    p_created_by: userId || null,
+  };
+}

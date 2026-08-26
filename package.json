@@ -40,7 +40,8 @@
     "healthcare:execution-boundary:test": "node --test test/healthcare-execution-boundary.test.mjs",
     "healthcare:sample-execution": "node scripts/healthcare-discovery/sample-execution-cli.mjs",
     "healthcare:sample-execution:test": "node --test test/healthcare-sample-execution*.test.mjs",
-    "healthcare:asc:candidate-pack": "node scripts/healthcare-discovery/official-asc-candidate-pack-cli.mjs"
+    "healthcare:asc:candidate-pack": "node scripts/healthcare-discovery/official-asc-candidate-pack-cli.mjs",
+    "healthcare:asc:research-import": "node scripts/healthcare-discovery/asc-research-import-cli.mjs"
   },
   "engines": {
     "node": ">=20.0.0"
