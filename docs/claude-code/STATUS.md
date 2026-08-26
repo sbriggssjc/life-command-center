@@ -17,6 +17,51 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-26 (Cowork) — P193: SPE subsidiaries should inherit the sponsor's answer (Scott, from the lane)
+
+Scott, working the lane: *"I'm seeing duplicates that are subsidiaries and matching the correct
+contacts… these should be automatically merged or connected to the true owner parent once we have a
+connected domain and person."* He was looking at `NGP VI ESSEX VT LLC → ngpv.com` directly above
+`Ngp Vi Harlingen Tx LLC → ngpv.com` — same three candidates, same sponsor, asked twice.
+
+**⚠️ This is NOT prompt 189's problem, and conflating them would corrupt the ownership record.**
+Easterly ×2 and "NGP Capital" ×5 are **one firm recorded twice** → a merge. `NGP VI ESSEX VT LLC`
+and `Ngp Vi Harlingen Tx LLC` are **legitimately distinct legal SPEs** holding different properties
+→ a **parent relationship and inheritance, never a merge**. Both problems are live in the same NGP
+name space at once, which is exactly why they must be kept apart.
+
+**Measured: 19 of 107 workable cards are one question asked three times.**
+
+| sponsor | SPE entities | rent | candidates | registered parent |
+|---|---|---|---|---|
+| `ngp` → ngpv.com | **13** | $26.1M | 3 | NGP Capital ✓ |
+| `uirc` → uirc.com | 5 | $4.9M | 7 | UIRC, Urban Investment Research Corp. ✓ |
+| `jbg` → jbg.com | 1 | $2.9M | 3 | — |
+
+**19 cards → 3 questions (−84%)**, and the judgement was already recorded
+(`lcc_owner_sponsor_domain.confirmed_by = 'scott 2026-08-26'`).
+
+**⚠️ Most of the machinery already existed — checked before building.** `lcc_buyer_parents` holds
+**25 human-curated parents including NGP Capital, UIRC, RMR, Boyd Watterson, Easterly and Realty
+Income**; `v_lcc_entity_tier0_parent` already carries **85 parent proposals covering NGP/UIRC SPEs**.
+The real gap is narrow: **`entity_relationships` has 0 parent edges and no parent TYPE exists** —
+the enum is associated_with, brokers, deal_party, developed, finances, guaranteed_by, leases, owns,
+purchases, sells.
+
+**⚠️ Naming trap worth recording:** `lcc_buyer_parents.domain` is the VERTICAL (`dia`/`gov`), **not**
+an email domain — it does not overlap `lcc_owner_sponsor_domain.email_domain` (P190) despite the
+column name. Two meanings of "domain" one table apart; check before "consolidating" them.
+
+**Shipped:** `v_lcc_tier0_sponsor_rollup` — read-only, one row per (sponsor, domain) with the SPE
+list and the registered parent. **The bulk attach is deliberately NOT built in SQL** — the JS
+verdict path carries the shape guards and re-reads the card at write time.
+
+**⚠️ And the rollup must not collapse the WHICH-PERSON choice.** "Do the people at ngpv.com work for
+the NGP SPEs?" is one judgement; "do we call Fran Cowan, Kim Phillips or David Kent?" is a second
+one that stays on the card. **UIRC has seven candidates** — auto-picking there would be the P188
+mistake at 5× the blast radius. Spec: `prompts/193-*.md`.
+
+
 ## 2026-08-26 (Cowork) — DIVISION OF LABOUR: Scott works the lane, the builds run in parallel
 
 Scott asked whether to work the Decision Center lane now or wait. **Work it now — the two tracks do
