@@ -166,9 +166,147 @@ A count that does not move is inventory, not throughput.
 
 ---
 
+## Class 7 — a capability that exists but is unreachable
+
+**Symptom:** the feature is built, correct, tested and deployed. No operator will ever see it.
+
+**First run:** P173 added a "Find the contact" button to `owner_contact_manual` cards — the fix
+that made the system's only dead lane answerable. Hours later, P174 measured where those cards
+actually appear. The Research page serves `priority.asc, created_at.asc`, 25 per page:
+
+- **page 1 was 25 of 25 `true_owner_needs_salesforce`, zero actionable**
+- the first `owner_contact_manual` card sat at **row 1,869 — page 75**
+
+The button was on cards nobody would reach. **A fix that ships behind 74 pages of other work
+has not shipped.**
+
+**Cause:** the lane carried a FLAT priority 50 — the unranked default — while a neighbouring
+lane had a hard 20. Two other producers in the same table *do* graduate their priorities
+(21–25, 50–100), so the absence was specific to this one, not a table-wide convention.
+
+**Detector — run this for ANY new action added to a ranked or paged surface:**
+
+```sql
+select min(rn) as first_row, ceil(min(rn)/25.0) as first_page
+from (select research_type, row_number() over (order by priority asc, created_at asc) rn
+        from research_tasks where status in ('queued','in_progress')) z
+where research_type = '<the lane your new button lives on>';
+```
+
+**The general question: after building something, ask what the operator sees on the first
+screen — not whether the thing works.** Correct-and-invisible is indistinguishable from
+not-built, and it *tests* as success: 142/142 guards passed on a button at page 75.
+
+**⚠️ Ranking is not just promotion.** 32 high-value tasks moved up AND 213 unsized ones moved
+DOWN (below the old default). A blanket promotion of the whole lane would have inverted the
+noise rather than removed it.
+
+---
+
+## Class 8 — a producer re-creates what the cleanup cleaned
+
+**Symptom:** a defect you already fixed is back tomorrow. Repairs "don't stick", and the
+cleanup function tests as correct because it *is* correct.
+
+**First run (P175, 2026-08-26):** 119 tombstones carried 198 live portfolio facts worth
+$71.8M of current annual rent. This looks exactly like Class 1 — an entity FK missing from
+the merge path — and it is not. `lcc_reconcile_tombstone_backrefs` handles portfolio facts
+correctly: it dedup-deletes collisions, then repoints the rest. **It moves them, and the
+daily sync puts them back.**
+
+**Cause, one line in `lcc_finalize_entity_portfolios`:**
+
+```sql
+WHERE EXISTS (SELECT 1 FROM entities e WHERE e.id = aggregated.entity_id)
+```
+
+**A tombstone still exists.** It is a row in `entities` carrying `merged_into_entity_id`, so
+an existence check passes for every ghost. (This is Class 4 wearing different clothes — the
+guard checks existence, not liveness.) The `entity_id` arrives as the *domain's*
+`true_owner_id`, and the domain DBs know nothing about LCC merges, so every sync re-sends the
+pre-merge id and the finalizer resurrects it.
+
+**Detector — the question is "was this row written AFTER the cleanup that should have removed
+it?":**
+
+```sql
+-- any table X with an entity_id and an updated_at
+select case when max(f.updated_at) > e.updated_at
+            then 'RE-CREATED by a live writer' else 'historical residue' end,
+       count(*)
+from entities e join <table> f on f.entity_id = e.id
+where e.merged_into_entity_id is not null
+group by 1;
+```
+
+All 92 then-measured ghosts returned **written after the merge, most recent = today**. That
+single result is what separates "clean it up" from "find the producer" — and it is the whole
+difference between a fix and a chore you repeat every morning.
+
+**⚠️ Two false steps on the way, both worth keeping:**
+
+1. **The first attribution test was meaningless.** "Did this merge run through the reconcile?"
+   was answered by looking for rows in `r40_merge_reconcile_backup` — which is only written
+   when `p_snapshot := true`, and `lcc_merge_entity` passes `false`. So the table is empty for
+   *every* normal merge and "1 of 92 ran through reconcile" measured nothing at all. Before
+   trusting a coverage signal, check that the signal is *emitted* in the path you are
+   measuring.
+2. **`updated_at` moves on an unconditional touch.** The `ON CONFLICT DO UPDATE` sets
+   `updated_at = now()` whether or not anything changed, so "written today" proves the row is
+   being *re-affirmed* daily — which is the point — but would not prove the values changed.
+   State the claim you can support.
+
+**The fix is at the producer, and the ordering matters:** resolve the id through
+`lcc_entity_survivor` **before the GROUP BY**, not at the INSERT. Two pre-merge ids collapsing
+to one survivor would otherwise arrive as duplicate keys in a single statement and Postgres
+rejects it outright — *"ON CONFLICT DO UPDATE command cannot affect row a second time."*
+
+**⚠️ And the repair itself needed three classes, not two — see P175a.** "The survivor already
+holds this property, so the ghost row is a duplicate" is the obvious rule and it would have
+destroyed live rent. Carrington, gov property 2654: ghost `is_current` with $1.7M and no end
+date; survivor `is_current = false`, ended 2024-05-01. Those rows **contradict** each other
+about whether the owner still holds the asset — deleting the ghost resolves the conflict
+toward the stale side. The aggregate split (183/3) hid it completely; only reading a named row
+with a stated expectation exposed it. Final disposition: 3 repoint, 183 dedup-delete, **12
+conflicts surfaced in `v_lcc_portfolio_ownership_conflict` and not decided**.
+
+---
+
 ## What to audit next
 
 Ordered by expected yield, not by ease:
+
+0. ~~**Class 8 across every table the merge path cleans**~~ — **SWEPT 2026-08-26, and it
+   found a second live producer.** The detector was run across all 38 entity-referencing
+   columns carrying stranded rows. Result:
+
+   | table.column | stranded | verdict |
+   |---|---|---|
+   | **`lcc_decisions.subject_entity_id`** | **296** | **CLASS 8 — 81 genuinely re-created, 11 STILL OPEN, 10 created in the last 7 days** |
+   | `lcc_entity_portfolio_facts.entity_id` | 12 | the held P175a conflicts (expected) |
+   | `lcc_owner_evidence.entity_id` | 3 | Class 8, trivial volume |
+   | `entity_relationships.from_entity_id` | 184 | **unmeasurable — no `updated_at`** |
+   | `lcc_owner_reconcile_evidence.*` | 203 | unmeasurable — no `updated_at` |
+   | `external_identities.entity_id` | 45 | unmeasurable — no `updated_at` |
+   | 30 further columns | 1–50 each | mostly logs/backups (correctly historical) |
+
+   **⚠️ The headline number was wrong on first read and self-inflicted.** The raw detector
+   said 94 re-created on `lcc_decisions` — but **P172 had superseded 78 of those cards hours
+   earlier**, and its own writes bumped `updated_at`. 13 of the 94 were mine. *When you run a
+   "was this written after X" detector, exclude your own batch first*, or you will discover
+   your own footprints and report them as the defect.
+
+   **NEXT (P176): `lcc_decisions` needs the same treatment as P175.** P172 drained the
+   backlog and said explicitly it "does not prevent recurrence" — this is the measured
+   recurrence, ~10/week. The minter (`lcc_open_decision` and its callers) must resolve
+   `subject_entity_id` through `lcc_entity_survivor()` or refuse a tombstone subject. Note
+   this is worse than a stale queue: `lcc_decisions` is HEALTHY and actively worked, so these
+   cards get real verdicts against entities that do not exist.
+
+   **Also still open:** `lcc_sync_property_owner_to_portfolio` carries the identical
+   existence-not-liveness guard. It has no cron and no caller today (checked), so it was
+   deliberately left alone rather than changed on suspicion — but it must be fixed before
+   anything is ever wired to it.
 
 1. ~~**Class 2 across the other queues**~~ — **DONE 2026-08-22, hypothesis refuted.** Six of
    seven are healthy; `owner_contact_manual` is the only genuinely dead lane. See the
@@ -239,7 +377,34 @@ Ordered by expected yield, not by ease:
    possible by any method. That observability gap is the item, not the parser.
 5. **The `establish_ownership_history` producer** — 545 open, 0 completed, emits one task per
    property with no value gate. Either give it a consumer or stop it producing; P165a added
-   the auto-retire predicate but the value gate is still missing.
+   the auto-retire predicate but the value gate is still missing. **It is now the largest
+   never-consumed block sitting above the newly-ranked contact lane.**
+6. **The observability gap (blocks Class 6, Class 8, and any future Class-4 detector)** —
+   `lcc_reusable_owner_contacts` (10,430 rows), `lcc_owner_evidence_cache` (43,161) and
+   `lcc_sf_comp_on_market` (1,696) have **no `_at` column at all**. No age, SLA, freshness or
+   throughput measure over them is possible by any method. Cheap to add, and it is the
+   prerequisite for the silent-cron question ever being answerable.
+
+   **Widened by the 2026-08-26 Class-8 sweep, which is now blocked on it.** The Class-8
+   detector asks "was this row written after the merge?" and therefore needs `updated_at`.
+   Three of the largest stranded populations cannot be classified at all without it:
+   **`entity_relationships` (184 + 14 stranded)**, **`lcc_owner_reconcile_evidence` (203)**
+   and **`external_identities` (45)**. `entity_relationships` is the notable one — it is the
+   party-role store the deal spine and reachability both read, so a stranded edge there is
+   not inert. Until these carry `updated_at`, "is a producer re-creating these?" is
+   unanswerable for the three tables where the answer matters most.
+7. **Two queues that close without a closure timestamp** — `action_items.completed_at`,
+   `lcc_owner_contact_propagate_review.decided_at`. Same family as (6).
+8. **Duplicate entities surfaced by the ranked contact lane** — "George Washington University"
+   and "George Washington University (The)" ($23.8M + $23.4M, one prospect, two entities);
+   "Penzance Management LLC" twice at identical rent in the priority-5 block. The ranked
+   surface makes these obvious in a way the unranked one never did — **expect ranking to keep
+   exposing duplicates, because it puts near-identical rows next to each other.**
+9. **Class 7 on every other paged surface** — Decision Center lanes, inbox triage, My Work.
+   Ask of each: what is on page 1, and is any of it actionable?
+10. **A private-vs-public prospecting call for Scott** — George Washington University sits at
+    priority 5. Doctrine excludes "public entities like a state or county"; GWU is a *private*
+    university. Deliberately not decided by Claude (see P174).
 
 ---
 

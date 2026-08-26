@@ -206,6 +206,8 @@ what it found on first run. Summary:
 | guard checks the label, not the substance | ask what other attribute identifies the population | broker guard reads ROLE; 80 broker/own-firm edges wore `prospecting_contact` |
 | dormant capability ≈ quiet pipeline | `feature_flags_registry where state <> 'on'` | every external acquisition adapter off since June; 249 owners have no automated route |
 | a count that measures state, not throughput | "what changes if the system idles a week?" | queue read 1,406 vs a real working set of 160; rent double-counted 4.65× |
+| **a capability that exists but is UNREACHABLE** | after building, ask what is on **page 1** | P173's new button sat at **row 1,869 — page 75**; 142/142 guards passed on a fix no operator could reach |
+| **a PRODUCER re-creates what the cleanup cleaned** | was the row written **after** the cleanup? (`max(child.updated_at) > entity.updated_at`) | **119 tombstones carrying 198 live portfolio facts, $71.8M**, re-upserted DAILY — the merge path was correct all along |
 
 **Two traps the merge-path detector had to survive, each of which gave a wrong answer first:**
 declared FKs alone MISS `owner_contact_pivot.active_contact_entity_id` (no FK constraint — match
@@ -461,6 +463,25 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
     `lcc_entity_survivor(uuid)` is hop-capped at 20. `lcc_merge_entity` now resolves the winner to its
     terminal survivor (a caller naming a tombstone means the survivor), refuses a genuine cycle, and
     refuses an already-tombstoned loser.
+  - **⚠️ CLEANING THE BACKREFS IS NOT ENOUGH IF A PRODUCER RE-CREATES THEM (P175, 2026-08-26).**
+    The merge path handles `lcc_entity_portfolio_facts` correctly — dedup-delete the
+    collisions, repoint the rest — and **119 tombstones still carried 198 live portfolio
+    facts worth $71.8M**, because `lcc_finalize_entity_portfolios` put them back every
+    night. Its guard was `EXISTS (SELECT 1 FROM entities e WHERE e.id = …)`, and **a
+    TOMBSTONE STILL EXISTS**; `entity_id` arrives as the DOMAIN's `true_owner_id`, and the
+    domain DBs know nothing about LCC merges, so each sync re-sends the pre-merge id. Any
+    writer keyed on a domain-supplied entity id must **resolve through
+    `lcc_entity_survivor()` and require `merged_into_entity_id IS NULL`** — existence is not
+    liveness. Resolve **before the GROUP BY**: two ids collapsing to one survivor otherwise
+    hit *"ON CONFLICT DO UPDATE command cannot affect row a second time."* The generalised
+    detector (was the row written AFTER the merge?) is Class 8 of
+    `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md`.
+  - **A survivor row for the same key is not automatically a DUPLICATE (P175a).** Where the
+    ghost reads `is_current` and the survivor reads ENDED, the rows **contradict** each other
+    about whether the party still holds the asset — deleting the ghost resolves the conflict
+    toward the stale side (Carrington gov 2654 would have dropped $1.7M of live rent). Three
+    dispositions, not two; the 12 conflicts live in `v_lcc_portfolio_ownership_conflict` and
+    are never auto-resolved.
   `ensureEntityLink` (the R4-A choke point: junk/implausible/federal guards + email-resolution tier +
   SF-account-as-org-edge modeling).
 - **Deal spine (living deal dossier, prompt 02/06):** `bd_opportunities` is the deal container;
