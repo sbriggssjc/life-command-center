@@ -732,6 +732,46 @@ right normaliser and **sorts its tokens**: `'Boyd Watterson Asset Management, LL
 `assetboydmanagementwatterson`, which does not contain `boydwatterson`. CLAUDE.md already warns
 about this for acronym initials; it applies to domain matching identically.
 
+### Class 13, second half (P187) — what fixing it taught, and the two traps in the fix
+
+**FIXED 2026-08-26.** Boyd Watterson, RMR (Adam Portnoy), Realty Income (Sumit Roy), TIAA-CREF,
+GI Partners, AVG and Cole Capital are now visible. Four durable lessons came out of the repair:
+
+1. **⚠️ MEASURING A GATE IS NOT SHIPPING A GATE.** P186 measured a token fan-out gate, reported
+   its effect in detail, and applied it only in *analysis queries*. It was never written into the
+   view. So `johnsonlexus.com` (a car dealership) was still matching "Allan Bailey Johnson Group"
+   the whole time the write-up said the gate cut it to zero. **Before citing a gate's effect,
+   confirm the gate is in the shipped object, not just in the query that measured it.**
+
+2. **Fan-out on the matching key was the answer three separate times** — token→domain,
+   token→owner, and 8-char-prefix→domain. Arm 2's five false positives (`american` → 10 unrelated
+   domains including americansleepdentistry.com, `national` → 4, `netlease` → 3, `healthca` → 4)
+   all shared one property: a generic opening. **Any prefix or containment matcher needs a
+   fan-out gate on whatever key it matches.** Promote this to a default, not a discovery.
+
+3. **⚠️ A COUNT THAT GETS WORSE WHEN PRECISION IMPROVES WAS MEASURING THE WRONG THING.**
+   Empty-bench owners at ≥$5M went **41 → 44** while empty-bench rent went **$902M → $738M**. All
+   10 newly-"empty" owners had benches that were **100% false positives**. The old "owners with a
+   bench" figure was inflated by noise. Expect a precision fix to make an inventory count look
+   worse, and say so rather than quietly reporting the flattering half.
+
+4. **⚠️ PRECISION IS A CURVE, NOT A NUMBER — quote the band.** Top 45 pairs by rent: **~91%**
+   (was 76–80%). Extend the same read down to the ~$2M single-property SPE band and it falls to
+   **~60–70%**, because those names ("NGP VI ESSEX VT LLC", "Ngp V Ogden Ut LLC", "Boyd Atlanta
+   Williams") are a place or a surname and little else. Two honest numbers, one misleading
+   average. The consumer surface must be worked top-down.
+
+**And the arm that was built, measured and rejected — Class 4 in new clothes.** An "acronym arm"
+keyed on *a 3–4 character token that is ALL-CAPS in the original name*. Measured: **27.6% of owner
+names (212 of 769) are ENTIRELY uppercase**, because that is the naming convention for government
+SPE records. So the test identified the CONVENTION, not an acronym, and every ordinary word in
+those names read as one. Live output included `"BOYD DEL RIO GSA LLC"` → **dell.com**,
+`"1445 ROSS AVE LLC"` → **avera.org**, `"MAIN THEATER PLACE"` → **maine.rr.com**, and
+`"EGP DEA VISTA LLC"` → de-az.com (**DEA is the tenant agency, not the owner**). Precision
+~30–40%. Fan-out could not rescue it — each wrong domain was the only one matching its token.
+**Before trusting a formatting signal (case, punctuation, ordering), measure how much of the
+population already wears it.**
+
 **Related, from the same round — a bar that answers the wrong question.** The evidence bar
 (Salesforce campaign membership, SF contact, Outlook, correspondence) attests that a PERSON is
 real and known to us. It says nothing about whether that person works for THIS owner. **Gary

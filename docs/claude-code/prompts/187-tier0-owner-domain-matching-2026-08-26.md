@@ -1,5 +1,25 @@
 # Prompt 187 — Tier 0 owner↔person matching: the rule cannot see the biggest owners
 
+> ## ✅ BUILT AND APPLIED 2026-08-26 — migration `20260827010000_lcc_p187_tier0_core_arm_and_stoplist.sql`
+>
+> **Result:** pairs 2,314 → 558; owners with a bench 346 → 208; empty-bench rent at ≥$5M
+> $902M → $738M. Top-45-by-rent precision **76–80% → ~91%**.
+>
+> **Now visible:** Boyd Watterson ($179.8M) 2 people · RMR Group 20 incl. **Adam Portnoy** ·
+> Realty Income 12 incl. **Sumit Roy** · TIAA-CREF · GI Partners · AVG Partners · Cole Capital.
+>
+> **Shipped:** `lcc_owner_domain_core()` (unsorted, order-preserving — 11/11 named-row gate);
+> Arm 2 = 8-char core/domain prefix equality with a fan-out gate; a fan-out gate on Arm 1 that
+> P186 had measured but never actually shipped; a widened stoplist (geography, generic CRE nouns,
+> consumer-ISP suffixes).
+>
+> **Rejected after measurement:** the acronym arm. 27.6% of owner names are entirely uppercase,
+> so "ALL-CAPS = acronym" identified the naming convention, not an acronym — it produced
+> `BOYD DEL RIO GSA LLC` → **dell.com**. See playbook Class 13.
+>
+> **Everything below is the original spec, kept for the record.** What remains open is in
+> `188-*.md`.
+
 > **Read first:** `docs/audits/P186_TIER0_VIEW_FIX_AND_BENCH_REVIEW_2026-08-26.md` §6,
 > `docs/architecture/account-based-contact-intelligence.md`,
 > `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md` Class 13.
