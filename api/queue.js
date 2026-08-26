@@ -171,6 +171,23 @@ export default withErrorHandler(async function handler(req, res) {
       return res.status(200).json({ items, count: result.count, view: 'research' });
     }
 
+    // P180: per-lane summary for the Research lane picker. Five+ lanes with very
+    // different cadences share ONE priority-ordered list, so a lane's
+    // reachability depends on the operator already knowing to filter for it
+    // (P179: a correctly ranked, answerable lane still read as "page 62").
+    //
+    // ⚠️ `total_annual_rent` is NULL — not 0 — for a lane whose tasks carry no
+    // entity_id. Unsized is not worthless: the two biggest such lanes are the
+    // healthiest work in the system (4,772 and 595 completions). The client MUST
+    // render null as "—" and never as "$0".
+    case 'research_lanes': {
+      const result = await opsQuery('GET', 'v_lcc_research_lane_summary?select=*&order=open_tasks.desc');
+      if (!result.ok) {
+        return res.status(result.status || 500).json({ error: 'Failed to fetch research lanes' });
+      }
+      return res.status(200).json({ items: result.data || [], view: 'research_lanes' });
+    }
+
     case 'entity_timeline': {
       if (!entity_id) {
         return res.status(400).json({ error: 'entity_id is required for entity_timeline view' });

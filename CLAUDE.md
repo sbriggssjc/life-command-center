@@ -279,6 +279,19 @@ worst failure mode: a `5,447` / `999+` badge that is mostly noise trains the ope
 4. **Close the loop from real activity** (Salesforce/Outlook activity → cadence advance) rather than a separate
    manual queue.
 5. **Honest counts** — every badge is actionable work, not raw output.
+   - **⚠️ NULL IS NOT ZERO, AND A LANE SUMMARY IS WHERE THAT BITES (P180, 2026-08-26).**
+     `v_lcc_research_lane_summary` first returned `0` for lanes whose tasks carry no
+     `entity_id`, which renders "$0" and reads as *worthless*. Six lanes are unsized that way
+     and **the two largest are the highest-throughput work in the system**
+     (`property_missing_recorded_owner` 4,772 completions, `true_owner_needs_salesforce` 595).
+     A "$0" badge on those invites exactly the wrong triage. NULL = "cannot be sized" (render
+     an em-dash); a GENUINE $0 (owners present, no known rent) must stay $0 — the two are
+     different facts.
+   - **Value is per OWNER, never per task**, wherever a producer emits one task per property:
+     measured 2× on `establish_ownership_history` and 4.65× on the contact lane. Report the
+     task count separately; never blend them into one figure.
+   - **An `answerable` flag is CURATED, not inferred** — the UI is the authority on whether a
+     capture path exists. When a new capture path ships, update that list in the same change.
 
 **No new producer ships without:** a named consumer (human verdict, worker, or auto-sweep — if none, don't
 build the producer); a value-gate; an auto-retire predicate; a ranked/capped actionable-only surface; and where

@@ -574,14 +574,26 @@ Ordered by expected yield, not by ease:
    *(The naive per-task sum said $809.8M — a 2× double-count. Rank and report per OWNER.)*
    **A ranked lane one filter-click away is a different thing from a lane buried at page 62;
    do not conflate them, and do not "fix" page 1 by demoting healthy work.**
-5b. **NEW (P179): the Research page has a type filter but no LANE PICKER.** Five lanes with
-   very different cadences share one priority-ordered list, so a lane's reachability depends on
-   the operator already knowing to filter for it. P179 showed why that matters: a correctly
-   ranked, newly-answerable lane still reads as "page 62" until you filter. **A picker showing
-   per-lane open count + total value (deduped per owner) would make all five navigable without
-   any further priority juggling** — and priority juggling is the move that risks demoting the
-   healthy lanes. This is navigation work, not ranking work, and it is the highest-value
-   remaining item on this list.
+5b. ~~**NEW (P179): the Research page has a type filter but no LANE PICKER.**~~ — **DONE
+   2026-08-26 (P180).** `v_lcc_research_lane_summary` + `GET /api/queue?view=research_lanes` +
+   chips on the Research page. **It found 14 lanes, not the five this work had been reasoning
+   about** — and the two answerable ones carry $1.08B and $754.9M.
+
+   **Three honest-count rules came out of building it, two of them mutation-tested:**
+
+   - **Value is per OWNER, never per task** (2× / 4.65× double-count otherwise).
+   - **NULL is not zero.** The first version returned `0` for lanes whose tasks carry no
+     `entity_id` — which renders "$0" and reads as *worthless*. Six lanes are in that state and
+     **the two largest are the highest-throughput work in the system** (4,772 and 595
+     completions). "$0" would have invited exactly the wrong triage. NULL now means "cannot be
+     sized" and renders an em-dash — while a GENUINE $0 (8 owners, no known rent) stays $0.
+   - **`answerable` is curated, not inferred** — the UI is the authority on whether a capture
+     path exists, so it is an explicit list. **When a new capture path ships, update that list
+     in the same change**, or the picker under-reports what the operator can do.
+
+   **Newly surfaced by it:** `npi_missing_inventory` — 203 open, **0 completed, 0 skipped, no
+   capture path** — a third genuinely dead lane (Class 2 + Class 3), previously invisible inside
+   an undifferentiated count. Now it displays its own emptiness.
 
 6. **The observability gap (blocks Class 6, Class 8, and any future Class-4 detector)** —
    `lcc_reusable_owner_contacts` (10,430 rows), `lcc_owner_evidence_cache` (43,161) and
