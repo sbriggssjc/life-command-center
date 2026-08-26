@@ -77,8 +77,13 @@ no-ops forever (never paginates to rows 201–1,095). → **Prompt 135** (query-
 `ownership_chain_draft` (545, today), `junk-prescreen` / `naming-hygiene` / `dup-pair` (cursor-advancing),
 `match-disambig` (1,270; 33 in 7d; caught up), `sf-link-assist` (247; 47 in 7d; caught up) — plus
 `NEXT_STEP_AI` (inline). **2 stalled:** `PROPERTY_TWIN_ASSIST` (confirmed stuck → P135) and
-`W9_2_REACHABILITY_HARVEST` (**16 ever / 0 in 11d** vs ~15k unreachable pool — investigate; may be the same
-no-cursor shape). **Structural tell: the two stalled lanes are the only ones without a keyset scan cursor.**
+`W9_2_REACHABILITY_HARVEST` (**16 ever / 0 in 11d** vs ~15k unreachable pool). **Diagnosed 2026-08-26
+(confirmed stall, NOT exhaustion):** cron 212 fires nightly but a bounded POST shows a fixed **120-target
+window** (60/domain) with `donors_found:0 / with_evidence:0` for those 120 — while the evidence pool holds
+5,000 intake + 4,305 comms names + 2,042 signature phones. It re-checks the same 120 unresolvable owners
+every night and never advances. → **Prompt 136** (mark no-evidence targets so the window advances + select
+targets by an evidence JOIN + honest counts + guard). **Structural tell: the two stalled lanes are the only
+ones without an advancing cursor/marker.**
 Doc note: the SF-assist flag is `W9_3_RESCORE` in code, not `W9_3_SF_ASSIST`. Full table in
 `docs/os/LOCAL-MODEL-LEVERAGE-MAP.md` §2.
 

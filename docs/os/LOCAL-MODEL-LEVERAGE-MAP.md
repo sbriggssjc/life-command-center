@@ -52,7 +52,7 @@ reversible.
 | sf-link assist | `W9_3_RESCORE` (source `w9_3_sf_assist`) | on | 247 total, 47 in 7d, caught up | ✅ healthy (caught up) |
 | next-step | `NEXT_STEP_AI` | on | inline (no proposal table) | ✅ on |
 | **property-twin** | `PROPERTY_TWIN_ASSIST` | on | **200, 0 in 7d, 895 unreached** | ❌ STUCK → Prompt 135 |
-| **reachability harvest** | `W9_2_REACHABILITY_HARVEST` | on | **16 ever, 0 in 11d** vs ~15k unreachable pool | ⚠️ investigate |
+| **reachability harvest** | `W9_2_REACHABILITY_HARVEST` | on | **16 ever, 0 in 11d** vs ~15k pool; diagnostic POST = fixed 120-target window, 0 evidence for those 120 while 5k intake + 4.3k comms names + 2k signature phones sit unused | ❌ STUCK (target window doesn't advance) → Prompt 136 |
 | ollama clean-assist | `OLLAMA_CLEAN_ASSIST` | off | held (thin context) | ⚪ off → Prompt 134 |
 
 **Structural tell:** the two stalled lanes are the ONLY ones without a keyset **scan cursor** — every
