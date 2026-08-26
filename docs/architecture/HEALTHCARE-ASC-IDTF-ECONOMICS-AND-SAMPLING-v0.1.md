@@ -164,6 +164,23 @@ only the aggregate receipt is eligible for architectural review or later governe
 Current acceptance is synthetic only. A real 50-property run still requires separate authorization for the
 frozen private release, source acquisition, reviewer access, and any database persistence.
 
+### Official ASC candidate-pack checkpoint
+
+`healthcare:asc:candidate-pack` converts an authorized official ASC release into three private artifacts: a
+CMS-derived candidate pool, an identifier crosswalk/manual-review worksheet, and a release-bound sampling
+contract. The eligible universe is limited to unique ASCQR facility identities corroborated by a currently
+`CERTIFIED` POS record; terminated POS facilities are excluded. Sampling strata use only source-grounded
+facts: Census region, presence of an exact ASC enrollment record, and a conservative single-site/multi-site
+proxy based on normalized CMS enrollment organization names. Hamilton largest-remainder allocation assigns
+exactly 50 slots proportionally across observed strata, and the existing deterministic sampler selects within
+those frozen cells without replacement.
+
+This checkpoint deliberately leaves property form, landlord/owner identity, ownership evidence, economics,
+LCC connection and Salesforce connection blank. A human may research those fields with approved CoStar, RCA,
+Salesforce and public-record workflows after the frame is frozen. The command performs no connector access,
+database write, CRM promotion, outreach or IDTF activation. Its public receipt is aggregate-only; candidates,
+CMS identifiers, organization names and manual research remain inside the approved private root.
+
 ## 9. Authorized sample-execution boundary
 
 `scripts/healthcare-discovery/sample-execution.mjs` and its CLI close the gap between the authorized private
@@ -175,5 +192,6 @@ candidate-pool fingerprint and selection fingerprint.
 
 The boundary fails closed on an unapproved or IDTF packet, receipt mismatch, release drift, path escape,
 insufficient cell quota, duplicate candidates or existing output. It does not download data, classify property
-form, populate scorecards, select replacements, write a database or authorize production promotion. Synthetic
-acceptance does not authorize the first official run.
+form, populate scorecards, select replacements, write a database or authorize production promotion. The official
+candidate-pack command additionally requires the authorized packet and matching authorization receipt, and its
+outputs do not broaden that approval.
