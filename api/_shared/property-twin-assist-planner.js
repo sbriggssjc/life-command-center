@@ -293,3 +293,58 @@ export function buildProposalFromLayers(detail, llmRaw) {
 }
 
 export { normalizeForMatch };
+
+// ---------------------------------------------------------------------------
+// Prompt 135 (2026-08-26) — advance the working set PAST the annotated window.
+//
+// The tick used to pull a FIXED first page of pending review rows (closest-first)
+// and drop the already-annotated ones in JS. Once that first page was fully
+// annotated, `fresh` was permanently 0: the assist annotated 200 rows on
+// 2026-08-19, then wrote NOTHING for 7 days while 1,095 rows sat pending, and the
+// nightly cron reported healthy the whole time (the silent-stall class this repo
+// keeps hitting — a worker judged by its own tally instead of the population
+// delta it is supposed to drain).
+//
+// Fix: PAGE through the pending slice, skipping annotated rows, until `want`
+// fresh rows are collected or the scan window is exhausted. The order
+// (closest-first) is preserved — this is a prioritization assist, so the highest-
+// likelihood twins must still be annotated first; only the WINDOW is lifted.
+//
+// The scan is bounded (`maxScan`) and reports `scan_capped` so a capped run's
+// `remaining` reads as a FLOOR, never a total (the P133 `lane_scan_capped`
+// discipline). Offset paging over a slowly-mutating pending slice can skip at
+// most a few rows when a human verdict removes one mid-scan; the next run
+// restarts at offset 0, so that is self-healing.
+//
+// Pure apart from the injected `fetchPage(limit, offset)` — directly unit-testable.
+export const TWIN_SCAN_PAGE = 1000;      // PostgREST caps a response at 1000 rows.
+export const TWIN_SCAN_MAX_ROWS = 5000;  // scan-window ceiling per invocation
+
+export async function selectFreshTwinRows({
+  fetchPage, isAnnotated, want, pageSize = TWIN_SCAN_PAGE, maxScan = TWIN_SCAN_MAX_ROWS,
+}) {
+  const page = Math.max(1, Math.min(pageSize, TWIN_SCAN_PAGE));
+  const ceiling = Math.max(page, maxScan);
+  const target = Math.max(0, want || 0);
+  const fresh = [];
+  let scanned = 0;
+  let freshTotal = 0;
+  let scanCapped = false;
+
+  for (let offset = 0; offset < ceiling; offset += page) {
+    const rows = await fetchPage(Math.min(page, ceiling - offset), offset);
+    const batch = Array.isArray(rows) ? rows : [];
+    scanned += batch.length;
+    for (const row of batch) {
+      if (isAnnotated(row)) continue;
+      freshTotal += 1;
+      // Keep only what this run can work; keep COUNTING the rest so `remaining`
+      // is honest (a run that legitimately finds nothing new must be
+      // distinguishable from one that cannot see past a window).
+      if (fresh.length < target) fresh.push(row);
+    }
+    if (batch.length < page) return { fresh, fresh_total: freshTotal, scanned, scan_capped: false };
+    if (offset + page >= ceiling) { scanCapped = true; break; }
+  }
+  return { fresh, fresh_total: freshTotal, scanned, scan_capped: scanCapped };
+}
