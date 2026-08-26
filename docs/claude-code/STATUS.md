@@ -28,8 +28,22 @@ All three stalled-assist prompts merged and reconciled:
   `POST /api/ollama-clean-assist-tick?limit=20`, keep on only if most proposals quote real evidence and
   `uncertain` lands on genuine ties.
 
+**Clean-assist RE-GRADE PASSED → FLIPPED ON (2026-08-26).** Enriched 20-item sample: 8/14 grounded (sf_link
+4/4, incl. a `merge@0.99` on Realty Income citing the actual strict_core; owner_reconcile 4/4 grounded
+abstentions), 6 correctly SKIPPED with named `no_evidence_reasons`, property_merge noise eliminated. Cleared
+the Consumption-Layer bar; `OLLAMA_CLEAN_ASSIST` now `state=on` (cron 200 hourly), the 14 proposals kept in
+the lane. **Follow-up DIAGNOSED → Prompt 137.** `provenance_conflict` 4/4 punt because P134 built the CONSUMER side
+(`clean-assist-context.js` computes `ladder_says` from `c.current_priority`/`c.priority_ladder`) but the
+PRODUCER side was never wired — `v_field_provenance_conflict_classified` has `attempted_priority` but **no
+`current_priority`**, and nothing in `admin.js` joins it, so `ladder_says` is always
+`unregistered_source_no_ladder_answer`. Measured: a join to `field_source_priority` on
+`(target_table, field_name, current_source)` resolves **454/454** conflicts — **433 ladder-decidable**, 21
+genuine ties. P137 = add `current_priority` + `priority_ladder` to the view (append) + the handler's
+`select=` (the exact "diff view columns vs select" lesson). Turns ~95% of the lane from punt into a
+grounded keep_current/accept_attempted.
+
 **Assist production-health is now GREEN across the board** — 6 were already healthy, the 2 stalled lanes are
-fixed (P135 live, P136 merged), clean-assist enriched (re-grade to flip). The recurring lesson, now proven
+fixed (P135 live, P136 merged), clean-assist enriched + re-graded + flipped ON. The recurring lesson, now proven
 three times in one arc: a producer keyed on "already processed" needs a marker/cursor that ADVANCES, or it
 silently re-checks the same residue forever while looking healthy.
 
