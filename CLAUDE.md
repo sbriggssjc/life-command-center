@@ -265,9 +265,33 @@ worst failure mode: a `5,447` / `999+` badge that is mostly noise trains the ope
      has a shelf life.** P172's gate was not wrong, it just could not see the producer; re-run
      the gate a day later, or make it permanent.
 3. **Surface actionable-only, value-ranked, capped** (top-N, with a "show all" toggle).
+   - **⚠️ "UNREACHABLE" HAS THREE DIFFERENT CAUSES AND ONLY ONE IS FIXED BY RANKING (P179,
+     2026-08-26).** Ranking `establish_ownership_history` off a flat priority 100 left it at
+     **row 1,528 — page 62** of the global research list. The tempting next move is to demote
+     whatever is above it; measured first, the 1,527 rows ahead were two lanes with **4,772 and
+     595 lifetime completions**, one completing rows that same day. They were the system
+     working, not noise. The three causes: *unranked/flat-defaulted* → rank it (P174);
+     *ranked but genuinely behind more valuable work* → a filter/lane picker, NOT a re-rank;
+     *reachable but with nowhere to enter an answer* → a capture path (P173/P179). **Measure the
+     throughput of whatever a promotion would displace before promoting.**
+   - **Capture path BEFORE rank, always.** Ranking an unanswerable lane promotes work nobody can
+     complete onto page 1 and displaces work they can — strictly worse than leaving it buried.
 4. **Close the loop from real activity** (Salesforce/Outlook activity → cadence advance) rather than a separate
    manual queue.
 5. **Honest counts** — every badge is actionable work, not raw output.
+   - **⚠️ NULL IS NOT ZERO, AND A LANE SUMMARY IS WHERE THAT BITES (P180, 2026-08-26).**
+     `v_lcc_research_lane_summary` first returned `0` for lanes whose tasks carry no
+     `entity_id`, which renders "$0" and reads as *worthless*. Six lanes are unsized that way
+     and **the two largest are the highest-throughput work in the system**
+     (`property_missing_recorded_owner` 4,772 completions, `true_owner_needs_salesforce` 595).
+     A "$0" badge on those invites exactly the wrong triage. NULL = "cannot be sized" (render
+     an em-dash); a GENUINE $0 (owners present, no known rent) must stay $0 — the two are
+     different facts.
+   - **Value is per OWNER, never per task**, wherever a producer emits one task per property:
+     measured 2× on `establish_ownership_history` and 4.65× on the contact lane. Report the
+     task count separately; never blend them into one figure.
+   - **An `answerable` flag is CURATED, not inferred** — the UI is the authority on whether a
+     capture path exists. When a new capture path ships, update that list in the same change.
 
 **No new producer ships without:** a named consumer (human verdict, worker, or auto-sweep — if none, don't
 build the producer); a value-gate; an auto-retire predicate; a ranked/capped actionable-only surface; and where

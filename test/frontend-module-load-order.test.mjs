@@ -672,6 +672,68 @@ describe('W6.5 front-end module load order (no-bundler classic scripts)', () => 
       'the button is scoped to owner_contact_manual — a binary verdict needs no field');
   });
 
+  // ── P179: the ownership-history lane must be answerable too ───────────────
+  it('the ownership-history research card opens the property Ownership tab', () => {
+    const ops = readFileSync(join(root, 'ops.js'), 'utf8');
+    // P173 gated its button to ONE research_type, leaving establish_ownership_history
+    // (545 open, above the value floor) with no way to record an answer.
+    assert.match(ops, /function\s+researchOpenOwnership\b/, 'ops.js defines the capture action');
+    assert.match(ops, /window\.researchOpenOwnership\s*=/,
+      'it must be on window — the card reaches it from an inline onclick at CLICK time');
+    assert.match(ops, /onclick="researchOpenOwnership\(/, 'the research card renders the button');
+    // ⚠️ Same trap the P173 test documents: the explanatory comment above the
+    // function mentions both `researchOpenOwnership` and `openUnifiedDetail`, so a
+    // bare-word match would pass with the real call deleted. Anchor on the CALL,
+    // with its exact argument shape.
+    assert.match(ops, /openUnifiedDetail\(dom,\s*\{\s*property_id:\s*pid\s*\},\s*\{\},\s*'Ownership'\)/,
+      'it must INVOKE the existing property panel on the Ownership tab, not merely mention it');
+    // Scoped to the one lane, and gated on the identifiers it actually needs.
+    assert.match(ops, /item\.research_type === 'establish_ownership_history'/,
+      'the button is scoped to establish_ownership_history');
+    assert.match(ops, /item\.domain && item\.source_record_id/,
+      'gated on the property identifiers — the card is about a PROPERTY, not the owner');
+    // ⚠️ The subject is a property. Routing to the entity panel would open the
+    // CURRENT owner, and the whole task is that the ownership chain is unresolved,
+    // so that owner is the thing in question.
+    assert.doesNotMatch(ops, /onclick="researchOpenOwnership\([^"]*item\.entity_id/,
+      'must NOT be wired to entity_id — that is the disputed owner, not the subject');
+  });
+
+  // ── P180: the research lane picker, and its honest-count rules ────────────
+  it('the research lane picker exists and reports counts honestly', () => {
+    const ops = readFileSync(join(root, 'ops.js'), 'utf8');
+    const queue = readFileSync(join(root, 'api', 'queue.js'), 'utf8');
+
+    assert.match(ops, /function\s+researchLanePickerHTML\b/, 'ops.js renders the picker');
+    assert.match(ops, /window\.setResearchLane\s*=/,
+      'the chip reaches its handler from an inline onclick at CLICK time');
+    assert.match(ops, /onclick="setResearchLane\(/, 'the chips are clickable');
+    assert.match(ops, /view=research_lanes/, 'it reads the lane summary endpoint');
+    assert.match(queue, /case 'research_lanes'/, 'queue.js serves that view');
+    assert.match(queue, /v_lcc_research_lane_summary/, 'backed by the summary view');
+
+    // ⚠️ RULE 1 — a failed picker must not strand the queue. Promise.all would
+    // reject the whole render on one bad response; the Overview tiles were
+    // broken this exact way.
+    assert.match(ops, /Promise\.allSettled\(\[\s*\n?\s*opsApi\(`\/api\/queue\?view=research/,
+      'the two fetches use allSettled, never Promise.all');
+
+    // ⚠️ RULE 2 — NULL rent means "cannot be sized", not "$0". Six lanes carry
+    // no entity_id, and two of them are the highest-throughput work we have;
+    // rendering "$0" would invite exactly the wrong triage. The null check must
+    // come BEFORE any numeric coercion (Number(null) === 0).
+    assert.match(ops, /if\s*\(v === null \|\| v === undefined\) return '<span title="no owner link/,
+      'null/undefined rent short-circuits to an em-dash before Number() is applied');
+
+    // ⚠️ RULE 3 — a lane with no capture path is marked, not silently offered.
+    assert.match(ops, /l\.answerable \?/, 'the chip distinguishes answerable lanes (Class 3)');
+
+    // Selecting a lane must reset paging, or the operator lands on page N of a
+    // shorter lane and reads an empty list as "no work".
+    assert.match(ops, /function setResearchLane\(type\)\s*\{[^}]*opsResearchPage = 1/,
+      'selecting a lane resets to page 1');
+  });
+
   it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
     const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
     const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');

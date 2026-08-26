@@ -5438,6 +5438,75 @@ async function renderMetadataBackfillPage() {
 }
 window.renderMetadataBackfillPage = renderMetadataBackfillPage;
 
+// ─── P180 — the research LANE PICKER ────────────────────────────────────────
+// 14 lanes with very different cadences share ONE priority-ordered list, so a
+// lane's reachability depended on the operator already knowing to filter for it.
+// P179 demonstrated the cost: a correctly ranked, newly-answerable lane holding
+// $1.08B still read as "page 62" of the unfiltered list. This is navigation, not
+// ranking — and ranking was the wrong lever, because the lanes sitting above it
+// are the healthiest work in the system (4,772 and 595 lifetime completions).
+//
+// ⚠️ THREE HONEST-COUNT RULES, each of which would mislead triage if broken:
+//  1. VALUE IS PER OWNER, never per task. A lane emitting one task per property
+//     double-counts (2x here, 4.65x on the contact lane). The view sums over
+//     DISTINCT owners; the task count is reported separately.
+//  2. NULL rent renders "—", NEVER "$0". Six lanes carry no entity_id at all, so
+//     they cannot be sized — and two of them are the highest-throughput lanes we
+//     have. Showing "$0" would invite exactly the wrong triage.
+//  3. `answerable` is shown, because a lane with no capture path should not be
+//     presented as workable however much value it carries (Class 3).
+function researchLanePickerHTML(lanes) {
+  if (!Array.isArray(lanes) || !lanes.length) return '';
+  const money = (v) => {
+    if (v === null || v === undefined) return '<span title="no owner link on these tasks — cannot be sized">&mdash;</span>';
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '<span>&mdash;</span>';
+    if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+    if (n >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return '$' + Math.round(n / 1e3) + 'K';
+    return '$' + n;
+  };
+  const sorted = lanes.slice().sort((a, b) => {
+    // Sized-and-answerable first, then by value, then by open count.
+    const av = a.total_annual_rent == null ? -1 : Number(a.total_annual_rent);
+    const bv = b.total_annual_rent == null ? -1 : Number(b.total_annual_rent);
+    if (a.answerable !== b.answerable) return a.answerable ? -1 : 1;
+    if (av !== bv) return bv - av;
+    return (Number(b.open_tasks) || 0) - (Number(a.open_tasks) || 0);
+  });
+  const chip = (l) => {
+    const t = String(l.research_type || '');
+    const active = opsResearchTypeFilter === t;
+    const label = t.replace(/_/g, ' ');
+    return `<button class="q-action${active ? ' primary' : ''}"
+      onclick="setResearchLane(decodeURIComponent('${encodeURIComponent(t)}'))"
+      title="${esc(label)} — ${esc(String(l.open_tasks))} open, ${esc(String(l.ever_completed))} completed, ${esc(String(l.ever_skipped))} auto-retired${l.answerable ? '' : ' — NO capture path yet'}"
+      style="margin:0 6px 6px 0">
+      ${esc(label)}
+      <span style="opacity:.75">&nbsp;${esc(String(l.open_tasks))}</span>
+      <span style="opacity:.75">&nbsp;&middot;&nbsp;${money(l.total_annual_rent)}</span>
+      ${l.answerable ? '' : '<span title="no way to record an answer yet" style="opacity:.6">&nbsp;&#9888;</span>'}
+    </button>`;
+  };
+  return `<div class="lcc-research-lanes" style="margin-bottom:10px">
+    <div style="font-size:11px;color:var(--text2);margin-bottom:4px">
+      Lanes &mdash; value is per OWNER (deduped), &mdash; means the lane carries no owner link
+    </div>
+    <button class="q-action${opsResearchTypeFilter ? '' : ' primary'}"
+      onclick="setResearchLane('')" style="margin:0 6px 6px 0">All lanes</button>
+    ${sorted.map(chip).join('')}
+  </div>`;
+}
+
+// Selecting a lane resets to page 1 — staying on page N of a different lane is
+// how an operator lands on an empty list and concludes the queue is empty.
+function setResearchLane(type) {
+  opsResearchTypeFilter = String(type || '');
+  opsResearchPage = 1;
+  renderResearchPage(1);
+}
+window.setResearchLane = setResearchLane;
+
 async function renderResearchPage(page = opsResearchPage) {
   const el = document.getElementById('researchContent');
   if (!el) return;
@@ -5459,7 +5528,15 @@ async function renderResearchPage(page = opsResearchPage) {
     : opsResearchFilter === 'completed' ? 'completed'
     : '';
   const typeParam = opsResearchTypeFilter ? `&research_type=${encodeURIComponent(opsResearchTypeFilter)}` : '';
-  const res = await opsApi(`/api/queue?view=research&page=${opsResearchPage}&per_page=25${statusParam ? `&status=${statusParam}` : ''}${typeParam}`);
+  // P180: fetch the lane summary ALONGSIDE the tasks. allSettled, not all — a
+  // failed picker must never strand the queue itself (the Overview-tile lesson).
+  const [resS, lanesS] = await Promise.allSettled([
+    opsApi(`/api/queue?view=research&page=${opsResearchPage}&per_page=25${statusParam ? `&status=${statusParam}` : ''}${typeParam}`),
+    opsApi('/api/queue?view=research_lanes')
+  ]);
+  const res = resS.status === 'fulfilled' ? resS.value : { ok: false, status: 0, data: null };
+  const lanes = (lanesS.status === 'fulfilled' && lanesS.value && lanesS.value.ok)
+    ? (lanesS.value.data?.items || []) : [];
   if (!res.ok) {
     el.innerHTML = opsErrorState(res, 'renderResearchPage()', 'Could not load research tasks');
     perf.end();
@@ -5469,6 +5546,7 @@ async function renderResearchPage(page = opsResearchPage) {
   opsResearchData = res.data?.items || res.data || [];
 
   let html = '';
+  html += researchLanePickerHTML(lanes);
   html += `<div class="ops-header">
     <h2>Research <span style="font-size:13px;color:var(--text2);font-weight:400">${opsResearchData.length} tasks</span></h2>
     ${opsResearchTypeFilter === 'news_alert_development_followup' ? `<div class="ops-controls"><button class="q-action" onclick="openNewsAlertResearchQueue()">\u2190 Back to News Alert Follow-up</button><button class="q-action" onclick="renderNewsAlertLane('open');navTo('pageReviewConsole')">News Alert Review</button></div>` : ''}
@@ -5515,6 +5593,7 @@ async function renderResearchPage(page = opsResearchPage) {
         </div>
         <div class="q-actions">
           ${item.status !== 'completed' && item.research_type === 'owner_contact_manual' && item.entity_id ? `<button class="q-action primary" onclick="researchFindContact(decodeURIComponent('${encodeURIComponent(item.entity_id)}'))">Find the contact &rarr;</button>` : ''}
+          ${item.status !== 'completed' && item.research_type === 'establish_ownership_history' && item.domain && item.source_record_id ? `<button class="q-action primary" onclick="researchOpenOwnership(decodeURIComponent('${encodeURIComponent(item.domain)}'), decodeURIComponent('${encodeURIComponent(item.source_record_id)}'))">Open ownership &rarr;</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action primary" onclick="_opsBtnGuard(this, completeResearch, decodeURIComponent('${encodeURIComponent(item.id)}'))">Complete</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action" onclick="_opsBtnGuard(this, createFollowup, decodeURIComponent('${encodeURIComponent(item.id)}'))">Follow-up</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action" onclick="_opsBtnGuard(this, dismissResearch, decodeURIComponent('${encodeURIComponent(item.id)}'))">Dismiss</button>` : ''}
@@ -5583,6 +5662,30 @@ async function researchFindContact(entityId) {
   if (typeof _entityAcquireContact === 'function') setTimeout(_entityAcquireContact, 250);
 }
 window.researchFindContact = researchFindContact;
+
+// ─── P179 — make the OWNERSHIP-HISTORY lane answerable too ───────────────────
+// P173 gave `owner_contact_manual` a capture path and gated the button to that
+// ONE type. `establish_ownership_history` — 545 open, above the value floor,
+// premise unresolved — was left with Complete / Follow-up / Dismiss, and
+// completeResearch() posts only { research_task_id }. Same Class-3 defect, same
+// remedy: open the surface where the answer is ALREADY recorded (the property
+// panel's Ownership tab) rather than build a second write path.
+//
+// ⚠️ The task's subject is a PROPERTY, not an owner — `source_record_id` is the
+// domain property_id and `domain` is dia|gov (source_table =
+// v_lcc_ownership_chain_completeness). Do NOT route this to the entity panel:
+// entity_id is the *current* owner, and the task is precisely that the ownership
+// CHAIN is incomplete, so the linked owner is the thing in question.
+async function researchOpenOwnership(domain, propertyId) {
+  const dom = String(domain || '').trim();
+  const pid = Number(propertyId);
+  if (!dom || !Number.isFinite(pid)) { showToast('This task has no linked property', 'error'); return; }
+  if (typeof openUnifiedDetail !== 'function') { showToast('Property panel unavailable', 'error'); return; }
+  // property_id is passed as a NUMBER: every other call site in this file does
+  // the same, and the domain lookup keys on an integer id.
+  await openUnifiedDetail(dom, { property_id: pid }, {}, 'Ownership');
+}
+window.researchOpenOwnership = researchOpenOwnership;
 
 async function completeResearch(id) {
   const res = await opsPost('/api/workflows?action=research_followup', {
