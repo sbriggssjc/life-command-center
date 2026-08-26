@@ -35,17 +35,37 @@ test('pickBestEmail skips a personal primary for the work address', () => {
     [{ name: 'idigmusic27@gmail.com', address: 'idigmusic27@gmail.com' },
      { name: 'Sarah Martin', address: 'smartin@NorthMarq.com' }], null);
   assert.equal(r.email, 'smartin@NorthMarq.com');
-  assert.equal(r.basis, 'first_business_domain');
+  assert.equal(r.basis, 'live_business_domain');
   assert.deepEqual(r.aliases, ['idigmusic27@gmail.com'], 'the personal address is KEPT, not dropped');
 });
 
-test('pickBestEmail keeps the full employment history as aliases', () => {
+// ⚠️ A DEAD FIRM MUST LOSE TO A LIVE ONE (2026-08-26). Measured: 101 contacts carried a
+// dead @stanjohnsonco.com primary, 52 with a live @northmarq.com address already on file —
+// because pickBestEmail took the FIRST business domain and the acquired firm sorts first.
+test('pickBestEmail prefers a live domain over a superseded one', () => {
   const r = pickBestEmail([{ address: 'khedrick@stanjohnsonco.com' },
                            { address: 'khedrick20200306@stanjohnsonco.com' },
                            { address: 'khedrick@northmarq.com' }], null);
-  assert.equal(r.email, 'khedrick@stanjohnsonco.com');
-  assert.equal(r.aliases.length, 2, 'both other addresses survive — that IS the job history');
-  assert.ok(r.aliases.includes('khedrick@northmarq.com'));
+  assert.equal(r.email, 'khedrick@northmarq.com', 'the live firm wins, not array position');
+  assert.equal(r.basis, 'live_business_domain');
+  assert.equal(r.aliases.length, 2, 'the superseded addresses SURVIVE — that IS the job history');
+  assert.ok(r.aliases.includes('khedrick@stanjohnsonco.com'));
+});
+
+test('a superseded domain still beats a consumer address', () => {
+  // A dead work identity is more useful than a personal one for BD purposes.
+  const r = pickBestEmail([{ address: 'x@gmail.com' },
+                           { address: 'x@stanjohnsonco.com' }], null);
+  assert.equal(r.email, 'x@stanjohnsonco.com');
+  assert.equal(r.basis, 'superseded_business_domain_only');
+});
+
+test('array ORDER does not decide when a live domain exists', () => {
+  // The defect was positional. Prove it is gone from both directions.
+  const a = pickBestEmail([{ address: 'p@stanjohnsonco.com' }, { address: 'p@northmarq.com' }], null);
+  const b = pickBestEmail([{ address: 'p@northmarq.com' }, { address: 'p@stanjohnsonco.com' }], null);
+  assert.equal(a.email, 'p@northmarq.com');
+  assert.equal(b.email, 'p@northmarq.com');
 });
 
 test('pickBestEmail falls back to the first when every domain is consumer', () => {
