@@ -689,6 +689,59 @@ proposals once and stalled again at row 1,001, with the failure now more expensi
 The fix is a cursor that advances and a selection that joins.
 
 
+## Class 13 — a MATCHING RULE whose eligibility test silently excludes the highest-value population
+
+**Symptom:** a matcher runs fast, returns thousands of rows, and reads as a rich, healthy bench.
+The rows it returns are real. The population it *cannot* return is invisible, because a row that
+never becomes eligible produces no output, no error and no counter. Distinct from Class 12 (a
+worker that re-checks the same residue): here the target is never selected *even once*.
+
+**First run (P186, 2026-08-26).** `v_lcc_tier0_owner_contact_candidates` matches owner-name tokens
+against person email domains. 2,358 candidate pairs across 346 owners — plausible, and the named
+rows in it are correct. Then the *complement* was measured: 41 owners at ≥ $5M ($902M of rent)
+with an EMPTY bench. Probing their real email domains directly found **≈51 people at 9 of those
+owners ($358M) already sitting in `entities`**, including **Boyd Watterson ($179.8M, the single
+largest owner)**, Adam Portnoy (RMR's CEO) and Sumit Roy (Realty Income's CEO).
+
+Three causes, all inside the eligibility test rather than the data:
+
+| cause | effect |
+|---|---|
+| `length(token) >= 5` | NGP, RMR, TIAA, USAA, GI, HPI, AVG yield **zero tokens** — acronym firms are structurally excluded, and they are the institutional buyers |
+| prefix-only matching (`sld LIKE tok \|\| '%'`) | `watterson` cannot match `boydwatterson`; the owner fails on its own domain |
+| a stoplist that can consume the whole name | "Realty Income Corporation" → realty/income/corporation all stoplisted → **zero tokens** (the documented `ownerCore` → empty-string failure, in a new place) |
+
+**Detector — measure the COMPLEMENT, and probe it directly:**
+
+1. List the population the matcher is supposed to serve, and subtract what it returns. **Rank the
+   remainder by value.** A matcher is judged by who it misses at the top, not by how much it emits.
+2. For the top misses, **look the answer up by hand** — one probe per owner against the domain a
+   human would guess. If the data is there, the rule is the defect.
+3. Ask **what makes a row ELIGIBLE**, and whether any legitimate target fails that test before
+   matching is even attempted. Length floors, stoplists and prefix anchors are the usual suspects,
+   and all three are invisible in the output.
+
+**⚠️ The premise that sent me here was wrong, which is why measuring the complement matters.**
+The design doc said these owners needed the Salesforce-by-email-domain path. Measured:
+`sf_campaign_members_at_org` is **0 for all 41**. The Salesforce route yields nothing at the org
+level — and the people were already in `entities` the whole time. *"The names were never missing,
+the LINKS were"* was correct, and still pointed at the wrong link.
+
+**⚠️ And the obvious fix carries a documented trap.** `lcc_owner_strict_core` looks like the
+right normaliser and **sorts its tokens**: `'Boyd Watterson Asset Management, LLC'` →
+`assetboydmanagementwatterson`, which does not contain `boydwatterson`. CLAUDE.md already warns
+about this for acronym initials; it applies to domain matching identically.
+
+**Related, from the same round — a bar that answers the wrong question.** The evidence bar
+(Salesforce campaign membership, SF contact, Outlook, correspondence) attests that a PERSON is
+real and known to us. It says nothing about whether that person works for THIS owner. **Gary
+George at `georgesinc.com` — a poultry company — passes all three tests for George Washington
+University.** Before adding evidence to a matcher, state which of the two questions each signal
+answers; recall and link-precision are not the same axis, and loosening one does not improve the
+other.
+
+---
+
 ## What to audit next
 
 > **⚠️ CURRENT BACKLOG LIVES IN `docs/claude-code/prompts/186-continuation-handoff-2026-08-26.md`**

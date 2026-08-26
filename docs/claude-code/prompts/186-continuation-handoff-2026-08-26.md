@@ -44,13 +44,50 @@ proposes all 7 `easterlyreit.com`/`easterlypartners.com` principals including An
 Elman → Mitchell Freeman; Trammell Crow → Aaron Thielhorn.
 
 **⚠️ Do these in order:**
-1. **Fix the view's performance first — it TIMES OUT at full scale.** A
-   `lcc_owner_known_annual_rent()` call per owner plus two `EXISTS` per pair. Hoist the
-   correlated subplans and LEFT JOIN once (the documented pattern; `loops=` equal to the row
-   count means a correlated subplan no index can fix).
+1. ~~**Fix the view's performance first — it TIMES OUT at full scale.** A
+   `lcc_owner_known_annual_rent()` call per owner plus two `EXISTS` per pair.~~ — **DONE
+   2026-08-26, and THIS DIAGNOSIS WAS WRONG ON BOTH HALVES.** Measured: the rent function is
+   191 ms of 58,694 ms (0.3%) and the two EXISTS are 53 ms combined (0.09%). The cost is a
+   JOIN with **no key** — `EXISTS(unnest(toks) WHERE sld LIKE tok||'%')` forces a Nested Loop
+   at `loops = 5,624,400`, 99.5% of the runtime. Fixing the three named suspects would have
+   bought 0.4% and left it timing out. Fixed by expanding each person's email SLD into its
+   prefixes, which makes the prefix match an equality join: **58,694 ms → 252–473 ms (124×),
+   0-row equivalence diff both directions.** Migration
+   `20260826234000_lcc_p186_tier0_candidates_hoist_cross_product.sql`.
 2. **Have Scott review the bench** for a handful of top owners before anything writes.
-3. **Then** build the promoter: dry-run, named-row expectations stated in advance, reversible,
-   batch-tagged.
+   → **BENCH PRODUCED: `docs/audits/P186_TIER0_VIEW_FIX_AND_BENCH_REVIEW_2026-08-26.md`.
+   AWAITING SCOTT.** Headline: the view is a recall net, not an identity rule — of 2,358 pairs,
+   **1,848 are noise** (CIM Urban → 17 unrelated `urban*` domains; George Washington University
+   → `georgesinc.com`, a poultry company; USPS → Postal Realty Trust; Allan Bailey Johnson →
+   `johnsonlexus.com`). A two-axis lexical gate cuts it to 510 but still passes known-wrong
+   rows, so **corroboration is required, not optional**. Only **A1 — 26 pairs / 20 owners /
+   $173M, correspondence + company-name match — reads clean row by row** and is a defensible
+   first promoter payload. Also measured: **41 owners ≥$5M ($902M) have an EMPTY bench**,
+   Boyd Watterson ($179.8M) among them — Tier 0's real gap is coverage, not ranking.
+3. ~~**Then** build the promoter~~ — **RECOMMENDATION REVERSED BY MEASUREMENT. Do not build an
+   unattended promoter.** Link precision at the agreed bar measured **~76–80%** (top 45 pairs read
+   individually). One write in five would put the wrong firm's employee in `owner_contact_pivot`.
+   Build a **confirm-a-draft lane** instead (the `lcc_clean_assist_proposals` pattern already in
+   use). **And do P187 first** — it is worth more than the promoter.
+
+**➡️ SUPERSEDED BY `187-tier0-owner-domain-matching-2026-08-26.md`.** The biggest unlock is not
+the promoter and not Salesforce: **≈51 people at 9 owners worth $358M are already in `entities`
+and invisible to Tier 0**, including Boyd Watterson ($179.8M, the largest owner in the system),
+RMR's CEO and Realty Income's CEO. Cause is the matcher's own eligibility test — playbook
+**Class 13**.
+
+### Scott's standing decisions, 2026-08-26 — do not re-litigate
+
+- **Corroboration bar:** correspondence is NOT required. Any evidence of "the right source or
+  connection or prospect historically" counts — Salesforce campaign membership (285 of 493 gated
+  pairs), SF contact record, Outlook address book, company-name corroboration. **⚠️ But that bar
+  attests to the PERSON, not the OWNER LINK** — Gary George at `georgesinc.com` (a poultry
+  company) passes all three for George Washington University.
+- **Municipalities and public bodies are OUT of prospecting scope**, while their ownership data
+  continues to be reconciled normally. Shipped: `lcc_owner_name_is_public_body` widened (27/27
+  named-row gate) + excluded in the Tier 0 view (−14 owners, −44 pairs).
+- **Public universities are still an open call** — Memphis and UNC Health are public; George
+  Washington ($23.8M) and Georgetown ($8.0M) are private and must stay. No regex separates them.
 
 **Hard rules:** brokers are never promoted. Owners whose only links are brokers must fall
 THROUGH to acquisition, not be suppressed. Reuse the P161-gated `owner-reachable-via` resolver.

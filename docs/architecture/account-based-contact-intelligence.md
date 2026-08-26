@@ -107,6 +107,30 @@ contains the principals for **three of the four invisible owners**:
 
 **Every one has `linked_to_owner = false`.** The names were never missing; the LINKS were.
 
+> ### ⚠️ CORRECTION (P186, 2026-08-26) — this section's PREMISE is half wrong, and the correct
+> half points somewhere better.
+>
+> The claim "Salesforce already holds the buyer names, so the unlock is linking SF membership to
+> the owner" was tested against the 41 high-value owners with an empty Tier-0 bench.
+> **`lcc_sf_list_membership.org_entity_id` is 0 for ALL 41** — the Salesforce route yields nothing
+> at the org level.
+>
+> Probing the owners' real email domains directly instead found **≈51 people at 9 owners worth
+> $358M already sitting in `entities`** — Boyd Watterson ($179.8M, the largest owner in the
+> system), Adam Portnoy (RMR's CEO), Sumit Roy (Realty Income's CEO), and **NGP's David Kent,
+> Fran Cowan and Kim Phillips — exactly the three names this section predicted, in `entities`, not
+> only in Salesforce.**
+>
+> So "the names were never missing, the LINKS were" is right, and the missing link is **not** the
+> SF-membership join. It is the Tier-0 matching rule's own eligibility test, which excludes
+> acronym firms (`length(token) >= 5`), cannot match a token that is not a domain prefix
+> (`watterson` vs `boydwatterson`), and can stoplist a name down to nothing ("Realty Income
+> Corporation"). Full measurement: `docs/audits/P186_TIER0_VIEW_FIX_AND_BENCH_REVIEW_2026-08-26.md`
+> §6; playbook Class 13; build spec in `docs/claude-code/prompts/187-*.md`.
+>
+> **§3b's rule "match on email domain, never company name" survives intact and is reinforced** —
+> it is the right key. The correction is about *which table to key it against*.
+
 **⚠️ MATCH ON EMAIL DOMAIN, NEVER COMPANY NAME.** Searching `company_name ilike '%easterly%'`
 returns **nothing** — Pulliam is filed under "Government Investment Partners LLC". The email
 domain `easterlyreit.com` is what identifies him. This is the same identity-vs-fuzzy discipline
