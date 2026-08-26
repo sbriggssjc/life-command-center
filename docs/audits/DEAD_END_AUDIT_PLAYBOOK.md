@@ -636,6 +636,48 @@ Ordered by expected yield, not by ease:
    That is a Decision Center lane, not a research card. Until it ships they remain notify-only,
    and the lane picker correctly reports `answerable = false`.
 
+5d. **⭐ NEW AND HIGHEST BD VALUE (2026-08-26): an EXCLUSION with no counterpart that
+   PROMOTES.** Found by walking the BD chain end-to-end for the top owners rather than auditing
+   a queue. Of the 81 resolved owners at ≥ $5M ($1.475B): 12 have a contact, 16 are in the
+   acquisition lane, **29 have no contact and are not in the lane, and 24 have no
+   `owner_contact_pivot` row at all** — i.e. the contact engine cannot see them.
+
+   **Mechanism (verified, and two wrong hypotheses discarded on the way):**
+   `v_owner_contact_worklist` deliberately excludes any owner that already has a linked person
+   (`associated_with`/`contact_at`/`works_at`) or an SF Contact — correct, since those need no
+   *acquisition*. **But nothing promotes that linked person into `owner_contact_pivot`.** The
+   exclusion assumes a downstream surface picks the person up; none does. Measured over the 120
+   suppressed owners ($875.3M):
+
+   | state | owners | rent |
+   |---|---|---|
+   | pivot names an ACTIVE contact — working as designed | 72 | $332.3M |
+   | pivot row exists but names nobody | 37 | — |
+   | **no pivot row at all — suppressed AND invisible** | **11** | **$240.5M** |
+
+   The 11 include **Easterly Gov Properties ($85.0M, 79 assets), NGP Capital ($59.8M), US Fed
+   Properties Trust ($53.7M), Elman Investors ($29.0M)** — top-tier prospects that read
+   "— none" in the panel while a person sits in the graph. This is P114's `reachable_via` gap
+   one level down: solved for the PANEL, never for the pivot the engine reads.
+
+   **⚠️ TWO HYPOTHESES I HAD TO DISCARD — both plausible, both wrong, each caught by measuring:**
+   - *"Two definitions of owner rent disagree."* They agree exactly ($85,049,576 both ways).
+   - *"They're suppressed by BROKER links we're forbidden to call."* Easterly's linked persons
+     are visibly CBRE/JLL/Newmark/Cushman/Avison Young — so this looked certain. Measured
+     fleet-wide: **zero** owners are suppressed by broker-ONLY links; 8 are mixed (Easterly also
+     carries two personal-email contacts). The broker edges are real and still wrong per Scott's
+     doctrine — but they are not what causes the suppression, and shipping that story would have
+     fixed the wrong thing. *(Note `v_lcc_prospecting_edge_review` did NOT contain the Easterly
+     broker edges, so using it as the broker test returned a false zero — the P166 surface is
+     narrower than its name suggests.)*
+
+   **The fix is a promoter, not a wider worklist:** resolve the linked person through the
+   existing P161-gated `owner-reachable-via` logic (which already excludes brokers via
+   `NON_REACHABLE_ROLES` and value-gates weak `works_at` associations) and write it into
+   `owner_contact_pivot` as the active contact. Owners whose only links are brokers should fall
+   THROUGH to acquisition rather than be suppressed. Not built here — it deserves a deliberate
+   design, since it decides who Scott calls.
+
 6. **The observability gap (blocks Class 6, Class 8, and any future Class-4 detector)** —
    `lcc_reusable_owner_contacts` (10,430 rows), `lcc_owner_evidence_cache` (43,161) and
    `lcc_sf_comp_on_market` (1,696) have **no `_at` column at all**. No age, SLA, freshness or
