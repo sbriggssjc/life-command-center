@@ -238,6 +238,47 @@ async function upsertDraft(task, draft, meta, ctx, sourceRunId) {
 }
 
 // ---------------------------------------------------------------------------
+// P133 — run log. The tick is on a nightly pg_cron schedule
+// (`lcc-ownership-chain-draft`, 06:45 UTC), and a schedule with no ledger cannot
+// tell a quiet night from a dropped one: pg_net records only the HTTP attempt
+// and prunes `net._http_response` to ~6 hours (P123), lcc_cron_post_log records
+// only that a request went out, and cron.job_run_details reports the SQL as
+// successful even when the handler never answers.
+//
+// So the row is OPENED at request entry (status='started') and PATCHed on the
+// way out. A row still reading 'started' means the handler did not come back.
+// Both writes are fail-soft — observability must never be able to break the
+// tick, and a run-log table that is missing (migration not yet applied) simply
+// costs a log line.
+// ---------------------------------------------------------------------------
+const RUN_LOG = 'lcc_ownership_chain_draft_run_log';
+
+async function openRunLog(row) {
+  try {
+    const r = await opsQuery('POST', RUN_LOG, row, { headers: { Prefer: 'return=representation' } });
+    if (!r.ok) { console.error('[ownership-chain-draft-tick] run-log open failed', r.status, r.data); return null; }
+    const rec = Array.isArray(r.data) ? r.data[0] : r.data;
+    return rec?.run_id ?? null;
+  } catch (e) {
+    console.error('[ownership-chain-draft-tick] run-log open threw', String(e?.message || e));
+    return null;
+  }
+}
+
+// Close the row opened at entry. If the OPEN failed (runId null) the outcome is
+// still persisted, as a fresh row, rather than losing the run entirely.
+async function closeRunLog(runId, row) {
+  try {
+    if (runId == null) { await openRunLog(row); return; }
+    const r = await opsQuery('PATCH', `${RUN_LOG}?run_id=eq.${encodeURIComponent(runId)}`,
+      row, { headers: { Prefer: 'return=minimal' } });
+    if (r && r.ok === false) console.error('[ownership-chain-draft-tick] run-log close failed', r.status, r.data);
+  } catch (e) {
+    console.error('[ownership-chain-draft-tick] run-log close threw', String(e?.message || e));
+  }
+}
+
+// ---------------------------------------------------------------------------
 export async function handleOwnershipChainDraftTick(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
   const user = await authenticate(req, res);
@@ -249,9 +290,26 @@ export async function handleOwnershipChainDraftTick(req, res) {
   const roleLabels = flagEnabled(ROLE_LABEL_FLAG, roleFlag);
   const limit = intParam(req.query.limit || req.body?.limit, DEFAULT_BATCH, 500);
 
+  // P133 — the row goes in BEFORE the work, so a run that dies mid-flight leaves
+  // a 'started' row instead of nothing. GET is a dry run and is not logged.
+  const isApply = req.method === 'POST';
+  const startedMs = Date.now();
+  const triggerSource = String(req.body?.trigger_source || req.query.trigger_source || 'api').slice(0, 32);
+  const runLogId = isApply
+    ? await openRunLog({
+      status: 'started', trigger_source: triggerSource,
+      flag_enabled: enabled, role_labels_enabled: roleLabels, batch_limit: limit,
+    })
+    : null;
+
   const scanErrors = [];
   const existing = await fetchExistingDrafts();
-  const openRows = await fetchOpenLaneRows(Math.max(limit, 600));
+  const laneScanLimit = Math.max(limit, 600);
+  const openRows = await fetchOpenLaneRows(laneScanLimit);
+  // The open-lane read is itself bounded, so when it comes back full the backlog
+  // we report is a FLOOR, not a total. Say so rather than implying we saw it all.
+  const laneScanCapped = openRows.length >= laneScanLimit;
+  if (laneScanCapped) scanErrors.push(`lane_scan_capped:${laneScanLimit}`);
   const fresh = openRows.filter((t) => !existing.has(OCD.ocdSubjectRef(t.domain, t.source_record_id)));
 
   // Group by domain so each domain DB is queried once.
@@ -303,6 +361,7 @@ export async function handleOwnershipChainDraftTick(req, res) {
       ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
       role_labels_enabled: roleLabels, lane: LANE_TYPE, limit,
       open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+      lane_scan_capped: laneScanCapped,
       counts, scan_errors: scanErrors,
       note: 'Annotation-only, NO writes in dry-run. The chain is assembled DETERMINISTICALLY from '
         + 'gov.ownership_history via v_ownership_transitions_portfolio (P138 guards re-applied); the '
@@ -330,8 +389,25 @@ export async function handleOwnershipChainDraftTick(req, res) {
 
   // ---- POST apply (flag-gated) -------------------------------------------
   if (!enabled) {
+    // The cron is deliberately NOT gated on the flag, so this path is reachable
+    // nightly. Record it: a fired-and-skipped run must be visible, or "flag off"
+    // and "cron never fired" look identical on every surface.
+    await closeRunLog(runLogId, {
+      status: 'completed', ok: true,
+      finished_at: new Date().toISOString(), duration_ms: Date.now() - startedMs,
+      open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+      written_draftable: 0, written_insufficient: 0, failed_writes: 0,
+      backlog_remaining: fresh.length, capped: fresh.length > 0,
+      budget_stopped: false, lane_scan_capped: laneScanCapped,
+      error_count: scanErrors.length,
+      detail: { skipped: 'feature_flag_off', counts, scan_errors: scanErrors },
+      ...(runLogId == null
+        ? { trigger_source: triggerSource, flag_enabled: false, role_labels_enabled: roleLabels, batch_limit: limit }
+        : {}),
+    });
     return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false,
-      lane: LANE_TYPE, open_lane_rows: openRows.length, fresh: fresh.length, counts });
+      lane: LANE_TYPE, open_lane_rows: openRows.length, fresh: fresh.length,
+      lane_scan_capped: laneScanCapped, counts });
   }
 
   const sourceRunId = 'p131_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)
@@ -341,30 +417,89 @@ export async function handleOwnershipChainDraftTick(req, res) {
     already_drafted: existing.size, fresh: fresh.length,
     written_draftable: 0, written_insufficient: 0, failed: 0,
     role_labels_applied: 0, role_labels_dropped: 0,
-    budget_stopped: false, counts, scan_errors: scanErrors };
+    backlog_remaining: 0, capped: false, lane_scan_capped: laneScanCapped,
+    budget_stopped: false, run_log_id: runLogId, counts, scan_errors: scanErrors };
 
   const start = Date.now();
-  for (const p of prepared.slice(0, limit)) {
-    if (Date.now() - start >= BUDGET_MS) { summary.budget_stopped = true; break; }
-    try {
-      const { draft, meta } = await draftOne(p.task, p.transitions, p.ctx, { roleLabels });
-      const w = await upsertDraft(p.task, draft, meta, p.ctx, sourceRunId);
-      if (!w.ok) { summary.failed += 1; scanErrors.push(`upsert_${w.status}`); continue; }
-      if (draft.draftable) summary.written_draftable += 1; else summary.written_insufficient += 1;
-      if (meta.labels) {
-        summary.role_labels_applied += meta.labels.applied || 0;
-        summary.role_labels_dropped += meta.labels.dropped || 0;
+  try {
+    for (const p of prepared.slice(0, limit)) {
+      if (Date.now() - start >= BUDGET_MS) { summary.budget_stopped = true; break; }
+      try {
+        const { draft, meta } = await draftOne(p.task, p.transitions, p.ctx, { roleLabels });
+        const w = await upsertDraft(p.task, draft, meta, p.ctx, sourceRunId);
+        if (!w.ok) { summary.failed += 1; scanErrors.push(`upsert_${w.status}`); continue; }
+        if (draft.draftable) summary.written_draftable += 1; else summary.written_insufficient += 1;
+        if (meta.labels) {
+          summary.role_labels_applied += meta.labels.applied || 0;
+          summary.role_labels_dropped += meta.labels.dropped || 0;
+        }
+      } catch (e) {
+        summary.failed += 1;
+        scanErrors.push(`draft_failed:${String(e?.message || e).slice(0, 120)}`);
       }
-    } catch (e) {
-      summary.failed += 1;
-      scanErrors.push(`draft_failed:${String(e?.message || e).slice(0, 120)}`);
     }
+  } catch (e) {
+    // Close the row as FAILED rather than leaving it at 'started' (which means
+    // "never came back"), then let withErrorHandler own the HTTP response.
+    await closeRunLog(runLogId, {
+      status: 'failed', ok: false,
+      finished_at: new Date().toISOString(), duration_ms: Date.now() - startedMs,
+      source_run_id: sourceRunId,
+      open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+      written_draftable: summary.written_draftable,
+      written_insufficient: summary.written_insufficient,
+      failed_writes: summary.failed,
+      backlog_remaining: Math.max(0, fresh.length - summary.written_draftable - summary.written_insufficient),
+      capped: true, budget_stopped: summary.budget_stopped, lane_scan_capped: laneScanCapped,
+      error_count: scanErrors.length + 1,
+      detail: { error: String(e?.message || e).slice(0, 400), counts, scan_errors: scanErrors.slice(0, 50) },
+    });
+    throw e;
   }
+
+  // Honest caps. The tick writes at most `limit` rows a night by design, so a
+  // run that leaves fresh rows undrafted is NOT "done" — it is a night that
+  // finished its batch. The next run resumes (already-drafted subject_refs are
+  // skipped), so a backlog drains rather than stalling; it just must not read
+  // as completion. Judge the run by written_draftable, never by already_drafted
+  // — that is a re-discovery tally and reads like throughput while nothing moves.
+  const writtenTotal = summary.written_draftable + summary.written_insufficient;
+  summary.backlog_remaining = Math.max(0, fresh.length - writtenTotal);
+  summary.capped = summary.backlog_remaining > 0;
 
   summary.note = 'Drafts written to lcc_clean_assist_proposals (source ownership_chain_draft). '
     + 'NOTHING was written to the ownership graph and no research task was closed — a human '
     + 'confirms each draft on the P179 capture path. Reverse: delete from '
-    + "lcc_clean_assist_proposals where source='ownership_chain_draft'.";
+    + "lcc_clean_assist_proposals where source='ownership_chain_draft'."
+    + (summary.capped
+      ? ` NOT done: ${summary.backlog_remaining} fresh lane row(s) still undrafted`
+        + `${laneScanCapped ? ' (a floor — the open-lane scan was itself capped)' : ''}`
+        + '; the next scheduled run continues.'
+      : ' Lane fully drafted as of this run.');
+
+  await closeRunLog(runLogId, {
+    status: 'completed', ok: summary.failed === 0,
+    finished_at: new Date().toISOString(), duration_ms: Date.now() - startedMs,
+    source_run_id: sourceRunId,
+    open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+    written_draftable: summary.written_draftable,
+    written_insufficient: summary.written_insufficient,
+    failed_writes: summary.failed,
+    backlog_remaining: summary.backlog_remaining,
+    capped: summary.capped, budget_stopped: summary.budget_stopped,
+    lane_scan_capped: laneScanCapped,
+    error_count: scanErrors.length,
+    detail: {
+      counts,
+      role_labels_applied: summary.role_labels_applied,
+      role_labels_dropped: summary.role_labels_dropped,
+      scan_errors: scanErrors.slice(0, 50),
+    },
+    ...(runLogId == null
+      ? { trigger_source: triggerSource, flag_enabled: true, role_labels_enabled: roleLabels, batch_limit: limit }
+      : {}),
+  });
+
   return res.status(200).json(summary);
 }
 

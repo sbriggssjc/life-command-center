@@ -24,9 +24,18 @@ onto cards that never appear. **→ Prompt 132** (named-alias fix `assignee:user
 in both paths + regression test + sweep for the same pattern; JS-only redeploy). This gates the whole R1
 review.
 
-**Prompt 133** — schedule the P131 drafter (`POST /api/ownership-chain-draft-tick`) as a nightly
-pg_cron on LCC Opps (~06:50 UTC via `lcc_cron_post`), idempotent/bounded, so new lane rows get drafted
-without manual re-runs. DB-only.
+**Prompt 133 — SHIPPED + APPLIED LIVE.** pg_cron `lcc-ownership-chain-draft` (jobid **239**,
+`45 6 * * *` — 06:45 UTC, not the proposed 06:50, which is `lcc-owner-deed-autofix`; 06:45 was the only
+free minute in the block and lands after `generate-research-tasks` at 06:35, which mints the lane rows)
+POSTs `/api/ownership-chain-draft-tick` via `lcc_cron_post` with `{"apply":true,"limit":100,
+"trigger_source":"cron"}`. Verified end-to-end by firing the exact cron command: HTTP **200**,
+`timed_out=false`, `open_lane_rows:545 / already_drafted:545 / fresh:0 / written_draftable:0` — the
+correct quiet-night disposition, 0 rows written. Registry note updated (`OWNERSHIP_CHAIN_DRAFT` was
+already `state='on'`); the cron is deliberately NOT gated on the flag. New observability
+`lcc_ownership_chain_draft_run_log` + `v_lcc_ownership_chain_draft_run_health` /
+`_stalled_runs` on the P123 open-before-the-work lifecycle. **DB side is live now; the run-log WRITE is
+JS and ships on the next Railway redeploy of merged `main`** — until then runs are observable only via
+`lcc_cron_post_log` + `net._http_response`. Reverse: `SELECT cron.unschedule('lcc-ownership-chain-draft');`
 
 **NEXT_STEP_AI dry-run (zero-spend).** It's inline-only (no standalone tick) — runs inside
 `deal-comms-propagate-tick` / `intake-tagged-comm` / `intake-correspondence`, deterministic-first, fails
