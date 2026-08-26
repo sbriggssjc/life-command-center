@@ -75,10 +75,16 @@ export async function buildOfficialAscCandidatePack({ packet, authorizationRecei
   await assertStagedArtifacts(packet, { cms_pos_asc: posPath, cms_ascqr_facility: qualityPath, cms_ffs_enrollment: enrollmentPath, cms_asc_payment: paymentPath });
   const releaseId = packet.source_manifest_release_id;
   const quality = new Map();
+  const qualityExclusions = { missing_facility_id: 0, missing_npi: 0, unjoinable_identity_rows: 0 };
   await eachCsv(qualityPath, (row) => {
     const ccn = clean(row['Facility ID']);
     const npi = clean(row.NPI);
-    if (!ccn || !npi) throw new Error('ASCQR rows require Facility ID and NPI');
+    if (!ccn || !npi) {
+      qualityExclusions.missing_facility_id += Number(!ccn);
+      qualityExclusions.missing_npi += Number(!npi);
+      qualityExclusions.unjoinable_identity_rows += 1;
+      return;
+    }
     const candidate = { ccn, npi, facility_name: String(row['Facility Name'] ?? '').trim(), city: String(row['City/Town'] ?? '').trim(), state: clean(row.State), zip: String(row['ZIP Code'] ?? '').trim(), year: Number(row.Year) || 0 };
     const existing = quality.get(ccn);
     if (existing && existing.npi !== npi) throw new Error(`ASCQR Facility ID ${ccn} maps to conflicting NPIs`);
@@ -149,6 +155,11 @@ export async function buildOfficialAscCandidatePack({ packet, authorizationRecei
   const receipt = {
     receipt_version: OFFICIAL_ASC_CANDIDATE_PACK_VERSION, lane: 'asc', packet_id: packet.packet_id, release_id: releaseId,
     eligible_candidate_count: candidates.length,
+    source_exclusions: {
+      ascqr_missing_facility_id: qualityExclusions.missing_facility_id,
+      ascqr_missing_npi: qualityExclusions.missing_npi,
+      ascqr_unjoinable_identity_rows: qualityExclusions.unjoinable_identity_rows,
+    },
     stratum_counts: Object.fromEntries([...counts].sort()),
     cell_quotas: Object.fromEntries(cells.map((cell) => [cell.name, cell.quota])),
     candidate_pool_fingerprint: sha256(canonicalJson(candidates.map((row) => row.candidate_fingerprint))),

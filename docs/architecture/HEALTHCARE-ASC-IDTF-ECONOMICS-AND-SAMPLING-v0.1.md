@@ -175,6 +175,10 @@ proxy based on normalized CMS enrollment organization names. Hamilton largest-re
 exactly 50 slots proportionally across observed strata, and the existing deterministic sampler selects within
 those frozen cells without replacement.
 
+ASCQR rows lacking either Facility ID or NPI are unjoinable and are excluded rather than assigned an inferred
+identity. Their reason counts appear in the aggregate receipt; conflicting nonblank Facility ID/NPI mappings
+remain a fail-closed integrity error.
+
 This checkpoint deliberately leaves property form, landlord/owner identity, ownership evidence, economics,
 LCC connection and Salesforce connection blank. A human may research those fields with approved CoStar, RCA,
 Salesforce and public-record workflows after the frame is frozen. The command performs no connector access,

@@ -38,6 +38,8 @@ async function fixtures() {
   const pos = ['prvdr_num,fac_name,prvdr_type_id,st_adr,city_name,zip_cd,state_cd,fed_crtfctn_stus_name'];
   const enrollment = ['NPI,PROVIDER_TYPE_DESC,ORG_NAME'];
   const states = ['NY', 'IL', 'TX', 'CA'];
+  quality.push('Missing ID,,8999999997,No Join,TX,00000,2024');
+  quality.push('Missing NPI,199997,,No Join,TX,00000,2024');
   for (let index = 0; index < 64; index += 1) {
     const ccn = String(100000 + index); const npi = String(9000000000 + index); const state = states[index % states.length];
     quality.push(`Facility ${index},${ccn},${npi},City ${index},${state},00000,2025`);
@@ -61,6 +63,11 @@ test('official pack creates a deterministic certified universe and executable 50
   assert.equal(buildPropertySamplingFrame(first.candidates, first.contract).sample_size, 50);
   assert.equal(first.receipt.controls.terminated_excluded, true);
   assert.equal(first.receipt.controls.production_write_authorized, false);
+  assert.deepEqual(first.receipt.source_exclusions, {
+    ascqr_missing_facility_id: 1,
+    ascqr_missing_npi: 1,
+    ascqr_unjoinable_identity_rows: 2,
+  });
   assert.equal(first.crosswalk[0].manual_review.landlord_owner, null);
   assert.ok(first.candidates.some((row) => row.operator_footprint_proxy === 'multi_site_proxy'));
   assert.ok(first.candidates.some((row) => row.corroboration_tier === 'pos_quality_only'));
