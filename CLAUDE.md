@@ -1292,6 +1292,56 @@ about what can honestly be drafted.
   lane and the research lane) drain independently — 27 U3 cards decided did NOT move
   `establish_ownership_history` off 0.
 
+## P134 — an LLM assist is only as good as the CONTEXT payload (2026-08-26)
+
+`OLLAMA_CLEAN_ASSIST` was flipped on for an inert 12-item sample and graded: **6 of 12 proposals were
+`uncertain @ 0.00` whose reason was a variant of "the context lacks detail."** The model was not
+failing — the safety doctrine held perfectly, it abstained instead of fabricating. It was handed
+`context: item.context || {}`, which for a federated lane row is **IDENTIFIERS, not evidence**
+(a representative property id, a provenance id, two entity uuids). Shipping that would have filled
+the Decision Center with content-free cards, which is the Consumption-Layer noise failure.
+
+- **⚠️ THE MISSING EVIDENCE WAS PARTLY ALREADY ON THE VIEW AND JUST NEVER SELECTED.**
+  `v_field_provenance_conflict_classified` has carried `attempted_priority`, `attempted_confidence`,
+  `decision_reason` and `current_recorded_at` all along; `api/admin.js`'s select asked for none of
+  them. Before building a new enrichment source, **diff the view's columns against the handler's
+  `select=`** — the cheapest fix is usually there. What genuinely had to be joined was the CURRENT
+  source's rung on `field_source_priority` (measured: **resolves for 454/454 cross-source conflicts**),
+  because "which source should win" is unanswerable without both rungs. The gate now hands the model
+  a precomputed `ladder_says` plus the ladder itself, with the rule stated (**LOWER priority number =
+  HIGHER trust**).
+- **⚠️ NEVER RE-DERIVE A VIEW'S GROUPING OUTSIDE THE VIEW — measured wrong on 3 of 7 live rows.**
+  `v_property_merge_lane` emits one row per duplicate GROUP, so the assist needs the members. Re-fetching
+  them by `(state, whitespace-collapsed address)` — a faithful-looking mirror of the view's `GROUP BY` —
+  returned **150 gov properties for a group the view says has 2**, because the view *also* excludes
+  `status='archived'`. Same class as the JS-copy-of-a-SQL-normaliser footgun elsewhere in this file. Fix
+  was to APPEND `member_property_ids` to the lane view on both domains (migrations
+  `supabase/migrations/{government,dialysis}/20260907120000_*_p134_merge_lane_member_ids.sql`, applied
+  live, append-only per the `CREATE OR REPLACE VIEW` column rule) and read it.
+- **AN ITEM WITH NO COMPARATIVE EVIDENCE IS NOT SENT TO THE MODEL.** `assessCleanAssistEvidence`
+  (`api/_shared/clean-assist-context.js`, pure) is the per-lane gate; a failing item is counted
+  `skipped_no_evidence` with a NAMED reason (`conflict_values_missing`,
+  `sf_link_account_name_unresolved`, `property_merge_members_unresolved`, `intake_no_address_or_tenant`,
+  …) instead of paying an Ollama call to hear "insufficient evidence". Live gate pass rates:
+  provenance 444/454, sf_link 3,369/3,369 (every row has both names), intake 801/942.
+- **⚠️ A DECISIVE VERDICT AT ~0 CONFIDENCE IS INCOHERENT AND MUST NOT RANK AS DECISIVE.** The sample's
+  one `merge` (Realty Income) came back at `confidence 0.00`, and the lanes sort easy-first ON
+  confidence — so it would have ranked as a confident call carrying none.
+  `normalizeCleanAssistProposal` downgrades any decisive verdict below `DECISIVE_MIN_CONFIDENCE` to
+  `uncertain` and **says so in the reason** (the model's own reason is preserved after it), so a graded
+  sample shows the guard firing rather than hiding it. `research`/`uncertain` at 0 are honest
+  non-answers and are left alone.
+- **The two name signals are labelled and never merged.** `strictOwnerCore` is the identity signal;
+  `dup-pair-planner.ownerCore`/`nameSimilarity` is the FUZZY PAIRING signal (it reduces
+  "Realty Income Corporation" to the empty string and scores "Agree Realty Corp"/"Agree Holdings LLC"
+  at 1.0). Both ride the payload under distinct keys so the model cannot read one as the other.
+  An upstream seeder's own proposal rides as `unverified_upstream_proposal` — the w8_u2 generator
+  emits things like *"the abbreviation 'tk' matches the initials of 'Terry Kessler'"*, which is exactly
+  the initials-only reasoning this lane must reject, so it is a claim to check, never a fact to inherit.
+- **Still OFF.** The flag stays off until a fresh 12–20 item sample grades clean (most proposals quoting
+  actual evidence, `uncertain` only on genuine ties). Cron 200 (`22 * * * *`) already exists and no-ops
+  while off. Enrichment is read-only GETs; proposals remain human-confirmed and never auto-write.
+
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
 Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration
