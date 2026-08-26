@@ -184,9 +184,59 @@ Ordered by expected yield, not by ease:
    and until it is, no age or throughput measure over those tables can be trusted.
 3. **Class 3 across every work surface** — Decision Center lanes, inbox triage, the
    contact-acquisition review. Each one: can the operator actually record the answer?
-4. **Crons that succeed and change nothing** — join `cron.job_run_details` to a row-count
-   delta on the table each job is supposed to write. The doctrine is already in `CLAUDE.md`
-   (cron 136/137 ran green for three weeks writing nothing); there is no detector yet.
+4. **Crons that succeed and change nothing** — ⚠️ **ATTEMPTED 2026-08-25. THE DETECTOR DOES
+   NOT WORK WELL ENOUGH TO SHIP, and the reason is worth more than the detector would have
+   been.** Method: parse each cron's function for `insert into` / `update` targets, then count
+   rows in those tables touched inside the run window.
+
+   First version flagged **108 of 135 active jobs (80%)** — not a defect rate, a broken
+   detector. Three bugs, all fixed: `lcc_cron_post` is an HTTP *dispatcher* whose real work
+   happens at Railway (61 jobs — analysing it measures the messenger); the regex returned SQL
+   keywords (`SET`, `SKIP`) as table names; and the timestamp probe only looked for
+   `updated_at`/`created_at`.
+
+   Fixed, it flagged 8. Checked by hand, those 8 are:
+
+   | | count | |
+   |---|---|---|
+   | **no timestamp column at all** | 3 | `lcc_reusable_owner_contacts` (10,430 rows), `lcc_owner_evidence_cache` (43,161), `lcc_sf_comp_on_market` (1,696) — all healthy |
+   | `*_inflight`, transient by design | 2 | empty is *correct*; rows are deleted after use |
+   | weekly job, 1 run in a 7-day window | 2 | not enough signal |
+   | ~~genuine candidate~~ | 1 | `lcc-owner-contact-review-autoretire` — **also not a defect**, see below |
+
+   **The one "genuine candidate" was not one either. Final score: 0 of 8.** The sweep
+   retires nothing while 97 rows sit pending, which looks damning — but the cron passes
+   `false` (it runs live, not dry-run), and its own dry-run returns **empty**: none of the 97
+   premises have cleared. Writing nothing is the correct answer. Same shape as P165a.
+
+   **That is the deepest reason the method fails, and it is not fixable by parsing.** For an
+   auto-retire sweep, a health check, or any guard, *writing nothing is the expected steady
+   state*. "Ran clean, wrote nothing" is not a defect signal for that entire class of job.
+
+   **The refined method, if anyone revisits it:** only evaluate jobs whose function is
+   expected to write on EVERY run — syncs, refreshes, ingests — and exclude sweeps, guards and
+   health checks by design. That is exactly why the P157 case was findable:
+   `lcc_sync_owner_contact_signals` was supposed to write every run. A sweep that writes
+   nothing is healthy; a *sync* that writes nothing is broken. The detector treated them alike.
+
+   `lcc_audit_silent_crons()` was built, evaluated, and **DROPPED** rather than shipped. An
+   audit function with a 0-for-8 hit rate is worse than no audit function, because someone
+   will eventually trust its output.
+
+   **The blocking limitation is not fixable by better parsing: a table with no timestamp
+   column cannot distinguish "nothing was written" from "a write is unobservable."** Three of
+   eight flags were exactly that, on tables holding tens of thousands of rows.
+
+   ⚠️ **And a correction worth keeping:** this was briefly reported as having "independently
+   rediscovered" the known P157 case (cron 136/137). It did not. It flagged that job because
+   its only parsed write target is a transient inflight table that is always empty —
+   coincidence, not detection. The P157 case was findable originally *because it had
+   observable state*; this method would have missed it.
+
+   **What would actually work** — and is the real prerequisite: give the write-target tables a
+   timestamp. `lcc_reusable_owner_contacts`, `lcc_owner_evidence_cache` and
+   `lcc_sf_comp_on_market` have no `_at` column at all, so no throughput measure over them is
+   possible by any method. That observability gap is the item, not the parser.
 5. **The `establish_ownership_history` producer** — 545 open, 0 completed, emits one task per
    property with no value gate. Either give it a consumer or stop it producing; P165a added
    the auto-retire predicate but the value gate is still missing.
