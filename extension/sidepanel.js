@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 48857)
-Total output lines: 4121
-
 // ============================================================================
 // LCC Assistant — Side Panel Logic
 // Manages 3 tabs: Property, Search, Chat
@@ -1286,7 +1283,1553 @@ async function loadPropertyTab(opts) {
 
       btn.disabled = true;
       btn.textContent = 'Staging…';
-     …18857 tokens truncated…arking);
+      toast.textContent = 'Posting to LCC intake…';
+
+      try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        const sourceUrl = tabs?.[0]?.url || url;
+        const hostname = (() => { try { return new URL(sourceUrl).hostname; } catch { return null; } })();
+
+        // Derive a real filename from the URL's last path segment (ignoring
+        // querystring). The doc card's `label` is a display string like
+        // "Marketing Brochure/Flyer" — not safe to use as a filename.
+        const urlFileName = (() => {
+          try {
+            const u = new URL(url);
+            const last = u.pathname.split('/').filter(Boolean).pop() || '';
+            const decoded = decodeURIComponent(last);
+            if (decoded && /\.(pdf|xlsx?|docx?)$/i.test(decoded)) return decoded;
+          } catch {}
+          return 'document.pdf';
+        })();
+
+        const resp = await chrome.runtime.sendMessage({
+          type: 'STAGE_PDF_TO_LCC',
+          url,
+          fileName: urlFileName,
+          sourceUrl,
+          hostname,
+          intent: `Staged from ${hostname || 'browser'}${label ? ` — ${label}` : ''}`,
+        });
+
+        if (resp?.ok && resp?.body?.ok) {
+          const b = resp.body;
+          btn.textContent = `✓ Staged (${b.extraction_status || 'received'})`;
+          btn.style.background = 'var(--green)';
+          btn.style.color = '#fff';
+          toast.textContent = `Intake id: ${b.intake_id} — ${b.message || ''}`;
+          setTimeout(() => toast.remove(), 8000);
+        } else if (resp?.ok && resp?.body?.skipped) {
+          // Round 76ah 2026-04-28: server intentionally skipped this PDF
+          // (deed/loan, signature image, etc.). Render as a neutral notice,
+          // not a red error. The detail message explains the next step.
+          const b = resp.body;
+          btn.textContent = 'Skipped';
+          btn.style.background = '#FEF3C7';
+          btn.style.color = '#92400E';
+          btn.disabled = false;
+          toast.style.background = '#FEF3C7';
+          toast.style.color = '#92400E';
+          toast.style.borderColor = '#FCD34D';
+          toast.style.maxHeight = '180px';
+          toast.style.overflow = 'auto';
+          toast.style.whiteSpace = 'pre-wrap';
+          toast.style.userSelect = 'text';
+          toast.textContent = b.detail || `Skipped (${b.skipped})`;
+          setTimeout(() => toast.remove(), 20000);
+        } else {
+          const asString = (v) => {
+            if (v == null) return '';
+            if (typeof v === 'string') return v;
+            try { return JSON.stringify(v); } catch { return String(v); }
+          };
+          const status = resp?.status ? `HTTP ${resp.status}` : '';
+          const errCode = asString(resp?.body?.error || resp?.error || 'unknown');
+          const errDetail = asString(resp?.body?.detail || resp?.body?.message || resp?.body || '');
+          const contentType = resp?.contentType ? ` [${resp.contentType}]` : '';
+          btn.textContent = 'Failed';
+          btn.style.background = 'var(--red, #dc2626)';
+          btn.style.color = '#fff';
+          toast.textContent = `Stage failed: ${status} ${errCode}${contentType} — ${errDetail}`;
+          toast.style.maxHeight = '160px';
+          toast.style.overflow = 'auto';
+          toast.style.fontSize = '10px';
+          toast.style.whiteSpace = 'pre-wrap';
+          toast.style.userSelect = 'text';
+          setTimeout(() => toast.remove(), 30000);
+          btn.disabled = false;
+          // Also dump to console for easier copying
+          console.error('[Stage to LCC] failed', resp);
+        }
+      } catch (err) {
+        btn.textContent = 'Error';
+        toast.textContent = `Stage error: ${err.message || err}`;
+        setTimeout(() => toast.remove(), 8000);
+        btn.disabled = false;
+      }
+    });
+  });
+
+  // Action buttons
+  if (ctx && ctx.address) {
+    const sourceLabel = escapeHtml(domainLabel);
+    if (matched) {
+      actions.innerHTML = `<button class="btn btn-sm btn-confirm" id="updateLccBtn">Update LCC with ${sourceLabel} Data</button>`;
+    } else {
+      actions.innerHTML = `<button class="btn btn-sm btn-success" id="saveLccBtn">Save Property to LCC</button>`;
+    }
+    wirePropertyActions(ctx, lccEntity);
+    wireAscResearchAction(ctx, actions).catch((err) => console.warn('[ASC research action]', err?.message || err));
+  }
+
+  console.log('[Re-run btn] matched:', matched,
+    'entity_type:', lccEntity?.entity_type,
+    'pipeline_status:', lccEntity?.metadata?._pipeline_status);
+
+  // Pipeline button — always available on matched assets
+  if (matched && lccEntity.entity_type === 'asset') {
+    const meta = lccEntity.metadata || {};
+    let pipelineLabel;
+    if (meta._pipeline_status === 'success') {
+      pipelineLabel = 'Re-run Pipeline';
+    } else if (meta._pipeline_status === 'failed') {
+      pipelineLabel = 'Retry Pipeline (Failed)';
+    } else if (!meta._pipeline_processed_at) {
+      pipelineLabel = 'Run Pipeline';
+    } else {
+      pipelineLabel = 'Re-run Pipeline';
+    }
+
+    const rerunBtn = document.createElement('button');
+    rerunBtn.className = 'btn btn-sm btn-secondary';
+    rerunBtn.id = 'rerunPipelineBtn';
+    rerunBtn.textContent = pipelineLabel;
+    actions.appendChild(rerunBtn);
+
+    // W1.4-L3b: don't let a promote fire on an empty capture. Allow when the
+    // live page ctx OR the already-stored entity metadata has extractable
+    // content; otherwise disable with a rescan tooltip.
+    const canPromote = hasExtractableContent(ctx) || hasExtractableContent(meta);
+    if (!canPromote) {
+      rerunBtn.disabled = true;
+      rerunBtn.title = 'Nothing extracted from this capture — rescan the page';
+      rerunBtn.style.opacity = '0.5';
+      rerunBtn.style.cursor = 'not-allowed';
+    }
+
+    rerunBtn.addEventListener('click', async () => {
+      rerunBtn.disabled = true;
+      rerunBtn.textContent = 'Running...';
+
+      const result = await apiCall('/api/entities?action=process_sidebar_extraction', {
+        entity_id: lccEntity.id,
+        force: true,
+      });
+
+      // W1.4-L3b: HTTP-200 is not success. A promote that classified no domain
+      // or wrote nothing returns pipeline_failed=true — surface it, don't toast
+      // "success".
+      const pipelineFailed = !!result.data?.pipeline_failed;
+
+      // Durable document capture: the extraction just upserted url_captured
+      // property_documents rows; fetch each doc's bytes in THIS authenticated tab
+      // and store a durable copy server-side (keyed by domain+source_url), so a
+      // later OCR never has to re-authenticate to CoStar. Fire-and-forget.
+      if (result.ok && !pipelineFailed) {
+        try {
+          const capDomain = result.data?.summary?.domain || result.data?.domain || ctx?.domain;
+          const docLinks = Array.isArray(ctx?.document_links) ? ctx.document_links : [];
+          if (capDomain && docLinks.length) {
+            chrome.runtime.sendMessage(
+              { type: 'CAPTURE_DOC_BYTES_BATCH', domain: capDomain, docs: docLinks },
+              () => void (chrome.runtime && chrome.runtime.lastError),
+            );
+          }
+        } catch { /* best-effort */ }
+      }
+
+      if (result.ok && !pipelineFailed) {
+        const toast = document.createElement('div');
+        toast.className = 'update-toast updated';
+        toast.textContent = 'Pipeline re-ran successfully';
+        actions.prepend(toast);
+        pollPipelineStatus(lccEntity.id, actions).then(() => {
+          rerunBtn.textContent = 'Re-run Pipeline';
+          rerunBtn.disabled = false;
+        });
+      } else if (result.ok && pipelineFailed) {
+        const reason = toErrorMessage(result.data?.pipeline_reason)
+          || 'no domain classified — nothing was written';
+        const toast = document.createElement('div');
+        toast.className = 'update-toast';
+        toast.style.background = 'var(--red, #dc2626)';
+        toast.style.color = '#fff';
+        toast.textContent = `Promote failed — ${reason}. Rescan the page and retry.`;
+        actions.prepend(toast);
+        rerunBtn.textContent = 'Retry Pipeline (Failed)';
+        rerunBtn.disabled = false;
+      } else {
+        const errMsg = toErrorMessage(result.data?.error)
+          || toErrorMessage(result.error)
+          || 'Unknown error';
+        const toast = document.createElement('div');
+        toast.className = 'update-toast';
+        toast.textContent = errMsg;
+        actions.prepend(toast);
+        rerunBtn.textContent = 'Re-run Pipeline';
+        rerunBtn.disabled = false;
+      }
+    });
+
+    // Round 76cx Phase 3: "Verify still available" button. Only shown when
+    // the property is matched in LCC and resolves to a dialysis/government
+    // property_id (the listings live in those domain DBs). One click records
+    // a sidebar_capture verification check via lcc_record_listing_check on
+    // every active listing for that property — refreshes verification_due_at,
+    // resets consecutive_check_failures, and updates the price/cap if the
+    // page has fresh values.
+    const pipelineSummary = lccEntity?.metadata?._pipeline_summary || null;
+    const verifyDomain = pipelineSummary?.domain || null;
+    const verifyPropertyId = pipelineSummary?.domain_property_id || null;
+
+    // UW#6-REV — capture document BYTES while the CoStar session is live. The
+    // server can't re-fetch ahprd1cdn signed URLs (token dies server-side), so
+    // we download each deep-parse doc here and store it durably in the domain's
+    // property-documents bucket (background → prepare-upload → PUT → notify).
+    // Fire-and-forget, deduped by content_hash server-side, one at a time so we
+    // don't hammer the CDN. Only runs once we have a resolved domain property_id.
+    if (verifyPropertyId && (verifyDomain === 'dialysis' || verifyDomain === 'government')) {
+      const DEEP_PARSE_DOCTYPES = new Set(['deed', 'lease', 'om', 'dd', 'master', 'bov', 'marketing_brochure']);
+      // OM-class doctypes route through the OM intake pipeline (stage-om) via
+      // STAGE_OM_VIA_TAB instead of the property-documents pointer path — so the
+      // embedded For-Sale Marketing Brochure gets AI-extracted + staged to LCC.
+      const OM_CLASS_DOCTYPES = new Set(['om', 'marketing_brochure']);
+      // SEC/IR/press artifacts the doc list sometimes carries — NOT property
+      // document types. Checked FIRST so "Press Release" never falls through to
+      // the lease branch (where the `release` substring used to match `lease`).
+      const NON_DOCTYPE_RE = /\bpress\s*release\b|\b8[\s-]?k\b|\b10[\s-]?[kq]\b|\binvestor\s+(presentation|deck|day)\b|\bearnings\b|\bprospectus\b|\bproxy\s+statement\b|\bannual\s+report\b/i;
+      const inferDocType = (label) => {
+        const raw = String(label || '');
+        if (NON_DOCTYPE_RE.test(raw)) return 'other';   // reject press release / 8-K / etc.
+        const l = raw.toLowerCase();
+        if (/\bdeed\b/.test(l)) return 'deed';
+        // word-boundary `lease` (so "release" no longer matches) + estoppel.
+        if (/\blease\b/.test(l) || /\bestoppel\b/.test(l)) return 'lease';
+        // "Marketing Brochure" on the new For-Sale layout IS the OM.
+        if (l.includes('marketing brochure')) return 'marketing_brochure';
+        if (/\bom\b/.test(l) || l.includes('offering') || l.includes('memorandum')) return 'om';
+        if (l.includes('due diligence') || /\bdd\b/.test(l)) return 'dd';
+        if (/\bmaster\b/.test(l)) return 'master';
+        if (/\bbov\b/.test(l) || l.includes('broker opinion')) return 'bov';
+        return 'other';
+      };
+      const docLinks = Array.isArray(ctx?.document_links) ? ctx.document_links : [];
+      const seenUrls = new Set();
+
+      // Once-per-property OM auto-stage guard (30-day TTL). The doc-capture block
+      // reruns on every property-tab render, and OM extraction (stage-om) costs
+      // AI tokens, so the embedded Marketing Brochure is staged at most once per
+      // property. Reversible: clearing chrome.storage.local 'omAutoStaged' re-arms.
+      const OM_AUTOSTAGE_KEY = 'omAutoStaged';
+      const OM_AUTOSTAGE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+      const omStageKey = `${verifyDomain}:${verifyPropertyId}`;
+      const shouldAutoStageOm = async () => {
+        try {
+          const store = (await chrome.storage.local.get(OM_AUTOSTAGE_KEY))[OM_AUTOSTAGE_KEY] || {};
+          const last = store[omStageKey];
+          return !(last && (Date.now() - last) < OM_AUTOSTAGE_TTL_MS);
+        } catch { return true; }
+      };
+      const markOmAutoStaged = async () => {
+        try {
+          const store = (await chrome.storage.local.get(OM_AUTOSTAGE_KEY))[OM_AUTOSTAGE_KEY] || {};
+          store[omStageKey] = Date.now();
+          const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+          for (const k of Object.keys(store)) { if (store[k] < cutoff) delete store[k]; }
+          await chrome.storage.local.set({ [OM_AUTOSTAGE_KEY]: store });
+        } catch { /* best-effort */ }
+      };
+
+      (async () => {
+        // UW#6 — observable: collect a per-doc outcome so a live capture shows
+        // "N ok / M failed / K skipped" in the console instead of silently
+        // skipping. A fetch failure is RECORDED (not swallowed) so a dead
+        // CoStar token / SW-context miss is visible.
+        const results = { ok: 0, failed: 0, skipped: 0, om: 0, failures: [] };
+
+        // ── Part A: offering material (embedded Marketing Brochure / OM) ──
+        // Route through the OM intake pipeline (stage-om) via STAGE_OM_VIA_TAB —
+        // once per property. Mark every offering URL seen so the byte-capture
+        // loop below never double-processes it down the pointer path.
+        const offeringDocs = docLinks.filter((d) => d?.url
+          && (d.is_offering_material || d.type === 'om' || d.type === 'marketing_brochure'
+              || inferDocType(d?.label) === 'marketing_brochure'));
+        if (offeringDocs.length) {
+          for (const d of offeringDocs) seenUrls.add(d.url);
+          if (await shouldAutoStageOm()) {
+            const primary = offeringDocs[0];
+            try {
+              const resp = await chrome.runtime.sendMessage({
+                type: 'STAGE_OM_VIA_TAB',
+                sourceUrl: primary.url,
+                fileName: primary.label || 'Marketing Brochure.pdf',
+                hostname: 'costar.com',
+                seedData: {
+                  address: ctx.address || null,
+                  city: ctx.city || null,
+                  state: ctx.state || null,
+                  tenant_name: ctx.tenant_name || null,
+                  asking_price: ctx.asking_price || ctx.sale_price || null,
+                  cap_rate: ctx.cap_rate || null,
+                  lease_expiration: ctx.lease_expiration || null,
+                  domain: verifyDomain,
+                  domain_property_id: verifyPropertyId,
+                },
+              });
+              if (resp && resp.ok) { results.om++; await markOmAutoStaged(); }
+              else {
+                results.failed++;
+                results.failures.push({ url: primary.url, error: resp?.error || 'no_response', kind: 'om' });
+                console.warn('[UW6] OM brochure stage failed', { url: primary.url, error: resp?.error, detail: resp?.detail });
+              }
+            } catch (e) {
+              results.failed++;
+              results.failures.push({ url: primary.url, error: e?.message || String(e), kind: 'om' });
+            }
+          }
+        }
+
+        for (const d of docLinks) {
+          const url = d?.url;
+          if (!url || seenUrls.has(url)) continue;
+          seenUrls.add(url);
+          // The upstream d.type can be wrong (a "Press Release" mis-typed
+          // lease); re-derive from the label and let a non-doctype label veto.
+          const labelType = inferDocType(d?.label);
+          const doctype = (d?.type && DEEP_PARSE_DOCTYPES.has(d.type) && labelType !== 'other') ? d.type : labelType;
+          // OM-class handled above (stage-om); never send it down the pointer path.
+          if (OM_CLASS_DOCTYPES.has(doctype)) continue;
+          if (!DEEP_PARSE_DOCTYPES.has(doctype)) { results.skipped++; continue; }  // brochure/comp/survey/other/press-release
+          try {
+            const resp = await chrome.runtime.sendMessage({
+              type: 'STAGE_DOC_BYTES_TO_LCC',
+              domain: verifyDomain,
+              propertyId: verifyPropertyId,
+              doctype,
+              fileName: d?.label || null,
+              sourceUrl: url,
+            });
+            if (resp && resp.ok) {
+              results.ok++;
+            } else {
+              results.failed++;
+              results.failures.push({ url, error: resp?.error || 'no_response', status: resp?.status, via: resp?.via });
+              console.warn('[UW6] doc byte-capture failed', { url, error: resp?.error, status: resp?.status, via: resp?.via });
+            }
+          } catch (e) {
+            results.failed++;
+            results.failures.push({ url, error: e?.message || String(e) });
+            console.warn('[UW6] doc byte-capture threw for', url, e?.message || e);
+          }
+        }
+        if (results.ok || results.failed || results.skipped || results.om) {
+          console.log(`[UW6] byte-capture: ${results.ok} ok / ${results.om} OM / ${results.failed} failed / ${results.skipped} skipped`, results.failures.length ? results.failures : '');
+        }
+      })();
+    }
+    if (verifyDomain && verifyPropertyId && (verifyDomain === 'dialysis' || verifyDomain === 'government')) {
+      const verifyBtn = document.createElement('button');
+      verifyBtn.className = 'btn btn-sm btn-secondary';
+      verifyBtn.id = 'verifyListingBtn';
+      verifyBtn.textContent = 'Verify still available';
+      verifyBtn.style.marginLeft = '6px';
+      actions.appendChild(verifyBtn);
+
+      verifyBtn.addEventListener('click', async () => {
+        verifyBtn.disabled = true;
+        verifyBtn.textContent = 'Verifying…';
+        // Pull the latest captured price + cap rate from the live page
+        // context so the verification both confirms availability AND
+        // refreshes the asking_price / cap_rate on the listing if they
+        // changed since last capture.
+        const liveCtx = (await getPageContext()) || ctx || {};
+        // Round 76dw: when on a /for-sale/ URL, also accept sale_price as
+        // the price fallback. Captures from before Round 76dv didn't
+        // populate asking_price (extractor's older "Asking Price"-only
+        // matcher missed CoStar's "For Sale"/"Sale Price"/"Price" labels)
+        // so the auto-create flow couldn't fire even though the page
+        // clearly had a price. The server-side fallback in
+        // upsertDialysisListings only fires on full pipeline runs;
+        // the verify endpoint's auto-create reads the request body
+        // directly, so we mirror the same fallback chain client-side.
+        // 2026-07-29: CoStar moved the For Sale detail page to
+        // /listings/for-sale/detail/<id>/<tab>; match /for-sale/ in either the
+        // old (/detail/for-sale/) or new layout so the sale_price fallback fires.
+        const onForSaleUrl = /\/for-sale\//i.test(String(liveCtx.page_url || window.location?.href || ''));
+        const cleanPrice = (() => {
+          const raw = liveCtx.asking_price
+            ?? liveCtx.list_price
+            ?? liveCtx.price
+            ?? (onForSaleUrl ? liveCtx.sale_price : null);
+          if (!raw) return null;
+          const n = parseFloat(String(raw).replace(/[$,]/g, ''));
+          return Number.isFinite(n) && n >= 1000 ? n : null;
+        })();
+        const cleanCap = (() => {
+          const raw = liveCtx.cap_rate ?? liveCtx.asking_cap_rate;
+          if (!raw) return null;
+          const n = parseFloat(String(raw).replace(/[%]/g, ''));
+          // Send as decimal (0.0526) per dia.available_listings convention.
+          return Number.isFinite(n) && n > 0 ? (n > 1 ? n / 100 : n) : null;
+        })();
+
+        const result = await apiCall('/api/entities?action=record_listing_verification', {
+          domain:        verifyDomain,
+          property_id:   verifyPropertyId,
+          method:        'sidebar_capture',
+          check_result:  'still_available',
+          asking_price:  cleanPrice,
+          cap_rate:      cleanCap,
+          source_url:    liveCtx.page_url || window.location?.href || null,
+          notes:         'verified via LCC sidebar',
+        });
+
+        const toast = document.createElement('div');
+        if (result.ok && result.data?.ok) {
+          toast.className = 'update-toast updated';
+          const n = result.data.listings_verified || 0;
+          const total = result.data.listings_total || 0;
+          const created = result.data.auto_created;
+          if (created) {
+            toast.textContent = `Created listing #${created.listing_id} + verified as still available`;
+          } else {
+            toast.textContent = `Verified ${n} of ${total} listing${total === 1 ? '' : 's'} as still available`;
+          }
+        } else {
+          toast.className = 'update-toast';
+          const errMsg = toErrorMessage(result.data?.error) || toErrorMessage(result.error) || 'Verification failed';
+          const hint = result.data?.hint;
+          toast.textContent = hint ? `${errMsg} — ${hint}` : errMsg;
+        }
+        actions.prepend(toast);
+        verifyBtn.textContent = 'Verify still available';
+        verifyBtn.disabled = false;
+      });
+
+      // Round 76cx Phase 3b (2026-04-29): "Mark as off market" button.
+      // Counterpart to "Verify still available" — when the user knows the
+      // listing is no longer for sale (closed sale, taken down, expired
+      // contract, etc.) they can flag every active listing on this property
+      // as off_market in one click. Server side uses the same
+      // record_listing_verification endpoint with check_result='off_market'
+      // and method='manual_user'. Reasons are picked from a small native
+      // dropdown so we capture WHY without a full modal — the value lands in
+      // listing_verification_history.notes for downstream audit.
+      const offMarketBtn = document.createElement('button');
+      offMarketBtn.className = 'btn btn-sm btn-secondary';
+      offMarketBtn.id = 'markOffMarketBtn';
+      offMarketBtn.textContent = 'Mark off market';
+      offMarketBtn.style.marginLeft = '6px';
+      actions.appendChild(offMarketBtn);
+
+      offMarketBtn.addEventListener('click', async () => {
+        // Round 76cx Phase 3b: light-weight reason picker via window.prompt.
+        // A custom dropdown is overkill given how rarely this button is used;
+        // the prompt's free-text fallback also captures one-off reasons we
+        // wouldn't have anticipated. Suggested values map cleanly to the
+        // off_market_reason column on listing_status_history.
+        const reasonInput = window.prompt(
+          'Why is this listing off market?\n\n' +
+          '  - sold (recorded sale)\n' +
+          '  - withdrawn (seller pulled it)\n' +
+          '  - expired (contract lapsed)\n' +
+          '  - under_contract\n' +
+          '  - leased\n' +
+          '  - or type your own reason',
+          'withdrawn'
+        );
+        if (reasonInput === null) return; // user cancelled
+        const reason = String(reasonInput).trim().toLowerCase().replace(/\s+/g, '_');
+        if (!reason) return;
+        // The server endpoint accepts check_result='sold' as a separate
+        // terminal state — route there if the user picked sold so the
+        // downstream listing transition is correct.
+        const checkResult = reason === 'sold' ? 'sold' : 'off_market';
+
+        offMarketBtn.disabled = true;
+        offMarketBtn.textContent = 'Marking…';
+
+        const liveCtx = (await getPageContext()) || ctx || {};
+        const result = await apiCall('/api/entities?action=record_listing_verification', {
+          domain:           verifyDomain,
+          property_id:      verifyPropertyId,
+          method:           'manual_user',
+          check_result:     checkResult,
+          source_url:       liveCtx.page_url || window.location?.href || null,
+          off_market_reason: reason,
+          notes:            `marked off market via LCC sidebar (${reason})`,
+        });
+
+        const toast = document.createElement('div');
+        if (result.ok && result.data?.ok) {
+          toast.className = 'update-toast updated';
+          const n = result.data.listings_verified ?? result.data.listings_total ?? 0;
+          toast.textContent = checkResult === 'sold'
+            ? `Marked ${n} listing${n === 1 ? '' : 's'} as Sold (${reason})`
+            : `Marked ${n} listing${n === 1 ? '' : 's'} off market (${reason})`;
+        } else {
+          toast.className = 'update-toast';
+          const errMsg = toErrorMessage(result.data?.error) || toErrorMessage(result.error) || 'Mark off market failed';
+          const hint = result.data?.hint;
+          toast.textContent = hint ? `${errMsg} — ${hint}` : errMsg;
+        }
+        actions.prepend(toast);
+        offMarketBtn.textContent = 'Mark off market';
+        offMarketBtn.disabled = false;
+      });
+    }
+  }
+
+  $('#lastUpdated').textContent = `Property: ${new Date().toLocaleTimeString()}`;
+}
+
+function renderDetectedFields(ctx, sourceLabel) {
+  let html = `<div class="section-label">${escapeHtml(sourceLabel || 'Detected')} Data</div>`;
+  for (const [key, label] of PROPERTY_FIELDS) {
+    const valStr = toDisplayString(ctx[key]);
+    if (valStr) {
+      html += `<div class="context-field">
+        <span class="context-label">${escapeHtml(label)}</span>
+        <span class="context-value compare-new">${escapeHtml(valStr)}</span>
+      </div>`;
+    }
+  }
+  return html;
+}
+
+function renderCompareTable(ctx, lccEntity, sourceLabel) {
+  // Round 76dp: read LCC values from BOTH the entity row AND its metadata
+  // blob. Most CRE fields (building_class, year_built, square_footage,
+  // tenant_name, etc.) live in entity.metadata.* — the entities table
+  // only has top-level columns for address/city/state/asset_type, so the
+  // previous lccEntity[lccKey]-only read was producing all-em-dash CURRENT
+  // LCC columns even when the property was matched and the data existed
+  // in metadata. Some dia/gov DBs use slightly different column names
+  // (square_footage → building_size, etc.); also try those.
+  const FIELD_ALIASES = {
+    square_footage: ['square_footage', 'building_size', 'sf', 'rba'],
+    year_built: ['year_built'],
+    building_class: ['building_class', 'class'],
+    lot_size: ['lot_size', 'land_acres', 'land_sf'],
+    asset_type: ['asset_type', 'property_type'],
+    sale_price: ['sale_price', 'last_sale_price'],
+    sale_date: ['sale_date', 'last_sale_date'],
+    cap_rate: ['cap_rate'],
+    asking_price: ['asking_price'],
+    list_price: ['list_price'],
+    original_price: ['original_price', 'list_price'],
+    noi: ['noi', 'net_operating_income'],
+    tenant_name: ['tenant_name', 'tenant', 'primary_tenant'],
+    owner_name: ['owner_name', 'owner', 'recorded_owner'],
+  };
+  function readLcc(lccKey) {
+    const candidates = FIELD_ALIASES[lccKey] || [lccKey];
+    for (const k of candidates) {
+      const v = lccEntity[k] ?? lccEntity?.metadata?.[k];
+      if (v != null && v !== '') return v;
+    }
+    return null;
+  }
+
+  // Only show fields where source has data that's new or different from LCC
+  const rows = PROPERTY_FIELDS.filter(([srcKey, , lccKey]) => {
+    const srcStr = toDisplayString(ctx[srcKey]);
+    const lccStr = toDisplayString(readLcc(lccKey));
+    return srcStr && (!lccStr || srcStr !== lccStr);
+  });
+
+  if (!rows.length) return `<div class="section-label">No new data from ${escapeHtml(sourceLabel || 'source')}</div>`;
+
+  let html = `<div class="section-label">Proposed Updates from ${escapeHtml(sourceLabel || 'Source')}</div>`;
+  html += '<table class="compare-table">';
+  html += `<tr><th>Field</th><th>${escapeHtml(sourceLabel || 'Source')}</th><th>Current LCC</th></tr>`;
+
+  for (const [srcKey, label, lccKey] of rows) {
+    const srcVal = toDisplayString(ctx[srcKey]);
+    const lccVal = toDisplayString(readLcc(lccKey));
+    const srcDisplay = srcVal || '—';
+    const lccDisplay = lccVal || '—';
+
+    let srcCls = '';
+    if (srcVal && !lccVal) srcCls = 'compare-new';
+    else if (srcVal && lccVal && srcVal !== lccVal) srcCls = 'compare-diff';
+
+    html += `<tr>
+      <td class="field-label">${escapeHtml(label)}</td>
+      <td class="${srcCls}">${escapeHtml(srcDisplay)}</td>
+      <td>${escapeHtml(lccDisplay)}</td>
+    </tr>`;
+  }
+
+  html += '</table>';
+  return html;
+}
+
+// ── Cap rate provenance helpers ─────────────────────────────────────────────
+//
+// The dialysis pipeline (api/_shared/rent-projection.js) stores three fields
+// per sale once a confirmed rent anchor arrives: stated_cap_rate (raw CoStar),
+// calculated_cap_rate (projected from the anchor), and cap_rate_confidence
+// ('low' | 'medium' | 'high'). We mirror that three-state model in the UI.
+
+function formatCapPct(raw) {
+  if (raw == null || raw === '') return null;
+  // Accept '7.15%' strings or decimal numerics (0.0715 or 7.15) from LCC.
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (trimmed.endsWith('%')) return trimmed;
+    const asNum = Number(trimmed);
+    if (Number.isFinite(asNum)) return formatCapPct(asNum);
+    return trimmed;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  // Values under 1 are assumed to be decimal fractions (0.0715 → 7.15%).
+  const pct = n < 1 ? n * 100 : n;
+  return pct.toFixed(2) + '%';
+}
+
+/**
+ * Read cap-rate provenance from whatever LCC has for this property.
+ * Returns { statedPct, calculatedPct, confidence, sourceLabel } where unset
+ * fields are null. Provenance fields live on the most recent sale in the
+ * LCC metadata sales_history (if the dialysis pipeline back-fills them),
+ * or on the property metadata itself as a fallback.
+ */
+function pickCapRateState(meta) {
+  const mostRecentSale = Array.isArray(meta?.sales_history) && meta.sales_history.length
+    ? [...meta.sales_history].sort((a, b) => {
+        const da = a.sale_date ? Date.parse(a.sale_date) : 0;
+        const db = b.sale_date ? Date.parse(b.sale_date) : 0;
+        return db - da;
+      })[0]
+    : null;
+
+  const source = mostRecentSale || meta || {};
+  const stated     = source.stated_cap_rate ?? source.cap_rate ?? null;
+  const calculated = source.calculated_cap_rate ?? null;
+  const confidence = source.cap_rate_confidence || null;
+  const rentSource = source.rent_source || meta?.anchor_rent_source || null;
+
+  // Human-readable provenance caption.
+  let sourceLabel = null;
+  if (confidence === 'high' || rentSource === 'projected_from_lease_confirmed'
+      || rentSource === 'lease_confirmed') {
+    sourceLabel = 'lease confirmed';
+  } else if (confidence === 'medium' || rentSource === 'projected_from_om_confirmed'
+      || rentSource === 'om_confirmed') {
+    sourceLabel = 'projected from OM';
+  } else {
+    sourceLabel = 'CoStar stated';
+  }
+
+  return {
+    statedPct:     formatCapPct(stated),
+    calculatedPct: formatCapPct(calculated),
+    confidence:    confidence || 'low',
+    sourceLabel,
+  };
+}
+
+/**
+ * Render a cap-rate cell using the three-state model. ``costarStr`` is the
+ * value we just scraped (may be null/empty if CoStar didn't surface one).
+ */
+function renderCapRateRow(label, costarStr, state) {
+  const confidence = state.confidence || 'low';
+  const sourceLabel = state.sourceLabel || 'CoStar stated';
+
+  // State 2 / 3 — calculated cap rate is available.
+  if (state.calculatedPct) {
+    const lock = confidence === 'high' ? '\uD83D\uDD12 ' : '';
+    const check = '\u2713';
+    const stated = state.statedPct || costarStr;
+    return `<div class="context-field" style="background:rgba(74,222,128,0.06)">
+      <span class="context-label">${escapeHtml(label)}</span>
+      <span class="context-value" style="display:block">
+        <span style="color:var(--text);font-size:11px">CoStar stated: ${escapeHtml(stated || '—')}</span><br>
+        <span style="color:#4ade80;font-size:11px;font-weight:600">Calculated: ${escapeHtml(state.calculatedPct)}</span>
+        <span style="color:#4ade80;font-size:11px;margin-left:4px">${check} ${lock}${escapeHtml(confidence)} confidence (${escapeHtml(sourceLabel)})</span>
+      </span>
+    </div>`;
+  }
+
+  // State 1 — no anchor rent yet; show low-confidence amber row.
+  const warn = '\u26A0';
+  return `<div class="context-field" style="background:rgba(251,191,36,0.08)">
+    <span class="context-label">${escapeHtml(label)}</span>
+    <span class="context-value">
+      <span style="color:#fbbf24;font-size:11px">CoStar: ${escapeHtml(costarStr)}</span>
+      <span style="background:rgba(251,191,36,0.2);color:#fbbf24;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:4px">${warn} low confidence (${escapeHtml(sourceLabel)})</span>
+    </span>
+  </div>`;
+}
+
+function renderIngestDiff(ctx, lccEntity) {
+  const meta = lccEntity.metadata || {};
+
+  // Pull cap-rate provenance off whatever LCC has for this property. We look
+  // first at the most recent sale in LCC metadata (where the dialysis pipeline
+  // stores calculated_cap_rate / cap_rate_confidence / stated_cap_rate), and
+  // fall back to the property-level metadata fields if present.
+  const capRateState = pickCapRateState(meta);
+  const capRateLabel = capRateState.calculatedPct
+    ? 'Cap Rate (stated / calculated)'
+    : 'Cap Rate';
+
+  const comparisons = [
+    { label: 'Asking Price', costar: ctx.asking_price, db: null },
+    { label: capRateLabel, costar: ctx.cap_rate, db: null,
+      capRateState },
+    { label: 'Building Size', costar: ctx.square_footage,
+      db: lccEntity.metadata?.square_footage },
+    (() => {
+      // Round 76cl: extended to match the background.js INVALID_TENANT regex.
+      // Keeps the renderIngestDiff display from showing junk values stored in
+      // pre-fix entity metadata (the migration scrubbed the DB; this filter
+      // also guards against any remaining pollution rendering to the UI).
+      const INVALID = /^(public\s+record|building|land|market|submarket|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|industry|sector|property\s+type|property\s+subtype|building\s+class|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|buyer|seller|broker|listing\s+broker|buyer\s+broker|lender|owner|recorded\s+buyer|recorded\s+seller|true\s+buyer|true\s+seller|current\s+owner|my\s+data|news|reports|directory|markets|public\s+records|rent|for\s+lease\s+at\s+sale|smallest\s+space|max\s+contiguous|office\s+avail|retail\s+avail|industrial\s+avail|service\s+type|owner\s+occup(?:ied|ant)?|legal\s+description)$/i;
+      const tenantCostar = (() => {
+        const raw = (ctx.tenants||[]).map(t=>t.name).filter(n => n && !INVALID.test(n)).join(', ') || ctx.tenant_name;
+        return (raw && !INVALID.test(raw)) ? raw : null;
+      })();
+      const tenantDb = (() => {
+        const raw = meta.tenant_name || (meta.tenants||[]).map(t=>t.name).filter(n => n && !INVALID.test(n)).join(', ');
+        return (raw && !INVALID.test(raw)) ? raw : null;
+      })();
+      return { label: 'Tenant', costar: tenantCostar, db: tenantDb,
+        hint: (!tenantCostar && !tenantDb)
+          ? 'Not available on comp pages \u2014 open property details in CoStar'
+          : null };
+    })(),
+    { label: 'Owner',
+      costar: (ctx.contacts||[]).find(c=>c.role==='owner')?.name,
+      db: meta.contacts ? meta.contacts.find(c=>c.role==='owner')?.name : null },
+    (() => {
+      // Round 76ac (2026-04-27): save is upsert by recordation_date and
+      // never deletes — a smaller CoStar count doesn't reduce the DB.
+      // Show that explicitly so users don't fear losing the older sale.
+      const cstarN = (ctx.sales_history||[]).length;
+      const dbN    = meta.sales_history ? meta.sales_history.length : 0;
+      let costarStr = cstarN + ' records';
+      let hint = null;
+      if (cstarN < dbN) {
+        costarStr = cstarN + ' new (preserves ' + dbN + ')';
+        hint = 'Save is additive \u2014 existing sales are preserved';
+      } else if (cstarN > dbN) {
+        costarStr = cstarN + ' records (will add ' + (cstarN - dbN) + ')';
+      }
+      return { label: 'Sales in History',
+        costar: costarStr,
+        db: dbN + ' records',
+        hint };
+    })(),
+  ];
+
+  let html = '<div class="section-label">Comparison: CoStar vs LCC</div>';
+  for (const c of comparisons) {
+    const costarStr = toDisplayString(c.costar);
+    const dbStr = toDisplayString(c.db);
+    if (!costarStr && !dbStr && !c.hint) continue;
+
+    // Cap Rate row — three-state display driven by what's in the LCC
+    // dialysis DB. When no anchor rent exists we show the unverified CoStar
+    // value with low-confidence (amber) styling. Once the pipeline has
+    // computed a calculated cap rate, we show stated + calculated side-by-
+    // side, with high confidence getting a lock icon.
+    if (c.capRateState && costarStr) {
+      html += renderCapRateRow(c.label, costarStr, c.capRateState);
+      continue;
+    }
+
+    const changed = costarStr && dbStr && costarStr !== dbStr;
+    html += `<div class="context-field" style="background:${
+      changed ? 'rgba(251,191,36,0.08)' : 'transparent'}">
+      <span class="context-label">${escapeHtml(c.label)}</span>
+      <span class="context-value">
+        ${dbStr ? '<span style="color:var(--text3);font-size:10px">DB: ' +
+          escapeHtml(dbStr) + '</span><br>' : ''}
+        ${costarStr ? '<span style="color:var(--text);font-size:11px">\u2192 ' +
+          escapeHtml(costarStr) + '</span>' : ''}
+        ${(!costarStr && !dbStr && c.hint) ? '<span style="color:var(--text3);font-size:10px;font-style:italic">\u26A0 ' +
+          escapeHtml(c.hint) + '</span>' : ''}
+      </span>
+    </div>`;
+  }
+  return html;
+}
+
+function renderLccFields(entity, data, ctx) {
+  let html = '';
+  // Round 76ej.m (2026-05-05): the panel was showing only Address /
+  // City / State / Asset Type because it read solely from top-level
+  // entity columns. Almost every CRE field lives in entity.metadata
+  // (year_built, square_footage, tenant_name, NOI, cap_rate,
+  // occupancy, etc.) — captured from CREXi/CoStar and persisted on
+  // every save — but the UI was hiding it. The data flow itself
+  // works; the panel just wasn't reading it.
+  //
+  // Fall back to entity.metadata when the top-level column is empty,
+  // and honor the same column-name aliases used by readLcc() in
+  // renderCompareTable so domain-DB column names (rba, building_size)
+  // and metadata field names (square_footage) both light up the
+  // "Square Footage" row.
+  const FIELD_ALIASES = {
+    address:        ['address'],
+    city:           ['city'],
+    state:          ['state'],
+    asset_type:     ['asset_type', 'property_type', 'property_subtype', 'sub_type'],
+    building_class: ['building_class', 'class'],
+    year_built:     ['year_built'],
+    square_footage: ['square_footage', 'building_size', 'rba', 'sf'],
+    occupancy:      ['occupancy', 'occupancy_percent', 'gov_occupancy_pct'],
+    cap_rate:       ['cap_rate', 'asking_cap_rate', 'current_cap_rate'],
+    noi:            ['noi', 'net_operating_income'],
+    asking_price:   ['asking_price'],
+    list_price:     ['list_price'],
+    original_price: ['original_price', 'list_price'],
+    tenant_name:    ['tenant_name', 'tenant', 'primary_tenant', 'agency', 'agency_full_name'],
+    lease_expiration: ['lease_expiration', 'lease_exp'],
+    lease_term:     ['lease_term'],
+    remaining_term: ['remaining_term'],
+    // Acreage and lot_size are NOT interchangeable — Acreage is in
+    // acres (e.g. "3.452"), Lot Size is typically in SqFt (e.g.
+    // "146,797"). Falling back from acreage to lot_size made the
+    // Athens VA Clinic listing display Acreage = 146,797 because the
+    // page only had a "Lot Size (SqFt)" row. Show Acreage only when
+    // a real acreage value is present.
+    acreage:        ['acreage', 'land_acres'],
+    lot_size:       ['lot_size', 'land_sf'],
+    stories:        ['stories'],
+    parking:        ['parking', 'parking_spaces', 'parking_ratio'],
+  };
+  function readEntityField(canonicalKey) {
+    const candidates = FIELD_ALIASES[canonicalKey] || [canonicalKey];
+    for (const k of candidates) {
+      const v = entity[k] ?? entity?.metadata?.[k];
+      if (v != null && v !== '') return v;
+    }
+    return null;
+  }
+  // Round 76ej.n (2026-05-05): defensive filter against pre-fix junk
+  // already persisted in entity.metadata. The earlier crexi.js
+  // findTextElement() heuristic stamped values like "Quality
+  // Construction and new HVAC systems" as tenant_name and "Valuation
+  // Metrics" as cap_rate on captures that ran before the heuristic
+  // was disabled; those values are still in LCC for historically
+  // captured properties even after the parser fix landed. Hide
+  // values that fail a simple per-field sanity check rather than
+  // surface stored garbage.
+  function isValidLccValue(canonicalKey, val) {
+    if (val == null || val === '') return false;
+    const s = String(val).trim();
+    if (!s) return false;
+    if (canonicalKey === 'cap_rate' || canonicalKey === 'noi'
+        || canonicalKey === 'asking_price' || canonicalKey === 'occupancy'
+        || canonicalKey === 'square_footage' || canonicalKey === 'year_built'
+        || canonicalKey === 'acreage' || canonicalKey === 'stories'
+        || canonicalKey === 'lease_term' || canonicalKey === 'remaining_term') {
+      // Numeric-flavored fields must contain at least one digit. "Valuation
+      // Metrics" / "Investment Highlights" / "Property Overview" all fail.
+      return /\d/.test(s);
+    }
+    if (canonicalKey === 'tenant_name') {
+      // Real tenant names are short and noun-phrase shaped. The heuristic
+      // pollution patterns we've seen are descriptive sentence fragments
+      // ("Quality Construction and new HVAC systems"). Reject:
+      //   - long strings (>60 chars)
+      //   - strings containing lowercase "and" with property-descriptor
+      //     keywords (hvac/construction/systems/amenities/features/...)
+      //   - strings that match obvious section labels
+      if (s.length > 60) return false;
+      const PROSE_PATTERNS = [
+        /\bhvac\b/i,
+        /\b(quality|new|recent|modern)\s+construction\b/i,
+        /\b(systems?|amenities|features?|upgrades?|improvements?)\b.*\band\b/i,
+        /\band\b.*\b(systems?|amenities|features?|hvac|construction|upgrades?)\b/i,
+        /^(valuation\s+metrics|investment\s+highlights?|property\s+overview|sale\s+highlights?|key\s+highlights?|executive\s+summary)$/i,
+        // Date-shaped values landing in tenant_name. The EPA Houston
+        // listing stored "Lease Commencement 07/01/2025" as tenant
+        // because the pre-fix heuristic returned the row adjacent to
+        // the "Lease" label. Reject CoStar's typical date stamps and
+        // any "<Field Label> <date>" composite.
+        /\b(lease\s+commencement|lease\s+expiration|lease\s+date|lease\s+term|since|effective)\b/i,
+        /\d{1,2}\/\d{1,2}\/\d{2,4}/,
+        /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b/i,
+        /\b\d{4}-\d{1,2}-\d{1,2}\b/,
+      ];
+      for (const re of PROSE_PATTERNS) if (re.test(s)) return false;
+      return true;
+    }
+    return true;
+  }
+  const fields = [
+    ['address', 'Address'], ['city', 'City'], ['state', 'State'],
+    ['asset_type', 'Asset Type'], ['building_class', 'Building Class'],
+    ['year_built', 'Year Built'], ['square_footage', 'Square Footage'],
+    ['occupancy', 'Occupancy'], ['tenant_name', 'Tenant'],
+    ['cap_rate', 'Cap Rate'], ['noi', 'NOI'], ['asking_price', 'Asking Price'],
+    ['lease_expiration', 'Lease Expiration'], ['lease_term', 'Lease Term'],
+    ['remaining_term', 'Remaining Term'], ['acreage', 'Acreage'],
+    ['lot_size', 'Lot Size'], ['stories', 'Stories'], ['parking', 'Parking'],
+  ];
+  for (const [key, label] of fields) {
+    const val = readEntityField(key);
+    if (val && isValidLccValue(key, val)) {
+      const valStr = typeof val === 'object' ? JSON.stringify(val) : String(val || '');
+      html += `<div class="context-field">
+        <span class="context-label">${escapeHtml(label)}</span>
+        <span class="context-value">${escapeHtml(valStr)}</span>
+      </div>`;
+    }
+  }
+
+  // Round 76ej.o (2026-05-05): for multi-tenant buildings whose CREXi
+  // Details panel has no Tenant label, the parser mines the tenant
+  // list out of the marketing-description prose ("Tenants Include
+  // Bon Secours, FDA, Supreme Court of Virginia, Rein, and Edward
+  // Jones") and stores it on metadata.tenants[]. Surface that as a
+  // separate Tenants row whenever the single-tenant Tenant row above
+  // didn't render.
+  const hasTenantRow = readEntityField('tenant_name')
+    && isValidLccValue('tenant_name', readEntityField('tenant_name'));
+  // Round 76ej.p (2026-05-05): for Mast One the live page extracted
+  // five tenants but only two ("Rein", "Edward Jones") survived as
+  // entity.metadata.tenants — the LCC matcher consumed the rest into
+  // separate sub-entity records and the truncated array no longer
+  // represents the page. Prefer the live ctx.tenants the content
+  // script just emitted, falling back to the stored array only when
+  // ctx isn't present (e.g. selectedEntity navigation paths).
+  const ctxTenants = Array.isArray(ctx && ctx.tenants) ? ctx.tenants : null;
+  const tenantsArr = (ctxTenants && ctxTenants.length)
+    ? ctxTenants
+    : (entity?.metadata?.tenants || null);
+  if (!hasTenantRow && Array.isArray(tenantsArr) && tenantsArr.length > 0) {
+    const names = tenantsArr
+      .map((t) => (t && typeof t === 'object' ? t.name : t))
+      .filter((n) => typeof n === 'string' && n.trim().length >= 3 && n.trim().length <= 60)
+      .map((n) => n.trim());
+    if (names.length) {
+      const dedup = Array.from(new Set(names.map((n) => n.toLowerCase())))
+        .map((lc) => names.find((n) => n.toLowerCase() === lc));
+      const display = dedup.join(', ');
+      html += `<div class="context-field">
+        <span class="context-label">Tenants</span>
+        <span class="context-value">${escapeHtml(display)}</span>
+      </div>`;
+    }
+  }
+  return html;
+}
+
+function wirePropertyActions(ctx, lccEntity) {
+  const updateBtn = $('#updateLccBtn');
+  const saveBtn = $('#saveLccBtn');
+  const domain = ctx.domain || 'source';
+  const domainLabel = DOMAIN_LABELS[domain] || domain;
+
+  // W1.4-L3b: a Save/Update promote runs the same domain-classifier pipeline as
+  // the Re-run button. If the capture has nothing extractable (only the entity
+  // name), the promote silently classifies domain:null and writes zero rows —
+  // so disable the button with a rescan tooltip rather than let it fail quietly.
+  const canPromote = hasExtractableContent(ctx)
+    || hasExtractableContent(lccEntity && lccEntity.metadata);
+  if (!canPromote) {
+    for (const b of [updateBtn, saveBtn]) {
+      if (!b) continue;
+      b.disabled = true;
+      b.title = 'Nothing extracted from this capture — rescan the page';
+      b.style.opacity = '0.5';
+      b.style.cursor = 'not-allowed';
+    }
+  }
+
+  if (updateBtn) {
+    updateBtn.addEventListener('click', async () => {
+      updateBtn.disabled = true;
+      updateBtn.textContent = 'Updating...';
+
+      // Re-read live pageContext so OM-enriched data is included
+      // (the closure ctx may be stale if OM ingestion happened after render)
+      const liveCtx = (await getPageContext()) || ctx;
+
+      // PATCH the existing entity — merge new CRE data into metadata
+      const fields = extractSourceFields(liveCtx);
+      const metadata = mergeMetadataPreservingArrays(lccEntity.metadata, buildMetadata(liveCtx, domain));
+      // Clear pipeline gate so re-ingestion triggers a fresh pipeline run
+      delete metadata._pipeline_processed_at;
+      delete metadata._pipeline_status;
+      delete metadata._pipeline_summary;
+      delete metadata._pipeline_last_error;
+      const result = await apiCall(`/api/entities?id=${lccEntity.id}`, {
+        ...fields,
+        metadata,
+        description: `Updated from ${domainLabel} on ${new Date().toLocaleDateString()}`,
+      }, 'PATCH');
+
+      if (result.ok) {
+        updateBtn.className = 'btn btn-sm btn-success';
+        updateBtn.textContent = 'Updated! Checking pipeline...';
+        const toast = document.createElement('div');
+        toast.className = 'update-toast updated';
+        toast.textContent = `Property data synced from ${domainLabel}`;
+        $('#propertyActions').prepend(toast);
+        pollPipelineStatus(lccEntity.id, $('#propertyActions')).then(() => {
+          updateBtn.textContent = 'Updated!';
+        });
+      } else {
+        updateBtn.disabled = false;
+        updateBtn.textContent = 'Update Failed — Retry';
+        updateBtn.className = 'btn btn-sm btn-danger';
+        const errMsg = toErrorMessage(result.error)
+          || toErrorMessage(result.data?.error)
+          || toErrorMessage(result.data?.message)
+          || `HTTP ${result.status || 'error'}`;
+        const toast = document.createElement('div');
+        toast.className = 'update-toast';
+        toast.textContent = errMsg;
+        $('#propertyActions').prepend(toast);
+      }
+    });
+  }
+
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving...';
+
+      // Re-read live pageContext so OM-enriched data is included
+      const liveCtx = (await getPageContext()) || ctx;
+
+      const fields = extractSourceFields(liveCtx);
+      const metadata = buildMetadata(liveCtx, domain);
+
+      const result = await apiCall('/api/entities', {
+        entity_type: 'asset',
+        name: liveCtx.address,
+        address: liveCtx.address,
+        city: liveCtx.city,
+        state: liveCtx.state,
+        zip: liveCtx.zip || null,
+        county: liveCtx.county || null,
+        asset_type: (() => {
+          const rawType = fields.property_type || liveCtx.property_subtype || null;
+          const INVALID_TYPES = ['size', 'type', 'class', 'sf', 'rba', 'stories'];
+          // Round 76ek.g: defense for parser leaks. The CoStar leasing panel
+          // emits "SF Avail" / "Office Avail" / "Retail Avail" / "For Lease"
+          // labels that occasionally pair with a "Type" label and reach this
+          // derivation. Reject any value that contains "Avail" or matches
+          // common leasing-status labels — those are never property types.
+          const AVAIL_OR_LEASING_RE = /\b(avail(able)?|for\s+(lease|sale)|asking|listing|smallest\s+space|max\s+contiguous|vacant)\b/i;
+          if (!rawType) return 'property';
+          if (INVALID_TYPES.includes(rawType.toLowerCase())) return 'property';
+          if (AVAIL_OR_LEASING_RE.test(rawType)) return 'property';
+          return rawType;
+        })(),
+        description: `Imported from ${domainLabel}`,
+        metadata,
+      });
+
+      // If created, link the external identity (CoStar parcel/URL)
+      const newEntityId = result.data?.entity?.id;
+      if (result.ok && newEntityId) {
+        const extId = liveCtx.parcel_number || liveCtx.page_url || liveCtx.address;
+        await apiCall('/api/entities?action=link', {
+          entity_id: newEntityId,
+          source_system: domain || 'extension',
+          source_type: 'property',
+          external_id: extId,
+          external_url: liveCtx.page_url || null,
+        }).catch(() => {}); // linking is best-effort
+      }
+
+      if (result.ok) {
+        saveBtn.className = 'btn btn-sm btn-success';
+        saveBtn.textContent = 'Saved! Checking pipeline...';
+        const toast = document.createElement('div');
+        toast.className = 'update-toast updated';
+        toast.textContent = 'Property added to LCC';
+        $('#propertyActions').prepend(toast);
+        pollPipelineStatus(newEntityId, $('#propertyActions')).then(() => {
+          saveBtn.textContent = 'Saved!';
+          // Round 76ek: hand the just-created entity id to loadPropertyTab so
+          // it doesn't have to guess via a string-match address lookup. This
+          // closes the "Save button reappears after refresh" loop where small
+          // address-spelling differences caused the rehydration to come back
+          // empty and the sidebar to offer Save again (creating duplicates).
+          setTimeout(() => loadPropertyTab({ prefetchEntityId: newEntityId }), 1500);
+        });
+      } else {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save Failed — Retry';
+        saveBtn.className = 'btn btn-sm btn-danger';
+        const errMsg = toErrorMessage(result.error)
+          || toErrorMessage(result.data?.error)
+          || toErrorMessage(result.data?.message)
+          || `HTTP ${result.status || 'error'}`;
+        const toast = document.createElement('div');
+        toast.className = 'update-toast';
+        toast.textContent = errMsg;
+        $('#propertyActions').prepend(toast);
+      }
+    });
+  }
+}
+
+// Round 76cr-Phase 2b / Round 76em (2026-04-29): capture-time domain
+// misclassification detector. Runs client-side against the live page
+// context so the user gets a heads-up BEFORE clicking Save Property to LCC.
+// Only fires the warning when the SUGGESTED domain differs from the
+// CURRENT domain — never warns when the user is already on the right side.
+//
+// Returns { suggested_domain, tenant_text, matched_pattern } or null.
+//
+// Pattern packs are intentionally narrow — false positives are worse here
+// than false negatives (a missed warning is just business as usual; a
+// false alarm trains the user to ignore the banner). Patterns target
+// strong, common government tenants and dialysis operators that account
+// for the bulk of past misroutes.
+function detectCaptureDomainMismatch(ctx, currentDomain) {
+  if (!ctx) return null;
+  // Pull every reasonably-tenanty signal from the live ctx into one
+  // lower-cased haystack. tenants[].name covers single + multi-tenant
+  // captures; primary_tenant / tenant_name covers the headline slot.
+  const haystackParts = [
+    ctx.primary_tenant,
+    ctx.tenant_name,
+    ctx.tenant,
+    ctx.tenant_guarantor,
+    ctx.guarantor,
+    ...(Array.isArray(ctx.tenants) ? ctx.tenants.map(t => t && t.name) : []),
+  ].filter(Boolean).map(s => String(s));
+  if (haystackParts.length === 0) return null;
+  const haystack = haystackParts.join(' | ').toLowerCase();
+
+  // Strong government-tenant signals. Anchored with word boundaries so
+  // common words ("federal" inside "Federal Reserve" CRE buyer text)
+  // don't false-trigger.
+  const GOV_PATTERNS = [
+    /\bveterans\s+affairs\b/i,
+    /\bva\s+(?:medical\s+center|clinic|hospital|outpatient)\b/i,
+    /\bdepartment\s+of\s+(?:veterans|defense|state|justice|treasury|labor|energy|interior|education|agriculture|transportation|homeland|commerce)/i,
+    /\bgeneral\s+services\s+admin/i,
+    /\bgsa\s+(?:lease|tenant)?\b/i,
+    /\bsocial\s+security\s+admin/i,
+    /\bssa\s+field\s+office/i,
+    /\binternal\s+revenue\s+service\b/i,
+    /\birs\s+(?:office|service\s+center)/i,
+    /\bunited\s+states\s+(?:postal|government|attorney)/i,
+    /\bus\s+postal\s+service\b/i,
+    /\bus(?:ps)?\s+post\s+office/i,
+    /\bfederal\s+(?:bureau|courthouse|building|courthouse)/i,
+    /\bfbi\s+(?:field\s+office|building)/i,
+    /\b(?:dod|dod\s+contract|department\s+of\s+defense)\b/i,
+    /\b(?:army|navy|air\s+force|marine\s+corps|coast\s+guard)\s+(?:recruiting|reserve)/i,
+    /\bnational\s+(?:archives|guard)/i,
+    /\bcourthouse\b.*\b(?:federal|us|united\s+states)\b/i,
+    /\bstate\s+of\s+[a-z]{4,}.*\b(?:dmv|department|agency)/i,
+  ];
+
+  // Strong dialysis signals — the user is on a gov capture path but the
+  // tenant is clearly a dialysis operator. Inverse case.
+  const DIA_PATTERNS = [
+    /\bdavita\b/i,
+    /\bfresenius\s+(?:medical|kidney)/i,
+    /\bfmc\s+(?:hillsboro|kidney|dialysis)/i,
+    /\bbio[- ]?medical\s+applications/i,
+    /\bus\s+renal\s+care\b/i,
+    /\bsatellite\s+(?:healthcare|dialysis)/i,
+    /\bdialyze\s+direct\b/i,
+    /\bnephrology\s+associates\b/i,
+    /\bdaVita|fresenius|us\s+renal/i,
+  ];
+
+  if (currentDomain === 'dialysis' || currentDomain === 'dia') {
+    for (const re of GOV_PATTERNS) {
+      const match = haystack.match(re);
+      if (match) {
+        return {
+          suggested_domain: 'government',
+          tenant_text: haystackParts[0] || haystack.substring(0, 80),
+          matched_pattern: match[0],
+        };
+      }
+    }
+  } else if (currentDomain === 'government' || currentDomain === 'gov') {
+    for (const re of DIA_PATTERNS) {
+      const match = haystack.match(re);
+      if (match) {
+        return {
+          suggested_domain: 'dialysis',
+          tenant_text: haystackParts[0] || haystack.substring(0, 80),
+          matched_pattern: match[0],
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function extractSourceFields(ctx) {
+  const fields = {};
+  for (const [key] of PROPERTY_FIELDS) {
+    if (ctx[key]) fields[key] = ctx[key];
+  }
+  for (const [key] of ASSESSOR_FIELDS) {
+    if (ctx[key]) fields[key] = ctx[key];
+  }
+  return fields;
+}
+
+// Round 76ej.v (2026-05-05): merge fresh-capture metadata into the
+// stored entity.metadata while PRESERVING existing array fields when
+// the fresh side has an empty / missing array. Plain `{ ...a, ...b }`
+// spread replaces wholesale, which clobbered Athens VA's tenants[]
+// backfill the moment the user clicked Update LCC with CREXi Data —
+// the live ctx had no prose-extracted tenants (older content script),
+// buildMetadata returned tenants:[], and the spread overwrote the
+// good stored value with the empty array.
+//
+// Rules:
+//   - Scalars: fresh wins (existing behaviour).
+//   - Arrays in the preservation list: keep existing if fresh is
+//     null / empty array; otherwise fresh wins.
+//   - Other arrays not in the list: fresh wins (default spread).
+function mergeMetadataPreservingArrays(existing, fresh) {
+  const merged = { ...(existing || {}), ...(fresh || {}) };
+  const PRESERVE_IF_FRESH_EMPTY = ['tenants', 'contacts', 'sales_history', 'documents', 'document_links', 'pdf_extracted_texts', 'portfolio_properties'];
+  for (const key of PRESERVE_IF_FRESH_EMPTY) {
+    const existingVal = existing && existing[key];
+    const freshVal    = fresh    && fresh[key];
+    const freshIsEmpty = freshVal == null
+      || (Array.isArray(freshVal) && freshVal.length === 0);
+    const existingHasData = Array.isArray(existingVal) && existingVal.length > 0;
+    if (freshIsEmpty && existingHasData) {
+      merged[key] = existingVal;
+    }
+  }
+  return merged;
+}
+
+function buildMetadata(ctx, domain) {
+  // Capture ALL extracted data for the cleaning/propagation pipeline.
+  // Keys match database column names where possible.
+  // Belt-and-suspenders filter: strip CoStar section headings that slip past extractFields()
+  // Round 76ej.v (2026-05-05): added credit-rating phrases that the
+  // Plano (7940 Preston Rd / U.S. District Courthouse) capture stamped
+  // as tenant_name = "Credit Rated, Corporate Guarantee" — those are
+  // CREXi tenant-credit field values, not tenant names. Anchored ^...$
+  // so legitimate names containing these tokens still pass.
+  const INVALID_TENANT = /^(public\s+record|building|land|market|submarket|sources|assessment|investment|not\s+disclosed|none|vacant|available|owner.occupied|confirmed|verified|research|industry|sector|property\s+type|property\s+subtype|building\s+class|tenancy|single\s+tenant|multi.tenant|net\s+lease|gross\s+lease|nnn|modified\s+gross|buyer|seller|broker|listing\s+broker|buyer\s+broker|lender|owner|recorded\s+buyer|recorded\s+seller|true\s+buyer|true\s+seller|current\s+owner|credit\s+rated|corporate\s+guarantee|investment\s+grade|credit\s+rated,?\s+corporate\s+guarantee|aa\+?|aaa|baa\+?|bbb\+?|s&p\s+aa\+?)$/i;
+  // Round 76ej.n: prose-fragment patterns left over by the pre-fix CREXi
+  // findTextElement heuristic. Mirrors renderLccFields's isValidLccValue
+  // tenant filter so the next "Update LCC with CREXi Data" PATCH writes
+  // tenant_name=null over the stored junk and clears it from LCC.
+  const TENANT_PROSE_RE = [
+    /\bhvac\b/i,
+    /\b(quality|new|recent|modern)\s+construction\b/i,
+    /\b(systems?|amenities|features?|upgrades?|improvements?)\b.*\band\b/i,
+    /\band\b.*\b(systems?|amenities|features?|hvac|construction|upgrades?)\b/i,
+    // Date-shaped values misclassified as tenant_name (EPA Houston
+    // stored "Lease Commencement 07/01/2025" before the heuristic-
+    // fallback fix). Mirror the read-side filter.
+    /\b(lease\s+commencement|lease\s+expiration|lease\s+date|lease\s+term|since|effective)\b/i,
+    /\d{1,2}\/\d{1,2}\/\d{2,4}/,
+    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b/i,
+    /\b\d{4}-\d{1,2}-\d{1,2}\b/,
+  ];
+  const isProseTenant = (s) => {
+    if (!s || typeof s !== 'string') return false;
+    if (s.length > 60) return true;
+    return TENANT_PROSE_RE.some((re) => re.test(s));
+  };
+  // Numeric-flavored fields must contain a digit. Catches "Valuation
+  // Metrics" / "Investment Highlights" stored under cap_rate by the
+  // pre-fix heuristic. Pass-through when the stored value is already
+  // numeric or null.
+  const sanitizeNumericField = (v) => {
+    if (v == null || v === '') return null;
+    return /\d/.test(String(v)) ? v : null;
+  };
+  const parseMoneyLike = (v) => {
+    if (v == null || v === '') return null;
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+    const m = String(v).trim().match(/^\$?\s*([\d,]+(?:\.\d+)?)\s*([KMB])?\b/i);
+    if (!m) return null;
+    let n = Number(m[1].replace(/,/g, ''));
+    if (!Number.isFinite(n)) return null;
+    const suffix = (m[2] || '').toUpperCase();
+    if (suffix === 'K') n *= 1e3;
+    else if (suffix === 'M') n *= 1e6;
+    else if (suffix === 'B') n *= 1e9;
+    return n;
+  };
+  // Round 76ej.w (2026-05-05): a real CRE asking price for any
+  // building with measurable SF is in the hundreds of thousands or
+  // millions. Sub-$5k values are always price-per-SF leaks ($8,286 /
+  // $1,102.05 / $1,345.69 / $419 etc) or household-income figures
+  // ($159,941 from a marketing description). Sub-$50k is also
+  // suspicious for any property over a few thousand SF — but we keep
+  // the threshold low to avoid rejecting legitimate sub-$1M deals.
+  // Also reject when asking_price exactly equals NOI (saw "221058" /
+  // "221057.66" in the audit — same numeric stamped in both slots).
+  const sanitizeAskingPrice = (v, ctxNoi) => {
+    if (v == null || v === '') return null;
+    if (!/\d/.test(String(v))) return null;
+    const numeric = parseMoneyLike(v);
+    if (!Number.isFinite(numeric) || numeric < 25000) return null;
+    if (ctxNoi) {
+      const noiNumeric = parseMoneyLike(ctxNoi);
+      if (Number.isFinite(noiNumeric) && noiNumeric > 0
+          && Math.abs(numeric - noiNumeric) / Math.max(numeric, noiNumeric) < 0.01) {
+        return null;
+      }
+    }
+    return v;
+  };
+  const m = {
+    source: domain || 'extension',
+    source_url: ctx.page_url || null,
+    _version: ctx._version || null,
+    costar_comp_id: ctx.costar_comp_id || null,
+    extracted_at: new Date().toISOString(),
+    // Financials
+    asking_price: sanitizeAskingPrice(ctx.asking_price, ctx.noi),
+    list_price: sanitizeAskingPrice(ctx.list_price, ctx.noi),
+    original_price: sanitizeAskingPrice(ctx.original_price || ctx.list_price, ctx.noi),
+    original_cap_rate: sanitizeNumericField(ctx.original_cap_rate),
+    last_price_change: ctx.last_price_change || null,
+    price_change_history: Array.isArray(ctx.price_change_history) ? ctx.price_change_history : null,
+    cap_rate: sanitizeNumericField(ctx.cap_rate),
+    noi: sanitizeNumericField(ctx.noi),
+    price_per_sf: sanitizeNumericField(ctx.price_per_sf),
+    sale_price: ctx.sale_price || null,
+    sale_date: ctx.sale_date || null,
+    // Building
+    building_class: ctx.building_class || null,
+    year_built: ctx.year_built || null,
+    year_renovated: ctx.year_renovated || null,
+    construction_start: ctx.construction_start || null,
+    square_footage: ctx.square_footage || null,
+    typical_floor_sf: ctx.typical_floor_sf || null,
+    lot_size: ctx.lot_size || null,
+    land_sf: ctx.land_sf || null,
+    far: ctx.far || null,
+    stories: ctx.stories || null,
+    parking: ctx.parking || null,
+    zoning: ctx.zoning || null,
+    occupancy: ctx.occupancy || null,
+    ownership_type: ctx.ownership_type || null,
+    location_type: ctx.location_type || null,
+    building_name: ctx.building_name || null,
+    // CREXi sends `sub_type` (e.g. "Government", "Medical Office"); the
+    // domain classifier reads `property_subtype`. Without this fallback
+    // an EPA / VA / SSA listing whose only government signal is its
+    // CREXi sub_type drops to no_domain because the property_subtype
+    // slot is empty.
+    property_subtype: ctx.property_subtype || ctx.sub_type || null,
+    days_on_market: ctx.days_on_market || null,
+    comp_status: ctx.comp_status || null,
+    price_status: ctx.price_status || null,
+    // Public records
+    parcel_number: ctx.parcel_number || null,
+    county: ctx.county || null,
+    assessed_value: ctx.assessed_value || null,
+    land_value: ctx.land_value || null,
+    improvement_value: ctx.improvement_value || null,
+    // Tenant / Lease
+    tenant_name:       (ctx.tenant_name && !INVALID_TENANT.test(ctx.tenant_name) && !isProseTenant(ctx.tenant_name)) ? ctx.tenant_name : null,
+    primary_tenant:    (ctx.primary_tenant && !INVALID_TENANT.test(ctx.primary_tenant) && !isProseTenant(ctx.primary_tenant)) ? ctx.primary_tenant : null,
+    tenancy_type: ctx.tenancy_type || null,
+    owner_occupied: ctx.owner_occupied || null,
+    est_rent: ctx.est_rent || null,
+    lease_type: ctx.lease_type || null,
+    lease_term: ctx.lease_term || null,
+    remaining_term: ctx.remaining_term || null,
+    lease_expiration: ctx.lease_expiration || null,
+    lease_commencement: ctx.lease_commencement || null,
+    rent_per_sf: ctx.rent_per_sf || null,
+    annual_rent: ctx.annual_rent || null,
+    expense_structure: ctx.expense_structure || null,
+    renewal_options: ctx.renewal_options || null,
+    guarantor: ctx.guarantor || null,
+    rent_escalations: ctx.rent_escalations || null,
+    // Round 76ej.k: provenance breadcrumb. When a lease field came from
+    // the marketing description prose (vs CREXi's structured Details
+    // panel), the backend can downgrade its trust level via the
+    // `crexi_sidebar_description` priority rules.
+    lease_facts_from_description: ctx.lease_facts_from_description || null,
+    sf_leased: ctx.sf_leased || null,
+    // Market data
+    subject_vacancy: ctx.subject_vacancy || null,
+    submarket_vacancy: ctx.submarket_vacancy || null,
+    market_vacancy: ctx.market_vacancy || null,
+    subject_rent_psf: ctx.subject_rent_psf || null,
+    market_rent_psf: ctx.market_rent_psf || null,
+    submarket_12mo_leased: ctx.submarket_12mo_leased || null,
+    submarket_avg_months_on_market: ctx.submarket_avg_months_on_market || null,
+    submarket_12mo_sales_volume: ctx.submarket_12mo_sales_volume || null,
+    market_sale_price_psf: ctx.market_sale_price_psf || null,
+    // Arrays
+    tenants: ctx.tenants || [],
+    contacts: ctx.contacts || [],
+    sales_history: ctx.sales_history || [],
+    // Bulk/Portfolio Sale Comp constituent table (content/_portfolio-parse.js
+    // → costar.js accumulated.portfolio_properties). MUST be whitelisted here
+    // or the captured 40-row table is silently dropped before reaching the
+    // pipeline — the same class of bug as the `loans` drop below (2026-06-25).
+    // The pipeline's propagateToDomainDbDirect unpacks this into per-property
+    // constituents when length > 1.
+    portfolio_properties: ctx.portfolio_properties || [],
+    // Round 76ev (2026-05-13): forward the rca.js Financing-block payload
+    // through to the backend. Without this whitelist entry the entire
+    // metadata.loans[] array was being dropped here, so upsertDomainLoans's
+    // Round 76er.c third loop never had anything to iterate — every
+    // recapture's "PATCH with empty rich fields" was traced to this single
+    // missing line.
+    loans: ctx.loans || [],
+    // Sale notes & document links from CoStar comp detail pages
+    sale_notes_raw: ctx.sale_notes_raw || null,
+    // Sale/Investment Highlights bullets (content/costar.js). On a property
+    // Summary page these often carry the ONLY government/operator tenant signal
+    // (USDA/FSA/GSA prose), and the server classifyDomain() reads
+    // metadata.investment_highlights — MUST be whitelisted here or the captured
+    // text is silently dropped and the property drops to no_domain (same class
+    // as the loans/portfolio_properties drops above). 2026-08-14.
+    investment_highlights: ctx.investment_highlights || null,
+    document_links: ctx.document_links || [],
+    documents: ctx.documents || [],
+    // Listing broker (from OM extraction)
+    listing_broker: ctx.listing_broker || null,
+    listing_firm: ctx.listing_firm || null,
+    listing_email: ctx.listing_email || null,
+    listing_phone: ctx.listing_phone || null,
+    // CREXi listing pages: marketing copy + OM availability
+    marketing_headline: ctx.marketing_headline || null,
+    marketing_description: ctx.marketing_description || null,
+    om_url: ctx.om_url || null,
+    om_available: ctx.om_available || null,
+    acreage: ctx.acreage || null,
+    updated_days_ago: ctx.updated_days_ago || null,
+    // PDF / OM ingestion tracking
+    pdf_count: (ctx.pdf_extracted_texts || []).length || 0,
+    pdf_extracted_texts: ctx.pdf_extracted_texts || [],
+  };
+  // Strip null values to keep metadata clean
+  for (const key of Object.keys(m)) {
+    if (m[key] === null) delete m[key];
+  }
+  return m;
+}
+
+// ── Assessor / public records extra fields ──────────────────────────────────
+
+function renderAssessorFields(ctx) {
+  const hasAssessor = ASSESSOR_FIELDS.some(([key]) => ctx[key]);
+  if (!hasAssessor) return '';
+
+  let html = '<div class="section-label">Public Records Data</div>';
+  for (const [key, label] of ASSESSOR_FIELDS) {
+    const val = ctx[key];
+    if (val) {
+      html += `<div class="context-field">
+        <span class="context-label">${escapeHtml(label)}</span>
+        <span class="context-value">${escapeHtml(val)}</span>
+      </div>`;
+    }
+  }
+  return html;
+}
+
+// ── Marketing description / OM (CREXi listing pages) ───────────────────────
+
+function renderMarketingSection(ctx) {
+  let html = '<div class="section-label">Listing Marketing</div>';
+  if (ctx.marketing_headline) {
+    html += `<div style="font-weight:700;font-size:12px;color:var(--text-primary);margin-bottom:6px;">${escapeHtml(ctx.marketing_headline)}</div>`;
+  }
+  if (ctx.marketing_description) {
+    const desc = ctx.marketing_description;
+    const truncated = desc.length > 600 ? desc.slice(0, 600) + '…' : desc;
+    html += `<div style="font-size:11px;color:var(--text-secondary);white-space:pre-wrap;line-height:1.4;margin-bottom:8px;">${escapeHtml(truncated)}</div>`;
+  }
+  if (ctx.om_available || ctx.om_url) {
+    const href = ctx.om_url || ctx.page_url;
+    if (href) {
+      html += `<div class="context-field"><span class="context-label">OM</span><span class="context-value"><a href="${escapeHtml(href)}" target="_blank" rel="noopener">View Offering Memorandum</a></span></div>`;
+    } else {
+      html += `<div class="context-field"><span class="context-label">OM</span><span class="context-value">Available on listing page</span></div>`;
+    }
+  }
+  // CREXi gates "View OM" behind an NDA modal, so the actual PDF URL is
+  // never exposed to the DOM. Synthesize a text/plain artifact from the
+  // structured fields + marketing description and route it through the
+  // unified OM intake pipeline (which accepts text/* and skips pdf-parse).
+  if (ctx.address && (ctx.marketing_description || ctx.asking_price || ctx.tenant_name)) {
+    html += '<div class="lcc-om-stage" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">';
+    html += '<button class="btn btn-sm btn-success lcc-stage-listing-btn" title="Send the listing summary + marketing description to LCC intake for AI extraction">Stage Listing to LCC</button>';
+    html += '<button class="btn btn-sm btn-secondary lcc-copy-listing-btn" title="Copy the synthesized listing summary to clipboard">Copy Summary</button>';
+    html += '<span class="lcc-stage-status" style="font-size:10px;color:var(--text-secondary);"></span>';
+    html += '</div>';
+
+    // Round 76ej.f (2026-05-04): manual OM PDF upload. After the user
+    // clicks "View OM" on the listing page and gets through the NDA,
+    // they can drop or pick the downloaded PDF here and we route it
+    // through the same /api/intake/stage-om pipeline as the synthetic
+    // text — but as a real application/pdf artifact so pdf-parse runs
+    // and the AI extractor sees the full OM content. Works for any
+    // gated listing source (CREXi, Marcus & Millichap, JLL, etc.).
+    html += '<div class="lcc-om-upload" style="margin-top:6px;border:1px dashed var(--border, #c8d0dc);border-radius:6px;padding:8px;font-size:11px;color:var(--text-secondary);">';
+    html += '<div style="margin-bottom:4px;font-weight:600;color:var(--text-primary);">Upload OM PDF</div>';
+    html += '<div style="margin-bottom:6px;line-height:1.4;">After downloading the OM from the listing page, drop the file here or browse to send the full PDF for AI extraction.</div>';
+    html += '<input type="file" class="lcc-upload-om-input" accept="application/pdf,.pdf" style="font-size:11px;" />';
+    html += '<span class="lcc-upload-om-status" style="margin-left:6px;font-size:10px;"></span>';
+    html += '</div>';
+  }
+  return html;
+}
+
+// Compose a plain-text "synthetic OM" from CREXi context. The OM extractor
+// is forgiving — it just needs labelled fields it can pattern-match.
+function buildSyntheticListingText(ctx) {
+  const lines = [];
+  const push = (label, val) => {
+    if (val == null || val === '' || val === false) return;
+    lines.push(`${label}: ${val}`);
+  };
+  lines.push(`Source: ${ctx.page_url || 'sidebar capture'}`);
+  push('Address', ctx.address);
+  push('City', ctx.city);
+  push('State', ctx.state);
+  lines.push('');
+  if (ctx.marketing_headline) {
+    lines.push(ctx.marketing_headline);
+    lines.push('');
+  }
+  push('Asking Price', ctx.asking_price);
+  push('Cap Rate', ctx.cap_rate);
+  push('NOI', ctx.noi);
+  push('Price per SF', ctx.price_per_sf);
+  push('Property Type', ctx.property_type);
+  push('Sub Type', ctx.sub_type);
+  push('Building Class', ctx.building_class);
+  push('Square Footage', ctx.square_footage);
+  push('Year Built', ctx.year_built);
+  push('Lot Size', ctx.lot_size);
+  push('Acreage', ctx.acreage);
+  push('Stories', ctx.stories);
+  push('Units', ctx.units);
+  push('Parking', ctx.parking);
   push('Zoning', ctx.zoning);
   push('Occupancy', ctx.occupancy);
   push('Tenancy', ctx.tenancy);

@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 32471)
-Total output lines: 2850
-
 // ============================================================================
 // Unified Intake API — Consolidated from intake-outlook-message.js + intake-summary.js
 // Life Command Center  (cache-bust: force rebuild of handler imports)
@@ -1159,7 +1156,223 @@ async function handleOutlookMessage(req, res) {
   // above. An infra alert is NOT a listing OM — SKIP the OM extractor and
   // return the priority tier + a ready-to-use To Do title so the Flag → To Do
   // Power Automate flow can prefix the task (e.g. "[HIGH] Vercel build failed
-  // — soccer-video"). No new folder/flag/bu…2471 tokens truncated…mail Subject: ${subject}
+  // — soccer-video"). No new folder/flag/button; the user only flags the email.
+  if (infra.isInfra) {
+    // Fire-and-forget entity extraction is skipped for infra (no deal parties).
+    // Infra is a non-terminal category (the Flag → To Do flow creates a tiered
+    // ack task) → STAGED: moved to "Intake Staged, Not Completed" and KEPT
+    // flagged until that To Do completes, then filed to Processed/Infra. The
+    // classification captured the priority signal; the raw email is not filed
+    // here (it stages as outstanding work).
+    const processing_complete = await emitPC('staged', {
+      channel: 'infra', domain: 'infra', inboxItemId: item?.id || null,
+    });
+    return res.status(200).json({
+      ok: true,
+      correlation_id: correlationId,
+      inbox_item_id: item?.id || null,
+      kind: 'infra_alert',
+      domain: 'infra',
+      source_system: infra.sourceSystem,
+      priority_tier: infraTier,
+      priority_score: infraScore,
+      todo_title: infraTodoTitle,
+      external_id: String(messageId),
+      status: item?.status || 'new',
+      processing_complete,
+    });
+  }
+
+  // If email has attachments (or a findable PDF URL in the body), bridge to
+  // the unified stageOmIntake pipeline. This replaces the legacy dual-DB
+  // path (dialysis_db writes, LCC-Opps reads) with a single LCC-Opps-native
+  // call that creates staged_intake_items + staged_intake_artifacts, fires
+  // the extractor, runs the matcher, and logs an entity-scoped memory event.
+  let stagedIntakeId = null;
+  {
+    // Collect the first candidate PDF: either an inline attachment or a
+    // body-URL-fetched PDF. Multi-PDF emails are not the common case; if one
+    // comes in, we stage the first and log a note for the rest.
+    const atts = Array.isArray(payload.attachments) ? payload.attachments : [];
+    let primaryDocument = null;
+
+    if (atts.length > 0) {
+      // pickPrimaryOmAttachment screens out signature graphics (image001.png,
+      // image002.jpg, etc.) before applying the storage_path > inline >
+      // index-zero preference. Power Automate's Outlook flow for large emails
+      // uploads attachments to Supabase via prepare-upload first, then posts
+      // this endpoint with just the storage references; the picker selects
+      // the OM PDF rather than whichever signature graphic happens to be
+      // first in the email's attachment order.
+      const first = pickPrimaryOmAttachment(atts);
+      if (first) {
+        primaryDocument = {
+          bytes_base64: first.inline_data || first.content || null,
+          storage_path: first.storage_path || null,
+          file_name:    first.file_name || first.name || 'attachment.pdf',
+          mime_type:    first.file_type || first.contentType || first.mime_type || 'application/pdf',
+        };
+      }
+    }
+    // Fall through to body-URL scan when no OM-eligible attachment was
+    // picked — covers emails whose only attachments are signature images
+    // but the real OM is linked from the body (Dropbox / Google Drive / etc.).
+    if (!primaryDocument && bodyForUrlScan) {
+      const urlMatches = bodyForUrlScan.match(/https?:\/\/[^\s"'<>]+/g) || [];
+      for (const url of urlMatches.slice(0, 3)) {
+        const fetched = await fetchUrlArtifact(url);
+        if (fetched) {
+          primaryDocument = {
+            bytes_base64: fetched.base64,
+            storage_path: null,
+            file_name:    fetched.fileName || 'om.pdf',
+            mime_type:    fetched.contentType || 'application/pdf',
+          };
+          break;
+        }
+      }
+    }
+
+    // Bug O fix (2026-04-25): when the email has neither an OM-eligible
+    // attachment nor a trusted-host PDF URL, stage the email BODY itself
+    // as a text artifact so the AI extractor still runs on it. This
+    // captures price-change updates, broker-list emails, marketing copy
+    // and other deal-relevant emails that don't carry a PDF.
+    // Threshold: 100 chars of combined subject+body. Below that, the
+    // email is signal-light enough that staging would just add inbox
+    // noise (e.g. "Thanks!" replies).
+    if (!primaryDocument) {
+      const synthParts = [];
+      if (subject) synthParts.push(`Subject: ${subject}`);
+      const bodyText = bodyForUrlScan || bodyPreview || '';
+      if (bodyText) synthParts.push(bodyText);
+      const synthText = synthParts.join('\n\n').trim();
+      if (synthText.length >= 100) {
+        const synthBase64 = Buffer.from(synthText, 'utf8').toString('base64');
+        const filenameSuffix = (graphRestId || internetMsgId || 'msg').slice(-12).replace(/[^A-Za-z0-9_-]/g, '');
+        primaryDocument = {
+          bytes_base64: synthBase64,
+          storage_path: null,
+          file_name:    `email-body-${filenameSuffix}.txt`,
+          mime_type:    'text/plain',
+        };
+      }
+    }
+
+    if (primaryDocument && (primaryDocument.bytes_base64 || primaryDocument.storage_path)) {
+      const stageRes = await stageOmIntake(
+        {
+          bytes_base64:     primaryDocument.bytes_base64 || undefined,
+          storage_path:     primaryDocument.storage_path || undefined,
+          file_name:        primaryDocument.file_name,
+          mime_type:        primaryDocument.mime_type,
+          channel:          'email',
+          note:             subject || null,
+          seed_data: {
+            property: null,
+            tags:     ['email_intake'],
+          },
+          email_context:    emailContext,
+          copilot_metadata: null,
+        },
+        {
+          email:      sender?.email || user.email,
+          name:       sender?.name  || user.display_name || null,
+          oid:        null,
+          tenant_id:  null,
+        },
+        workspaceId,
+      );
+
+      if (stageRes.status === 200 && stageRes.body?.ok) {
+        stagedIntakeId = stageRes.body.intake_id;
+        // Link the email's inbox_item to the new staging record via metadata.
+        if (item?.id && stagedIntakeId && stagedIntakeId !== item.id) {
+          await opsQuery('PATCH', `inbox_items?id=eq.${pgFilterVal(item.id)}`, {
+            metadata: {
+              ...(item.metadata || {}),
+              bridged_to_intake_id: stagedIntakeId,
+            },
+          }).catch(() => {});
+        } else if (item?.id) {
+          stagedIntakeId = item.id;
+        }
+
+        // Round 76ej.k (2026-05-05): when stageOmIntake's race-window match
+        // returned a matched LCC entity, also stamp entity_id (+ domain) on
+        // THIS flagged_email inbox row so the LCC inbox UI can navigate
+        // straight to the property card. Round 76ej.h fixed this for the
+        // sidebar/Copilot inbox rows (those go through the email_om row
+        // staged INSIDE stageOmIntake) but the user-facing flagged_email
+        // row is created up here in handleOutlookMessage and was never
+        // patched. Conservative: only set when entity_id is currently null.
+        const matchedEid = stageRes.body?.matched_entity_id || null;
+        const matchedDom = stageRes.body?.matched_domain    || null;
+        if (item?.id && matchedEid) {
+          const inboxPatch = { entity_id: matchedEid };
+          if (matchedDom) inboxPatch.domain = matchedDom;
+          await opsQuery(
+            'PATCH',
+            `inbox_items?id=eq.${pgFilterVal(item.id)}&entity_id=is.null`,
+            inboxPatch
+          ).catch(err => console.warn('[intake] flagged_email entity link patch failed:', err?.message));
+        }
+      } else {
+        console.error('[intake] stageOmIntake from email failed:', stageRes.status, stageRes.body?.error);
+      }
+    }
+  }
+
+  // Fire-and-forget entity extraction — NEVER blocks the intake response
+  runEntityExtraction(workspaceId, user, item, subject, bodyPreview, sender)
+    .catch(err => console.error('[Intake extraction error]', err.message || err));
+
+  // Disposition: this general ("general" category) flagged-email path has NO
+  // domain/category classification, so it must NOT auto-file (filing IS terminal
+  // and clears the flag — an OM to review, a survey/title question, anything not
+  // yet acted on, would be filed prematurely). Instead it records `staged`: the
+  // email moves to the single "Intake Staged, Not Completed" folder and KEEPS
+  // its flag (the Teams card + To Do task the PA flow creates are the surface),
+  // and files to Processed/General only once its To Do task completes. `filed`
+  // stays reserved for terminal categories; `needs_review` for genuine failures.
+  const processing_complete = await emitPC('staged', {
+    channel: 'om', inboxItemId: item?.id || null,
+  });
+
+  return res.status(200).json({
+    ok: true,
+    correlation_id: correlationId,
+    inbox_item_id: item?.id || null,
+    staged_intake_id: stagedIntakeId,
+    external_id: String(messageId),
+    status: item?.status || 'new',
+    processing_complete,
+  });
+}
+
+// ============================================================================
+// ENTITY EXTRACTION FROM EMAIL (fire-and-forget after intake response)
+// ============================================================================
+
+// STEP 4 — Extraction gate: env flag, minimum body length, skip internal domains
+function shouldRunExtraction(body, senderEmail) {
+  if (process.env.INTAKE_EXTRACTION_ENABLED !== 'true') return false;
+  if (!body || body.length < 100) return false;
+  const internalDomains = (process.env.INTERNAL_EMAIL_DOMAINS || '')
+    .split(',')
+    .map(d => d.trim().toLowerCase())
+    .filter(Boolean);
+  if (senderEmail && internalDomains.length) {
+    const senderDomain = senderEmail.split('@')[1]?.toLowerCase();
+    if (senderDomain && internalDomains.includes(senderDomain)) return false;
+  }
+  return true;
+}
+
+function buildExtractionPrompt(subject, body) {
+  return `You are a commercial real estate data extraction assistant. Extract all structured entities from this email. Return ONLY valid JSON — no markdown, no explanation.
+
+Email Subject: ${subject}
 Email Body: ${body}
 
 Extract and return this exact JSON structure:
