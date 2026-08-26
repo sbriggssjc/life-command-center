@@ -176,9 +176,46 @@ a buyer's rep, and where competitors are winning their business).
 Scott asked whether LinkedIn or similar public/social sources can be ingested. Honest answer,
 ranked by legitimacy and effort:
 
+### ⚠️ FIRST: Scott already syncs LinkedIn → Outlook contacts. **That data is NOT in the LCC.**
+
+Scott (2026-08-26): *"I already sync LinkedIn with my contacts in Outlook so we should have
+that data already reflected in our Outlook connections."* The sync into Outlook is real; the
+step from Outlook into the LCC has never happened. Measured live on `unified_contacts`
+(31,038 rows):
+
+| column | populated |
+|---|---|
+| `sf_contact_id` | 17,298 — Salesforce IS flowing |
+| `company_name` | 31,004 |
+| **`outlook_contact_id`** | **0** |
+| **`last_synced_outlook`** | **never** |
+| `icloud_contact_id` | 0 |
+| **`title`** | **585 (1.9%)** |
+
+**The receiver is fully built and has never been fed.** `api/_handlers/contacts-handler.js`
+accepts `outlook_contact_id`, carries a **Tier-3 match rule** on it, and renders an Outlook
+source badge in the UI; `unified_contacts` has the columns. There is simply no sender — no
+Power Automate flow pulls `/me/contacts`, unlike the existing Outlook mail/calendar bridges.
+A dormant capability that looks like a healthy quiet pipeline (playbook Class 5), except here
+it is *unfed* rather than flag-gated, so even the feature-flag registry does not show it.
+
+**Why this is the highest-leverage enrichment item, not just a nice-to-have:** the role
+taxonomy in §3a needs a TITLE to distinguish acquisitions from disposition from DD — and we
+have a title on **1.9%** of contacts. Outlook contacts (LinkedIn-synced) are the natural
+source for exactly that field, for exactly the people Scott already knows. It also closes the
+"where did this person go" case without any scraping: a LinkedIn-synced Outlook contact
+updates its company/title when the person moves.
+
+**Build it as a Power Automate flow mirroring the existing Outlook bridges** (`api/bridges.js`
+pattern, `X-LCC-Source-User-Id` normalized through `resolveSourceUserId` — see the P116
+footgun where the wrong user-id space silently rejected 10,470 writes), POSTing into the
+contacts-handler endpoint that already exists. Delta-sync on `lastModifiedDateTime`.
+
+### Other sources
+
 | source | verdict |
 |---|---|
-| **Your own LinkedIn connections export** (Settings → Get a copy of your data → Connections) | ✅ **Best first move.** A CSV of name/company/title/connected-date for people *you already know*. It is your data, export is a supported feature, no ToS issue. Directly answers "where did this person go" for anyone in your network, and seeds the "leverage a prior relationship at their new firm" case. |
+| **LinkedIn connections CSV export** (Settings → Get a copy of your data → Connections) | ✅ Still useful as a one-shot backfill / cross-check, and as the fallback if the Outlook contact sync proves lossy. It is your data, export is a supported feature, no ToS issue. |
 | **Company team pages** (`easterlyreit.com/company/team/`) | ✅ Fetchable, authoritative for current roster, and the pattern already exists in this codebase (the SOS residential-proxy work). Best signal for *departures* — a name disappearing from a team page is evidence. |
 | **SEC filings** (REIT officers, proxy statements) | ✅ Authoritative, free, well-structured for public buyers like Easterly. |
 | **Paid enrichment APIs** — ZoomInfo, RocketReach, Apollo, Clearbit | ✅ Legitimate, licensed, API-based. Cost per lookup; would need a value gate exactly like the SAM lookup budget. ZoomInfo already surfaced Pulliam correctly in the test above. |
