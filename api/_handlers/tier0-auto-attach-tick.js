@@ -121,6 +121,75 @@ async function reReadRow(ownerId, domain) {
   return (r.ok && Array.isArray(r.data)) ? (r.data[0] || null) : null;
 }
 
+// --------------------------------------------------------------------------
+// P196 — the PARKED population, on the same dry-run surface as the auto set.
+//
+// `decidability='parked_domain_only'` cards never reach the Decision Center (the
+// `_open` view serves only 'ask' and 'auto'), so until now an operator could see
+// that 146 cards existed and nothing about WHY. park_reason is computed by the SQL
+// CASE in v_lcc_tier0_owner_contact_lane_triage, which stays the single owner of the
+// classification — this only renders what the server decided (the A1 rule).
+//
+// ⚠️ THE COUNTS ARE DERIVED FROM THE ROWS THAT WERE ACTUALLY FETCHED, not a separate
+// count query, and `capped` says so when the window truncates. A badge counted in SQL
+// beside a list filtered in JS is the P132 defect where the two disagree.
+// --------------------------------------------------------------------------
+const PARK_CAP = 1000;
+
+async function fetchParkBreakdown() {
+  const r = await opsQuery('GET', 'v_lcc_tier0_park_watch?select=owner_id,owner_name,domain,'
+    + 'owner_rent,park_reason,park_employer_on_file,park_owner_compared,sponsor_shaped,'
+    + 'sponsor_token_candidate,n_person_evidence'
+    + '&order=owner_rent.desc.nullslast&limit=' + PARK_CAP);
+  if (!r.ok || !Array.isArray(r.data)) return null;
+  const rows = r.data;
+  const by = {};
+  for (const row of rows) {
+    const k = row.park_reason || 'unclassified';
+    const b = (by[k] ||= { cards: 0, owners: new Set(), rent: 0 });
+    b.cards += 1;
+    b.owners.add(row.owner_id);
+    b.rent += Number(row.owner_rent) || 0;
+  }
+  return {
+    cards: rows.length,
+    capped: rows.length === PARK_CAP,
+    by_reason: Object.fromEntries(Object.entries(by).map(([k, v]) => [k,
+      { cards: v.cards, owners: v.owners.size, rent: Math.round(v.rent) }])),
+    // The reason an operator can act on in one second, value-ranked.
+    examples: rows.slice(0, 10).map((row) => ({
+      owner_name: row.owner_name, domain: row.domain,
+      owner_rent: Number(row.owner_rent) || 0,
+      park_reason: row.park_reason,
+      employer_on_file: row.park_employer_on_file || null,
+      owner_compared: row.park_owner_compared || null,
+      sponsor_shaped: row.sponsor_shaped === true,
+    })),
+  };
+}
+
+/**
+ * Sponsor-shaped parks, as proposals for the curated lcc_owner_sponsor_domain.
+ * ⚠️ Measured ~4 of 6 correct on named rows, and the 4 are the top 4 by rent — so
+ * these are PROPOSALS a human confirms, never anything this tick writes.
+ */
+async function fetchSponsorProposals() {
+  const r = await opsQuery('GET', 'v_lcc_tier0_sponsor_map_proposals?select=*'
+    + '&order=combined_annual_rent.desc.nullslast&limit=100');
+  if (!r.ok || !Array.isArray(r.data)) return null;
+  return r.data.map((row) => ({
+    proposed_sponsor_token: row.proposed_sponsor_token,
+    proposed_email_domain: row.proposed_email_domain,
+    spe_entities: row.spe_entities,
+    combined_annual_rent: Number(row.combined_annual_rent) || 0,
+    spe_names: row.spe_names,
+    employers_on_file: row.employers_on_file,
+    already_confirmed: row.already_confirmed === true,
+    confirm_with: "insert into lcc_owner_sponsor_domain(sponsor_token, email_domain, confirmed_by, notes)"
+      + " values ('" + row.proposed_sponsor_token + "', '" + row.proposed_email_domain + "', '<you>', '<why>')",
+  }));
+}
+
 export async function handleTier0AutoAttachTick(req, res) {
   const user = await authenticate(req, res);
   if (!user) return;
@@ -198,6 +267,11 @@ export async function handleTier0AutoAttachTick(req, res) {
           other_open_cards_for_this_owner: Math.max(0, (Number(row.owner_domain_cards) || 1) - 1),
         })),
         skipped,
+        // P196: the OTHER half of the lane. An operator who can read
+        // "parked: employer on file reads 'Oxford Development Company'" resolves
+        // it in one second; before this they saw nothing at all.
+        parked: await fetchParkBreakdown(),
+        sponsor_map_proposals: await fetchSponsorProposals(),
       });
     }
 
