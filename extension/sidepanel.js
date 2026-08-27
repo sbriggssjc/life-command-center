@@ -260,6 +260,36 @@ async function wireAscResearchAction(ctx, actions) {
   wrap.appendChild(missing);
   actions.appendChild(wrap);
 
+  const appendCaptureCompletion = () => {
+    if (wrap.querySelector('[data-asc-capture-complete]')) return;
+    const complete = document.createElement('button');
+    complete.dataset.ascCaptureComplete = 'true';
+    complete.className = 'btn btn-sm btn-secondary';
+    complete.style.marginLeft = '5px';
+    complete.textContent = 'Complete property capture';
+    wrap.appendChild(complete);
+    missing.disabled = true;
+    complete.addEventListener('click', async () => {
+      complete.disabled = true;
+      complete.textContent = 'Advancing…';
+      const advanced = await apiCall('/api/asc-research-complete', {
+        run_id: target.run_id,
+        candidate_fingerprint: target.candidate_fingerprint,
+      });
+      if (advanced.ok) {
+        complete.textContent = 'Complete ✓ — open next property';
+        detail.textContent = 'Evidence collection completed for this candidate. The next frozen candidate will load on the next page scan.';
+      } else {
+        complete.disabled = false;
+        complete.textContent = 'Complete property capture';
+        detail.textContent = toErrorMessage(
+          advanced.data?.detail || advanced.data?.error || advanced.error
+        ) || 'Could not advance candidate';
+      }
+    });
+  };
+  if (Number(target.capture_count) > 0) appendCaptureCompletion();
+
   missing.addEventListener('click', async () => {
     const label = identity.facility_name || identity.ccn || 'this frozen candidate';
     const confirmed = window.confirm(
@@ -313,29 +343,7 @@ async function wireAscResearchAction(ctx, actions) {
       const lccCount = capture.data?.reconciliation?.lcc_matches?.length || 0;
       const sfCount = capture.data?.reconciliation?.salesforce_identities?.length || 0;
       detail.textContent = `Structured evidence saved privately; LCC matches: ${lccCount}; Salesforce identities: ${sfCount}. No canonical or CRM writes.`;
-      const complete = document.createElement('button');
-      complete.className = 'btn btn-sm btn-secondary';
-      complete.style.marginLeft = '5px';
-      complete.textContent = 'Complete property capture';
-      wrap.appendChild(complete);
-      complete.addEventListener('click', async () => {
-        complete.disabled = true;
-        complete.textContent = 'Advancing…';
-        const advanced = await apiCall('/api/asc-research-complete', {
-          run_id: target.run_id,
-          candidate_fingerprint: target.candidate_fingerprint,
-        });
-        if (advanced.ok) {
-          complete.textContent = 'Complete ✓ — open next property';
-          detail.textContent = 'Evidence collection completed for this candidate. The next frozen candidate will load on the next page scan.';
-        } else {
-          complete.disabled = false;
-          complete.textContent = 'Complete property capture';
-          detail.textContent = toErrorMessage(
-            advanced.data?.detail || advanced.data?.error || advanced.error
-          ) || 'Could not advance candidate';
-        }
-      });
+      appendCaptureCompletion();
     } else {
       button.disabled = false;
       button.textContent = 'Capture blocked — retry';
