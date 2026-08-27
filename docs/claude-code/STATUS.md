@@ -55,6 +55,38 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 05:10 UTC (Cowork) — V2 was never stalled. The verification was measuring the wrong output.
+
+**`reachability_harvest_target_marker`: 60 markers, all written this morning, last at 04:40:19** —
+inside cron 212's run. **V2 is healthy and P136 works.**
+
+**⚠️ And `reachability_harvest_review` is still 4 — which is CORRECT.** P136's entire design is a
+**negative marker** recording *checked, and empty*, so a target with no evidence stops being
+re-selected forever. Targets with no evidence **correctly produce no proposal.** The proposal count
+is therefore the one metric that reads zero while the fix works perfectly — and it is exactly what
+the backlog row **and my scheduled 6am check** both asserted on. That check would have reported a
+false failure on a lane that is fine.
+
+**⚠️ Second trap in the same five minutes: cron 212 logs `timed_out: true` at exactly 60,000 ms.**
+Per P123, `lcc_cron_post` stops listening at 60s while the handler runs to completion — the markers
+landed **19 seconds in**. Read the worker's own output, never the caller's patience.
+
+**Fixed in the same pass:** the scheduled check now asserts on `markers_total`, states plainly that
+`reach_reviews` staying at 4 is expected, and tells its future self not to read a pg_net timeout as
+failure. Backlog V2 → ✅ with the wrong criterion recorded rather than quietly replaced.
+
+**New `CLAUDE.md` doctrine — the generalisation, because this will recur:**
+*assert on the state delta* is necessary and **not sufficient; you must assert on the RIGHT delta.*
+**Before writing a verification, ask what the worker emits when it succeeds and finds nothing.** If
+that is a marker, a tombstone or a `checked_at`, **that** is the delta. It is the exact mirror of
+the re-discovery-tally trap: `already_annotated` reads like throughput while nothing moves; a
+negative-marker worker reads like a stall while everything moves. Both come from asserting on the
+convenient counter instead of the one the design advances.
+
+**Still open:** V1 (property-twin, cron 220 @ 05:45 — window had not arrived at 05:10) and V7
+(Analyst's Take, cron 240 @ 10:18 weekdays).
+
+
 ## 2026-08-27 (Cowork, automation window) — ✅ THE LANE COMPLETED A TASK. 0 → 288 after 69 days.
 
 **A2 shipped (PR #1805) and the acceptance test passed.** This was never about rows written:
