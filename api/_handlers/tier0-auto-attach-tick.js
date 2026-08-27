@@ -139,7 +139,7 @@ const PARK_CAP = 1000;
 async function fetchParkBreakdown() {
   const r = await opsQuery('GET', 'v_lcc_tier0_park_watch?select=owner_id,owner_name,domain,'
     + 'owner_rent,park_reason,park_employer_on_file,park_owner_compared,sponsor_shaped,'
-    + 'sponsor_token_candidate,n_person_evidence'
+    + 'sponsor_token_candidate,n_person_evidence,park_employer_source'
     + '&order=owner_rent.desc.nullslast&limit=' + PARK_CAP);
   if (!r.ok || !Array.isArray(r.data)) return null;
   const rows = r.data;
@@ -162,6 +162,11 @@ async function fetchParkBreakdown() {
       owner_rent: Number(row.owner_rent) || 0,
       park_reason: row.park_reason,
       employer_on_file: row.park_employer_on_file || null,
+      // P197 — an `employer_on_file_differs` park now has to say WHOSE employer
+      // record it disagreed with. A park resting on a corroborated Salesforce
+      // label is a different quality of judgement from one resting on the hub,
+      // and collapsing the two is the one-label-two-facts failure (P181).
+      employer_source: row.park_employer_source || null,
       owner_compared: row.park_owner_compared || null,
       sponsor_shaped: row.sponsor_shaped === true,
     })),

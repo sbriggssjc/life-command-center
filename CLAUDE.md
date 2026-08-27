@@ -2275,6 +2275,78 @@ Every parked Tier 0 card now carries **`park_reason`** plus both compared string
 - **The SQL CASE is the single owner of both classifications** — the handler renders what the server
   decided; there is no JS mirror.
 
+## P197 — the Tier 0 lane read ONE employer source, by ONE key (2026-08-27)
+
+`no_employer_on_file` **67 → 54** cards ($131.2M → $113.6M), parked 142 → 137, `ask` 82 → **87**.
+`auto` unchanged at **9 — the same 9 cards**. Card universe 233 → 233. **Nothing minted.**
+`lcc_tier0_employer_on_file(person_id, email)` is the single owner of *"what employer do we hold for
+this person"* — ranked `hub_email > hub_entity_id > sf_campaign > entity_capture`. Migration
+`20260827170000`. Writeup: `docs/audits/P197_TIER0_EMPLOYER_RESOLVER_2026-08-27.md`.
+
+- **⚠️ WHEN A CONSUMER REPORTS "NOT ON FILE", ASK HOW MANY PLACES IT LOOKED.**
+  `v_lcc_tier0_owner_contact_candidates` resolved `contact_company` from a single
+  `LEFT JOIN unified_contacts ON lower(email)=lower(email)`, so *"we hold no employer for this
+  person"* and *"we hold one and cannot reach it"* produced the identical card. Of the 73 eligible
+  people blocking `no_employer_on_file`, **only 4** were missing a hub row that exists; **20** were
+  in `lcc_sf_list_membership.company_name` (6,781 such rows, **never once read by the lane**) and
+  **20** on `entities.metadata->>'company'`. The prompt's prescribed fix — reconcile them into
+  `unified_contacts` — would have fixed 4 of 73.
+- **⚠️ `company_name` IS SANCTIONED IN THE HUB AND A LANDMINE EVERYWHERE ELSE — the hazard travels
+  with the TECHNIQUE, not the column name (P189/A2 again).** `lcc_sf_list_membership.company_name`
+  and `entities.metadata->>'company'` are human/capture labels. Measured on named rows over the
+  parked population they carry **city/zip strings** (`Southbury, CT 06488`, `Hollywood, FL 33021`),
+  the **person's own name** (`Steve Blumer`), a P188-named junk label (`Inco Commercial`, on two
+  people sharing ONE mailbox) and stale firms (`Pop Local` for someone @edwardsrealtyco.com,
+  `The Carpet Shop` @corporaterealty1.com, `Community Trust Bk` proposed against a **health-centre**
+  owner). `contact_company` feeds `ev_company_matches_owner` — **the only signal that attests the
+  LINK** (P188) — so writing an invented employer that collides with an owner name manufactures
+  exactly the claim P188 established these signals cannot make.
+  - **The gate is EMAIL-DOMAIN CORROBORATION** (`lcc_tier0_company_confirms_domain`, now the single
+    owner of that rule — the lane CALLS it instead of restating it inline). The label counts only
+    when the person's own mailbox agrees. It kills every row above and keeps the real ones.
+    **The two hub tiers are deliberately UNGATED**: the hub is the system of record, so whatever it
+    says is "on file" by definition, and that is also the pre-P197 behaviour.
+  - **Probed on 8 named rows with stated expected answers — 4 resolve, 4 reject — 8 of 8 correct.**
+    A gate that only ever rejects is indistinguishable from a broken one (P182 positive control).
+- **⚠️ THE 5,440 ORPHANED PERSON ENTITIES ARE 5,193 — A DETECTOR THAT KNOWS ONE KEY REPORTS THE
+  OTHER KEY'S POPULATION AS ABSENT.** 247 of them **do** carry a `unified_contacts` row, linked by
+  `entity_id`, invisible to the email-keyed detector. Same family as P189's `IS NOT DISTINCT FROM`
+  inversion. **Before quoting any orphan/gap count, enumerate every link column the table carries** —
+  `unified_contacts` has `entity_id`, `sf_contact_id`, `outlook_contact_id`, `gov_contact_id`,
+  `dia_contact_id` besides `email`.
+- **The producer is LIVE and it is SALESFORCE, not the sidebar.** 542 orphans in 30 days, 94 in 7,
+  one the day of the audit. `metadata->'salesforce'` on 3,994 of 5,440;
+  `external_identities` `salesforce/Contact` **4,032** vs `costar/contact` 1,767. So a one-shot
+  reconcile is a chore repeated forever (Class 8) — which is a second reason P197 resolves at READ
+  time rather than minting. Duplicate risk was checked, not assumed: of 3,874 orphans carrying an SF
+  contact id, **exactly 1** already has a hub row under it.
+- **The general rule was SIZED, NOT CHOSEN.** Gates over the 5,193, quoted before choosing:
+  **SF campaign 1,475** (the only discriminating gate) · correspondence **33** · has an edge 4,903
+  (94%) · person-shaped 5,131 (99%). **No hub rows were minted** — and note it would not have cleared
+  the blockage anyway, because a hub row with no `company_name` answers nothing the lane asks.
+  Backlog **N14**.
+- **⚠️ TWO OF THE 5 NEW `ask` CARDS REST ON A GENERIC WORD STEM.** `ev_company_matches_owner`'s
+  shared-8-character arm fires on `innovati` (*Innovation 2100 LLC* ← "Innovative Renal Care", a
+  dialysis **operator**, $2.93M) and `corporat` (*Corporate Plaza LP* ← "Corporate Realty Inc").
+  Pre-existing property of that comparator, now exercised more often — **stated, not papered over**.
+  They are `ask` cards, and the card carries the employer, its `employer_source` and the match key,
+  so a wrong one is a one-second reject. Tightening the comparator would move the 82 pre-existing
+  `ask` cards and was left out of scope.
+- **Safety proven, not asserted:** `auto` is the **same 9 cards** (0 lost, 0 gained) and
+  `match_strength`/`n_eligible` changed on **0 of 233** — `auto` requires `match_strength='exact'`
+  AND `n_eligible=1`, neither of which P197 touches, so **no unattended write can result**. The view
+  also got FASTER — **793.9 ms → 553.6 ms**, buffers **32,841 → 22,820** — because the plan was
+  pushing the old hub join down to all **7,890** rows of the `people` CTE, and the resolver is
+  bounded to the ~600 matched pairs in a MATERIALIZED CTE.
+- **Read `park_employer_source`.** All 81 `employer_on_file_differs` cards name their source; all 54
+  `no_employer_on_file` correctly name none. A park resting on a corroborated Salesforce label is a
+  different quality of judgement from one resting on the hub (P181). The remaining **54 cards /
+  $113.6M are CORRECT** — a genuine acquisition gap, not plumbing.
+- Guard: `test/tier0-employer-resolver.test.mjs` (7 tests, **all 7 mutation-verified RED**). It also
+  re-asserts P196's decidability invariants, because P197 rebuilds the view that carries them and
+  `test/tier0-park-reasons.test.mjs` reads the **P196 file**, which no longer describes the shipped
+  definition.
+
 ## P195 — merging the byte-identical owner groups, and the two traps in doing it (2026-08-27)
 
 P189 surfaced 60 byte-identical owner groups (147 entities, $102.4M) and merged nothing. P195 landed
