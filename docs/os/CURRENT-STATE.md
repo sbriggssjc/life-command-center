@@ -75,6 +75,18 @@ real branded signature, threading, and deal context; save-to-Outlook-Drafts (sav
 their data tab renders (`checkKpiSeriesConsistency` is the tripwire).
 → `CLAUDE.md` §"CM export", `public/reports/cm-brand.json`
 
+### Research-task producer — correct and value-gated (A5a + A5c, 2026-08-27)
+The generator read a 29,643-row feed through a call **PostgREST caps at 1,000** and auto-closed
+everything outside the window as `gap_resolved` — its guard compared the **requested** limit against
+a **capped** response. **100% of the "completions" in the two biggest lanes were false** (4,781 and
+596). **A5a fixed it** (returned-count guard + paging + stable tiebreak; verified in production —
+zero `gap_resolved` closures since deploy). **A5c value-gated it**: pool **71,448 → 2,530 admitted
+(3.5%)**, floor reused at **$500k**, operators excluded by **recorded fact** (never a name test —
+P113), unknown rent gated (P161). First live run minted **343**, `closed: 0`.
+⚠️ **Every lane it feeds still has ZERO real completions** — the constraint has moved downstream to
+consumption. → backlog **P1a / C1–C3**
+→ `docs/audits/A5_TRUE_OWNER_SALESFORCE_STALL_2026-08-27.md`, `A5c_RESEARCH_TASK_VALUE_GATE_2026-08-27.md`
+
 ### Ownership-history lane — the first dead research lane with a working consumer (2026-08-27)
 `establish_ownership_history` produced **545 items and consumed none for 69 days**. A1 split it into
 four real actions; A2 applies `agrees`; A4 retires the unanswerable; A3 turns the mismatches into
