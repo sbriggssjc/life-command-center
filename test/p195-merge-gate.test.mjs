@@ -16,10 +16,16 @@
 //     the stoplist is compared token-for-token against the normalizer's own.
 //
 //  2. THE PIVOT FOLD RUNS BEFORE THE MERGE. lcc_merge_entity DELETES the loser's
-//     owner_contact_pivot whenever the winner has one (uncorrelated EXISTS) and
-//     calls the reconcile with p_snapshot => false, so the row is unrecoverable.
-//     Measured live on `bamproperties`: the winner had no contact and the loser
-//     carried the only named one. Reorder those two calls and the bug is silent.
+//     owner_contact_pivot whenever the winner has one. Measured live on
+//     `bamproperties`: the winner had no contact and the loser carried the only
+//     named one. Reorder those two calls and the bug is silent.
+//     ⚠ P196/N11 fixed the shared path itself — lcc_merge_entity now snapshots,
+//     folds the pivot, and calls the reconcile with p_snapshot => TRUE. This
+//     driver's own snapshot+fold are therefore redundant but harmless (the fold
+//     is idempotent: the second call sees a winner that already names someone).
+//     They are kept so lcc_p195_unmerge, which scopes on note='p195:<tag>',
+//     remains this pass's reversal path. Guard for the shared path:
+//     test/merge-entity-reversible.test.mjs.
 //
 // Anchored on FUNCTION NAMES and the stoplist token set -- never a line number,
 // never a sliced region between banners (the block-slice footgun), never a

@@ -17,6 +17,111 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 06:00 UTC — P196: the shared merge path is REVERSIBLE (N11 ✅), and parked Tier 0 cards say why (N3e ✅)
+
+Full writeup: [`docs/audits/P196_MERGE_REVERSIBILITY_AND_PARK_REASONS_2026-08-27.md`](../audits/P196_MERGE_REVERSIBILITY_AND_PARK_REASONS_2026-08-27.md).
+Migrations `20260827150000_lcc_p196_merge_entity_reversible.sql` and
+`20260827160000_lcc_p196_tier0_park_reasons.sql`, both applied live to LCC Opps.
+
+### Unit 1 — `lcc_merge_entity` had no undo, and it is not the dormant path
+
+`lcc_merge_entity` now snapshots the whole loser side, **folds `owner_contact_pivot` fill-blanks
+before the dedup DELETE can destroy it**, calls the reconcile with `p_snapshot => true`, and writes
+an action-labelled backup row before every P160 dedup/repoint. `lcc_unmerge_entity(loser)` is the
+reversal; `lcc_entity_merge_log` is the ledger; `v_lcc_entity_merge_reversibility` is the instrument.
+
+**Three corrections to N11 as filed, each of which changes what the fix had to be:**
+
+1. **⚠️ "DORMANT, NOT ARMED" DESCRIBES THE LOOP, NOT THE FUNCTION.** N11's measurement was right that
+   nothing calls `lcc_apply_fuzzy_merges` (re-confirmed: 0 cron rows, 0 repo callers). But
+   `lcc_merge_entity` itself has **nine human-verdict call sites in `api/`** and the entity table
+   says they fire — **285 merges in the last 30 days, 176 in the last 7.** The irreversible pivot
+   delete has been running all along. Reading the loop's disposition as the function's is how a live
+   path gets filed as latent.
+2. **⚠️ "UNCORRELATED EXISTS" IS NOT THE BUG.** `owner_contact_pivot` and `lcc_property_owner` are
+   both PRIMARY KEY `(entity_id)`, so at most one row exists per entity and the un-correlated
+   `EXISTS` is *equivalent* to a correlated one. Correlating it changes nothing. The bug is that the
+   statement **DELETES content instead of FOLDING it**, with no ledger. Worth stating because
+   "correlate the EXISTS" is a one-line change that would have looked like the fix.
+3. **⚠️ `p_snapshot => true` ALONE WOULD HAVE LEFT THE WORST PATH UNTOUCHED.** The reconcile covers
+   portfolio facts, identities, relationships, watchers and cadence. The four backrefs the **P160
+   block inside `lcc_merge_entity`** handles — `lcc_property_owner`, `lcc_property_owner_evidence`,
+   `owner_contact_pivot`, `bd_opportunities` — live in the caller, and **neither function
+   snapshotted them in any mode.** The prescribed one-line fix would have made four tables
+   recoverable and left the pivot exactly as it was.
+
+**⚠️ AND THE ROUND TRIP CAUGHT A BUG REVIEW DID NOT — which is the whole reason the prompt demanded
+one.** The first cut restored `entity_relationships` / `external_identities` / `watchers` with
+`INSERT … ON CONFLICT (id) DO UPDATE`. Both tables carry a **BEFORE INSERT** survivor-resolving
+trigger (P177/P178), and **P177's SKIPS a row that duplicates an edge the resolved entity already
+holds** — it returns NULL, so the row never reaches `ON CONFLICT` and the `DO UPDATE` never runs.
+Live on `Monaco Holdings`, three **byte-identical** `(loser → 4f1b724a, 'purchases')` edges: edge 1
+restored, edges 2 and 3 were then duplicates of it, were silently skipped, and stayed on the
+**winner** — while the unmerge returned `restored`. Fixed by repointing surviving rows with `UPDATE`
+(both triggers are INSERT-only) and INSERTing only what was deleted, plus a
+`restored_with_residue:relationships_not_restored=N` count so a partial restore can never read clean.
+
+**Verified live before calling it done:** real merge → unmerge on `Monaco Holdings` → `Monaco
+Holdings LLC` (an `auto_mergeable` byte-name duplicate; the merge dedup-DELETED a portfolio fact and
+the loser's pivot and repointed 3 relationships, 1 identity, 1 property-owner edge). Full-row diff
+over ten tables for both entities: **16 rows before, 16 after, 0 lost, 0 new**, `auto_mergeable`
+**3,053 → 3,053**. The FOLD path — which Monaco could not exercise, both its pivots being blank — was
+proven by a self-rolling-back gate: the loser's *"Alex Bias Test"* lands on the blank winner with
+`active_source` **still `tier0_confirm`** (carried VERBATIM, never restamped — P194) and
+`pivot_history[0].source='entity_merge_fold'`, then unwinds cleanly. 0 residue.
+
+**Stated honestly:** `v_lcc_entity_merge_reversibility` reports **2,411 existing tombstones,
+`reversible = false` for every one.** Those merges have no snapshot and never will.
+
+**Not done, deliberately:** nothing wires up `lcc_apply_fuzzy_merges`. Reversibility lowers the cost
+of being wrong; it does not make P195 §1's grading unnecessary. That is a decision, not a consequence.
+
+**A2a is unblocked** — merge the 45 ambiguous parties and cron 244 applies the chains the same night.
+
+### Unit 2 — the parked cards now say why, and the sponsor-shaped ones have a route
+
+| park_reason | cards | owners | rent |
+|---|---:|---:|---:|
+| `employer_on_file_differs` | 76 | 67 | $96.3M |
+| `no_employer_on_file` | 68 | 56 | $132.3M |
+| `employer_not_comparable` | 2 | 2 | $1.9M |
+| **parked, total** | **146** | **105** | **$180.3M** |
+
+N3e's "$98M / 75 owners" is the **`differs` slice specifically**, not the whole pile. Those cards are
+parked because the employer on file is not this owner — the gate working. `employer_not_comparable`
+is kept separate on purpose: the comparator has a 6-char floor on both sides, so for those 2 it could
+not run at all, and "could not run" is a different fact from "ran and disagreed" (the P181 shape).
+
+**⚠️ ONE OF THE TWO PRESCRIBED FIXES WAS IMPLEMENTED, MEASURED AND REJECTED.** Normalising the company
+string (strip `www`/`com`/punctuation) unparks **0 of 146 cards**, and the motivating row does not
+survive its own fix: `Savlan Cc Property LLC` → `savlanccproperty` vs `savlancapital` fails
+containment and then fails the 8-char prefix arm on `savlancc` vs `savlanca`. **The mismatch is at
+character 8, not in the www/com noise.** The comparator is unchanged; Savlan is a sponsor-shaped park
+and is routed as one.
+
+**⚠️ AND THE NAIVE SPONSOR DETECTOR IS A NOISE GENERATOR AT ~25% PRECISION** — the same number P189
+measured and rejected for domain-keyed merge grouping. Leading-brand-token equality alone returns 19
+pairs dominated by **shared given names** (`George Kurz` ← *George's Inc*, which is P188's Gary
+George trap in a new dress; two `JAMES` trusts ← a shared CPA at `jameshowardcpa.com`) and **place
+words** (`MAPLE HILL` ← *Mapletree Investments*, a Singapore REIT; `Steel Station Rd` ← *Steel
+Equities*). Three guards — the owner must carry an SPE/portfolio marker, must not read as a street,
+must not be person-shaped — take it to **4 of 6, and the 4 are the top 4 by rent** (Gardner $8.0M,
+Salus $5.3M, Oxford $2.5M, Savlan $2.0M; the 2 false ones sit at $1.26M and $0.84M). The view is
+value-ranked for exactly that reason.
+
+**⚠️ The un-park was NOT widened.** ask 77 / auto 9 / parked 146, before and after. Admitting person
+evidence restores the Gary George noise P192 removed, and the guard goes RED if `n_person_evidence`
+ever appears in that CASE.
+
+**Operator surface:** `GET /api/tier0-auto-attach-tick` (already the ungated dry-run grade) now also
+returns `parked.by_reason`, ten value-ranked examples with both compared strings, and
+`sponsor_map_proposals` with the confirm SQL. Confirming is the existing curated
+`insert into lcc_owner_sponsor_domain(...)` — one decision covering an SPE family. Nothing in Unit 2
+writes.
+
+**Verify by owners moved out of parked, never cards touched:** 105 parked owners / $180.3M today, of
+which 4 confirmable sponsor proposals cover 4 owners / $17.7M.
+
 ## 2026-08-27 05:00 UTC — repo fully synced; CI skip path PROVEN; two git traps recorded
 
 **State verified:** local `main` == `origin/main` (0 ahead / 0 behind), **zero conflict markers
