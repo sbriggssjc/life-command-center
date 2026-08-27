@@ -80,6 +80,22 @@ npm run verify:deploy --wait=180
 **Branch naming:** `docs/…` · `fix/…` · `feat/…` · `chore/…` · `claude/…` (Claude Code's own).
 Anything is acceptable except working directly on `main`.
 
+> ### ⚠️ The numbered steps are a CHECKLIST, not a suggestion — abbreviating it is where the
+> ### failures come from
+>
+> Every loop step above exists because skipping it broke something here. When the sequence gets
+> compressed for readability, the step that gets dropped is a guard, and the failure lands on
+> whoever runs it:
+>
+> | dropped step | what happened |
+> |---|---|
+> | `Remove-Item .git\index.lock` (step 0) | **every** `add` / `commit` / `merge` / `checkout --` failed with *"Another git process seems to be running"* — while `checkout -b` succeeded, so the branch existed and nothing was in it |
+> | `git status` after `git pull --rebase` (step 1) | the pull had silently refused on a dirty tree → **three stale-base branches**, one costing a full merge-resolution cycle |
+>
+> **Paste the whole block, including the lines that look like no-ops.** `Get-Process git` before
+> deleting the lock is the one judgement call: **empty output means the lock is stale and safe to
+> remove**; a listed process means something is genuinely mid-write and must be closed first.
+
 ## 3. ⛔ Wait for CI. Do not merge early.
 
 **PR #1793 was merged 58 seconds after it was opened, before CI finished, carrying a red suite.**
