@@ -883,6 +883,55 @@ first time on `428C9: cannot insert a non-DEFAULT value into column "is_current"
 ALWAYS` column, a footgun already written down in `CLAUDE.md`, restored with a bare `select *`. A
 reversal path that has never been executed is a claim, not a capability.
 
+## Class 18 — an OPEN COUNT that is really a QUERY WINDOW, and a terminal status nobody earned
+
+**Symptom:** a lane shows a large, stable open count and a healthy-looking completion history. Both
+are artifacts of the *instrument*: the open count is the leftover of a truncated read, and the
+completions were written by an auto-close, not by a human, a worker, or a resolution.
+
+**Two detectors, both one query:**
+
+```sql
+-- 1. Is the open count suspiciously round, or exactly (cap − something)?
+select count(*) from research_tasks where research_type = '<lane>' and status = 'open';
+--    815 = 1000 − 185.  1000 = the cap itself.  A count pinned to a constant is an instrument reading.
+
+-- 2. Who wrote the terminal status? If `outcome` has ONE distinct value, nobody worked it.
+select outcome, status, count(*) from research_tasks
+ where research_type = '<lane>' and status <> 'open' group by 1,2 order by 3 desc;
+```
+
+Then **verify the premise actually cleared on named rows** — sample closed items and check the
+field they claimed to fill is still null.
+
+**First run (A5, 2026-08-27).** `true_owner_needs_salesforce` read as *815 open / 596 lifetime
+completions / ~1 per week* and was ranked the biggest addressable stall in the system.
+`handleGenerateResearchTasks` fetches the feed with `limit=2000`; **PostgREST caps the response at
+1,000** and the real feed is **29,643 rows**. So `815` is the leftover of the truncated window, and
+the auto-close guard — written `if (feed.length < limit)`, i.e. **1000 < 2000 → true** — fired over
+a truncated slice and closed everything outside it as `gap_resolved`. **All 596 completions are that
+auto-close, and 170 of 183 sampled owners still have `salesforce_id IS NULL` — 93% false.**
+
+**⚠️ It invalidated the lane that had just been called healthiest.** gov
+`property_missing_recorded_owner` was written up as *"908 completions in 30 days, ~23/day, clears in
+~7 weeks, leave it alone."* Measured: open count pinned at **exactly 1,000**, **885 of 885**
+completions are the same auto-close, and **146 of 146** sampled properties still have
+`recorded_owner_id IS NULL`. Zero real work in 30 days, and it *cannot* clear, because its open
+count is a constant.
+
+**The durable rules:**
+
+- **Compare the guard against the RETURNED row count, never the limit you asked for.** `feed.length
+  < limit` is the bug. This is the same footgun as `CAND_LIMIT = 1200` (P123) and the 1000/page
+  stride rule already in `CLAUDE.md`.
+- **Before ranking lanes by completion rate, check who writes the terminal status.** A rate computed
+  over a status nobody earns is worse than no rate — the re-audit switched from lifetime totals to
+  rates *specifically* to avoid being fooled, and was fooled anyway.
+- **A round number is a bug signal** (cf. Class 11, and the "round-number count means a tile is
+  reading a paged query" note in `CLAUDE.md`). 1,000 / 815 / 500 are readings of the instrument.
+
+---
+
 ## Class 17 — a RULE proposed for removal because its false positives are the only part you can see
 
 **Symptom:** a matching or admission rule produces a handful of obviously-wrong outputs. They are

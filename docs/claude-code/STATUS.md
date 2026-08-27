@@ -17,6 +17,46 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 19:00 UTC — A5 was ALREADY DONE and I recommended re-sending it; playbook Class 18
+
+**⚠️ My recommendation to send A5 to Claude Code was wrong — it had already completed and merged**
+(PR #1840, `docs/audits/A5_TRUE_OWNER_SALESFORCE_STALL_2026-08-27.md`, 182 lines, plus 50 lines
+into `CLAUDE.md` and 8 into the backlog). **The prompt file was still sitting in `prompts/`
+un-filed, and I read the prompt folder as the record of what is outstanding.** It is not — the
+**audit** is. Filed to `done/` now. *Check `docs/audits/` for the round's output before
+recommending that a prompt be sent.*
+
+### Why A5 matters more than the filing slip: two "healthy" lanes were instrument readings
+
+**`815 open` is `1000 − 185`** — the leftover of a truncated window. `handleGenerateResearchTasks`
+reads a **29,643-row** feed with `limit=2000`, PostgREST caps the response at **1,000**, and the
+auto-close guard is written `if (feed.length < limit)` → **1000 < 2000 → true**, so it fires over a
+truncated slice and closes everything outside it as `gap_resolved`. **All 596 "completions" are that
+auto-close; 170 of 183 sampled owners still have `salesforce_id IS NULL` — 93% false.**
+
+**⚠️ And it invalidates the lane the re-audit had just called healthiest.** gov
+`property_missing_recorded_owner` — *"908 completions in 30 days, ~23/day, clears in ~7 weeks, leave
+it alone"* — has its open count pinned at **exactly 1,000**, **885 of 885** completions are the same
+auto-close, and **146 of 146** sampled properties still have `recorded_owner_id IS NULL`. **Zero
+real work in 30 days, and it cannot clear, because its open count is a constant.**
+
+Recorded as **playbook Class 18** — *an open count that is really a query window, and a terminal
+status nobody earned*. The durable rules: **compare the guard against the RETURNED row count, never
+the limit you asked for** (same footgun as `CAND_LIMIT = 1200`, P123); **check who writes the
+terminal status before ranking lanes by completion rate** — the re-audit switched to rates
+specifically to avoid being fooled and was fooled anyway; and **a round number is a bug signal**.
+
+### Parallel windows — the division, for the record
+
+Two Cowork threads plus Claude Code share this repo. **This thread is the P-series** (P186–P198,
+Tier 0 owner-contact, entity merges). **The other thread is the A-series** (A0–A5, the
+ownership-history lane and the automation re-audit) — branches `docs/reaudit-and-a5-diagnosis`,
+`docs/kickoff-refresh-and-a2b-a4b-reconcile`. Claude Code lands on `claude/*` branches.
+**Neither chat reads the other; the handoff is the repo** — `CLAUDE.md`, `STATUS.md`, the canonical
+pages and the playbook. That is the design, and it is why a prompt left un-filed causes a
+cross-thread duplicate-work risk (§4a's "check whether the other audit window already fixed it",
+now demonstrated on a prompt rather than a workflow file).
+
 ## 2026-08-27 18:45 UTC — the gov lock hid a migration that was RUNNING BUT NOT MERGED
 
 Clearing GovernmentProject's orphaned `.git/HEAD.lock` (0 bytes, sandbox-owned, dated **2026-08-20**)

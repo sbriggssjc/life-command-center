@@ -27,7 +27,7 @@ bootstraps a fresh chat and points at them.
 
 | artifact | location | notes |
 |---|---|---|
-| Prompt for Claude Code | `docs/claude-code/prompts/` | → `prompts/done/` once its work merges |
+| Prompt for Claude Code | `docs/claude-code/prompts/` | → `prompts/done/` once its work merges. ⚠️ **`prompts/` is NOT the record of what is outstanding — the AUDIT is.** A5 sat un-filed after completing and was recommended for re-sending on 2026-08-27. **Before proposing that a prompt be sent, grep `docs/audits/` for that round's output.** With two Cowork threads plus Claude Code sharing this repo, an un-filed prompt is a cross-thread duplicate-work hazard |
 | Claude Code's response (.docx) | `docs/claude-code/responses/` | → `responses/done/` once reconciled |
 | **Audit / measurement writeup** | `docs/audits/<TOPIC>_<YYYY-MM-DD>.md` | the finding and its reproduction queries |
 | Architecture / subsystem design | `docs/architecture/<subsystem>.md` | one canonical file per subsystem |
