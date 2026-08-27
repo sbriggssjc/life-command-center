@@ -717,6 +717,75 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 19:xx UTC (Cowork) — A5a merged AND deployed, but has not RUN yet. Do not read the counts yet.
+
+**A5a merged as PR #1849** (both checks green before merge, on the post-Update-branch head).
+⚠️ **Claude Code correctly flagged it as inert until a redeploy** — the P131 trap. **Checked rather
+than assumed:** live `/version` is `d8fcfbfe` (#1850), and `git merge-base` confirms **A5a IS in the
+deployed build**, with **0 commits un-deployed**. It rode in on the N15c merge.
+
+**But it has not executed.** Cron 34 fires at **06:35 UTC**, and the counts are unchanged:
+`property_missing_recorded_owner` 1,185 open / `true_owner_needs_salesforce` 815 open, with
+`gap_resolved` in the last 24h still 9 and 1 — **all pre-fix**. Nothing here is evidence either way
+yet.
+
+### ✅ Dry run PASSED — the fix works, on both domains
+
+`generate-research-tasks&domain=both&limit=2000&dry_run=1`, HTTP 200:
+
+| domain | `membership_complete` | chunks | `would_close` | `would_insert` |
+|---|---|---:|---:|---:|
+| government | **true** | 7 | **0** | **1,000** |
+| dialysis | **true** | 7 | **0** | **1,586** |
+
+**`would_close` is 0 on BOTH** — including dia, which A5a had not measured and expected might be
+legitimately non-zero. **Zero false closures.** `membership_complete: true` with 7 chunks means the
+feed is genuinely exhausted rather than truncated. The bug is fixed.
+
+### ⚠️ But `would_insert` = 2,586, and the producer has no value gate yet
+
+**This is the flood A5a's own prompt warned about**, now measured. And it is sooner than the 06:35
+run: **cron 35 (`generate-research-tasks-inc`) fires every 30 minutes** at `limit=300`, so minting
+begins within the hour and continues until the pool drains — and **5,509 gaps have never had a
+task**, so 2,586 is the near-term head, not the total.
+
+**84% of that population owns zero properties**, and operators/placeholders (`DaVita Inc.` 2,626
+properties, `Independent` 754) carry 81% of the apparent value. Minting it un-gated is precisely the
+badge-that-is-noise failure the Consumption-Layer doctrine exists to prevent — *no new producer
+ships without a value gate.*
+
+**It is not dangerous** — these are research tasks, not production writes, and every one is
+reversible. The cost is that two lanes get noisier **before** A5c makes them cleaner.
+
+**Scott's call, and the pause is trivially reversible:**
+```sql
+select cron.alter_job(34, active := false);   -- daily 06:35, limit 2000
+select cron.alter_job(35, active := false);   -- every 30 min, limit 300
+-- undo: cron.alter_job(<id>, active := true);
+```
+⚠️ **Cost of pausing:** this generator serves **several** dia+gov lanes, so pausing starves all of
+them, not just this one. It has been mis-closing for months, so a day's pause is cheap — but say it
+out loud rather than pausing silently.
+
+⚠️ **The verification is inverted, restated because it will look wrong:** success is
+`gap_resolved`-per-day falling to ~0 and the **pinned open counts (1,000 / 815) moving.** **Open
+counts going UP is the fix working** — real gaps that were being silently closed now stay visible.
+
+**Bookkeeping note:** this was labelled A5c in the hand-off but the response file and the work are
+**A5a**. A5c has not been sent. Flagged so the record does not drift.
+
+### Still open, deliberately
+
+- **A5b-repair — ~2,044 falsely-closed subjects.** Claude Code's recommendation, which I agree with:
+  **re-label first** (kills the corrupted metric, adds zero surface), then let the corrected producer
+  re-mint whatever ranks. **Do not re-open before the producer is proven correct** — that just
+  refills a broken window.
+- **A5c is now the priority, and it is time-sensitive.** Without a value gate, the corrected producer
+  gives gov `owner_needs_salesforce` its **first 430 tasks** while **24,077 `owner_needs_sos` rows
+  stay unreachable** — a flood into one lane and continued invisibility for another. **84% of the
+  population owns zero properties.**
+
+
 ## 2026-08-27 (Cowork) — A5a drafted: fix the producer before repairing anything it broke
 
 `prompts/A5a-truncated-feed-auto-close-2026-08-27.md`. Three-part fix — compare against the
