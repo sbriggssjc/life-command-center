@@ -717,6 +717,51 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 20:07 UTC (Cowork) — crons 34/35 PAUSED pending A5c; and a false alarm worth recording
+
+### ⚠️ I raised an alarm that was wrong. Recording it, because the reasoning is the reusable part.
+
+Crons 34 and 35 post with `target => 'vercel'`, and `lcc_cron_post_log` shows **3,092 posts to
+"vercel" in 24h across 44 endpoints vs 41 to "railway"**. Given P194 — *a retired deployment that
+still answers is a second writer* — that reads exactly like the whole cron fleet executing on the
+Vercel build retired 2026-07-20. I nearly reported it as the highest-priority defect in the system.
+
+**It is not.** `lcc_cron_post` branches **only** on `target = 'edge'`; **everything else, including
+the literal string `'vercel'`, falls through to the same Railway URL** (vault `lcc_railway_url`,
+fallback `tranquil-delight`). **`'vercel'` is a historical label with no routing effect.**
+
+The corroborating detail that *looked* damning — cron 35's 19:39 response lacking `mint_head` /
+`membership_complete` — has a mundane cause: **A5a merged at 19:41:45, two minutes later.** That run
+predates the fix. My 20:00 dry run, same host, returned all the new fields.
+
+**The lesson: `git merge-base` has an equivalent for runtime routing — read the function, not the
+label.** P194's rule is right and I applied it to the wrong evidence; a label that names a dead host
+is not proof traffic reaches one. **Checking cost one query and would have cost a full false
+escalation.**
+
+### Crons 34 and 35 are DISABLED (`cron.alter_job(..., active := false)`)
+
+A5a is live and verified — dry run: `membership_complete: true` (7 chunks), **`would_close: 0` on
+both domains.** The bug is fixed.
+
+**But it also revealed the flood, now measured: `would_insert` = 1,000 gov + 1,586 dia = 2,586** on
+one `limit=2000` run, and **cron 35 fires every 30 minutes** — so the backlog would mint within
+hours and continue into the **5,509 gaps that never had a task**. With **84% owning zero properties**
+and operators/placeholders carrying **81% of the apparent value**, that is the badge-that-is-noise
+failure, aimed at the lanes this arc just cleaned.
+
+**Paused rather than throttled** — a smaller limit still mints the same pool, just slower.
+⚠️ **Re-enabling is part of A5c's deliverable**, explicitly, so the pause cannot be forgotten.
+
+**A5c drafted** (`prompts/A5c-value-gate-research-task-producer-2026-08-27.md`): reuse the existing
+**$500k** knob rather than inventing a floor; exclude operators via the **existing**
+`is_operator_not_owner` flag (P113: never write a second name-based operator test); **unknown rent
+is not small** (P161 measured that trade); value **per owner**, never per task; and the gate goes in
+the **producer's selection**, not a downstream filter. It also requires enumerating every lane this
+producer feeds — **`establish_ownership_history` must not be starved**, since it is the one lane with
+genuine completions.
+
+
 ## 2026-08-27 19:xx UTC (Cowork) — A5a merged AND deployed, but has not RUN yet. Do not read the counts yet.
 
 **A5a merged as PR #1849** (both checks green before merge, on the post-Update-branch head).
