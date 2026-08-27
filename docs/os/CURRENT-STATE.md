@@ -92,7 +92,9 @@ entities), `carrington` / `sequoia` (name-derived evidence only).
 → `docs/audits/V8_SPONSOR_FAMILY_REVIEW_2026-08-27.md`
 
 **Remaining residue is named and routed, not pooled:** blocked `ambiguous_entity` 18 ·
-`no_entity` 18 · `placeholder` 15 · `repeat_transfer_unrepresentable` 14 (**A2b**); plus **A4b**, a
+`no_entity` 18 · `placeholder` 15 · ~~`repeat_transfer_unrepresentable` 14~~ (**A2b ✅ DONE** —
+collapsed in the drafter, 32 links → 15, all 14 unblocked; it was NOT the P138 flicker, see the
+audit); plus **A4b**, a
 P138 guard misfiring on street-numbered SPEs (**10 of 18 recoverable, defect wider than this
 lane**), and **A3-residue** ~31 chains with no sponsor family.
 
@@ -234,7 +236,7 @@ from lcc_clean_assist_proposals group by source`:
 | Invariants, footguns, doctrines | `CLAUDE.md` (LCC) · `Dialysis/CLAUDE.md` · `government-lease/CLAUDE.md` |
 | API/routing reference | `.github/AI_INSTRUCTIONS.md` |
 | Repeatable defect detectors | `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md` |
-| **Tier 0 owner-contact: person↔owner matching, the confirm lane, the sponsor map, owner merges** | `docs/architecture/tier0-owner-contact-system.md` — **one door into twelve rounds (P186–P197)**; live state, decisions already made, traps already paid for |
+| **Tier 0 owner-contact: person↔owner matching, the confirm lane, the sponsor map, owner merges** | `docs/architecture/tier0-owner-contact-system.md` — **one door into thirteen rounds (P186–P198)**; live state, decisions already made, traps already paid for. **Sibling of the row below — they share `lcc_merge_entity`, `lcc_owner_sponsor_domain` and the owner entities, and now cross-link** |
 | **Ownership-history lane** (the whole subsystem — read this, not the 7 audits) | **`docs/architecture/ownership-history-lane.md`** |
 | **Where operator time actually goes** (lane-by-lane throughput) | `docs/audits/DATA_PROCESS_AUTOMATION_AUDIT_2026-08-26.md` |
 | Intake channel provenance (grade by channel, never fleet-wide) | `docs/audits/W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md` |
