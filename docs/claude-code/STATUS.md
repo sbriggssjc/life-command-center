@@ -643,6 +643,61 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 (Cowork) — ⛔ A5 refuted BOTH of my re-audit's headline calls. The metric was manufactured.
+
+**The lane never stalled, because it was never work** — and the same bug invalidates the lane I told
+Scott to leave alone.
+
+| lane | "completed" | **auto-closed by the generator** |
+|---|---:|---:|
+| `property_missing_recorded_owner` | 4,781 | **4,781 (100%)** |
+| `true_owner_needs_salesforce` | 596 | **596 (100%)** |
+| `establish_ownership_history` | 314 | **0** ← the only real completions |
+
+**One bug produces all of it.** `handleGenerateResearchTasks` reads a 29,643-row feed through a call
+**PostgREST caps at 1,000 rows**, then auto-closes everything outside the window as `gap_resolved`.
+The guard tests `feed.length (1000) < limit (2000)` — **the requested limit, not the returned cap** —
+so it passes and fires *over a truncation*. Its own comment says *"never on a capped slice."*
+
+- **`true_owner_needs_salesforce`: 815 open is `1000 − 185`**, leftover window slots, not a backlog.
+  **170 of 183 sampled owners still have `salesforce_id IS NULL` — 93% of closures false.** The
+  2026-06-22 "cliff" is the date the window saturated. **5,509 of 6,324 real gaps never had a task.**
+- **`property_missing_recorded_owner` — my "healthiest lane, leave it alone" was exactly backwards.**
+  Open pinned at **exactly 1,000**, 885/885 completions the same auto-close, 146/146 sampled still
+  `recorded_owner_id IS NULL`. **Zero real work in 30 days, and it cannot clear, because its open
+  count is a constant.**
+- **The `983 → 439` improvement stands** — driven by `establish_ownership_history`, whose 314
+  completions are **0% auto-closed** and backed by 304 written ownership facts.
+
+### ⚠️ The lesson, and it is about my own method
+
+I switched the re-audit from lifetime totals to **rates** *specifically* to avoid being fooled by a
+stale cumulative number — and the rates were themselves manufactured. **Choosing a more rigorous
+metric is not the same as validating it.** The missing question was one column deep: **who closed
+these, and how?** `outcome` was right there, and every row said `gap_resolved`.
+
+**Rule now in `CLAUDE.md`: before ranking anything by completions, check WHO closed them.** A status
+set in bulk by a sweep is not throughput — the same trap as P119's `inbox_triaged`, where a bulk-set
+status admitted the whole historical population.
+
+**Two further findings worth keeping:**
+- **81% of the apparent value in this lane is not an owner.** 5,338 of 6,324 (84%) own zero
+  properties; operators and literal placeholders (`DaVita Inc.` 2,626 properties, `Independent` 754)
+  carry 5,227 of 6,442 — the documented **P113 tenant-in-the-owner-slot** trap at scale. **963 are
+  real prospectable owners.**
+- **P131 category (a) + (c), (b) empty** — 293 resolve ID-to-ID via `external_identities`, ~6,031
+  are not on-box at all, and **zero are unstructured-on-box, so an LLM would have nothing to read
+  and would fabricate.** Third time in this arc that the top-ranked "LLM opportunity" wasn't one.
+
+⚠️ **Caveat carried from A5, not to be dropped when these numbers get quoted:** the 93% and 100%
+false-closure rates are **samples of 183 and 146 rows**, not full population scans.
+
+**Backlog filed by A5: A5a** (fix the auto-close — a correctness bug costing ~900 false closures a
+month **across all dia+gov NBA lanes**, and it is manufacturing the very number the re-audit ranked
+on), **A5c** (value-gate 6,324 → 963), **A5d** (fill the 293), **A5e** (retire the 5,338). None
+built. **A5a lands first** — every other measurement in this area is untrustworthy until it does.
+
+
 ## 2026-08-27 (Cowork) — RE-AUDIT of the original automation audit: the method worked, the next target is elsewhere
 
 Scott asked to revisit the document that started this thread
