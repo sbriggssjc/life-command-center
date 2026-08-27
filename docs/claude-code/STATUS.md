@@ -26,7 +26,11 @@
 for a future-dated timestamp in the ownership-lane doc.
 
 **Housekeeping:** the A4b prompt is filed to `prompts/done/` (its audit and code shipped).
-**`A2b-repeat-transfer-flicker` correctly stays open — it has no audit and was never run.**
+~~**`A2b-repeat-transfer-flicker` correctly stays open — it has no audit and was never run.**~~
+**A2b SHIPPED later the same day and is now filed to `prompts/done/` too** — see
+`docs/audits/A2b_REPEAT_CONVEYANCE_COLLAPSE_2026-08-27.md`. ⚠️ Its prompt name is a misnomer that
+this arc kept repeating: **the mechanism is NOT the `gsa_lease_diff` flicker** (that one has a
+return leg and is caught by `is_oscillating_pair`); it is per-lease fan-out plus cross-source lag.
 
 **⚠️ Two canonical pages now exist for one entity graph, and they did not know about each other.**
 `tier0-owner-contact-system.md` (person↔owner, P186–P198) and `ownership-history-lane.md`

@@ -1790,8 +1790,9 @@ A3/A4/A4b are untouched and unchanged at 73 / 74 / 18.
   counter is NOT a write counter" — `intent` and `effect` differ precisely where a conflict clause
   is doing its job. And the rows that collided were not repeat ownership: all 14 were ONE conveyance
   recorded on several dates (`SENTINEL SQUARE I → WASHINGTON DC VI FGF` on 2020-02, 2020-03 AND
-  2020-04) — the `gsa_lease_diff` lessor flicker P138 documents, surviving P131's `(from, to, date)`
-  dedup because the DATE differs.
+  2020-04), surviving P131's `(from, to, date)` dedup because the DATE differs. ⚠️ **This sentence
+  used to call it "the `gsa_lease_diff` lessor flicker P138 documents" and that was WRONG — see A2b:
+  the flicker has a RETURN LEG and this population has none.**
 - **⚠️ AN EXACT-MATCH STOPLIST IS DEFEATED BY A DECORATED PLACEHOLDER.** The gate blocked
   `Previous Owner`; the gov feed also writes `Previous Owner Name`, `Previous Owner Name Unknown`
   and `Previous Owner LLC`, all of which had already been **minted as entities**, and all of which
@@ -1850,6 +1851,9 @@ A3/A4/A4b are untouched and unchanged at 73 / 74 / 18.
   `links_already_present`. Residue is named, not lumped: `ambiguous_entity` 54 (LCC duplicate
   entities — **48** of the 92 open tasks are blocked by that ALONE and need only a P195-style
   merge, after which cron 244 applies them unaided), `repeat_transfer_unrepresentable` 28, `placeholder` 26, `no_entity` 20.
+  ⚠️ **Re-measured 2026-08-27: `repeat_transfer_unrepresentable` is 14 tasks / 32 links and A2b
+  resolved it in the drafter** — see the A2b section below, which also CORRECTS the mechanism the
+  next bullet names.
 
 ## A2a — merging the duplicates that blocked the chains; the producer was NOT r9 (2026-08-27)
 
@@ -1874,9 +1878,9 @@ ledger `lcc_a2a_merge_log`, reversal `lcc_a2a_unmerge(batch)`. **Not scheduled.*
   `repeat_transfer_unrepresentable` (`ROSSLYN CENTER ASSOCIATES L.P.` gov 14293;
   `Gate Properties LP`/`GATE PROPERTIES LP` gov 3891). A2 blocks when one `(grantor_entity, property)`
   pair carries links on two dates — and **while the two case-spellings were two entities, each pair
-  carried exactly one link.** Both are the P138 `gsa_lease_diff` lessor flicker, which is *why* they
-  produced two entities. Expect a repair to move rows between blocked reasons, not only out of them,
-  and count the destinations.
+  carried exactly one link.** Both are the per-lease fan-out A2b measured (NOT the P138 flicker, as
+  this line used to say), which is *why* they produced two entities. Expect a repair to move rows
+  between blocked reasons, not only out of them, and count the destinations.
 - **⚠️ `auto_mergeable` MOVING IS NOT AUTOMATICALLY A SIDE EFFECT.** P195 held it at 3,053; A2a took
   it to **3,041**, and the −12 is the point: verified **0** auto-mergeable groups still contain any
   A2a winner or loser, so those 12 left the candidate set because they were resolved. Check *which*
@@ -1908,6 +1912,72 @@ ledger `lcc_a2a_merge_log`, reversal `lcc_a2a_unmerge(batch)`. **Not scheduled.*
   `USAA Real Estate`, the only group where the destructive pivot dedup-DELETE fires: 153 rows before,
   153 after, **0 lost / 0 new / 0 changed**, self-loop-deleted edge and folded pivot bench both back
   byte-identical. Guard: `test/a2a-ambiguity-merge.test.mjs` (13 tests, mutation-verified red on 14).
+
+## A2b — one conveyance recorded on several dates; the mechanism was NOT the flicker (2026-08-27)
+
+`repeat_transfer_unrepresentable` **14 tasks / 14 properties / 32 links → 15**, 18 folded away,
+12 distinct owners, **$26.2M** (per OWNER — the per-link sum reads $88.5M, a 3.4× overstatement).
+Fixed in the DRAFTER (`buildChainDraft` → `collapseRepeatedConveyances`), **never the applier**: the
+PK — one interval per party per property — is right, the INPUT was wrong. **No migration, no new
+cron.** Writeup: `docs/audits/A2b_REPEAT_CONVEYANCE_COLLAPSE_2026-08-27.md`.
+
+- **⚠️ A SHARED PRODUCER NAME IS NOT A SHARED MECHANISM — A1, A2 and this file all called this
+  population "the P138 `gsa_lease_diff` flicker" and it is not.** P138's flicker oscillates between
+  an SPE and its parent: it emits **both** `A→B` and `B→A`, which is exactly what
+  `is_oscillating_pair` catches. **This population has no return leg** (and A4 measured zero
+  oscillating pairs here). It is *one conveyance observed more than once*, two ways: **per-lease
+  fan-out** — a GSA building carries many leases and the lessor of record updates on each
+  separately, so the diff emits an acquisition per lease (**one distinct `lease_number` per date,
+  13 of 13** testable properties; property 3123 is 8 rows across 8 leases over 2020-02..04) — and
+  **cross-source lag** (property 3891: `costar_sidebar` has the sale at 2014-07, `gsa_lease_diff`
+  the paperwork at 2015-05). **The correction is load-bearing:** if it were the flicker the
+  DIRECTION would be untrustworthy and collapsing would be unsafe; it is not, so the only thing
+  wrong is that one fact is stored several times.
+- **⚠️ THE DATE RULE IS EARLIEST, AND A2's OWN COMMENT SAYING OTHERWISE IS SUPERSEDED BY
+  MEASUREMENT.** A2 wrote *"Picking the earliest date would be a guess about which record is real…
+  Never guess"* — right without the measurement, wrong with it. Two reasons: **structural**, the
+  link's `transfer_date` becomes the GRANTOR's `ownership_end_date`, so a later observation can only
+  ever OVERSTATE a tenure (by up to **700 days** here); and **empirical**, over every party pair gov
+  holds from BOTH `costar_sidebar` and `gsa_lease_diff` the recorded sale is earlier **26 of 26**,
+  0 same-day, **0 later**, mean lag **161 days**. Choosing "latest" would discard the actual sale
+  date in favour of lease administration. The applied migration's text is left as the historical
+  record.
+- **The later dates are NOT wrong data, so nothing is deleted.** Every folded row's `ownership_id`,
+  `data_source` and date ride the survivor's `citation.also_recorded_as` — **48 of 48 guarded-clean
+  source rows traceable** from the drafts. That required closing a pre-existing gap: P131's
+  `(from, to, date)` dedup **silently discarded** the `ownership_id` of a byte-identical same-date
+  twin (3123 has three on 2020-03-01 alone); without that fix the claim would have been 33 of 48.
+  A price seen only on a later observation is carried and **cited** (`price_from_ownership_id`).
+  `gov.ownership_history` is untouched.
+- **⚠️ THE SAFETY PROPERTY IS IN THE KEY: it includes the GRANTEE.** A grantor that sold to B and
+  later to C is genuine repeat ownership — two distinct keys, no collapse, still blocked for a
+  human, which is right because one interval per party cannot represent that either. Verified: all
+  14 blocked pairs carry exactly ONE grantee name-key.
+- **Collapsing also removes a PHANTOM chain break.** `A→B, A→B` reads as a gap, because link[1]'s
+  `from` is not link[0]'s `to`. The chain was never broken; **all 14 now report
+  `contiguous: true`**, so the drafts stop claiming a missing intermediate owner that never existed.
+  Property 3290 correctly keeps TWO links (`WASHINGTON DESIGN CENTER → MUSEUM OF THE BIBLE` 2013-02,
+  then `→ WOC LLC` 2016-11) — not over-collapsed.
+- **⚠️ THE PRODUCER IS LIVE, AND READING ONLY THE DORMANT HALF GIVES THE WRONG ANSWER.**
+  `gsa_lease_diff` is dormant (newest row **2026-03-27**, **0 in 90 days**) — the obvious check says
+  "one-shot is fine". But the population is still GROWING: **323 repeat pairs fleet-wide (91
+  cross-source), 58 completed in 90 days, 9 in 30, most recent 2026-08-24**, because live
+  `costar_sidebar` (271 rows/30d) lands a SECOND observation of a pair the lease-diff already
+  recorded. A one-shot would be a chore repeated silently forever (P176 / Class 8). **Ask what
+  completes a repeat pair, not just which producer is still writing.**
+- **But it needs NO NEW CRON — because the fix is in the drafter.** Every draft from now on is
+  collapsed at birth; the only residue is tasks already carrying a pre-A2b draft, since `fresh`
+  excludes anything already proposed (the A4b stale-draft trap). So the sweep is
+  `runA2bRedraftPass` inside the drafter's existing 06:45 run, **keyed on STATE** (*this task is
+  blocked as `repeat_transfer_unrepresentable` and the drafter now collapses it*), which self-clears
+  and equally catches a pair whose second observation lands next month. It **re-runs the real
+  planner** rather than trusting the blocked reason, so a failed gov fetch supersedes nothing.
+  06:45 draft → 06:49 A2 apply.
+- **Read `drafts_superseded` / `links_collapsed`, never `repeat_blocked_checked`** — the last is a
+  re-discovery tally that reads exactly like throughput (P159a).
+- Guard: `test/ownership-chain-repeat-collapse.test.mjs` (15 tests, **all mutation-verified RED**:
+  latest-instead-of-earliest 5, grantor-only key 1, dropped evidence 2, collapse-after-continuity 4,
+  dropped same-date twins 2). Source assertions anchor on stable identity tokens, never a line.
 
 ## A3 — the `mismatch` lane is a REPRESENTATION question; 74 chains → 12 decisions (2026-08-27)
 

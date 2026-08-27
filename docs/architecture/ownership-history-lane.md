@@ -5,7 +5,7 @@
 > The dated audits under `docs/audits/` are the **evidence trail** — go there for *why*, come here
 > for *what is true now*.
 >
-> **Last measured: 2026-08-27 16:30 UTC.** Re-measure before quoting any number.
+> **Last measured: 2026-08-27 17:15 UTC.** Re-measure before quoting any number.
 >
 > 🔗 **Sibling subsystem, same entity graph:**
 > [`tier0-owner-contact-system.md`](tier0-owner-contact-system.md) — matching a PERSON to an owner
@@ -46,7 +46,7 @@ distrust every record we have* — which trains an operator to skip all of it.
 has not reached is *not* `no_records`, and a payload matching nothing must surface rather than be
 absorbed into a bucket it does not belong to.
 
-## 3. Current state (2026-08-27 16:30 UTC)
+## 3. Current state (2026-08-27 17:15 UTC)
 
 **Completed ever 314 · open 156 · skipped 1,766.** From 0 completions in 69 days.
 
@@ -70,10 +70,26 @@ cron 244 applies at 06:49. Run against the **real planner**, they classify **9 `
 280 owners, **$579.9M**. **Badge reads human-actionable, not raw open.**
 
 **Blocked `agrees` residue** (`v_lcc_ownership_chain_apply_blocked`):
-`ambiguous_entity` 18 · `no_entity` 18 · `placeholder` 15 · `repeat_transfer_unrepresentable` 14.
+`ambiguous_entity` 18 · `no_entity` 18 · `placeholder` 15 · `repeat_transfer_unrepresentable` **14 → 0
+once the drafter re-runs (A2b)**.
+
+**A2b collapsed one conveyance recorded on several dates** — 14 tasks / 14 properties / **32 links →
+15**, 18 folded away, 12 distinct owners, **$26.2M** (per OWNER; the per-link sum reads $88.5M, a 3.4×
+overstatement). Fixed in the DRAFTER, never the applier: the PK — one interval per party per property
+— is right, the input was wrong. **All 14 now report `contiguous: true`**, because `A→B, A→B` was also
+manufacturing a phantom chain break.
+
+⚠️ **It is NOT the P138 `gsa_lease_diff` flicker, despite what A1/A2 and `CLAUDE.md` say.** That
+flicker has a **return leg** (`A→B` *and* `B→A`) and is caught by `is_oscillating_pair`; this
+population has none. It is *one conveyance observed more than once*, two ways: **per-lease fan-out**
+(a GSA building carries many leases and the lessor of record updates on each separately — one
+distinct `lease_number` per date, **13 of 13** testable properties; property 3123 is 8 rows across 8
+leases) and **cross-source lag** (property 3891: `costar_sidebar` has the sale at 2014-07,
+`gsa_lease_diff` the paperwork at 2015-05).
 
 **The 7 remaining `all_guarded` are correctly guarded, name by name:** three punctuation-variant
-self-transitions (`786` RGR, `7527` EPA, `14058` MAOB — A2b's `gsa_lease_diff` flicker), `13080`
+self-transitions (`786` RGR, `7527` EPA, `14058` MAOB — **not** A2b's population and not a flicker;
+a punctuation-variant *self*-transition is a different defect from one conveyance recorded twice), `13080`
 `COMM 2014-UBS5 HARWOOD CENTER, LLC` (a CMBS trust, deliberately an artifact), `9995` PMMC (a genuine
 strict-prefix name variant), `7966` (a concatenated brokerage — `gov_strip_brokerage_suffix` only
 strips a `by <brokerage>` suffix), and `1429` Camarillo (six `Unknown` grantors plus the street-token
@@ -117,7 +133,16 @@ variant A4b now catches). **There is no further recoverable population here.**
    (`runA4bRedraftPass`) is keyed on **state** — this task says every transfer was guarded away, and
    the gov view now passes one — never on "A4b shipped", so it equally covers records simply
    improving, and it is not a chore repeated the next time a guard moves (Class 8).
-11. **Loosening a name guard needs the variant guard widened in the SAME change.** Admitting
+12. **A repeated observation is not a repeated conveyance — collapse it in the PRODUCER, keeping the
+   EARLIEST date.** The link's `transfer_date` becomes the grantor's `ownership_end_date`, so a later
+   observation can only ever OVERSTATE a tenure (by up to 700 days here). Corroborated, not assumed:
+   over every party pair gov holds from **both** `costar_sidebar` and `gsa_lease_diff`, the recorded
+   sale is earlier **26 of 26**, 0 same-day, 0 later, mean lag 161 days. The later dates are **not
+   wrong data** — every folded row's `ownership_id` rides the survivor's `also_recorded_as` (48 of 48
+   traceable), and gov's records are never touched. **The collapse key includes the GRANTEE**, so a
+   grantor who sold to B and later to C is genuine repeat ownership, does not collapse, and stays
+   blocked — which is right, because one interval per party cannot represent that either.
+13. **Loosening a name guard needs the variant guard widened in the SAME change.** Admitting
    street-numbered names makes `10835 CAMARILLO STREET APARTMENTS LLC → 10835 CAMARILLO APARTMENTS
    LLC` read as a real transfer, and A2 would write it as history. The widening is
    street-token-equality (15 rows, **all 15 read as the same party**); the tempting
@@ -128,7 +153,8 @@ variant A4b now catches). **There is no further recoverable population here.**
 
 | # | Item | Size |
 |---|---|---|
-| **A2b** | `repeat_transfer_unrepresentable` — one conveyance recorded on several dates (the `gsa_lease_diff` flicker). Producer fix. **A4b left its 3 `all_guarded` self-transitions untouched — they are the same flicker and belong here.** | 14 tasks / 32 links |
+| ~~**A2b**~~ | ✅ **DONE** — `repeat_transfer_unrepresentable` collapsed in the drafter, 32 links → 15, all 14 unblocked. See §4 invariant 12 and the audit. | — |
+| **A2b-res** | ⚠️ **A4b's 3 `all_guarded` self-transitions (`786` RGR, `7527` EPA, `14058` MAOB) were NOT A2b's population and are still open.** They are punctuation-variant **self**-transitions, correctly guarded — a different defect from a repeated conveyance, and the earlier note that they "are the same flicker" was wrong on both counts. | 3 |
 | **A4b-res** | `is_name_variant` still misses **spaced-letter legal forms and TIC** (`1201 CORBIN, L. L. C.`, `1325 J STREET L P`, `321 E 2nd St TIC`) — measured at **18 address-arm names**, sized deliberately and NOT folded into A4b, whose blast radius was graded on a different rule. | ~18 names |
 | **V8a** | Settle **Boyd ↔ FGF** before confirming `fgf` — 90 SPEs ride on it. | 👤 |
 | **V8c** | Merge the Madison duplicates, then one clean confirm. | 2 |
@@ -147,4 +173,5 @@ variant A4b now catches). **There is no further recoverable population here.**
 | `docs/audits/A3_OWNERSHIP_MISMATCH_SPONSOR_FAMILY_2026-08-27.md` | sponsor↔SPE; why the bare-token key was rejected |
 | `docs/audits/A4_OWNERSHIP_LANE_RETIRE_AND_ADJUDICATE_2026-08-27.md` | the 74 retired; the guard defect measured |
 | `docs/audits/A4b_TRANSITION_CLEAN_GUARD_2026-08-27.md` | the street-numbered-SPE defect: fleet-wide size, the measured discriminator, the variant pairing, the re-draft sensor |
+| `docs/audits/A2b_REPEAT_CONVEYANCE_COLLAPSE_2026-08-27.md` | one conveyance on several dates: the mechanism corrected off "flicker", the 26-of-26 date rule, and why a dormant producer still needed a sweep |
 | `docs/audits/V8_SPONSOR_FAMILY_REVIEW_2026-08-27.md` | Scott's 12 answers + the evidence check that changed 4 |
