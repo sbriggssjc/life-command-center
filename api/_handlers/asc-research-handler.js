@@ -105,8 +105,27 @@ export async function handleAscResearchCapture(req, res) {
 export async function handleAscResearchComplete(req, res) {
   if (req.method !== 'POST') return fail(res, 405, `Method ${req.method} not allowed`);
   const auth = await operator(req, res); if (!auth) return;
-  const { run_id, candidate_fingerprint } = req.body || {};
+  const { run_id, candidate_fingerprint, source_dispositions } = req.body || {};
   if (!run_id || !candidate_fingerprint) return fail(res, 400, 'frozen_target_required');
+  if (source_dispositions != null) {
+    if (source_dispositions?.costar !== 'not_found'
+      || source_dispositions?.rca !== 'not_found'
+      || Object.keys(source_dispositions).length !== 2) {
+      return fail(res, 400, 'exact_dual_source_missingness_required');
+    }
+    const missing = await opsQuery('POST', 'rpc/lcc_complete_asc_candidate_missingness', {
+      p_run_id: run_id,
+      p_candidate_fingerprint: candidate_fingerprint,
+      p_source_dispositions: source_dispositions,
+      p_completed_by: auth.user.user_id || auth.user.id || null,
+    }, { countMode: 'none' });
+    if (!missing.ok) return fail(res, missing.status || 500, 'asc_research_missingness_failed', missing.data);
+    return res.status(200).json({
+      ok: true,
+      candidate: Array.isArray(missing.data) ? missing.data[0] : missing.data,
+      controls: { canonical_write_performed: false, salesforce_write_performed: false, outreach_performed: false },
+    });
+  }
   const result = await opsQuery('POST', 'rpc/lcc_complete_asc_candidate_capture', {
     p_run_id: run_id,
     p_candidate_fingerprint: candidate_fingerprint,

@@ -376,3 +376,23 @@ test('capture retries receive only the column update privilege required by the i
   assert.doesNotMatch(sql, /grant\s+update\s+on\s+public\.healthcare_research_captures/i);
   assert.doesNotMatch(sql, /security\s+definer/i);
 });
+
+test('dual-source missingness advances without fabricating a capture and remains fail closed', async () => {
+  const [sql, handler, sidepanel] = await Promise.all([
+    readFile(new URL('../supabase/migrations/20261001120600_lcc_asc_dual_source_missingness.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
+    readFile(new URL('../extension/sidepanel.js', import.meta.url), 'utf8'),
+  ]);
+  assert.match(sql, /p_source_dispositions\s+is\s+distinct\s+from\s+'\{"costar":"not_found","rca":"not_found"\}'::jsonb/is);
+  assert.match(sql, /if\s+v_capture_count\s+<>\s+0\s+then[\s\S]+captured candidates must use normal evidence completion/is);
+  assert.match(sql, /final_disposition[\s\S]+licensed_sources_not_found/is);
+  assert.match(sql, /second_review_required[\s\S]+true/is);
+  assert.match(sql, /set\s+status\s*=\s*'reviewed',[^;]+reviewed_at/is);
+  assert.doesNotMatch(sql, /insert\s+into\s+public\.healthcare_research_(captures|evidence)/i);
+  assert.doesNotMatch(sql, /delete\s+from/i);
+  assert.match(handler, /Object\.keys\(source_dispositions\)\.length\s*!==\s*2/);
+  assert.match(handler, /rpc\/lcc_complete_asc_candidate_missingness/);
+  assert.match(sidepanel, /Complete: CoStar \+ RCA not found/);
+  assert.match(sidepanel, /window\.confirm\(/);
+  assert.match(sidepanel, /source_dispositions:\s*\{\s*costar:\s*'not_found',\s*rca:\s*'not_found'\s*\}/s);
+});

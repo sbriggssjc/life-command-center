@@ -253,7 +253,39 @@ async function wireAscResearchAction(ctx, actions) {
   button.className = 'btn btn-sm btn-primary';
   button.textContent = 'Attach capture to ASC research';
   wrap.appendChild(button);
+  const missing = document.createElement('button');
+  missing.className = 'btn btn-sm btn-secondary';
+  missing.style.cssText = 'margin-left:5px;margin-top:5px;';
+  missing.textContent = 'Complete: CoStar + RCA not found';
+  wrap.appendChild(missing);
   actions.appendChild(wrap);
+
+  missing.addEventListener('click', async () => {
+    const label = identity.facility_name || identity.ccn || 'this frozen candidate';
+    const confirmed = window.confirm(
+      `Confirm you manually searched the exact frozen candidate (${label}) in both CoStar and RCA and found no matching property. No evidence capture will be created.`,
+    );
+    if (!confirmed) return;
+    missing.disabled = true;
+    button.disabled = true;
+    missing.textContent = 'Recording missingness…';
+    const advanced = await apiCall('/api/asc-research-complete', {
+      run_id: target.run_id,
+      candidate_fingerprint: target.candidate_fingerprint,
+      source_dispositions: { costar: 'not_found', rca: 'not_found' },
+    });
+    if (advanced.ok) {
+      missing.textContent = 'Missingness recorded ✓ — open next property';
+      detail.textContent = 'CoStar and RCA not-found dispositions recorded with zero captures; second review required. The next frozen candidate will load on the next page scan.';
+    } else {
+      missing.disabled = false;
+      button.disabled = false;
+      missing.textContent = 'Complete: CoStar + RCA not found';
+      detail.textContent = toErrorMessage(
+        advanced.data?.detail || advanced.data?.error || advanced.error
+      ) || 'Could not record licensed-source missingness';
+    }
+  });
 
   button.addEventListener('click', async () => {
     button.disabled = true;
