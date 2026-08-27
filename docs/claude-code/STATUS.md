@@ -122,6 +122,140 @@ writes.
 **Verify by owners moved out of parked, never cards touched:** 105 parked owners / $180.3M today, of
 which 4 confirmable sponsor proposals cover 4 owners / $17.7M.
 
+## 2026-08-27 11:55 UTC — ⭐ 49% of person entities are not in the contacts hub; 92 block $132.3M
+
+**The parked pile splits exactly, and the split is the finding.** Of 189 candidate people behind the
+142 parked Tier 0 cards:
+
+| | people | meaning |
+|---|---|---|
+| have a `unified_contacts` row | **97 — and all 97 carry an employer** | the `employer_on_file_differs` parks. **The gate working.** |
+| **no hub row at all** | **92** | no employer, no title, no SF, no Outlook — **not a judgement, a missing row** |
+
+So `no_employer_on_file` (**68 cards / $132.3M**) was never a decision anyone declined to make. The
+data to make it is absent.
+
+**Fleet-wide: `entities` (person, live, with an email) = 11,107; reconciled to `unified_contacts` =
+5,667; ORPHANED = 5,440 (49%).** `unified_contacts` is what carries `company_name`, `title`,
+`sf_contact_id`, `outlook_contact_id` — an orphan has none of them.
+
+**⚠️ 49% orphaned is very likely CORRECT and must not be read as a defect count.** `entities` is the
+graph (everyone ever seen — CoStar brokers, deed grantees, OM-extracted names); `unified_contacts`
+is the hub (people we actually track). Playbook Class 9's corollary applies exactly: the detector
+produces CANDIDATES. **A bulk reconcile would pour thousands of untracked broker records into the
+surface Scott works** — the Consumption-Layer failure this codebase documents repeatedly.
+
+**The actionable population is 92, not 5,440** — the ones already proposed as contacts for a named
+owner above the rent floor. Each either resolves its card or converts it to an honest
+`employer_on_file_differs` reject. **Prompt 197** specifies it, and insists the *cause* be diagnosed
+first: if a live producer is still minting orphans, a one-shot reconcile is a chore repeated forever
+(Class 8). Check `created_at` on the orphans.
+
+### ⚠️ N9v is STILL UNVERIFIED — and the reason is timing, not failure
+`TIER0_AUTO_ATTACH=true` is set and the redeploy is live. But **cron 241 last ran 06:55 UTC, which
+was BEFORE the redeploy**, and that run is the one that reported `flag_off`. `active_source=
+'tier0_auto'` is still 0 because **the tick has not run since**. The next run is **06:55 UTC
+tomorrow** and is the first honest test — expect 0 → 9. *(A `GET` of the tick would settle it
+immediately; `web_fetch` returned nothing usable from here, so this is unverifiable from Cowork.)*
+**Do not diagnose before that run.** `feature_flags_registry` stays `off` until a tick reports
+`writes > 0` — it describes the runtime, not the intent.
+
+
+## 2026-08-27 11:45 UTC — four sponsor entries confirmed by Scott; 6 cards unparked, $19.8M
+
+Scott confirmed the top four of P196 Unit 2's six sponsor proposals and rejected the bottom two.
+`lcc_owner_sponsor_domain` **4 → 8 rows**.
+
+| sponsor → domain | rent | corroborating employer on file |
+|---|---|---|
+| `gardner` → gardnercompanies.com | $7.99M | Douglas Gardner — **"Gardner Companies"** |
+| `salus` → salusgroup.us | $5.28M | James Jacobson — "Salus Healthcare Real Estate Group LLC" |
+| `oxford` → oxforddevelopment.com | $2.46M | Stephen Nicotra — "Oxford Development Company" |
+| `savlan` → savlancapital.com | $1.99M | Zusha Tenenbaum — "WWW Savlancapital COM" *(the junk string that defeated the comparator)* |
+
+**Rejected:** `royal` → royalamerican.com ($1.26M) and `maple` → maplestmanagement.com ($0.84M) —
+a common word and a place-word collision (the Mapletree trap P196 measured at ~25% precision).
+
+**⚠️ Blast radius measured BEFORE writing, because a sponsor token matches fleet-wide.** Each token
+was checked against every owner in scope: `oxford` and `salus` match exactly 1 owner; `gardner` and
+`savlan` match 2 — and in both cases the second is **the same firm** (`Gardner-Tannenbaum`, a
+spelling-variant duplicate entity; `Savlan Capital`, the sponsor itself). No collateral.
+
+**Effect — assert on the state delta, not the row count:** `parked` **146 → 142**, `ask`
+**77 → 82** (6 cards moved, 2 of them the bonus same-firm owners), lane rent askable now **$254.9M**.
+
+**⚠️ A correction to my own earlier reading, caught before writing.** In the P187 bench I recorded
+*"Gardner Tanenbaum Holdings → Douglas Gardner @gardnercompanies.com — Achen-Gardner Construction"*
+and marked it a probable false positive. Reading the authoritative row: his employer on file is
+**"Gardner Companies"**, not Achen-Gardner. I had conflated two different rows. **A dated note in
+my own write-up is a hypothesis to re-check, exactly like a dated blocker.**
+
+**⚠️ Flagged on the Oxford card, and it is not a reason to reject the mapping:** the only candidate
+at `oxforddevelopment.com` is Stephen Nicotra, title **"Summer Internship"**. The domain↔sponsor
+link is sound; the *person* is not a pursuit target. This is the doctrine working as designed —
+"do the people at this domain work for this owner" and "who do we call" are two decisions, and only
+the first is answered by the map.
+
+
+## 2026-08-27 11:35 UTC — ⚠️ N9v FAILED, diagnosed; P196 corrected three of my own claims
+
+### ⚠️ THE AUTO-ATTACH FLAG IS SET IN RAILWAY AND **OFF AT THE RUNTIME**
+The dated check came due and failed. Cron 241 fired **06:55:00 UTC**, `cron.job_run_details` says
+**`succeeded`** — and that only means `lcc_cron_post` dispatched the HTTP request. Reading the
+handler's own response instead:
+
+```json
+{"ok":true,"skipped":"flag_off","flag":"TIER0_AUTO_ATTACH","writes":0,"would_attach":9}
+```
+
+**HTTP 200, and the process does not see the variable.** Scott set `TIER0_AUTO_ATTACH=true` in the
+Railway `tranquil-delight` env, but the *running* build was never redeployed after the change (or
+the variable landed on a different service/environment). **A flag set is not a flag read.**
+
+**The handler behaved correctly** — it named `skipped: flag_off` rather than silently writing
+nothing, which is the whole reason this was diagnosable in one query instead of a hunt.
+
+**⚠️ And I had made `feature_flags_registry` lie.** I flipped it to `on` when Scott set the
+variable — recording the *intent*. The registry drives the daily brief's Dormant Capabilities
+section, so it must describe the **runtime**. Reset to `off` with the evidence in `notes`.
+**Flip it back only after a redeploy AND a tick reporting `writes > 0`.**
+
+**Operator fix:** redeploy the `tranquil-delight` service, then re-run
+`GET /api/tier0-auto-attach-tick` and confirm it no longer says `flag_off`.
+
+### P196 shipped (#1809) — and corrected three things I had written
+
+**Unit 1 — `lcc_merge_entity` is now reversible.** `lcc_unmerge_entity(loser)`,
+`lcc_entity_merge_log` as ledger, `v_lcc_entity_merge_reversibility` as instrument.
+
+1. **⚠️ "Dormant, not armed" described the LOOP, not the FUNCTION — and I measured the wrong
+   thing.** I checked callers of `lcc_apply_fuzzy_merges` (still 0, correct) and concluded the
+   irreversible path was not firing. **`lcc_merge_entity` has NINE human-verdict call sites, and
+   285 entities were merged in 30 days — 176 in 7.** The irreversible pivot delete had been running
+   all along. *Count the callers of the FUNCTION, not of the one wrapper you were told about.*
+2. **"The uncorrelated `EXISTS` is the bug" was wrong.** Both tables are PK `(entity_id)`, so the
+   predicate is already equivalent to a correlated one. The bug is that it **DELETES instead of
+   FOLDING**, with no ledger. *Correlating it would have looked like a fix and moved nothing.*
+3. **`p_snapshot => true` alone would have left the worst path untouched** — the four P160 backrefs
+   live in `lcc_merge_entity`, not in the reconcile, and neither snapshotted them in any mode.
+
+**The round trip caught a bug review did not** — exactly what the prompt insisted on. P177's
+`BEFORE INSERT` trigger skips a duplicate edge, so `ON CONFLICT DO UPDATE` never fires: restoring
+three byte-identical Monaco Holdings edges brought back **one**, left two on the winner, and the
+unmerge still reported `restored`. Verified live: full-row diff over ten tables, 16 rows before and
+after, 0 lost. **Honest limit: 2,411 pre-P196 tombstones read `reversible = false` and always will.**
+
+**Unit 2 — parked cards now say why.** **146 parked / 105 owners / $180.3M** —
+`employer_on_file_differs` 76 / $96.3M (the slice my "$98M" actually meant — the gate working),
+`no_employer_on_file` 68 / $132.3M, `employer_not_comparable` 2. Decidability unchanged
+(ask 77 / auto 9 / parked 146). **Both fixes I prescribed were measured rather than assumed, and
+one was rejected:** company-string normalisation unparks **0 of 146** (Savlan fails at character 8,
+`savlancc` vs `savlanca`, not on the `www`/`com` noise), and a naive sponsor detector reads **~25%
+precision — the same figure P189 rejected**, with false positives on shared given names
+(George Kurz ← George's Inc) and place words (MAPLE HILL ← Mapletree). Three guards take it to
+**4 of 6, and the 4 are the top 4 by rent**, so the view is value-ranked and human-confirm-only.
+
+
 ## 2026-08-27 05:00 UTC — repo fully synced; CI skip path PROVEN; two git traps recorded
 
 **State verified:** local `main` == `origin/main` (0 ahead / 0 behind), **zero conflict markers
