@@ -110,6 +110,55 @@ Budget for it: roughly three minutes per re-run, and if `main` moves again durin
 may do it twice. **Merging the moment the first green appears is how PR #1793 shipped a red
 suite** — the checks were still running.
 
+## 2b. ⚠️ `git stash pop` after a long gap WILL conflict — and `git add -A` commits the markers
+
+**This happened on 2026-08-27 and reached `main`.** `docs/claude-code/STATUS.md` was merged
+carrying `<<<<<<< Updated upstream` / `=======` / `>>>>>>> Stashed changes`.
+
+The sequence that produced it is the one in §2, and it is a **correct** sequence — with one missing
+step:
+
+```powershell
+git stash -u          # park local edits
+git checkout main
+git pull --rebase     # ← local main was 10 commits BEHIND
+git checkout -b <branch>
+git stash pop         # ← conflicted, silently, in the working tree
+git add -A            # ← staged the conflict markers
+git commit            # ← and committed them
+```
+
+**Two things make this near-certain rather than unlucky:**
+
+1. **The longer you were behind, the worse it is.** `STATUS.md` is the most-written file in the
+   repo — Cowork and Claude Code both append to it every session. Ten commits of drift means a
+   collision on that file is the expected outcome, not the exception.
+2. **`git add -A` is the amplifier.** It stages everything including a half-merged file. `git
+   commit` does not refuse conflict markers, and neither did any check.
+
+**THE MISSING STEP — do this after every `stash pop`:**
+
+```powershell
+git stash pop
+git status                       # "Unmerged paths" means STOP and resolve
+git diff --check                 # flags whitespace AND leftover conflict markers
+git grep -nE '^(<<<<<<< |>>>>>>> |=======$)'   # belt and braces; expect NO output
+```
+
+**Resolving a chronological log like `STATUS.md`: keep BOTH sides.** The entries are *additions*,
+not alternatives — order them newest-first and delete only the three marker lines.
+
+**⚠️ But do not generalise "keep both" into a rule.** CLAUDE.md records the opposite case: a
+conflict resolution that kept both sides of a `setup-node` step produced **two `node-version` keys
+in one mapping**, which was structurally invalid, and GitHub could not build a run from the file —
+so the required check reported *nothing* and no re-run fixed it. **Ask whether the two sides are
+alternatives or additions.** Prose in a log: additions. A key in a mapping: alternatives.
+
+*(A guard test — `test/no-conflict-markers.test.mjs` — is on `claude/conflict-marker-guard-sxcpoy`
+along with the repair for `docs/architecture/panel-redesign-verification.md`, which carries the
+same damage from an earlier merge. **That branch must land AFTER this repair, or its new guard goes
+red on `STATUS.md`.**)*
+
 ## 3a. Documentation-only PRs skip the suite (2026-08-27)
 
 Scott: *"only require tests when a substantive change that requires a test gets pushed or merged.
