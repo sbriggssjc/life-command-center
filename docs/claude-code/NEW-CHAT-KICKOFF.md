@@ -29,6 +29,12 @@ Then, only if the task touches them: `docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.
 comps / deploy map) and `docs/os/LOCAL-MODEL-{LEVERAGE-MAP,GAP-AUDIT}.md` (where the on-prem model
 is live/dormant, and the ranked gaps with their refuted premises).
 
+**⛔ Before you hand Scott any git commands, read
+[`docs/os/GITHUB-WORKFLOW.md`](../os/GITHUB-WORKFLOW.md).** `main` is protected — **branch → PR →
+both checks green → merge.** A direct push to `main` is rejected outright and retrying never
+works. **And [`docs/os/DOCUMENTATION-MAP.md`](../os/DOCUMENTATION-MAP.md) says where every
+artifact is filed** — the repo root is code and config, never a new `.md`.
+
 **Standing workflow:** Scott pastes Cowork-drafted prompts to Claude Code (CC), then pastes CC's
 responses (as .docx) into `docs/claude-code/responses/`. Cowork reviews each against **live**
 Supabase data, reconciles, updates STATUS + the affected docs, verifies migrations/flags live,

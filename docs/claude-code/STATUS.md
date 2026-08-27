@@ -235,6 +235,139 @@ one that stays on the card. **UIRC has seven candidates** — auto-picking there
 mistake at 5× the blast radius. Spec: `prompts/193-*.md`.
 
 
+## 2026-08-27 — ⛔ `main` IS PROTECTED AND CURRENTLY BLOCKED. Two standards docs.
+
+The docs commit was rejected:
+
+```
+remote: - Required status check "npm test" is expected.
+! [remote rejected] publish-c868140 -> main (push declined due to repository rule violations)
+```
+
+**Not a transient error.** `git push origin <branch>:main` is a **direct push to `main`**, and a
+required status check cannot run without a pull request — so the rule engine rejects it before
+anything else. Retrying never works. **Every change now goes branch → PR → both checks green →
+merge.**
+
+**⚠️ `main` is BLOCKED, which is the more urgent half.** *"npm test"* is required and
+`test-suite.yml` on `main` is pinned `node-version: '20'` — three test files import Deno `.ts`
+edge modules Node 20 cannot load, so the check has never been green on `main`. **No PR can pass it
+until a one-file workflow fix lands.** The corrected file is `beb3aecd:.github/workflows/
+test-suite.yml` (Node 22 + a comment block explaining why). ⚠️ **Do not cherry-pick that whole
+commit** — it also edits `CLAUDE.md`, which has since moved 581 lines on `main`; take **only the
+workflow file** onto a fresh branch off current `main`.
+
+**Diagnosed and dismissed — not defects:**
+- **CRLF warnings are correct behaviour.** `.gitattributes` exists and already normalises to LF
+  (`* text=auto eol=lf`, `.ps1`/`.bat`/`.cmd` kept CRLF). Windows editors write CRLF; git converts
+  on the way in, exactly as configured. Nothing to fix.
+- `cannot pull with rebase: You have unstaged changes` → dirty tree (the 11
+  `test/fixtures/healthcare-discovery/*.csv` predate this session). Stash or commit.
+- `The upstream branch … does not match` → `git push origin HEAD`, **never `HEAD:main`**.
+
+**⚠️ And a process trap worth recording: `git stash` silently swept a session's work.** Stashing to
+clear the rebase block also stashed that turn's *tracked* doc edits (`CLAUDE.md`, `CURRENT-STATE`,
+`STATUS`, the kickoff), while the two *untracked* new files survived on disk — so the branch that
+got pushed carried the earlier commit and **none of the standards work**. It looked complete and
+was half-missing. **`git stash` is not a scratch buffer; check `git stash list` before assuming a
+branch has everything.** Recovered by re-applying the edits against current `main` rather than
+popping a stash taken from a 49-commit-older base.
+
+**Two standards docs, wired into `CLAUDE.md`, `CURRENT-STATE.md` and the kickoff:**
+
+- **`docs/os/GITHUB-WORKFLOW.md`** — the standard loop with exact PowerShell, the wait-for-CI rule,
+  a failure-mode table mapping every message above to its real cause, the unlock sequence, and six
+  non-negotiables (never push to `main`; never merge before green; **a new CI job is not shipped
+  until it has been green once on `main`**; never run git from the sandbox; *merged ≠ running*;
+  Scott merges, Claude Code never merges its own PR).
+- **`docs/os/DOCUMENTATION-MAP.md`** — where every artifact is filed, the five files that carry
+  state, the lifecycle *found → shipped → retired-with-a-reason*, the two-window labelling and
+  prompt-numbering convention, and a **"do not create"** list headed by *no new `.md` at the repo
+  root* — **exactly how K13–K20 stayed invisible for 17 days.** It also encodes the pre-archive
+  checklist that recovered them.
+
+
+## 2026-08-27 (Cowork, automation window) — A1 shipped; E4 answered; and the CI gate we just built is red on main
+
+**A1 is merged and live** (`542896a`, PR #1793). `v_lcc_ownership_history_lane_split` +
+`v_lcc_ownership_history_lane_actions` verified against the live DB — the split matches the audit
+exactly, with owner counts and value added:
+
+| action | tasks | owners | links | annual rent | human-actionable |
+|---|---:|---:|---:|---:|---|
+| `agrees` | 380 | 360 | 450 | $714.7M | no — a confirmation |
+| `mismatch` | 73 | **45** | 120 | $401.2M | **yes** |
+| `no_records` | 74 | 62 | 0 | $278.5M | no — auto-retire |
+| `all_guarded` | 18 | 18 | 0 | $33.5M | **yes** |
+
+**Badge now reads 91, not 545.** Tasks with no draft: **0** (545/545, reported rather than
+assumed). `awaiting_draft` and `unrecognised_payload` kept as distinct states.
+
+**⏳ The acceptance test is still OPEN and this matters:** `establish_ownership_history` has
+**still completed 0 tasks.** A1 splits; A2–A4b drain. A split that does not end in a completion is
+a no-op with extra steps — do not read "A1 ✅" as the lane being fixed.
+
+**E4 answered (I flagged it as "measure before building A3") — the mismatches PARTIALLY cluster.**
+Links on the 73 chains by `citation.data_source`: **`gsa_lease_diff`/acquisition 50 links across
+46 chains** · `costar_sidebar` 53 / 21 · `sales_transaction` 15 / 15 · `county_deed` 2 / 2 (chains
+carry links from several sources, so these overlap). **46 of 73 chains touch `gsa_lease_diff`** —
+the producer `CLAUDE.md` already documents as emitting an "acquisition" every time the GSA lessor
+field flickers between an SPE and its parent, which is exactly the shape that leaves a chain ending
+on the wrong side. **That is a hypothesis, not a verdict.** If it holds on the 46, most of A3 is one
+upstream fix and only ~27 chains are genuine human judgements. Folded into A3; test before building
+73 cards.
+
+### ⚠️ N9 shipped and is RED ON MAIN — a badge, not a gate
+
+`test-suite.yml` landed (PR #1792) and **has never once been green, including on `main`.** It was
+pinned `node-version: '20'`, **copied from `boot-check.yml`**; three test files import Deno `.ts`
+edge modules and **Node 20 cannot load a `.ts` file** (`ERR_UNKNOWN_FILE_EXTENSION` — 0 pass,
+thrown before any test body runs). On Node 22 the suite is **4,606 pass / 0 fail**.
+`boot-check.yml` correctly stays on 20 — it never imports a `.ts` module, which is exactly why
+copying its pin was the wrong default.
+
+**The one-line fix is on a pushed branch with no PR open, so `main` is still red.** Two operator
+steps: merge it, then add *"npm test"* to branch protection as a **required** check. Without the
+second, a red suite still merges — **PR #1793 proved it by merging 58 seconds after opening,
+before CI finished.**
+
+**Durable rules added to `CLAUDE.md`:** *a new CI job is not shipped until it has been green once
+on `main`* (a job red on every run is a badge people learn to merge past — the precise failure N9
+existed to close), and *"red on my PR" is not "my PR is broken"* — check the base branch first;
+this one was red on `main` twice, and it was **not flaky**.
+
+### Root-worklog consolidation — and it recovered five measured defects nobody had filed
+
+31 one-off worklogs sat at the repo root; they are now `docs/history/worklogs/` + an `INDEX.md`.
+**Scanned for open-work markers BEFORE moving** — 24 clean, 7 not — and everything actionable went
+into `PLANNED-BACKLOG.md` **P10 as K13–K20**, each keeping its original measurement:
+
+- **K13** `cm_gov_sold_cap_by_term_dot` uses the **old term ladder**, not `firm_term_years_at_sale`
+  — **1,368 cap-eligible sales bucket differently**, and `cap_5to10` is labelled `6-10`. A stale
+  view definition, *not* a data-ingestion failure (term data is 3,211/3,211 populated).
+- **K14/K15** `cm_gov_lease_termination_rate_m/_q` can select a **corrupt partial snapshot** as its
+  active denominator (Feb-2019: **11 lease keys vs ~8,050**), plus the corrupt source months
+  themselves, which every other consumer can still hit.
+- **K16** `cm_gov_rent_price_psf_q` has no display policy; pre-1997 is unreliable — **Scott's call**
+  between 1997-06-30 and 2003-01-01.
+- **K17** `cm_gov_market_turnover_m` — export crops at 2012 in code while the gov `cm_view_registry`
+  has no `display_from`, so DB and export policy disagree.
+- **K18** `cm_gov_core_cap_rate_dots` keeps a lease-derived fallback plotting **0 rows today** —
+  fine now, a leak for future unbackfilled sales.
+- **K19** the gov seller-sentiment `_8q` / `6+ yr` fix was **never mirrored to dia**.
+- **K20** dia 23654's **Census-radius demographics write** (Prompt 16 item 3) never completed.
+
+Four other flagged files matched on *follow-up* / *remaining* but their items were already closed in
+the same file — read in full, nothing carried.
+
+**⚠️ The durable lesson, and it is about our own process:** **a consolidation scoped to a directory
+misses whatever sits outside it.** P141 was thorough inside `docs/` and still left five measured,
+unfixed Capital-Markets chart defects invisible for **17 days** — they were never in any index,
+including the backlog that exists precisely to hold unbuilt work. **Enumerate by file type across
+the whole repo, not by folder, and grep candidates for open-work markers *before* moving them.**
+Three live doc references were repointed to the new paths in the same change.
+
+
 ## 2026-08-26 (Cowork, automation window) — the end-to-end data-process audit: we are not short of automation, we are short of CONSUMPTION
 
 Picked up the Ollama-hygiene thread in its broader framing — *audit our data processes end to end,

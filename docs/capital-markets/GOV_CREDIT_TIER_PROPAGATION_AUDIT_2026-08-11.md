@@ -6,7 +6,7 @@ Investigate why State/Municipal coverage is sparse in the government `cap_rate_b
 ## Required Context Read
 - `CLAUDE.md`
 - `.github/AI_INSTRUCTIONS.md`
-- `CAPMARKETS_TAB_PACKET_WORKLOG.md`
+- `docs/history/worklogs/CAPMARKETS_TAB_PACKET_WORKLOG.md`
 - `docs/capital-markets/ROUND66_DATA_AUDIT_2026-06-01.md`
 - `docs/capital-markets/ROUND66_EXPORT_FEEDBACK_WORKLOG.md`
 - `supabase/migrations/20260694_cm_round66_gov_export_feedback_view_fixes.sql`
