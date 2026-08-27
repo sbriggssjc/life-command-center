@@ -229,9 +229,15 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
     there the suite stayed green while the app crash-looped, because tests import modules and
     nothing imported the app. The gap nobody closed is the other direction: CI imports the app and
     never runs the tests. One failure mode produced the workflow; its twin was left standing.
-  - **The fix is small and offered:** a `pull_request` job running `npm ci && npm test`. The suite
-    runs fully offline — no secrets, no network, no DB. It is **not** built yet because widening a
-    docs/lane PR into a CI-policy change was not Claude Code's call to make.
+  - **~~The fix is small and offered~~ — SHIPPED 2026-08-27 as its own PR (backlog N9).**
+    `.github/workflows/test-suite.yml` runs `npm ci && npm test` on every `pull_request` and on
+    pushes to `main`. The suite runs fully offline — no secrets, no network, no DB — so it needs
+    no environment, exactly like `boot-check.yml`.
+    ⚠️ **A workflow existing is not a merge gate.** Until *"npm test"* is added to branch
+    protection as a REQUIRED check alongside *"App boots"*, a red suite still merges — it just
+    merges with a visible red X instead of silently. **That toggle is an operator step**
+    (repo Settings → Branches → main → required status checks), and until it is flipped, every
+    "guarded by `test/x.test.mjs`" line in this file remains a regression detector, not a gate.
     Backlog row **N9** in `docs/os/PLANNED-BACKLOG.md`.
 
 ## Core doctrines (apply to every change)
