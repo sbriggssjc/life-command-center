@@ -403,6 +403,71 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 (Cowork) — A3 + A4 landed. The lane is 288 done / 182 open, and BOTH prompts corrected my premises.
+
+**Lane state:** completed **288**, open **545 → 182**, skipped 1,766.
+`no_records` is **gone from the split entirely** (74 retired). Remaining: `agrees` 90 ·
+`mismatch` 74 · `all_guarded` 18.
+
+### A4 — my "the guards are probably right" hypothesis was WRONG, and that is the finding
+
+I wrote A4b expecting `is_oscillating_pair` to explain the 18, in which case retiring them was the
+answer. Measured: **zero oscillating pairs.** The guards are **not** all correct — **10 of 18 would
+be unblocked by a corrected guard.** The defect was found by computing which arm fires per name
+rather than eyeballing, and checked for precision before proposing anything: the junk the guard
+**correctly** catches has **no legal form** (`Houston, Harris County, Texas 77007`), while the real
+SPEs all carry one. That is a clean discriminator, and it also drops links inside chains that
+*did* draft — so the defect is wider than these 18. **Sized, not patched in that prompt.**
+
+**Unit 1 shipped:** all **74 `no_records` retired**, terminal and dated, after verifying what the
+seeder treats as terminal so they cannot be re-minted tonight.
+
+### A3 — the machinery is built; the movement now needs 12 human confirmations
+
+**⚠️ A3 rejected the key I prescribed, and was right to.** I said reuse `lcc_owner_sponsor_domain`
+keyed on `sponsor_token`. Measured: **a bare token is not bounded** — `east` names **226** live
+entities, `boyd` **129**, including the surname *Boyd Alexander* and addresses like
+*100 East PropCo LLC*. In that table a wrong token merely fails to join to a person; **here it
+would assert a false ownership fact.** And its PK cannot carry two cases already in the data:
+`madison` is proposed by **two** owner entities, and `egp` names **both** Easterly Government
+Properties *and* EastGroup Properties. So the registry is keyed **(sponsor entity, token)**.
+**Not second-registry drift** — the detector is shared: P196's guards were extracted into
+`lcc_name_reads_as_street` / `lcc_name_has_spe_marker` and P196 re-issued to call them, gated at
+**0 of 696 Tier 0 rows changed.**
+
+**Population re-measured: 73 → 74 chains / 46 owners / $403.0M** (A2 landed in between and drained
+`agrees` 380 → 90).
+
+**⚠️ P196's SPE-marker guard drops 24 of 27 genuine rows here** — a GSA SPE is named for its city
+and agency (`BOYD SACRAMENTO GSA, LLC`), not "Propco". **Not applied, predicate not weakened** —
+the correct call. The other three guards are applied with measured cost: street fires 3× changing
+**0** outcomes, brokerage 0, and person costs **exactly 2** real false negatives, both
+`lcc_looks_like_person` false positives (*City of Oakland* is not a person) — **named, not
+patched.**
+
+**Three deliberate non-actions worth keeping:** contact confirms were not inherited (they resolve
+**0 of 74**, and would let a ~4-of-6 gate settle an ownership fact); `sponsor_spe` was not folded
+into `agrees` (that would hand it to A2's *write* path); and the 11 `name_variant` cards were not
+retired, because they ride `lcc_owner_strict_core` — which **A2 already rejected for writes on this
+exact population**.
+
+**Nothing has moved yet, and the writeup says so plainly: `mismatch` is still 74.** The positive
+control proves the machinery — confirming `boyd` alone gives mismatch **74 → 54**, sponsor_spe
+**0 → 20**, human_actionable **92 → 72**, with `agrees`/`no_records`/`all_guarded` unmoved — then
+rolled back with **0 residue**. Residue sized at **31 chains / 27 owners / $344.6M**, characterised,
+surface deliberately not built.
+
+**👤 THE NEXT MOVE IS SCOTT'S: 12 sponsor confirmations**, ranked in
+`v_lcc_ownership_sponsor_family_proposals`. **Boyd Watterson is 20 of them in one decision
+($179.8M).** ⚠️ Read `token_entities_fleetwide` on each — `east` 226, `madison`/`fgf` 67, `arc` 46,
+`commonwealth` 32, **`boyd` 129** — which is exactly why the key is (sponsor entity, token) and why
+each confirm is per-sponsor rather than per-token.
+
+**Three of my hypotheses have now been refuted by measurement in this arc** (A2b↔A3 shared
+population, the gsa flicker, the oscillating-pair guard). Each was plausible, cheap to test, and
+wrong — which is the argument for the measure-first discipline, not against it.
+
+
 ## 2026-08-27 (Cowork) — A3 measured before building it: the 73 "mismatches" are mostly sponsor↔SPE
 
 **The A3 backlog row said "route the 73 to a data-integrity lane, both readings on the card."

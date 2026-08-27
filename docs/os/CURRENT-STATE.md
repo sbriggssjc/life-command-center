@@ -76,12 +76,17 @@ their data tab renders (`checkKpiSeriesConsistency` is the tripwire).
 → `CLAUDE.md` §"CM export", `public/reports/cm-brand.json`
 
 ### Ownership-history lane — the first dead research lane with a working consumer (2026-08-27)
-`establish_ownership_history` produced **545 items and consumed none for 69 days**. A1 split it
-into four real actions (`v_lcc_ownership_history_lane_split`; badge reads **91 human-actionable**,
-not 545); A2 auto-applies the `agrees` bucket. **Completed ever: 0 → 288. Open: 545 → 257. +304
-historical ownership facts** (12,724 → 13,028), 280 owners, **$579.9M**. Nightly on **cron 244**
-(06:49 UTC), reversible by batch tag. Residue is named, not buried: 48 tasks blocked by duplicate
-entities (**A2a**, no new code needed), 28 by a `gsa_lease_diff` flicker (**A2b**).
+`establish_ownership_history` produced **545 items and consumed none for 69 days**. A1 split it into
+four real actions; A2 applies `agrees`; A4 retires the unanswerable; A3 turns the mismatches into
+sponsor decisions. **Completed ever: 0 → 288. Open: 545 → 182.** **+304 historical ownership facts**
+(12,724 → 13,028), 280 owners, **$579.9M**. Nightly on **crons 244/245**, reversible by batch tag.
+
+**Current split:** `agrees` 90 · `mismatch` 74 · `all_guarded` 18 · **`no_records` 0** (all 74
+retired). Residue is named, not buried: **A2a** 48 tasks blocked by duplicate entities (now
+unblocked — 196 Unit 1 made `lcc_merge_entity` reversible), **A2b** 28 repeat-transfer links,
+**A4b** a P138 guard misfiring on street-numbered SPEs (**10 of 18 recoverable**, defect wider than
+this lane), and **A3-residue** 31 chains / $344.6M with no sponsor family.
+⏳ **`mismatch` will not move until Scott confirms the 12 sponsor families** — see backlog **V8**.
 → `docs/audits/A1_OWNERSHIP_LANE_SPLIT_2026-08-27.md`, `DATA_PROCESS_AUTOMATION_AUDIT_2026-08-26.md`
 
 ### The shared entity-merge path is REVERSIBLE (2026-08-27, P196 / N11)
