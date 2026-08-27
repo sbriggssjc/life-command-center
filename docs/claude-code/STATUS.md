@@ -403,6 +403,43 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 13:28 UTC (Cowork) — the on-box Analyst's Take produces for the first time; A2a drafted
+
+**V9 ✅ / V7 ✅ — R8 Stage 1 works.** `LCC_DEFAULT_WORKSPACE_ID` set on `tranquil-delight`,
+triggered through the **production path** (`lcc_cron_post` → `/api/briefing-analyst-take-tick`,
+apply): **HTTP 200**, `flag.enabled: true`, and a **508-char take, `source = onprem_ollama`,
+`generated_at` 13:28:48** against `existing_analyst_take_chars: 0`. The 400 is gone.
+
+⚠️ **One check deliberately left open: the UNATTENDED run.** A manual trigger proves the *config*,
+not the *schedule* — which is precisely what V7 was about (the 2026-08-26 774-char take was a
+hand-run that read as a working pipeline for a day). **Cron 240 at 10:18 UTC weekdays, with
+`generated_at` inside that window, is the real close.**
+
+⚠️ **And two faults in the same chain stay open** — `/api/daily-briefing` → **401 Unauthorized**,
+and `briefing-intel-snapshot` still warns *"Anthropic API 400: credit balance too low"*. Neither is
+fixed by this; the on-box take exists to route around the second.
+
+**Also worth recording: `?generate=1` is write-free by design, so a NULL take after calling it
+proves nothing.** The first attempt returned an empty body (the on-box model exceeding a 30s fetch
+cap) and a still-NULL column — which looks exactly like failure and was not. Verification went
+through `lcc_cron_post` instead, i.e. the path the cron actually uses.
+
+**V8 and V9 are both MANUAL, not Claude Code prompts** — worth stating since it was asked:
+V9 was an env var (done). **V8 is a judgement only Scott can make** — *is this SPE family actually
+this sponsor's?* A3 built the machinery and correctly refused to auto-confirm; the rows require
+`confirmed_by`, so they are SQL inserts, not a UI. **Boyd Watterson is 20 chains / $179.8M in one
+decision.**
+
+**A2a drafted** (`prompts/A2a-merge-duplicate-chain-entities-2026-08-27.md`) — merge the duplicate
+entities blocking ~50 `agrees` chains; **no new applier needed**, cron 244 applies them the same
+night. It is only safe now because 196 Unit 1 made `lcc_merge_entity` reversible, and the prompt
+insists on **proving the round trip on this population first** — P195's reversal failed its first
+live attempt on a GENERATED ALWAYS column, and P196's on a BEFORE-INSERT trigger defeating
+`ON CONFLICT DO UPDATE`. It also bans `lcc_owner_strict_core` for identity here (A2 measured and
+rejected it on this exact population) and asks whether `r9_chain_connect` is the *source* of these
+duplicates — 291 of the 331 grantors A2 resolved are its unattached output.
+
+
 ## 2026-08-27 (Cowork) — A3 + A4 landed. The lane is 288 done / 182 open, and BOTH prompts corrected my premises.
 
 **Lane state:** completed **288**, open **545 → 182**, skipped 1,766.
