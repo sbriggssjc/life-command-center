@@ -17,6 +17,298 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 19:15 UTC — N15c drafted: the BUILD prompt, and two measurements that changed its shape
+
+**Lane split confirmed with Scott:** this thread continues the **N15b → N15c** line (entity
+identity / `canonical_name`); **the other thread owns A5 and the `gap_resolved` auto-close class**
+(playbook Class 18). N15c says so explicitly and tells Claude Code not to touch
+`handleGenerateResearchTasks` or the research lanes.
+
+**Checked first that the build was unclaimed** — no N15b/N15c migration, no competing prompt, and
+`lcc_r2_w1_canonicalizer_source_registry` (which *sounds* like this machinery) is provenance
+bookkeeping for `field_source_priority`, not a dedup key. Reviewing existing machinery before
+building, per doctrine.
+
+**⚠️ Two live measurements changed the prompt's shape, and the first would have been a real bug:**
+
+- **Do NOT point `canonical_name` at `lcc_owner_domain_core`.** N15b recommended it and Scott's
+  decision endorsed its *token rule* — but the function ends `string_agg(tok, '')`, **no
+  separator**. It matches only **1,973 of 62,368** rows today. Measured over 43,219 organization
+  entities: **space-joined gives 37,519 distinct keys, no-separator gives 37,404 — those 115 fewer
+  keys are false collisions** (the `Gate Way`/`Gateway` hazard). The adopted key is the **token
+  stoplist, joined with SPACES**, built as **one token list with two join styles** so
+  `lcc_owner_domain_core` keeps byte-identical output for P187/P188/P198.
+- **The writer census missed one — there are EIGHT.** `field_source_priority` carries
+  `entities.canonical_name → w8_u5_naming_hygiene@40`. It also means this column sits inside the
+  provenance system, so the new writer must be registered or `v_field_provenance_unranked` flags
+  drift.
+
+Also sized for the prompt: **75 organization entities reduce to an empty key** under the adopted
+rule and need a named fallback (the P189 blind-spot precedent). And the producer is confirmed live
+again — **+5 live entities in ~40 minutes** between two of today's measurements.
+
+**Still Scott's, and the prompt says surface-don't-guess:** the 540 stale rows (recomputing
+discards a captured string some preserve) and whether `canonical_name` becomes an enforced UNIQUE
+key (**3,930 groups violate it today**).
+
+## 2026-08-27 19:00 UTC — A5 was ALREADY DONE and I recommended re-sending it; playbook Class 18
+
+**⚠️ My recommendation to send A5 to Claude Code was wrong — it had already completed and merged**
+(PR #1840, `docs/audits/A5_TRUE_OWNER_SALESFORCE_STALL_2026-08-27.md`, 182 lines, plus 50 lines
+into `CLAUDE.md` and 8 into the backlog). **The prompt file was still sitting in `prompts/`
+un-filed, and I read the prompt folder as the record of what is outstanding.** It is not — the
+**audit** is. Filed to `done/` now. *Check `docs/audits/` for the round's output before
+recommending that a prompt be sent.*
+
+### Why A5 matters more than the filing slip: two "healthy" lanes were instrument readings
+
+**`815 open` is `1000 − 185`** — the leftover of a truncated window. `handleGenerateResearchTasks`
+reads a **29,643-row** feed with `limit=2000`, PostgREST caps the response at **1,000**, and the
+auto-close guard is written `if (feed.length < limit)` → **1000 < 2000 → true**, so it fires over a
+truncated slice and closes everything outside it as `gap_resolved`. **All 596 "completions" are that
+auto-close; 170 of 183 sampled owners still have `salesforce_id IS NULL` — 93% false.**
+
+**⚠️ And it invalidates the lane the re-audit had just called healthiest.** gov
+`property_missing_recorded_owner` — *"908 completions in 30 days, ~23/day, clears in ~7 weeks, leave
+it alone"* — has its open count pinned at **exactly 1,000**, **885 of 885** completions are the same
+auto-close, and **146 of 146** sampled properties still have `recorded_owner_id IS NULL`. **Zero
+real work in 30 days, and it cannot clear, because its open count is a constant.**
+
+Recorded as **playbook Class 18** — *an open count that is really a query window, and a terminal
+status nobody earned*. The durable rules: **compare the guard against the RETURNED row count, never
+the limit you asked for** (same footgun as `CAND_LIMIT = 1200`, P123); **check who writes the
+terminal status before ranking lanes by completion rate** — the re-audit switched to rates
+specifically to avoid being fooled and was fooled anyway; and **a round number is a bug signal**.
+
+### Parallel windows — the division, for the record
+
+Two Cowork threads plus Claude Code share this repo. **This thread is the P-series** (P186–P198,
+Tier 0 owner-contact, entity merges). **The other thread is the A-series** (A0–A5, the
+ownership-history lane and the automation re-audit) — branches `docs/reaudit-and-a5-diagnosis`,
+`docs/kickoff-refresh-and-a2b-a4b-reconcile`. Claude Code lands on `claude/*` branches.
+**Neither chat reads the other; the handoff is the repo** — `CLAUDE.md`, `STATUS.md`, the canonical
+pages and the playbook. That is the design, and it is why a prompt left un-filed causes a
+cross-thread duplicate-work risk (§4a's "check whether the other audit window already fixed it",
+now demonstrated on a prompt rather than a workflow file).
+
+## 2026-08-27 18:45 UTC — the gov lock hid a migration that was RUNNING BUT NOT MERGED
+
+Clearing GovernmentProject's orphaned `.git/HEAD.lock` (0 bytes, sandbox-owned, dated **2026-08-20**)
+revealed **two files staged and never committed**:
+`sql/20260827_gov_a4b_transition_clean_legal_form_gate.sql` and
+`tests/unit/test_a4b_transition_clean_gate.py`.
+
+**⚠️ `add` and `commit` take DIFFERENT locks.** `add` takes `index.lock`; `commit` takes
+`HEAD.lock`. With an orphaned `HEAD.lock`, **staging succeeds and committing fails — and
+`git status` looks tidy**, which is why this sat for a week without anyone noticing.
+
+**Verified live before assuming a gap: the gov database is CORRECT.** All three functions exist on
+`scknotsqkcheojiaewwh` and read **8 of 8 on named rows** — `EGP 17101 BROOMFIELD LLC`,
+`CA-10880 WILSHIRE LIMITED PARTNERSHIP` and `JBG/12420 PARKLAWN, L.L.C` clean; `Houston, Harris
+County, Texas 77007` and the other two junk names rejected.
+
+**So this is the MIRROR of the doctrine this repo documents everywhere.** CLAUDE.md carries
+*"merged is not running"* in several places; this is **running and not merged**. A DB-only change
+ships instantly, which is precisely why nothing forces the commit, and the repo quietly stops being
+a record of what the database does. Recorded as gov `CLAUDE.md` critical rule **12**, plus a row in
+`GITHUB-WORKFLOW.md`'s error table. **The check is `git log --oneline -3 -- sql/<file>`, never "the
+function works."** Same family as P194: a second copy that is correct beats no copy at all.
+
+## 2026-08-27 18:30 UTC — N15b decision 1 ANSWERED; N17 recorded; and a false "lost work" alarm
+
+**✅ Scott's decision on the N15b token rule: a DST, its Trust and its LLC are ONE entity — the
+TRUE OWNER.** `Rainier Rockford DST Trust` = `Rainier Rockford Llc`; `SE VALPO LLC` = `Se Valpo
+Dst`; Syndicated Equities likewise. **So `lcc_owner_domain_core`'s `trust|dst|reit` strip is
+CORRECT and is the adopted rule** — what the N15b audit listed as that rule's "named residue" is
+the *desired* behaviour, not a defect. N15b is now **ready to build**; decisions 2 (recompute the
+540 stale rows) and 3 (enforce UNIQUE — 3,930 groups violate it today) remain open.
+
+**New backlog row N17 — the aspirational feature, recorded so it is not lost:** individual
+investors as direct owners in our target markets, *and* knowing they hold **partial positions in a
+DST / TIC / JV** on similar deals. ⚠️ **This must NOT be built by splitting the `canonical_name`
+dedup key** — that decision went the other way. Fractional interest is a **relationship, not an
+identity split**: model it on `entity_relationships` the way `lcc_owner_sponsor_domain` models
+sponsor→SPE. Unsized.
+
+### ⚠️ A false "my edits were lost" alarm — the third instrument failure in this arc
+
+After the two genuine lock incidents, the reflex became *rewrite it.* **Wrong twice running.** A
+`grep -rl` over a file list containing one non-existent path exited **2**, the `$( )` came back
+empty, and the loop reported **`MISSING` for every pattern** — including ones plainly present.
+Harness "changed on disk" notices rendered a **cached older copy** and corroborated it.
+**The data was fine**: disk and `HEAD` both matched (`grep -c` 2 = 2), local `HEAD` == `origin/main`,
+mtimes seconds old. **Rule added to `GITHUB-WORKFLOW.md` §2a: before concluding content was lost,
+compare DISK against HEAD with `cat-file` — index-free and safe — and never trust a `grep -rl`
+sweep over an explicit file list.** Nothing was rewritten.
+
+**👤 GovernmentProject has an orphaned `.git/HEAD.lock`** — 0 bytes, owned by the sandbox uid,
+dated **2026-08-20 12:32**, i.e. a week old. Same class as the life-command-center incident; the
+sandbox cannot remove it. PowerShell one-liner supplied.
+
+## 2026-08-27 17:05 UTC — N15b landed (measurement only); N3h executed; Gardner's deal history reunited
+
+### N3h — 9 merges, and the one that mattered
+
+Scott approved; all 9 merged, **all 9 reversible**. **Gardner Tanenbaum Holdings: relationships
+270 → 512 (+242)**, assets 17 → 22. That firm's transaction history was split across two live
+entities, so the survivor every surface points at was reporting **half its own deal history** — the
+P177 failure, and prospecting ranks on precisely that signal. Live entities 62,365 → 62,356;
+`ask` 84 → 83; `auto` 9 and parked 137 unchanged; **`auto_mergeable` 3,043 → 3,040, which is exactly
+the three groups resolved**; 0 duplicate groups left on the three winners.
+
+**At $0 current rent on all nine losers, no rent-ranked surface would ever have surfaced this.** It
+was found only by chasing a guard counter that moved by 2 — the discipline, not a detector.
+⚠️ Gardner's `min_loser_sim` 0.667 was read before merging: it is `Gardner Tanenbaum` vs
+`Gardner Tanenbaum Holdings`, a suffix, not a different party.
+
+### N15b — measurement only, nothing written, and it corrected TWO of my prompt's premises
+
+Full writeup: [`docs/audits/N15b_CANONICAL_NAME_AUTHORS_2026-08-27.md`](../audits/N15b_CANONICAL_NAME_AUTHORS_2026-08-27.md).
+
+**Headline: 10,340 live entities (16.6%) are invisible to `ensureEntityLink`'s own lookup by their
+own name.** That is the duplicate factory stated as one number. `canonical_name` has **seven
+authors**, four live and distinguishable — including **two JS copies of the same rule that drifted
+apart on a single character** (`[^a-z0-9\s]` → space vs deleted). ⚠️ It has **no unique
+constraint** — a de-facto dedup key nothing enforces.
+
+**⚠️ My prompt was wrong twice, and both corrections matter:**
+- **"3,400 rows match no known normalization → a third author"** → adding the two JS rules takes the
+  unexplained set to **540**, and they are not a normalizer at all: they are `canonical_name` left
+  **stale after `name` was later repaired** (`Scott W. Beynon` still keyed
+  `buyer contactsscott w beynon 801 568 1031 p`). That is the *inverse* failure and needs a
+  different fix — recompute on name change.
+- **The entire `auto_mergeable` gate I specified is unsatisfiable**: `v_lcc_merge_candidates`
+  **does not read `canonical_name`**. It groups on `lcc_normalize_entity_name(e.name)`; the column
+  is a dead passthrough. **Rewriting it cannot move `auto_mergeable`.** I asserted a blast radius
+  without checking the view definition — the exact "read the function, not its name" failure this
+  file keeps recording.
+
+**The real blast radius is elsewhere and one surface is already broken:**
+`v_lcc_developer_classification_candidates` joins `canonical_name` against
+`lcc_normalize_entity_name(developer_name)` and is **~19% blind — 222 of 274 resolve today, 269
+would if aligned**. Nobody had noticed.
+
+**Recurrence is a burst plus a trickle: quote 79 in 21 days (~4/day), never the blended 1,879/30d**
+— off by ~24×. Confirmed live: entities rose 62,363 → 62,365 in the ~30 minutes between two of
+today's measurements.
+
+**Recommendation (not applied):** adopt the `lcc_owner_domain_core` **token rule** (pure legal forms
+only, keep every semantic token), enforced by a `BEFORE INSERT OR UPDATE OF name` trigger that
+returns NEW unconditionally, and delete the inline copy in `entities-handler.js`. ⚠️ **Not**
+`lcc_normalize_entity_name` — banned for identity, NULL for 1,070 entities, and as a *link* key it
+would silently auto-link `Century Park Partners` to `Century Park Properties LLC` with no human
+review.
+
+**👤 Three questions for Scott** in §6 of the audit: which token rule (the `trust|dst|reit` residue
+is a real judgement — should a DST and its LLC share a dedup key?); whether the 540 stale rows get
+recomputed (it discards a captured string some of them preserve); and whether `canonical_name`
+becomes an enforced unique key (**3,930 groups would violate it today**).
+
+## 2026-08-27 16:40 UTC — merge state confirmed; docs cross-linked; N15b drafted
+
+**Everything is on `main`.** PR #1830 (P198 view + audit + migration) and #1833 (the merge results
++ lock postmortem + backlog cleanup) both merged; all eight files verified present in
+`origin/main` by content, not by `git status`. Two other branches landed in parallel: **#1831/#1832
+(A4b — the corrected P138 street-number guard, with `test/a4b-guard-redraft.test.mjs`)** and a fix
+for a future-dated timestamp in the ownership-lane doc.
+
+**Housekeeping:** the A4b prompt is filed to `prompts/done/` (its audit and code shipped).
+~~**`A2b-repeat-transfer-flicker` correctly stays open — it has no audit and was never run.**~~
+**A2b SHIPPED later the same day and is now filed to `prompts/done/` too** — see
+`docs/audits/A2b_REPEAT_CONVEYANCE_COLLAPSE_2026-08-27.md`. ⚠️ Its prompt name is a misnomer that
+this arc kept repeating: **the mechanism is NOT the `gsa_lease_diff` flicker** (that one has a
+return leg and is caught by `is_oscillating_pair`); it is per-lease fan-out plus cross-source lag.
+
+**⚠️ Two canonical pages now exist for one entity graph, and they did not know about each other.**
+`tier0-owner-contact-system.md` (person↔owner, P186–P198) and `ownership-history-lane.md`
+(A1–A4b) **share `lcc_merge_entity`, `lcc_owner_sponsor_domain` and the owner entities themselves**
+— a merge confirmed in one changes the chains in the other. Reciprocal pointers added to both, and
+to `CURRENT-STATE.md` §6. That is the failure the consolidation pass exists to prevent: not a
+missing doc, but two correct docs with no edge between them.
+
+**Next prompt drafted: `prompts/N15b-canonical-name-one-normalizer-2026-08-27.md`** — the producer
+behind every duplicate round we have run. Grounded fresh: of **62,363** live entities only
+**46,045 (73.8%)** have `canonical_name` matching `lcc_normalize_entity_name`, **42,260** match
+`lower(name)` verbatim, and **3,400 match NEITHER** — a third author, or a stale rule. The two big
+buckets overlap, which is exactly why it survived: the disagreement is invisible until two writers
+meet on the same name.
+
+## 2026-08-27 16:28 UTC — P198 §5: three merges DONE; 9 more duplicates surfaced; and a lost-work postmortem
+
+Easterly, Cambridge and Gardner merged through `lcc_merge_entity`. **Six cards became three.**
+Easterly is now ONE card: **$114,864,150 / 89 assets / 7 eligible people** — the pre-merge combined
+total exactly, 0 lost. Lane `ask` **87 → 84**; `auto` 9 and parked 137 unchanged; pairs 696 → 684;
+live entities 62,366 → 62,363. **All three `reversible = true`** (snapshots 67 / 27 / 14 rows).
+Winners by P195's **ownership-first** rule, not rent (Easterly REIT owns 79 assets vs 10).
+
+**Both pairs already carried the SAME confirmed contact on both sides** — Alison Bernard on both
+Easterly entities, Constance MacOn on both Cambridge entities. Scott had confirmed the same person
+twice, once per duplicate. Nothing lost to the pivot fold, and the double-confirm is independent
+evidence the duplicates were real.
+
+**⚠️ `auto_mergeable` moved 3,041 → 3,043 and chasing it found the next thing.** Benign in itself
+(each winner now heads a byte-identical group that was already auto-mergeable; the added assets
+flipped two winner selections) — but it surfaced **9 MORE duplicate entities on the same three
+firms, all at $0 current rent** and therefore invisible to every rent-ranked surface: Easterly 3,
+Cambridge 2, **Gardner 4 — one of which alone holds 240 relationships while the asset-holding
+entity holds 13 assets. That firm's deal history is split across two live entities** (the P177
+failure). **Not merged — an approval of three named pairs is not extended by inference.** Backlog
+**N3h**.
+
+### ⚠️ POSTMORTEM — Cowork's own `git status` orphaned `.git/index.lock`, and clearing it discarded a turn of doc edits
+
+The lock that blocked three of Scott's commands was **0 bytes and owned by the sandbox uid** —
+`git status` is not read-only, it refreshes the index and takes the lock, and the sandbox can
+neither reuse nor unlink it. `GITHUB-WORKFLOW.md` §2a previously blamed "a Windows git process";
+that was wrong and is corrected, and §6 rule 4 no longer exempts `status`/`diff`.
+
+**Worse, and now recorded: after the stale lock was removed, the next index-writing command
+reconciled the working tree to HEAD and SILENTLY DISCARDED all seven uncommitted doc edits.**
+`git status` went from 7 modified files to clean between two commands, `git add` staged nothing,
+and `git commit` reported *"nothing to commit."* Nothing warned. The edits were reconstructed by
+hand. **A long-held stale lock means the index and the working tree have diverged — treat clearing
+it as a destructive operation and commit or stash BEFORE the first git command after removal.**
+
+## 2026-08-27 15:10 UTC — P198: the tightening I recommended was measured and REFUTED
+
+Full writeup: [`docs/audits/P198_PREFIX8_ARM_IS_LOAD_BEARING_2026-08-27.md`](../audits/P198_PREFIX8_ARM_IS_LOAD_BEARING_2026-08-27.md).
+Migration `20260827230000_lcc_p198_tier0_coproposed_owner_duplicates.sql`, applied live.
+**Lane unchanged by construction: ask 87 / auto 9 / parked 137 / pairs 696, before and after.**
+
+**Last turn I recommended tightening `ev_company_matches_owner` because two `ask` cards rest on a
+generic word stem (`innovati`, `corporat`). Measured: the prefix-8 arm is the ONLY link evidence
+on 28 of 87 ask cards / $146.9M**, including Easterly at $85.0M, and it is the un-park mechanism
+for **25 of 32 `weak_partial`** cards (P194 un-parks on `n_link_evidence > 0`, and for those 25
+this arm *is* that evidence — the `no link evidence` column reads **0** for that whole band).
+Tightening it would have parked ~$147M of reach to remove five wrong cards worth ~$5.6M.
+**Not shipped. Closed, do not re-raise.**
+
+**P179 Class 2, read backwards.** That rule says measure the throughput of whatever a *promotion*
+would displace. The mirror: **before demoting a rule, measure what depends on it.** A rule's false
+positives are visible on the surface; what it holds up is not.
+
+Read all 44 prefix-8 rows: the top by rent is entirely correct (Easterly, Cambridge, Carnegie,
+Franklin Street, Woodbranch, Westfield, the Briarcliff SPE family). **5 of 30 cards are wrong** —
+a shared given name (Michael Downing ← Michael Development), place words (Westlake ← Westlake
+Farms; Maple Tree ← Mapletree), generic words (Corporate Plaza, Innovation 2100 ← an *operator*).
+Stated residue, each a one-second reject because P188 put the employer and match key on the card.
+
+**Built instead: 3 owner-merge decisions.** Easterly is the #1 *and* #3 card — one firm as two
+entities, both proposing Andrew Pulliam. New read-only view
+`v_lcc_tier0_coproposed_owner_duplicates`. ⚠️ **The broad signal was rejected on the way**:
+co-proposal alone (same person + same domain on two owners) is **95 pairs, 88 of them unrelated
+names — 7% precision, worse than the domain-keyed fix P189 already rejected at 25%.** Narrowed to
+a shared 8-char core opening it is 7 pairs: Easterly ✅, Gardner-Tannenbaum ✅ (spelling variant),
+Cambridge ⚠️ probable, and 4 sibling-SPE pairs that must never merge (UIRC Douglas AZ / Van Horn
+TX are different properties in different states). **No `auto_mergeable` column, deliberately** —
+`lcc_apply_fuzzy_merges` loops on that flag.
+
+**⚠️ Two instrument failures, both caught by implausibility.** `min(a.owner_name)` collapsed both
+sides of each pair to one string, reporting **95 / 95 identical / 0 / 0** — everything in one
+bucket and nothing anywhere else is a bug signal (P182); keyed properly it is 0 / 7 / 88, the
+opposite conclusion. And **`lcc_name_has_spe_marker` is named backwards** — it detects a
+PORTFOLIO marker and returns FALSE for every name containing the literal string "SPE".
+
 ## 2026-08-27 14:30 UTC — DOC CONSOLIDATION: twelve Tier 0 audits now have ONE door
 
 **New canonical page: [`docs/architecture/tier0-owner-contact-system.md`](../architecture/tier0-owner-contact-system.md).**
@@ -423,6 +715,190 @@ conflict resolution on the repo's hottest file.
 **Dated checks at 04:32 UTC — both still pending, both still expected:** N9v auto-attach `0` writes
 (cron 241 fires **06:55 UTC**); N9w sidebar `0.0%` stamped, last row **2026-08-26 22:49 UTC**, still
 pre-reload.
+
+
+## 2026-08-27 (Cowork) — A5a drafted: fix the producer before repairing anything it broke
+
+`prompts/A5a-truncated-feed-auto-close-2026-08-27.md`. Three-part fix — compare against the
+**returned** row count (not the requested limit), **page the feed at exactly 1,000** (a larger
+stride silently skips rows), and add a **stable tiebreak** to `order=priority.desc`, since the gap
+arm is a hard-coded `20 AS priority` and **6,324 rows tie at exactly 20**, making the "top 1,000"
+arbitrary and paging non-deterministic.
+
+**Four things the prompt insists on, each from a documented failure here:**
+
+- **Fail CLOSED on ambiguity.** If the feed cannot be exhausted, skip the auto-close entirely and
+  say so. A false closure silently asserts a gap was resolved; an open task merely waits.
+- **Do NOT raise `limit`.** The cap is server-side — a bigger number changes nothing and re-creates
+  the same lie (`CAND_LIMIT = 1200` is the documented precedent).
+- **Do NOT re-open the ~5,377 falsely-closed tasks here.** That is a data repair with its own blast
+  radius, and **repairing before the producer is correct just refills a broken window.** Filed as
+  **A5b-repair**, sized not built, Scott's call.
+- **Establish the fleet-wide blast radius first** — this generator serves multiple dia+gov lanes.
+  Enumerate which it auto-closes, and check which open counts sit at a suspicious constant
+  (**1,000, or `1000 − n`** — that is the signature, and it is cheap to check).
+
+**⚠️ And the verification is inverted, which is why it is spelled out explicitly:** the success
+signal is that false closures **stop**, which looks like nothing happening. **A rising open count is
+the fix working** — real gaps that were being silently closed now stay visible. The number that must
+fall is `gap_resolved`-per-day; the number that must *move* is the pinned constant.
+
+One more consequence flagged in the prompt: **5,509 gaps have never had a task**, so a corrected
+producer could mint them all at once — a flood into surfaces nobody can work. It must cap or
+value-gate the first run and state which, because A5c exists precisely because **84% of that
+population owns zero properties**.
+
+
+## 2026-08-27 (Cowork) — ⛔ A5 refuted BOTH of my re-audit's headline calls. The metric was manufactured.
+
+**The lane never stalled, because it was never work** — and the same bug invalidates the lane I told
+Scott to leave alone.
+
+| lane | "completed" | **auto-closed by the generator** |
+|---|---:|---:|
+| `property_missing_recorded_owner` | 4,781 | **4,781 (100%)** |
+| `true_owner_needs_salesforce` | 596 | **596 (100%)** |
+| `establish_ownership_history` | 314 | **0** ← the only real completions |
+
+**One bug produces all of it.** `handleGenerateResearchTasks` reads a 29,643-row feed through a call
+**PostgREST caps at 1,000 rows**, then auto-closes everything outside the window as `gap_resolved`.
+The guard tests `feed.length (1000) < limit (2000)` — **the requested limit, not the returned cap** —
+so it passes and fires *over a truncation*. Its own comment says *"never on a capped slice."*
+
+- **`true_owner_needs_salesforce`: 815 open is `1000 − 185`**, leftover window slots, not a backlog.
+  **170 of 183 sampled owners still have `salesforce_id IS NULL` — 93% of closures false.** The
+  2026-06-22 "cliff" is the date the window saturated. **5,509 of 6,324 real gaps never had a task.**
+- **`property_missing_recorded_owner` — my "healthiest lane, leave it alone" was exactly backwards.**
+  Open pinned at **exactly 1,000**, 885/885 completions the same auto-close, 146/146 sampled still
+  `recorded_owner_id IS NULL`. **Zero real work in 30 days, and it cannot clear, because its open
+  count is a constant.**
+- **The `983 → 439` improvement stands** — driven by `establish_ownership_history`, whose 314
+  completions are **0% auto-closed** and backed by 304 written ownership facts.
+
+### ⚠️ The lesson, and it is about my own method
+
+I switched the re-audit from lifetime totals to **rates** *specifically* to avoid being fooled by a
+stale cumulative number — and the rates were themselves manufactured. **Choosing a more rigorous
+metric is not the same as validating it.** The missing question was one column deep: **who closed
+these, and how?** `outcome` was right there, and every row said `gap_resolved`.
+
+**Rule now in `CLAUDE.md`: before ranking anything by completions, check WHO closed them.** A status
+set in bulk by a sweep is not throughput — the same trap as P119's `inbox_triaged`, where a bulk-set
+status admitted the whole historical population.
+
+**Two further findings worth keeping:**
+- **81% of the apparent value in this lane is not an owner.** 5,338 of 6,324 (84%) own zero
+  properties; operators and literal placeholders (`DaVita Inc.` 2,626 properties, `Independent` 754)
+  carry 5,227 of 6,442 — the documented **P113 tenant-in-the-owner-slot** trap at scale. **963 are
+  real prospectable owners.**
+- **P131 category (a) + (c), (b) empty** — 293 resolve ID-to-ID via `external_identities`, ~6,031
+  are not on-box at all, and **zero are unstructured-on-box, so an LLM would have nothing to read
+  and would fabricate.** Third time in this arc that the top-ranked "LLM opportunity" wasn't one.
+
+⚠️ **Caveat carried from A5, not to be dropped when these numbers get quoted:** the 93% and 100%
+false-closure rates are **samples of 183 and 146 rows**, not full population scans.
+
+**Backlog filed by A5: A5a** (fix the auto-close — a correctness bug costing ~900 false closures a
+month **across all dia+gov NBA lanes**, and it is manufacturing the very number the re-audit ranked
+on), **A5c** (value-gate 6,324 → 963), **A5d** (fill the 293), **A5e** (retire the 5,338). None
+built. **A5a lands first** — every other measurement in this area is untrustworthy until it does.
+
+
+## 2026-08-27 (Cowork) — RE-AUDIT of the original automation audit: the method worked, the next target is elsewhere
+
+Scott asked to revisit the document that started this thread
+(`DATA_PROCESS_AUTOMATION_AUDIT_2026-08-26.md`) and re-assess where the time should go. Re-measured
+the whole surface rather than assuming.
+
+| | audit (08-26) | now |
+|---|---:|---:|
+| open research tasks | ~3,000 | **2,747** |
+| tasks in **never-completed** lanes | **983** | **439** |
+| `establish_ownership_history` | 545 open / **0** done | **156 / 314** |
+
+**The method is validated** — split a lane into the distinct jobs it is actually asking, give each
+its own consumer. The 983 → 439 drop is essentially that one lane.
+
+**⚠️ But a finding that will mislead anyone reading the fleet-wide number: completing a lane SEEDS
+the next one.** `trace_ownership_to_developer` went **18 → 152 open** while completing 12 more —
+A2's completions re-seeded it *by design* (once a property has ownership history, the next question
+is who developed it). **Total open fell ~250 while completions rose 314.** Draining a lane converts
+open work into *different* open work. **Judge a lane by its own completion rate, never by the fleet
+open count**, or every success reads as a wash.
+
+### 🎯 The re-assessed target is a lane nobody in this arc has looked at
+
+Switching from lifetime totals to **rates** — which is what hid the stall in the first place:
+
+| lane | open | done 7d | done 30d | verdict |
+|---|---:|---:|---:|---|
+| `property_missing_recorded_owner` | 1,185 | **159** | **908** | ✅ healthiest in the system, ~23/day → clears in ~7 weeks. **Leave it alone.** |
+| **`true_owner_needs_salesforce`** | **815** | **1** | **26** | 🔴 **the target** |
+| `owner_contact_manual` | 311 | 0 | 0 | 🔴 externally egress-blocked — a constraint, not a design gap |
+| `trace_ownership_to_developer` | 152 | 12 | 38 | 🟡 slow, now fed by A2 |
+
+**`true_owner_needs_salesforce` is the biggest addressable stall in the system.** 815 open, **596
+lifetime completions** — so the machinery demonstrably works — and then **26 in 30 days, 1 in the
+last 7.** It is bigger than the ownership lane ever was, it is *proven consumable* (unlike
+`owner_contact_manual`), and it has never been split, measured for actionability, or asked the P131
+question.
+
+**A5 drafted as DIAGNOSIS ONLY** (`prompts/A5-*.md`) — establish whether it stopped or decayed (a
+cliff and a slope have different causes), read real rows rather than inferring from the type name,
+state the P131 category explicitly, and check whether the SF link already exists via another path,
+since **A2 found 291 of 331 grantors were already minted by an unattached producer**. ⚠️ The prompt
+explicitly forbids building a consumer, and warns off the obvious "four jobs under one label"
+hypothesis — **six plausible premises have been refuted by measurement in this arc**, two of them
+about this same family of lanes.
+
+**Also filed: `confirm_true_owner`** (151 open / 35 ever / 0 recently) — the same *worked-once-then-
+stopped* shape, smaller, worth the same treatment after A5 establishes the method (**A5b**).
+
+
+## 2026-08-27 17:15 UTC (Cowork) — A2b + A4b landed; refreshed the kickoff doc, which carried a DANGEROUS instruction
+
+**Lane: `all_guarded` 18 → 7, `awaiting_draft` 0 → 11** (the A4b recovery mid-flight, not a defect
+— the drafter re-runs at 06:45 and cron 244 applies at 06:49). `agrees` 64 · `mismatch` 49 ·
+`sponsor_spe` 25 · `no_records` 0. Verified `split_state='awaiting_draft'` with `action=NULL` is the
+**designed** shape, so the distinct-state invariant holds — my initial worry there was unfounded.
+
+**⚠️ A2b refuted my prompt's premise, and it had been repeated in three places.** I wrote it as the
+P138 `gsa_lease_diff` flicker. It is not: **that flicker has a RETURN LEG** (`A→B` *and* `B→A`) and
+is caught by `is_oscillating_pair`; this population has none. It is **one conveyance observed more
+than once** — per-lease fan-out (a GSA building carries many leases and the lessor of record updates
+on each separately: one distinct `lease_number` per date, **13 of 13** testable properties) plus
+cross-source lag. **The correction is load-bearing:** if it *were* the flicker the direction would
+be untrustworthy and collapsing unsafe; it is not, so the only thing wrong is that one fact is
+stored several times. `CLAUDE.md` and the canonical doc now carry the correction — **the sixth
+hypothesis of mine refuted by measurement in this arc.**
+
+**A2b** collapsed 32 links → 15 across 14 tasks (**$26.2M per OWNER**; the per-link sum reads $88.5M,
+a 3.4× overstatement). Fixed in the **drafter**, never the applier — the PK is right, the input was
+wrong — and it removed a **phantom chain break**, since `A→B, A→B` reads as a gap. All 14 now report
+`contiguous: true`.
+
+**A4b** corrected the gov guard. **The 7 remaining `all_guarded` are correctly guarded, name by
+name** — three punctuation-variant self-transitions, a CMBS trust artifact, a strict-prefix variant,
+a concatenated brokerage, and one with six `Unknown` grantors. **There is no further recoverable
+population there**, which is a real answer rather than a leftover.
+
+### ⚠️ The kickoff doc had gone stale in a way that would have caused harm
+
+`NEW-CHAT-KICKOFF.md` still instructed a future chat to verify reachability by
+*"`reachability_harvest_review` passes 4"* — **the exact criterion measurement disproved.** A fresh
+chat following it would have diagnosed a false failure on a healthy lane and spent a cycle on code
+that was never broken. **Corrected, and the reason kept in place rather than deleted**, because the
+generalisation is what matters: *before writing any verification, ask what the worker emits when it
+succeeds and finds nothing.*
+
+Also refreshed: the CI section (now "`npm test` is a required check; `main` is protected" rather
+than "CI runs no tests"), and a pointer to the canonical lane doc + its Tier 0 sibling, with the
+warning that **the two share `lcc_merge_entity`, `lcc_owner_sponsor_domain` and the owner
+entities**, so a merge confirmed in one changes the other.
+
+**This is the third time a doc in this repo has aged into being actively wrong within days.** The
+pattern is consistent: the *state* rots fast, the *lessons* do not. Files that carry both should
+lead with the lesson.
 
 
 ## 2026-08-27 (Cowork) — consolidated the lane into ONE canonical doc; drafted A2b + A4b

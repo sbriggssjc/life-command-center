@@ -145,8 +145,84 @@ assumed a clean tree, so the branch was never created, the cherry-pick refused, 
 **This is the same class as everything else in this file: a surface that answers confidently
 instead of erroring.**
 
-**The rule:** §6 rule 4 permits read-only git from the sandbox — but **not while the lock exists.**
-Before trusting any sandbox-read repo state:
+### ⚠️ 2026-08-27, SECOND INCIDENT — **COWORK'S OWN `git status` IS WHAT CREATES THE LOCK**
+
+The note above blamed "a Windows git process." **That was wrong, and the correction is the point.**
+Measured on the stuck file:
+
+```
+-rwx------ 1 epic-optimistic-hawking epic-optimistic-hawking 0 Aug 27 11:33 .git/index.lock
+```
+
+**Zero bytes, owned by the SANDBOX uid.** No Windows process ever held it. Cowork's own
+`git --no-pager status --porcelain` created it — **`git status` is not a read-only command**: it
+refreshes the index and takes `index.lock` to do so. The sandbox cannot then unlink it
+(`Operation not permitted` on the mount), and Windows git will not delete a file owned by another
+uid either. The lock is orphaned and blocks Scott until he removes it by hand.
+
+It cost three failed commands: `git checkout main`, `git add` and `git commit` all died with
+*"Another git process seems to be running"* — while `git checkout -b` and `git push` **succeeded**,
+producing a pushed branch with **no commit on it** and `gh pr create` failing with *"could not find
+any commits between origin/main and <branch>"*. **Some git commands working while others fail,
+ending in an empty pushed branch, is the signature of this bug.**
+
+### ⚠️⚠️ AND CLEARING A STALE LOCK IS A DESTRUCTIVE OPERATION — IT SILENTLY DISCARDED SEVEN FILES
+
+After `Remove-Item .git\index.lock -Force`, `git status --short` correctly listed **7 modified
+files**. Two commands later — `git checkout main` (which reported *"Already on 'main'"*) and
+`git checkout -b` — `git status --short` returned **nothing**, `git add` staged nothing, and
+`git commit` said *"nothing to commit, working tree clean."* **A full turn of documentation edits
+was gone, with no error and no warning.** The edits were verified absent by reading the files
+directly, then reconstructed by hand.
+
+Cause: while the lock was held for hours, git could not refresh the index, so the index and the
+working tree diverged. The first index-writing command after the lock cleared reconciled the
+working tree **to HEAD**, discarding everything uncommitted.
+
+**The rule:** treat a stale-lock cleanup as destructive.
+
+```powershell
+Remove-Item .git\index.lock -Force
+git status --short                 # note what is modified
+git stash push -u -m "pre-lock-clear"   # or commit — BEFORE any checkout/add/pull
+```
+
+If work does vanish, **do not assume it is recoverable from git** — it was never staged, so there
+is no blob. Check whether the file content still exists on disk first (`grep` for a distinctive
+string); if it does not, it must be rewritten.
+
+### ⚠️ THIRD INCIDENT — "the content is gone from disk" was a BROKEN DETECTOR, twice
+
+After the two incidents above, the reflex became *"my edits are missing, rewrite them."*
+**That reflex was wrong the next two times it fired, and would have cost a full turn each.**
+
+A Cowork sweep ran `grep -rl "<pattern>" fileA fileB fileC …` inside a `$( )` over a list
+containing **one path that did not exist**. grep exited **2**, the substitution came back empty,
+and the loop printed **`MISSING` for every pattern** — including patterns plainly present.
+Separately, the harness's "file changed on disk" notices rendered a **cached older copy** of two
+files, which corroborated the false conclusion.
+
+**Both were instrument failures; the data was fine.** Disk and `HEAD` each contained the text
+(`grep -c` = 2 on both), local `HEAD` == `origin/main`, and the mtimes were **seconds old** — the
+merge had just landed.
+
+**The rule: before concluding content was lost, compare DISK against HEAD directly.**
+
+```bash
+echo "disk: $(grep -c '<distinctive string>' path/to/file)"
+git --no-pager cat-file -p HEAD:path/to/file | grep -c '<distinctive string>'  # index-free, safe
+git --no-pager rev-parse --short HEAD origin/main                              # equal?
+ls -la --time-style=full-iso path/to/file                                      # how old is it really?
+```
+
+- **`grep -rl` over an explicit file list is not a detector** — one missing path poisons the whole
+  result. Check one file at a time and print `exists`/`MISSING` per file.
+- **An implausible result is a bug signal** (Class 11): *every* pattern missing from *every* file,
+  immediately after a successful merge, is not a plausible state of the world.
+- **`cat-file`, `log`, `rev-parse`, `rev-list` are index-free and safe from the sandbox** — they
+  answer exactly this question and cannot create the lock that started the sequence.
+
+**The original rule (kept — still true while a lock exists, whoever created it):**
 
 ```powershell
 Remove-Item .git\index.lock -ErrorAction SilentlyContinue   # Windows only; the sandbox cannot
@@ -430,7 +506,10 @@ the bar rule §6.3 sets for a new CI job. It is no longer a badge; it is a gate.
 | `cannot pull with rebase: You have unstaged changes` | a dirty working tree | `git stash` → pull → `git stash pop`, or commit them first |
 | `The upstream branch of your current branch does not match the name of your current branch` | your local branch has a different name from its upstream | `git push origin HEAD` (same-named branch) — **never `HEAD:main`** |
 | `warning: … CRLF will be replaced by LF` | **not a defect.** `.gitattributes` already normalises to LF. Windows editors write CRLF; git converts on the way in, exactly as configured | ignore it |
-| `Unable to create '.git/index.lock'` | a Windows git process holds the lock; **the sandbox cannot delete it** | `Remove-Item .git\index.lock` from PowerShell |
+| `Unable to create '.git/index.lock'` | ⚠️ **usually COWORK'S OWN `git status`**, not a Windows process — the lock is 0 bytes and owned by the sandbox uid, which can neither reuse nor unlink it (§2a). `git status`/`diff` are not read-only | `Remove-Item .git\index.lock -Force`, then **`git stash push -u` BEFORE any checkout/add** — clearing a stale lock discards uncommitted work. Confirm the owner with `ls -la .git/index.lock` before blaming an editor |
+| `gh pr create` → *"could not find any commits between origin/main and <branch>"*, on a branch that pushed fine | the lock silently blocked `add`/`commit` while `checkout -b` and `push` succeeded — **you pushed an empty branch** | clear the lock, re-make the edits if they were discarded (§2a), commit, push; delete the empty branch |
+| `git status` shows files STAGED (`A `/`M `) with a clean worktree, dated days ago | **`add` and `commit` take DIFFERENT locks** — `add` takes `index.lock`, `commit` takes `HEAD.lock`. With an orphaned `HEAD.lock`, **staging succeeds and committing fails**, and the result looks tidy. Found live in GovernmentProject: an A4b migration **applied to the database** but never committed, staged since a 2026-08-20 lock | clear the lock, then `git commit` the staged files. ⚠️ **After applying any migration live, verify it is committed** — `git log --oneline -3 -- sql/<file>`, never "the function works" |
+| `git status` goes from N modified files to clean across two commands, and `commit` says *"nothing to commit"* | a long-held stale lock left index and working tree diverged; the first index-writing command after clearing it reconciled **to HEAD** | the changes were never staged, so **there is no blob to recover** — check the files on disk for a distinctive string; if absent, rewrite them |
 | CI red on your PR | **check the base branch first** — it may already be red on `main` | if `main` is red it is not your PR; see §4 |
 | A required check stuck on *"Expected — waiting for status to be reported"*, and **re-running does nothing** | usually **the workflow file is invalid**, so no run can be produced — commonly a conflict resolution that kept both sides of a key (see §4b) | read the workflow file; fix the file, not the trigger |
 | You are about to PR a fix to shared infra (workflow, `package.json`, a migration) | the other audit window may have already fixed it | `git fetch origin && git log origin/main --oneline -5 -- <file>` **before** you push (§4a) |
@@ -442,9 +521,15 @@ the bar rule §6.3 sets for a new CI job. It is no longer a badge; it is a gate.
 2. **Never merge before both checks are green.** A check you outrun is a check you do not have.
 3. **A new CI job is not shipped until it has been green once on `main`.** A job red on every run
    is a badge people learn to merge past — which is precisely how `test-suite.yml` shipped broken.
-4. **Never run git from the Cowork sandbox.** The `.git/index.lock` is held by Scott's Windows
-   process. Cowork hands over PowerShell; Scott runs it. Read-only git (`log`, `merge-base`,
-   `diff`) from the sandbox is fine and encouraged.
+4. **Never run git from the Cowork sandbox — `status` and `diff` INCLUDED.** ⚠️ This rule used to
+   end *"read-only git (`log`, `merge-base`, `diff`) from the sandbox is fine and encouraged"* and
+   blame Windows for the lock. **Both halves were refuted 2026-08-27** (§2a): the stuck
+   `.git/index.lock` was 0 bytes and **owned by the sandbox uid** — Cowork's own `git status` made
+   it. `status` and `diff` refresh the index and take the lock; the sandbox then cannot unlink it
+   and neither can Windows. It blocked three of Scott's commands, produced a pushed branch with no
+   commit on it, and clearing it discarded a full turn of uncommitted edits. Read the tree with
+   `ls`/`grep`/file reads. The only genuinely index-free git commands are `log`, `merge-base`,
+   `rev-parse`, `cat-file`, `ls-files`. Cowork hands over PowerShell; Scott runs it.
 5. **"Merged" is not "running."** JS ships on a Railway redeploy; SQL migrations are live
    immediately. After a merge that touched `/api/` or the SPA, run `npm run verify:deploy` and
    confirm live `/version` moved. Three assist lanes silently wrote nothing for a day because

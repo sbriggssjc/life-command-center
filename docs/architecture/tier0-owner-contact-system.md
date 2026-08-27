@@ -2,11 +2,17 @@
 
 > **START HERE for anything about matching a person to an owner, the Decision Center Tier 0 lane,
 > the sponsor map, or owner-entity merges.** This is the one door into an arc that otherwise spans
-> **twelve** audit documents. Live state, the objects that exist, the decisions already made, and
+> **thirteen** audit documents (P186–P198). Live state, the objects that exist, the decisions already made, and
 > the traps already paid for.
 >
 > **Nothing here replaces the per-round audits — they are the evidence and they stay.** This page
-> tells you which one to open. Last measured **2026-08-27 14:26 UTC**.
+> tells you which one to open. Last measured **2026-08-27 17:05 UTC**.
+>
+> 🔗 **Sibling subsystem, same entity graph:**
+> [`ownership-history-lane.md`](ownership-history-lane.md) — the `establish_ownership_history`
+> lane (A1–A4b). **The two share `lcc_merge_entity`, `lcc_owner_sponsor_domain` and the owner
+> entities themselves**, so a merge confirmed here changes the chains there. Read that page before
+> touching ownership history; read this one before touching entity identity or person↔owner links.
 
 ---
 
@@ -19,19 +25,19 @@ the ones nobody could act on, and asks Scott about the rest. A confirmed answer 
 active contact and a person→owner edge. **The account is the pursuit; who to call there is a
 separate, standing decision** (`account-based-contact-intelligence.md`).
 
-## 2. Live state — 2026-08-27 14:26 UTC
+## 2. Live state — 2026-08-27 17:05 UTC
 
 | | |
 |---|---|
-| candidate pairs | **696** |
-| lane cards shown to the operator | **96** (ask 87 + auto 9) |
+| candidate pairs | **684** |
+| lane cards shown to the operator | **92** (ask 83 + auto 9) |
 | parked, not shown | **137** |
 | human attaches recorded | **27** |
+| owner merges logged (all reversible) | **44** |
 | `tier0_auto` writes | **0** — see §6, this is a pending verification, not a failure |
 | curated sponsor entries | **8** |
 | `TIER0_AUTO_ATTACH` | **`off` in the registry** — it describes the RUNTIME, not the intent |
-| merge-detector blind groups remaining | **64** |
-| reversible merges logged | **32** |
+| merge-detector blind groups remaining | **64** (176 entities) |
 
 ## 3. The objects
 
@@ -65,6 +71,7 @@ cron **241 at 06:55 UTC**. The GET is an ungated dry run and writes nothing.
 | **Sponsor map: 8 confirmed** | Scott 2026-08-26/27 | ngp, uirc, hpi, jbg, gardner, salus, oxford, savlan. **fcp and tmg deliberately held** |
 | **Rejected sponsors** | Scott 2026-08-27 | `royal` (common word), `maple` (the Mapletree place-word trap) |
 | **A confirm lane, not an unattended promoter** | measured | link precision ~91% only above ~$16M, ~60–70% in the $2M SPE band |
+| **DST / Trust / LLC variants of one sponsor stay ONE entity — the TRUE OWNER** | Scott 2026-08-27 | Answers N15b §6 decision 1. `Rainier Rockford DST Trust` = `Rainier Rockford Llc`; `SE VALPO LLC` = `Se Valpo Dst`; `Chiapelone` = `Chiapelone Trust`. **So `lcc_owner_domain_core`'s `trust\|dst\|reit` strip is CORRECT and is the adopted rule** — what N15b listed as its "named residue" is the desired behaviour. ⚠️ **The aspirational future (individual investors as direct owners, and knowing they hold fractional positions in a DST/TIC/JV on similar deals) is a SEPARATE model and must NOT be built by splitting this dedup key** — see backlog **N17** |
 
 ## 5. ⚠️ Traps paid for — each cost a real cycle
 
@@ -91,6 +98,15 @@ cron **241 at 06:55 UTC**. The GET is an ungated dry run and writes nothing.
    employer" that was 74.8% present. **Two measurements disagreeing is the signal.** *(P197 prep)*
 10. **A reversal path never RUN is a claim, not a capability** — P195's failed on
     `428C9 is_current is GENERATED ALWAYS`; P196's on a trigger that skips duplicate edges. *(P195/P196)*
+11. **⚠️ Before DEMOTING a rule, measure what depends on it.** The prefix-8 arm of
+    `ev_company_matches_owner` looked like a leak producing two generic-stem cards; it is the
+    **only** link evidence on **28 of 87 ask cards / $146.9M**, and the un-park mechanism for
+    **25 of 32 `weak_partial`** cards. Tightening it would have parked Easterly ($85.0M) to
+    remove ~$5.6M of wrong. A rule's false positives are visible; what it holds up is not.
+    **Do not tighten this comparator.** *(P198 — P179 Class 2 read backwards)*
+12. **`lcc_name_has_spe_marker` is named backwards** — it detects a PORTFOLIO/sponsor marker
+    and returns **FALSE for every name containing the literal string "SPE"**. Read the
+    function, never its name. *(P198)*
 
 ## 6. Open — and what is merely PENDING vs genuinely open
 
@@ -106,11 +122,32 @@ cron **241 at 06:55 UTC**. The GET is an ungated dry run and writes nothing.
 15 candidates, Wells Fargo, the JP Morgan CMBS trust); **N15** whether the 1,475 Salesforce-campaign
 orphans get hub rows.
 
-**🔴 Build:** N14 the 92 orphans blocking parked cards; N3a the wording half of duplicate detection
-(Easterly ×2 — the domain-keyed fix was measured at **25%** and rejected); N10 the 4 held
-generic-name groups (~$0, a name-repair job); the two generic-stem ask cards (`innovati`,
-`corporat`) — fixing them moves `ev_company_matches_owner` and therefore all 87 ask cards, so it
-needs its own measured pass.
+**✅ Done 2026-08-27 16:28 UTC (P198 §5):** Scott approved and all three merges landed — Easterly,
+Cambridge, Gardner. Six cards became three; **Easterly is now ONE card at $114,864,150 / 89 assets /
+7 eligible people**, the combined pre-merge total exactly. Lane `ask` 87 → 84. All reversible.
+
+**✅ Done 2026-08-27 17:05 UTC (N3h):** the 9 further duplicates on those same three firms are
+merged, all reversible. **Gardner Tanenbaum Holdings: relationships 270 → 512 (+242)** — its
+transaction history had been split across two live entities, so the survivor was reporting half its
+own deal history (P177). `auto_mergeable` 3,043 → 3,040, exactly the three groups resolved.
+⚠️ **All nine losers carried $0 current rent** — no rent-ranked surface would ever have shown this;
+it was found by chasing a guard counter that moved by 2.
+
+**👤 Needs Scott (new, N15b — three decisions, audit §6):** `canonical_name` has **seven authors**
+and **10,340 live entities (16.6%) are invisible to `ensureEntityLink`'s own lookup**. Which token
+rule (the `trust|dst|reit` residue is a genuine judgement — should a DST and its LLC share a dedup
+key?); whether the 540 stale rows are recomputed; whether the column becomes an enforced unique key
+(3,930 groups would violate it today). ⚠️ **`v_lcc_merge_candidates` does NOT read this column** —
+a rewrite cannot move `auto_mergeable`.
+
+**🔴 Build:** N14 the 92 orphans blocking parked cards; N10 the 4 held generic-name groups (~$0,
+a name-repair job).
+
+**🚫 Closed, do not re-raise:** tightening `ev_company_matches_owner` for the two generic-stem
+cards (`innovati`, `corporat`) — **measured and refuted, trap 11 above.** The five false
+positives are a stated residue and a one-second reject each, because the card carries the
+employer and the match key. Co-proposal as a general merge rule — **7% precision**, worse than
+the domain-keyed fix P189 already rejected at 25%.
 
 ## 7. The audit trail — open these for detail, in order
 
@@ -125,7 +162,9 @@ needs its own measured pass.
 | **P195** | 66 entities merged, $102.2M consolidated |
 | **P196** | merge made reversible; park reasons |
 | **P197** | the employer resolver; `no_employer_on_file` 68 → 54 |
-| **A1–A4, A2a** | the ownership-lane arc (a sibling workstream, same entity graph) |
+| **P198** | the prefix-8 arm is load-bearing (refuted a tightening); co-proposal at 7%; **12 owner merges — 3 approved pairs + N3h's 9, which reunited Gardner's split deal history (270 → 512 relationships)** |
+| **N15b → N15c** | **the producer behind all of the above** — `entities.canonical_name` has **eight** authors (the census missed `w8_u5_naming_hygiene@40`) and **16.6% of live entities are invisible to `ensureEntityLink`'s own lookup**. N15b measured; **N15c builds**. ⚠️ It does **not** feed `v_lcc_merge_candidates`. ⚠️ **Adopt the token RULE, not `lcc_owner_domain_core` itself** — that function joins with no separator and would create `Gate Way`/`Gateway` collisions as a name key |
+| **A1–A4b, A2a, A2b** | the ownership-lane arc — sibling workstream, same entity graph: [`ownership-history-lane.md`](ownership-history-lane.md) |
 
 **Design intent:** `account-based-contact-intelligence.md` (who to pursue) ·
 `contact-reconciliation-outbound.md` (getting the record back out).

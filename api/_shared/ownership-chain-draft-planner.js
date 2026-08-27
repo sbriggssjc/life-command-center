@@ -110,7 +110,12 @@ function toNumberOrNull(v) {
 //   * is_self_transition   — A→A, an artifact, not a transfer.
 //   * is_oscillating_pair  — gsa_lease_diff flickers between an SPE and its
 //                            parent; the DATE is real, the DIRECTION is not.
-//   * is_name_variant      — a strict prefix extension of the same name.
+//   * is_name_variant      — the same name wearing a variant: a strict prefix
+//                            extension, or (A4b) equal once street-type tokens
+//                            are removed. The SQL view is the single owner of
+//                            that judgement; nothing here re-derives it, because
+//                            a JS copy of a SQL normalizer is the drift this repo
+//                            has paid for repeatedly.
 //   * *_is_clean           — junk/brokerage-polluted party names.
 //   * transfer_date        — an undated link cannot be ordered, and an ordered
 //                            chain is the entire deliverable.
@@ -129,6 +134,124 @@ export function guardTransition(t) {
   if (row.is_name_variant === true) return 'name_variant';
   if (chainNameKey(prior) === chainNameKey(next)) return 'self_transition';
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// A2b — COLLAPSE ONE CONVEYANCE RECORDED ON SEVERAL DATES.
+//
+// The dedup above keys on `(from, to, date)`, so it removes byte-identical
+// repeats and nothing else. It leaves the shape that blocked 14 tasks / 32 links
+// in A2: the SAME party pair recorded on two or three different dates. Those are
+// not repeat ownership — `lcc_entity_portfolio_facts` is PK
+// `(entity_id, source_domain, source_property_id)`, one interval per party per
+// property, so the second row collides and A2 correctly refuses the whole task.
+// The PK is right; the INPUT was wrong, which is why this is fixed here in the
+// producer and never by loosening the applier's conflict handling.
+//
+// ⚠️ THE MECHANISM IS NOT THE P138 FLICKER, MEASURED 2026-08-27. P138's flicker
+// oscillates between an SPE and its parent and is caught per-property by
+// `is_oscillating_pair` — it has a RETURN LEG. This population has none (A4
+// measured zero oscillating pairs here, and there is no B->A row anywhere in
+// it). It is two other things, both "one conveyance, observed more than once":
+//   * PER-LEASE FAN-OUT (13 of 14 properties). A GSA building carries many
+//     leases; the lessor of record updates on each one separately, and the diff
+//     emits an acquisition per lease. Property 3123 is 8 rows across 8 DISTINCT
+//     lease numbers spanning 2020-02..2020-04. Measured over all 14: one
+//     distinct `lease_number` per date, 13 of 13 testable properties.
+//   * CROSS-SOURCE LAG (property 3891). `costar_sidebar` records the sale at
+//     2014-07 and `gsa_lease_diff` sees the lease paperwork at 2015-05.
+//
+// WHICH DATE IS TRUE — the judgement, made explicitly rather than defaulted.
+// EARLIEST, for two independent reasons:
+//   1. Structural. This link's `transfer_date` becomes the GRANTOR's
+//      `ownership_end_date`. The first date the record shows the successor in
+//      possession is the tightest bound we have on when the grantor left. Taking
+//      a later date would assert the grantor still held the asset for months
+//      after the record already said otherwise — it can only ever OVERSTATE a
+//      tenure, and on this population by up to 700 days.
+//   2. Empirical. Where an independent record of the actual conveyance exists,
+//      it is ALWAYS earlier than the lease-diff observation: over every party
+//      pair gov holds from BOTH `costar_sidebar` and `gsa_lease_diff`,
+//      **26 of 26 have CoStar first, 0 same-day, 0 later, mean lag 161 days.**
+//      So the earliest observation is the one nearest the conveyance and every
+//      later one is administrative lag.
+// ⚠️ The later dates are NOT wrong data — they are the same fact observed again.
+// Nothing is deleted: every collapsed row's `ownership_id`, `data_source` and
+// date ride on the survivor's citation as `also_recorded_as`, so the collapse is
+// auditable and reversible from the draft alone. gov.ownership_history is never
+// touched.
+//
+// ⚠️ THE KEY INCLUDES THE GRANTEE, AND THAT IS THE SAFETY PROPERTY. A grantor
+// that sold to B and later sold to C is GENUINE repeat ownership: two distinct
+// keys, no collapse, and it stays blocked for a human — which is right, because
+// one interval per party cannot represent it either. Verified on the live
+// population: all 14 blocked pairs carry exactly ONE grantee name-key, so all 14
+// collapse and nothing else in the lane is touched.
+// ---------------------------------------------------------------------------
+export function collapseRepeatedConveyances(links) {
+  const groups = new Map();
+  const order = [];
+  for (const l of (Array.isArray(links) ? links : [])) {
+    const k = `${chainNameKey(l.from)}|${chainNameKey(l.to)}`;
+    if (!groups.has(k)) { groups.set(k, []); order.push(k); }
+    groups.get(k).push(l);
+  }
+
+  const cite = (l) => ({
+    ownership_id: l.citation ? l.citation.ownership_id : null,
+    data_source: l.citation ? l.citation.data_source : null,
+    transfer_date: l.date,
+  });
+  // Rows the same-date dedup already folded — same parties, same day, so the
+  // same fact recorded twice. They are evidence too.
+  const sameDay = (l) => (l._repeats || []).map(cite);
+
+  const out = [];
+  for (const k of order) {
+    const group = groups.get(k);
+    if (group.length === 1) {
+      const only = group[0];
+      const twins = sameDay(only);
+      if (!twins.length) { out.push(strip(only)); continue; }
+      const solo = { ...only, citation: { ...only.citation, also_recorded_as: twins } };
+      out.push(strip(solo));
+      continue;
+    }
+    const byDate = group.slice()
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    const [first, ...rest] = byDate;
+    const survivor = { ...first, citation: { ...first.citation } };
+
+    // EVERY source row stays traceable from the surviving link — the other dates
+    // AND the same-date twins already folded above.
+    survivor.citation.also_recorded_as = [
+      ...sameDay(first),
+      ...rest.flatMap((l) => [cite(l), ...sameDay(l)]),
+    ];
+    survivor.collapsed_from = byDate.length;
+    survivor.also_recorded_on = rest.map((l) => l.date);
+
+    // One conveyance has one price. If the earliest observation carried none,
+    // take the first that did and SAY WHERE IT CAME FROM — a figure whose
+    // provenance is not on the row is the thing this lane must not produce.
+    if (survivor.price == null) {
+      const priced = rest.find((l) => l.price != null);
+      if (priced) {
+        survivor.price = priced.price;
+        survivor.citation.price_from_ownership_id =
+          priced.citation ? priced.citation.ownership_id : null;
+      }
+    }
+    out.push(strip(survivor));
+  }
+  return out;
+}
+
+// `_repeats` is scratch for the dedup->collapse handoff and must never reach a
+// stored draft.
+function strip(link) {
+  const { _repeats, ...rest } = link;
+  return rest;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,14 +297,20 @@ export function buildChainDraft(transitions, ctx = {}) {
 
   // Dedup identical links (same parties, same date). gsa_lease_diff emits repeats
   // — P138 measured six identical rows on one date for property 180.
-  const seen = new Set();
-  const links = [];
+  // A2b: the dropped twin is REMEMBERED rather than discarded, so every source
+  // row the draft folded away stays traceable from the link that survived it.
+  const byKey = new Map();
+  const deduped = [];
   for (const l of kept) {
     const k = `${chainNameKey(l.from)}|${chainNameKey(l.to)}|${l.date}`;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    links.push(l);
+    const survivor = byKey.get(k);
+    if (survivor) { survivor._repeats.push(l); continue; }
+    l._repeats = [];
+    byKey.set(k, l);
+    deduped.push(l);
   }
+  // A2b — and then collapse ONE conveyance recorded on SEVERAL dates.
+  const links = collapseRepeatedConveyances(deduped);
   links.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 
   if (!links.length) {
@@ -230,6 +359,11 @@ export function buildChainDraft(transitions, ctx = {}) {
     rejected,
     continuity: { breaks, contiguous: breaks === 0 },
     terminates_at_current_owner: terminates,
+    // Honest count of the A2b collapse: how many links were folded away because
+    // they were the same conveyance seen again. Reported so a run that collapses
+    // nothing is distinguishable from one that collapsed a lot.
+    collapsed_conveyances: links.reduce(
+      (n, l) => n + (l.collapsed_from ? l.collapsed_from - 1 : 0), 0),
   };
 }
 
