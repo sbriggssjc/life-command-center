@@ -122,6 +122,45 @@ writes.
 **Verify by owners moved out of parked, never cards touched:** 105 parked owners / $180.3M today, of
 which 4 confirmable sponsor proposals cover 4 owners / $17.7M.
 
+## 2026-08-27 11:55 UTC — ⭐ 49% of person entities are not in the contacts hub; 92 block $132.3M
+
+**The parked pile splits exactly, and the split is the finding.** Of 189 candidate people behind the
+142 parked Tier 0 cards:
+
+| | people | meaning |
+|---|---|---|
+| have a `unified_contacts` row | **97 — and all 97 carry an employer** | the `employer_on_file_differs` parks. **The gate working.** |
+| **no hub row at all** | **92** | no employer, no title, no SF, no Outlook — **not a judgement, a missing row** |
+
+So `no_employer_on_file` (**68 cards / $132.3M**) was never a decision anyone declined to make. The
+data to make it is absent.
+
+**Fleet-wide: `entities` (person, live, with an email) = 11,107; reconciled to `unified_contacts` =
+5,667; ORPHANED = 5,440 (49%).** `unified_contacts` is what carries `company_name`, `title`,
+`sf_contact_id`, `outlook_contact_id` — an orphan has none of them.
+
+**⚠️ 49% orphaned is very likely CORRECT and must not be read as a defect count.** `entities` is the
+graph (everyone ever seen — CoStar brokers, deed grantees, OM-extracted names); `unified_contacts`
+is the hub (people we actually track). Playbook Class 9's corollary applies exactly: the detector
+produces CANDIDATES. **A bulk reconcile would pour thousands of untracked broker records into the
+surface Scott works** — the Consumption-Layer failure this codebase documents repeatedly.
+
+**The actionable population is 92, not 5,440** — the ones already proposed as contacts for a named
+owner above the rent floor. Each either resolves its card or converts it to an honest
+`employer_on_file_differs` reject. **Prompt 197** specifies it, and insists the *cause* be diagnosed
+first: if a live producer is still minting orphans, a one-shot reconcile is a chore repeated forever
+(Class 8). Check `created_at` on the orphans.
+
+### ⚠️ N9v is STILL UNVERIFIED — and the reason is timing, not failure
+`TIER0_AUTO_ATTACH=true` is set and the redeploy is live. But **cron 241 last ran 06:55 UTC, which
+was BEFORE the redeploy**, and that run is the one that reported `flag_off`. `active_source=
+'tier0_auto'` is still 0 because **the tick has not run since**. The next run is **06:55 UTC
+tomorrow** and is the first honest test — expect 0 → 9. *(A `GET` of the tick would settle it
+immediately; `web_fetch` returned nothing usable from here, so this is unverifiable from Cowork.)*
+**Do not diagnose before that run.** `feature_flags_registry` stays `off` until a tick reports
+`writes > 0` — it describes the runtime, not the intent.
+
+
 ## 2026-08-27 11:45 UTC — four sponsor entries confirmed by Scott; 6 cards unparked, $19.8M
 
 Scott confirmed the top four of P196 Unit 2's six sponsor proposals and rejected the bottom two.
