@@ -88,16 +88,22 @@ function normalizeFacilityName(value) {
   return clean(value).toUpperCase().replace(/[^A-Z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeTenantIdentityName(value) {
+  return normalizeFacilityName(value)
+    .replace(/\s+(?:INCORPORATED|INC|CORPORATION|CORP|LIMITED|LTD|LLC|PLLC|LLP|LP|PC|P A|PA)$/, '')
+    .trim();
+}
+
 function contextTenantNames(context) {
   const names = [context.tenant_name, context.primary_tenant];
   for (const tenant of Array.isArray(context.tenants) ? context.tenants : []) {
     names.push(typeof tenant === 'string' ? tenant : tenant?.name || tenant?.tenant_name);
   }
-  return names.map(normalizeFacilityName).filter(Boolean);
+  return names.map(normalizeTenantIdentityName).filter(Boolean);
 }
 
 function corroboratingTenant(target, context) {
-  const facility = normalizeFacilityName(target.cms_identity?.facility_name);
+  const facility = normalizeTenantIdentityName(target.cms_identity?.facility_name);
   const tenants = contextTenantNames(context);
   if (facility) {
     const tenant = tenants.find((name) => name === facility || facility.startsWith(`${name} AT `));
@@ -106,7 +112,7 @@ function corroboratingTenant(target, context) {
   const evidence = target.cms_evidence || {};
   if (evidence.enrollment_corroborated !== true) return null;
   const organizations = (Array.isArray(evidence.enrollment_org_names) ? evidence.enrollment_org_names : [])
-    .map(normalizeFacilityName).filter(Boolean);
+    .map(normalizeTenantIdentityName).filter(Boolean);
   const organization = organizations.find((name) => tenants.includes(name));
   return organization ? { basis: 'cms_enrollment_organization', matched_name: organization } : null;
 }
