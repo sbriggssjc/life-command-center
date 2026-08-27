@@ -742,6 +742,43 @@ signal.
 3. **After the first real verdicts, diff the open list before and after.** One attach should remove
    one card. If it removes three, the exclusion is wider than the answer.
 
+### ⚠️ Class 14 RECURRED INSIDE ITS OWN FIX — a new enum value satisfies every `<>` written against the old one (P194, 2026-08-26)
+
+P191 narrowed the exclusion to `active_source <> 'tier0_confirm'` — correct at the time. P194 then
+added a **second** source value, `'tier0_auto'`, for the auto-attach sweep. **`'tier0_auto'`
+satisfies that inequality**, so the first automatic attach on an owner would once again have hidden
+every other open card for that owner. Measured before shipping: **3 of the 9 auto owners hold a
+second card, two of them live `ask`** (`healthcarerea.com`, `capitalsq.com`).
+
+**And the honest-count metric would have lied in the safe direction:** `cards_drained` would have
+*risen*, because questions were being deleted rather than answered. Fixed by making the predicate a
+SET (`not in ('tier0_confirm','tier0_auto')`).
+
+**Durable rule: when you add a value to a column that an exclusion tests with `<>`, go read the
+exclusion.** A new enum member silently changes the meaning of every inequality written against the
+old one, and nothing errors.
+
+### ⚠️ And two recommendations in the prompts that fed this class were REFUTED by measurement
+
+Both were mine, both were plausible, both were checked before being built:
+
+1. **"Group duplicate owners on the shared email domain — far better evidence than any name
+   comparison."** Graded over every same-domain owner pair: **4 net-new pairs, exactly 1 a genuine
+   duplicate (Easterly). 25% precision.** The other three plus 13 NGP pairs are **sponsor↔SPE** —
+   the domain is shared *because an SPE family shares its sponsor's domain*, which is real evidence
+   answering a **different question** (the P193 relationship). Same shape as Gary George. A
+   domain-keyed merge view would have been a noise generator.
+2. **"A parked card returns automatically the moment new evidence lands."** True for **one of the
+   six signals the prompt listed.** Only `n_link_evidence > 0` (or a sponsor-map row) un-parks;
+   correspondence, SF campaigns, SF contact records and titles all move `n_person_evidence`, which
+   the decidability `CASE` never reads. **95 of 146 parked cards ($118M) already carry person
+   evidence and are parked permanently** — Class 10 hiding inside a Class 10 fix. It was correctly
+   *not* widened: admitting person evidence would restore exactly the Gary George noise the triage
+   removed. The real mechanism is now observable in `v_lcc_tier0_park_watch`.
+
+**The lesson is about prompts, not code: a design note asserting how a mechanism behaves is a
+hypothesis. State it as one, and make the builder measure it before relying on it.**
+
 **⚠️ Corollary — the fix must not re-inflate the surface.** The naive repair (drop the
 `owner_already_has_contact` filter) would have re-admitted the 1,381 owners whose contacts came from
 elsewhere and who need no acquisition at all. The discriminator was
