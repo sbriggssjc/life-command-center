@@ -2441,6 +2441,20 @@ Arm precision read on all 44 rows: **25 of 30 cards correct**. **Not shipped; cl
   ⚠️ **`UIRC-GSA V Douglas AZ` and `UIRC-GSA V VAN HORN TX` are different properties in different
   states** — 4 of the 7 rows must never be merged. Full writeup:
   `docs/audits/P198_PREFIX8_ARM_IS_LOAD_BEARING_2026-08-27.md`; playbook **Class 17**.
+- **MERGED 2026-08-27 16:28 UTC (Scott approved all three).** Six cards became three; Easterly is
+  ONE card at **$114,864,150 / 89 assets** — the combined pre-merge total exactly. Lane `ask`
+  **87 → 84**; `auto` 9 and parked 137 unchanged; all three `reversible = true`. Winners by P195's
+  **ownership-first** rule, not rent (Easterly REIT owns 79 assets vs 10). **Both pairs already
+  carried the SAME confirmed contact on both sides** — the duplicate had been confirmed separately,
+  which is independent evidence it was real, and the pivot fold lost nothing.
+- **⚠️ CHASING A MOVED GUARD COUNTER FOUND THE NEXT DEFECT.** `auto_mergeable` 3,041 → 3,043:
+  benign (each winner now heads a byte-identical group that was already auto-mergeable, and the
+  added assets flipped two winner selections) — but it surfaced **9 MORE duplicate entities on the
+  same three firms, ALL at $0 current rent and therefore invisible to every rent-ranked surface.**
+  **Gardner Tanenbaum's deal history is SPLIT: 240 relationships sit on a live entity separate from
+  the one holding its 13 assets** — the P177 failure, a survivor under-reporting the transaction
+  history prospecting ranks on. **Not merged: an approval of three named pairs is not extended by
+  inference.** Backlog **N3h**.
 
 ## P197 — the Tier 0 lane read ONE employer source, by ONE key (2026-08-27)
 
