@@ -44,7 +44,30 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # ⚠️ 22, NOT 20 — and this is not a preference.
+          #
+          # Three test files import Deno edge-function modules directly:
+          #   test/sf-deal-promotion.test.mjs  -> supabase/functions/_shared/sf-deal-promotion.ts
+          #   test/sf-file-collector.test.mjs  -> .../intake-salesforce-files/discovery.ts
+          #   test/sf-file-discovery.test.mjs  -> .../intake-salesforce-files/discovery.ts
+          #
+          # Node 20 cannot load a .ts file at all and throws
+          # ERR_UNKNOWN_FILE_EXTENSION before a single test body runs. Node 22.18+
+          # strips types by default, so those 46 tests pass. On '20' this workflow
+          # was red on EVERY run from the moment it shipped — including twice on
+          # `main` — which is the badge-that-is-noise failure: a check that is
+          # always red teaches everyone to merge past it, exactly what N9 existed
+          # to prevent.
+          #
+          # Reproduced both directions before changing it:
+          #   node --no-experimental-strip-types --test <those 3>  -> 0 pass, ERR_UNKNOWN_FILE_EXTENSION
+          #   node --test <those 3>                                -> 46 pass, 0 fail
+          #
+          # package.json `engines` stays ">=20.0.0": the SERVER runs fine on 20,
+          # it is only the test suite that needs type stripping. Do not "tidy"
+          # this back to 20 to match boot-check.yml — boot-check never imports a
+          # .ts module, which is why it is green on 20.
+          node-version: '22'
           cache: npm
       - run: npm ci
       - run: npm test
