@@ -91,6 +91,15 @@ cron **241 at 06:55 UTC**. The GET is an ungated dry run and writes nothing.
    employer" that was 74.8% present. **Two measurements disagreeing is the signal.** *(P197 prep)*
 10. **A reversal path never RUN is a claim, not a capability** — P195's failed on
     `428C9 is_current is GENERATED ALWAYS`; P196's on a trigger that skips duplicate edges. *(P195/P196)*
+11. **⚠️ Before DEMOTING a rule, measure what depends on it.** The prefix-8 arm of
+    `ev_company_matches_owner` looked like a leak producing two generic-stem cards; it is the
+    **only** link evidence on **28 of 87 ask cards / $146.9M**, and the un-park mechanism for
+    **25 of 32 `weak_partial`** cards. Tightening it would have parked Easterly ($85.0M) to
+    remove ~$5.6M of wrong. A rule's false positives are visible; what it holds up is not.
+    **Do not tighten this comparator.** *(P198 — P179 Class 2 read backwards)*
+12. **`lcc_name_has_spe_marker` is named backwards** — it detects a PORTFOLIO/sponsor marker
+    and returns **FALSE for every name containing the literal string "SPE"**. Read the
+    function, never its name. *(P198)*
 
 ## 6. Open — and what is merely PENDING vs genuinely open
 
@@ -106,11 +115,19 @@ cron **241 at 06:55 UTC**. The GET is an ungated dry run and writes nothing.
 15 candidates, Wells Fargo, the JP Morgan CMBS trust); **N15** whether the 1,475 Salesforce-campaign
 orphans get hub rows.
 
-**🔴 Build:** N14 the 92 orphans blocking parked cards; N3a the wording half of duplicate detection
-(Easterly ×2 — the domain-keyed fix was measured at **25%** and rejected); N10 the 4 held
-generic-name groups (~$0, a name-repair job); the two generic-stem ask cards (`innovati`,
-`corporat`) — fixing them moves `ev_company_matches_owner` and therefore all 87 ask cards, so it
-needs its own measured pass.
+**👤 Also needs Scott (new, P198):** **three owner-merge decisions** in
+`v_lcc_tier0_coproposed_owner_duplicates` — Easterly ×2 ($114.9M combined, the #1 and #3 cards),
+Gardner-Tannenbaum ×2 ($9.2M, a spelling variant), Cambridge ×2 ($13.2M, probable). Confirming
+Easterly alone takes the lane 87 → 85 and collapses four cards on one firm into two.
+
+**🔴 Build:** N14 the 92 orphans blocking parked cards; N10 the 4 held generic-name groups (~$0,
+a name-repair job).
+
+**🚫 Closed, do not re-raise:** tightening `ev_company_matches_owner` for the two generic-stem
+cards (`innovati`, `corporat`) — **measured and refuted, trap 11 above.** The five false
+positives are a stated residue and a one-second reject each, because the card carries the
+employer and the match key. Co-proposal as a general merge rule — **7% precision**, worse than
+the domain-keyed fix P189 already rejected at 25%.
 
 ## 7. The audit trail — open these for detail, in order
 
@@ -125,6 +142,7 @@ needs its own measured pass.
 | **P195** | 66 entities merged, $102.2M consolidated |
 | **P196** | merge made reversible; park reasons |
 | **P197** | the employer resolver; `no_employer_on_file` 68 → 54 |
+| **P198** | the prefix-8 arm is load-bearing (refuted a tightening); co-proposal at 7%; 3 merge decisions |
 | **A1–A4, A2a** | the ownership-lane arc (a sibling workstream, same entity graph) |
 
 **Design intent:** `account-based-contact-intelligence.md` (who to pursue) ·
