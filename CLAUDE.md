@@ -2662,6 +2662,56 @@ group by group, gate `lcc_p195_name_has_distinctive_residue`, plan `v_lcc_p195_m
   `open_groups`** — a group that was never merged is not a resurrection.
 
 
+## A5 — a truncated feed auto-closed the work it could not see (2026-08-27)
+
+`true_owner_needs_salesforce` read **815 open / 596 lifetime completions / 1 in the last week** and
+was ranked the biggest addressable stall in the system. **It never stalled, because it was never
+work.** Diagnosis only, nothing built. Writeup:
+`docs/audits/A5_TRUE_OWNER_SALESFORCE_STALL_2026-08-27.md`; follow-ups **A5a → A5c → A5d → A5e**.
+
+- **⚠️ `815 open` IS `1000 − 185` — AN OPEN COUNT THAT EQUALS A QUERY WINDOW IS NOT A BACKLOG.**
+  `handleGenerateResearchTasks` fetches `v_next_best_research` with `order=priority.desc&limit=2000`;
+  **PostgREST caps the response at 1,000** (the invariant already in this file) and the dia feed is
+  **29,643 rows**. The gap arm is `20 AS priority` — a **hard-coded literal, no value term and no
+  tiebreak** — so the window is `185` rows above priority 20 plus **815** arbitrary rows at exactly
+  20. Open tasks: **exactly 815**. **5,509 of the 6,324 real gaps have never had a task at all.**
+  The 2026-06-22 "cliff" is simply the date the window saturated.
+- **⚠️ THE AUTO-CLOSE GUARD COMPARES THE REQUESTED LIMIT AGAINST A CAPPED RESPONSE.** Its own comment
+  says *"never on a capped slice"*, and it tests `feed.length (1000) < limit (2000)` — which passes.
+  So it fires over a truncation and closes everything outside the window as `gap_resolved`.
+  **Compare against the RETURNED row count, never the number you asked for**; the same footgun that
+  makes `CAND_LIMIT = 1200` a lie (P123).
+- **⚠️ CHECK WHO WRITES A TERMINAL STATUS BEFORE RANKING LANES BY IT.** All 596 completions carry the
+  single value `"gap_resolved"` — the auto-close, not a human, worker, or verdict. **170 of 183
+  sampled owners still have `salesforce_id IS NULL`: 93% of the closures were FALSE.** The re-audit
+  switched from lifetime totals to completion *rates* precisely to avoid being fooled, and was fooled
+  anyway, because the rate was computed over a status nobody ever earns. Same family as P159a's
+  `drillthrough: 37` and the `already_annotated` re-discovery tally — **verify on the underlying rows
+  that the premise actually cleared.**
+- **⚠️ AND IT INVALIDATED THE LANE EVERYONE CALLED HEALTHIEST.** gov `property_missing_recorded_owner`
+  was *"908/30d, ~23/day, clears in ~7 weeks, leave it alone."* Its open count is pinned at **exactly
+  1,000** (the cap), **885 of 885** completions are the same auto-close, and **146 of 146** sampled
+  properties still have `recorded_owner_id IS NULL` — **100% false, zero real work in 30 days, and it
+  cannot clear because its open count is a constant.** **An open count that does not move is a
+  reading of the instrument, not of the population.**
+- **The P131 answer is (a) + (c), with (b) empty — the third time in this arc.** **293** owners
+  resolve **ID-to-ID** (dia `true_owner_id` → `external_identities(dia/true_owner)` → an entity
+  carrying a `salesforce/Account` identity; 49 of them own a property) = deterministic plumbing.
+  **~6,031 are not on-box at all** = CRM lookup, not automation. **ZERO are unstructured-on-box** —
+  no corpus anywhere states a Salesforce account id, so **an LLM here would have nothing to read and
+  would fabricate.**
+- **⚠️ 84% OF THE LANE OWNS NOTHING, AND 81% OF THE APPARENT VALUE IS NOT AN OWNER.** 5,338 of 6,324
+  hold zero properties. Ranked by property count the head is **DaVita Inc. 2,626 / DaVita Kidney Care
+  1,183 / `Independent` 754 / U.S. Renal Care 342 / `Other` 110** — operators (the documented P113
+  tenant-in-the-owner-slot trap) plus **literal placeholder strings**, carrying **5,227 of 6,442**
+  properties. Real prospectable owners: **963**, holding 1,215 properties. Also
+  ⚠️ **`dia.properties.estimated_annual_revenue` is CLINIC operating revenue, not owner rent** —
+  summing it over this population gives **$45.5B** and is not a BD value signal.
+- **The handler that looks like the consumer runs the other way.** `sf-link-reconcile.js` reads
+  `true_owners.salesforce_id` **where it already exists** and mirrors it onto the LCC entity — it is
+  this lane's downstream, not its consumer. The only code that ever *fills* the column is unscheduled
+  Python in the **Dialysis** repo. **Read a handler's direction before counting it as a consumer.**
+
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
 Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration
