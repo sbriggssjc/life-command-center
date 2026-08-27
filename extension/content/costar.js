@@ -1631,6 +1631,13 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       if (!data.tenancy_type && /^tenancy$/i.test(line)) {
         if (next && next.length < 30) data.tenancy_type = next;
       }
+      // CoStar's top property-stat cards render the value before the label in
+      // DOM text order (for example, "Single" then "Tenancy"). Preserve the
+      // same structured field without inferring from the tenant list.
+      if (!data.tenancy_type && /^(single|multi)$/i.test(line)
+          && /^tenancy$/i.test(next)) {
+        data.tenancy_type = line;
+      }
 
       if (!data.owner_occupied && /^owner\s+occup(ied)?$/i.test(line)) {
         if (next && /^(yes|no)$/i.test(next)) data.owner_occupied = next;
