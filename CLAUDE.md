@@ -66,10 +66,15 @@ after opening, before CI finished, carrying a red suite.
 [`docs/os/DOCUMENTATION-MAP.md`](docs/os/DOCUMENTATION-MAP.md)** — the root of the repo is code and
 config; **do not add a new `.md` there.**
 
-⚠️ **`main` is currently BLOCKED**: `test-suite.yml` on `main` is pinned `node-version: '20'` and
-three test files import Deno `.ts` modules Node 20 cannot load, so the required check has never
-been green. The fix is `beb3aecd`'s version of that workflow file; land it on its own branch off
-current `main` and every other PR unblocks. Details in the workflow doc §4.
+✅ **The Node-version lockout is RESOLVED (2026-08-27).** `test-suite.yml` was pinned
+`node-version: '20'` while four test files import Deno `.ts` edge modules Node 20 cannot load
+(`ERR_UNKNOWN_FILE_EXTENSION`), so the required check was red from its first run — 7 of 7. Fixed by
+`2883d95`, which pins **Node 24**, the repo's runtime baseline. **The tell was the test COUNT** —
+CI reported 4,568 tests / 868 suites against 4,621 / 883 locally; a failing assertion never changes
+how many tests exist, a module that cannot load does. ⚠️ `package.json` still says
+`"engines": {"node": ">=20.0.0"}`, which is false for the suite (it needs ≥22.18); whether the APP
+runs on 20 is unmeasured and affects Railway, so it was left alone. Details:
+[`docs/os/GITHUB-WORKFLOW.md`](docs/os/GITHUB-WORKFLOW.md) §4.
 
 ## Rules
 

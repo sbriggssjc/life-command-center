@@ -67,30 +67,46 @@ A required check only protects you if you let it run. Both checks must be green:
 no database — so a red CI run is almost always reproducible on your machine in less time than the
 round trip.
 
-## 4. ⚠️ CURRENT LOCKOUT and the exact unlock (as of 2026-08-27)
+## 4. The Node-version lockout — RESOLVED 2026-08-27
 
-**`main` cannot accept any PR right now**, because *"npm test"* is required and
-`test-suite.yml` **on `main` is pinned to `node-version: '20'`** — and three test files import
-Deno `.ts` edge modules that Node 20 cannot load (`ERR_UNKNOWN_FILE_EXTENSION`, 0 tests run). The
-check has never been green on `main`. On Node 22 the same suite is **4,606 pass / 0 fail**.
+> **Re-measured and rewritten. The section that stood here described a lockout that has since been
+> unlocked, and its recommended escape hatch — temporarily removing *"npm test"* from the required
+> list — is exactly the failure this rule exists to close. Left uncorrected it would have cost the
+> next reader real time, which is why the doctrine says to fix a dated blocker in the same change
+> that re-measures it.**
 
-**The fix already exists** on `origin/claude/split-ownership-history-q797uk` — one commit,
-`beb3aecd`, touching only `.github/workflows/test-suite.yml` and `CLAUDE.md`.
+**What happened.** *"npm test"* became a required check while `test-suite.yml` was pinned to
+`node-version: '20'`. Four test files import Deno `.ts` edge modules directly:
 
-**Unlock sequence — do this before anything else:**
+```
+test/availability-checker-parsers.test.js  → supabase/functions/availability-checker/parsers.ts
+test/sf-deal-promotion.test.mjs            → supabase/functions/_shared/sf-deal-promotion.ts
+test/sf-file-collector.test.mjs            → .ts
+test/sf-file-discovery.test.mjs            → .ts
+```
 
-1. Open a PR from **`claude/split-ownership-history-q797uk`** → `main`.
-   Its own workflow file specifies Node 22, and for a `pull_request` event GitHub runs the
-   workflow **as it exists in the merge of head into base** — so this PR runs on 22 and should go
-   green. (It may need a rebase: `main` has moved on, and `CLAUDE.md` is edited by both audit
-   windows, so expect a possible conflict there.)
-2. Merge it. `main` is now on Node 22 and the required check can pass.
-3. Re-open every other PR — including the docs branch that was rejected — and they will run green.
+Node 22.18+ and Node 24 strip TypeScript types natively, so these resolve. Node 20 has no TS
+support and throws `ERR_UNKNOWN_FILE_EXTENSION` at module load. The required check was therefore
+red from its first execution — **7 runs, 7 failures**, including the workflow's own PR.
 
-**If step 1 still fails**, the escape hatch is an admin bypass, or temporarily removing *"npm
-test"* from the required list (Settings → Branches → main), merging the fix, and re-adding it.
-**Re-add it** — an unenforced check is the badge-people-merge-past failure this rule exists to
-close.
+**The tell was the test COUNT, not the failure text.** CI reported **4,568 tests / 868 suites**
+against **4,621 / 883** locally. A failing assertion never changes how many tests exist; a module
+that cannot load does. Diagnose any future version-skew failure on this check by comparing the
+counts first.
+
+**Resolved** by commit `2883d95` ("P196: run required test gate on Node 24"), which pins
+`node-version: '24'` — the repository's development/runtime baseline. It reached `main` inside
+PR #1795 rather than the dedicated PR #1796, which was closed unmerged. Note the earlier
+prescription in this section pointed at a *different* fix on
+`claude/split-ownership-history-q797uk` pinning Node 22; that branch's version is not what landed.
+
+**`package.json` still declares `"engines": { "node": ">=20.0.0" }`, which is false for the test
+suite** — it needs ≥22.18 to load at all. Whether the *application* still runs on Node 20 is a
+separate, unmeasured question that affects the Railway runtime, so the field has deliberately not
+been changed. Do not "fix" it without measuring the app.
+
+**Never resolve a red required check by un-requiring it.** An unenforced check is the
+badge-people-merge-past failure. Fix the check.
 
 ## 5. Common errors, and what they actually mean
 
