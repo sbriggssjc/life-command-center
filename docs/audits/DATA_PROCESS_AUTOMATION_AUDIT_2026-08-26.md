@@ -1,5 +1,65 @@
 # End-to-end data-process audit — where the operator's hands are actually required
 
+> # 🔁 RE-AUDIT 2026-08-27 (evening) — the method worked; the next target is a DIFFERENT lane
+>
+> **Read this block first. §1–§3 below are the original audit and several of their numbers are now
+> historical.**
+>
+> ## What changed
+>
+> | | audit (08-26) | now (08-27) |
+> |---|---:|---:|
+> | open research tasks | ~3,000 | **2,747** |
+> | tasks in **never-completed** lanes | **983** | **439** |
+> | `establish_ownership_history` | 545 open / **0** done | **156 open / 314 done** |
+>
+> The 983 → 439 drop is almost entirely one lane. **The method — split a lane into the distinct
+> jobs it is actually asking, give each its own consumer — is validated.**
+>
+> ## ⚠️ But completing a lane SEEDS the next one, and that must not read as failure
+>
+> `trace_ownership_to_developer` went **18 → 152 open** while completing 12 more. A2's completions
+> re-seeded it *by design*: once a property has ownership history, the next question is who
+> developed it. **Total open fell only ~250 while completions rose 314** — because draining a lane
+> converts open work into *different* open work. **Judge a lane by its own completion rate, never by
+> the fleet-wide open count**, or every success will look like a wash.
+>
+> ## 🎯 The re-assessed answer to "where should we spend time"
+>
+> Measured completion **rates** (the audit originally used lifetime totals, which hide a stall):
+>
+> | lane | open | done 7d | done 30d | verdict |
+> |---|---:|---:|---:|---|
+> | `property_missing_recorded_owner` | 1,185 | **159** | **908** | ✅ **healthiest lane in the system** — ~23/day, clears in ~7 weeks. **Leave it alone.** |
+> | **`true_owner_needs_salesforce`** | **815** | **1** | **26** | 🔴 **THE TARGET — see below** |
+> | `owner_contact_manual` | 311 | 0 | 0 | 🔴 egress-blocked; a known external constraint, not a design gap |
+> | `establish_ownership_history` | 156 | 314 | 314 | ✅ this arc |
+> | `trace_ownership_to_developer` | 152 | 12 | 38 | 🟡 slow, and now fed by A2 |
+>
+> ### ⭐ `true_owner_needs_salesforce` is the biggest addressable stall in the system
+>
+> **815 open. 596 lifetime completions — so it demonstrably works. But 26 in 30 days and 1 in the
+> last 7.** At that rate the backlog never clears in any meaningful horizon.
+>
+> **It is a better target than anything left in the ownership lane**, for three reasons:
+> 1. **Bigger than the ownership lane ever was** (815 vs 545).
+> 2. **Proven consumable** — unlike `owner_contact_manual` (0 lifetime completions, externally
+>    blocked), this one has closed 596. The machinery exists and something slowed it.
+> 3. **Nobody has looked at it in this arc.** It has never been split, measured for actionability,
+>    or asked the P131 question — *is the answer already on-box and structured?*
+>
+> **⚠️ Do not assume it is the same shape as the ownership lane.** The obvious hypothesis — "it is
+> four jobs under one label" — is exactly the kind of premise this arc refuted six times. **Measure
+> first:** what fraction is answerable, what stopped in the last 30 days, and does the answer
+> already exist somewhere (Salesforce, the hub, the sponsor map)?
+>
+> ## Decision lanes — three still dead, and one is now the outlier
+>
+> `junk_entity_name` is **thriving** (1,334 decided, **90 in 2 days**). Unchanged and still dead:
+> `milestone_confirm` **57 open / 0 ever**, `match_disambiguation` 14 / **1**,
+> `confirm_true_owner` **151 open / 35 ever / 0 recently** — the last is the one worth a look, since
+> like `true_owner_needs_salesforce` it *worked once* and then stopped.
+
 > ## ✅ STATUS 2026-08-27 — the headline finding has been ACTED ON. Read this before quoting §2.
 >
 > This audit's central claim was **`establish_ownership_history`: 545 open, 0 completed in 68

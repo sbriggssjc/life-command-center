@@ -530,6 +530,57 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 (Cowork) — RE-AUDIT of the original automation audit: the method worked, the next target is elsewhere
+
+Scott asked to revisit the document that started this thread
+(`DATA_PROCESS_AUTOMATION_AUDIT_2026-08-26.md`) and re-assess where the time should go. Re-measured
+the whole surface rather than assuming.
+
+| | audit (08-26) | now |
+|---|---:|---:|
+| open research tasks | ~3,000 | **2,747** |
+| tasks in **never-completed** lanes | **983** | **439** |
+| `establish_ownership_history` | 545 open / **0** done | **156 / 314** |
+
+**The method is validated** — split a lane into the distinct jobs it is actually asking, give each
+its own consumer. The 983 → 439 drop is essentially that one lane.
+
+**⚠️ But a finding that will mislead anyone reading the fleet-wide number: completing a lane SEEDS
+the next one.** `trace_ownership_to_developer` went **18 → 152 open** while completing 12 more —
+A2's completions re-seeded it *by design* (once a property has ownership history, the next question
+is who developed it). **Total open fell ~250 while completions rose 314.** Draining a lane converts
+open work into *different* open work. **Judge a lane by its own completion rate, never by the fleet
+open count**, or every success reads as a wash.
+
+### 🎯 The re-assessed target is a lane nobody in this arc has looked at
+
+Switching from lifetime totals to **rates** — which is what hid the stall in the first place:
+
+| lane | open | done 7d | done 30d | verdict |
+|---|---:|---:|---:|---|
+| `property_missing_recorded_owner` | 1,185 | **159** | **908** | ✅ healthiest in the system, ~23/day → clears in ~7 weeks. **Leave it alone.** |
+| **`true_owner_needs_salesforce`** | **815** | **1** | **26** | 🔴 **the target** |
+| `owner_contact_manual` | 311 | 0 | 0 | 🔴 externally egress-blocked — a constraint, not a design gap |
+| `trace_ownership_to_developer` | 152 | 12 | 38 | 🟡 slow, now fed by A2 |
+
+**`true_owner_needs_salesforce` is the biggest addressable stall in the system.** 815 open, **596
+lifetime completions** — so the machinery demonstrably works — and then **26 in 30 days, 1 in the
+last 7.** It is bigger than the ownership lane ever was, it is *proven consumable* (unlike
+`owner_contact_manual`), and it has never been split, measured for actionability, or asked the P131
+question.
+
+**A5 drafted as DIAGNOSIS ONLY** (`prompts/A5-*.md`) — establish whether it stopped or decayed (a
+cliff and a slope have different causes), read real rows rather than inferring from the type name,
+state the P131 category explicitly, and check whether the SF link already exists via another path,
+since **A2 found 291 of 331 grantors were already minted by an unattached producer**. ⚠️ The prompt
+explicitly forbids building a consumer, and warns off the obvious "four jobs under one label"
+hypothesis — **six plausible premises have been refuted by measurement in this arc**, two of them
+about this same family of lanes.
+
+**Also filed: `confirm_true_owner`** (151 open / 35 ever / 0 recently) — the same *worked-once-then-
+stopped* shape, smaller, worth the same treatment after A5 establishes the method (**A5b**).
+
+
 ## 2026-08-27 17:15 UTC (Cowork) — A2b + A4b landed; refreshed the kickoff doc, which carried a DANGEROUS instruction
 
 **Lane: `all_guarded` 18 → 7, `awaiting_draft` 0 → 11** (the A4b recovery mid-flight, not a defect
