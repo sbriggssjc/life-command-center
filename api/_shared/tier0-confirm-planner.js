@@ -298,6 +298,85 @@ export function buildTier0Card(row) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// P194 — THE AUTO-ATTACH POPULATION.
+//
+// Prompt 192 §1: sweep `decidability='auto'` — `match_strength='exact'` AND
+// `n_eligible = 1`. Exactly one candidate, and the email domain IS the owner's
+// own name reduced to a core, so there is no person to choose and no lexical
+// slack to be wrong about.
+//
+// ⚠️ AND IT STOPS THERE. `domain_is_core_prefix` looks like the obvious next
+// tier and is measured at ~9/12, with severe failures:
+//     "JP Morgan Chase Commercial Mortgage Securities Trust 2018PTC" -> jpmorgan.com
+//         a securitization vehicle is not the bank, and is not a prospect at all
+//     "Frontier Hub LLC" -> frontier.net
+//         an internet service provider (fixed separately, in the P194 stoplist)
+// One tier of match strength separates 11/11 from 9/12, and the cost of being
+// wrong is a stranger's employee in `owner_contact_pivot`, which is the one
+// field the entire outreach chain reads. Widening this predicate is a decision
+// with a blast radius, not a tuning knob.
+//
+// ONE VERDICT FUNCTION, TWO CALLERS. The tick's GET (dry-run grade) and POST
+// (write) both call this, so what Scott grades before flipping the flag is
+// exactly what runs after — the P140 rule that `evaluateRoleLabel` is the sole
+// verdict and `apply`/`grade` merely wrap it. A test pins that they agree.
+//
+// PURE. No I/O, no clock, no randomness — safe to run over a snapshot.
+// ---------------------------------------------------------------------------
+
+/** The one decidability value this sweep may act on. */
+export const TIER0_AUTO_DECIDABILITY = 'auto';
+/** The one match strength this sweep may act on. */
+export const TIER0_AUTO_MATCH_STRENGTH = 'exact';
+
+/**
+ * Decide whether one triage row may be attached unattended.
+ *
+ * @param {object} row  a row of v_lcc_tier0_owner_contact_lane_triage
+ * @param {object=} card  buildTier0Card(row); built here when not supplied
+ * @returns {{eligible:boolean, reason:string, person:object|null, card:object}}
+ *   `reason` is always populated — a skip must name itself, never be a silent
+ *   filter (an unexplained drop is indistinguishable from a bug).
+ */
+export function planTier0AutoAttach(row, card) {
+  const r = row || {};
+  const c = card || buildTier0Card(r);
+  const out = (eligible, reason, person = null) => ({ eligible, reason, person, card: c });
+
+  // The view is the authority on membership; JS re-asserts the two facts that
+  // define it, so a future widening of the view cannot silently widen the sweep.
+  if (String(r.decidability || '') !== TIER0_AUTO_DECIDABILITY) {
+    return out(false, 'not_auto_decidability:' + (r.decidability || '(none)'));
+  }
+  if (String(r.match_strength || '') !== TIER0_AUTO_MATCH_STRENGTH) {
+    return out(false, 'not_exact_match:' + (r.match_strength || '(none)'));
+  }
+  if (Number(r.n_eligible) !== 1) {
+    return out(false, 'not_single_candidate:' + (r.n_eligible ?? '(none)'));
+  }
+  // The SQL n_eligible and the JS shape gate can legitimately disagree: the JS
+  // layer adds isPersonShaped / isJunkEntityName / isMisparseName / the role-or-
+  // form stoplist on top. If the one SQL-eligible candidate fails those, there
+  // is nothing to attach — and that is a correct outcome, not an error.
+  if (!Array.isArray(c.people) || c.people.length !== 1) {
+    return out(false, 'js_gate_left_' + ((c.people || []).length) + '_candidates');
+  }
+  const person = c.people[0];
+  const cls = classifyTier0Person(person);
+  if (!cls.eligible) return out(false, 'person_not_eligible:' + cls.block_reason);
+  if (!person.person_id) return out(false, 'person_missing_id');
+
+  // Defensive: the candidate's own email domain must BE the card's domain. The
+  // view guarantees it today; asserting it here means a future join change
+  // cannot quietly attach a person from somewhere else.
+  const personDomain = String(person.email || '').split('@')[1] || '';
+  if (personDomain.trim().toLowerCase() !== String(c.domain || '').trim().toLowerCase()) {
+    return out(false, 'person_domain_mismatch:' + (personDomain || '(none)'));
+  }
+  return out(true, 'exact_single_candidate', person);
+}
+
 /** Stable subject_ref for the lane. Domain-scoped: rejecting rmrgroupinc.com must not close rmrgroup.com. */
 export function tier0SubjectRef(ownerId, domain) {
   if (!ownerId || !domain) return null;
