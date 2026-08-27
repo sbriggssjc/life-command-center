@@ -5,7 +5,7 @@
 > The dated audits under `docs/audits/` are the **evidence trail** — go there for *why*, come here
 > for *what is true now*.
 >
-> **Last measured: 2026-08-27 14:00 UTC.** Re-measure before quoting any number.
+> **Last measured: 2026-08-27 22:30 UTC.** Re-measure before quoting any number.
 
 ---
 
@@ -33,29 +33,44 @@ distrust every record we have* — which trains an operator to skip all of it.
 | `mismatch` | last grantee ≠ our owner | **A3** sponsor confirms → `sponsor_spe` | ✅ live |
 | `sponsor_spe` | resolved: grantee is an SPE of a confirmed sponsor | — (terminal) | ✅ live |
 | `no_records` | no transfers on file | **A4** auto-retires (cron 245, 06:51) | ✅ live |
-| `all_guarded` | transfers exist, **all** guard-rejected | **A4b** — open | 🔴 |
+| `all_guarded` | transfers exist, **all** guard-rejected | **A4b** corrected the guard; residue is correct | ✅ live |
 
 ⚠️ **`awaiting_draft` and `unrecognised_payload` are kept as distinct states** — a task the drafter
 has not reached is *not* `no_records`, and a payload matching nothing must surface rather than be
 absorbed into a bucket it does not belong to.
 
-## 3. Current state (2026-08-27 14:00 UTC)
+## 3. Current state (2026-08-27 22:30 UTC)
 
 **Completed ever 314 · open 156 · skipped 1,766.** From 0 completions in 69 days.
 
-| action | tasks |
-|---|---:|
-| `agrees` | 64 |
-| `mismatch` | 49 |
-| `sponsor_spe` | 25 |
-| `all_guarded` | 18 |
-| `no_records` | **0** (all 74 retired) |
+| action | tasks | was (14:00) |
+|---|---:|---:|
+| `agrees` | 64 | 64 |
+| `mismatch` | 49 | 49 |
+| `sponsor_spe` | 25 | 25 |
+| `all_guarded` | **7** | 18 |
+| `awaiting_draft` | **11** | 0 |
+| `no_records` | 0 (all 74 retired) | 0 |
+
+⚠️ **The 11 in `awaiting_draft` are the A4b recovery mid-flight, not a defect.** A4b corrected the
+gov guard; the drafts built from the old one were superseded so the 06:45 drafter re-drafts them and
+cron 244 applies at 06:49. Run against the **real planner**, they classify **9 `agrees` + 2
+`mismatch`** (`5379` Brookfield/BSREP II, `6992` TFO REVA — both sponsor↔SPE shaped, so A3 territory).
+`awaiting_draft` returning to 0 is the completion signal; **verify on `facts_inserted` /
+`tasks_completed`, never on the predicate.**
 
 **+304 historical ownership facts** written to `lcc_entity_portfolio_facts` (12,724 → 13,028),
 280 owners, **$579.9M**. **Badge reads human-actionable, not raw open.**
 
 **Blocked `agrees` residue** (`v_lcc_ownership_chain_apply_blocked`):
 `ambiguous_entity` 18 · `no_entity` 18 · `placeholder` 15 · `repeat_transfer_unrepresentable` 14.
+
+**The 7 remaining `all_guarded` are correctly guarded, name by name:** three punctuation-variant
+self-transitions (`786` RGR, `7527` EPA, `14058` MAOB — A2b's `gsa_lease_diff` flicker), `13080`
+`COMM 2014-UBS5 HARWOOD CENTER, LLC` (a CMBS trust, deliberately an artifact), `9995` PMMC (a genuine
+strict-prefix name variant), `7966` (a concatenated brokerage — `gov_strip_brokerage_suffix` only
+strips a `by <brokerage>` suffix), and `1429` Camarillo (six `Unknown` grantors plus the street-token
+variant A4b now catches). **There is no further recoverable population here.**
 
 **Six sponsor families confirmed:** `boyd` `highwoods` `rxr` `arc` `east` `sunflower`.
 **Held:** `fgf` (90 SPEs — possibly a Boyd program), `commonwealth` (15 unrelated parties),
@@ -83,13 +98,31 @@ absorbed into a bucket it does not belong to.
    entities, `boyd` 129, and `egp` names two different REITs.
 8. **Report `facts_inserted` / `tasks_completed`, never `links_already_present`** — a re-discovery
    tally reads exactly like throughput.
+9. **An address-shaped name test must be gated on a legal-form check.** `\m[0-9]{5}\M` sat as a bare
+   disjunct in the gov `*_is_clean` predicate, so **a street number ≥ 10000 disqualified the SPE named
+   after it** — the commonest owner-name shape in this portfolio (`EGP 17101 BROOMFIELD LLC`). The
+   discriminator is measured, not assumed: over every name the arm rejects, the junk carries **no**
+   legal form and every real party carries one; the residue after gating is 3 pasted addresses,
+   3 of 3 correct. **Narrow the arm, never delete it** — nothing else catches those three.
+10. **A corrected guard is INVISIBLE without a re-draft, and that is not the same bug as A4's.**
+   `fresh` excludes any task carrying a proposal, so all 18 `all_guarded` tasks kept the stale draft
+   the old guard produced: fix the view, change nothing on any surface. The sensor
+   (`runA4bRedraftPass`) is keyed on **state** — this task says every transfer was guarded away, and
+   the gov view now passes one — never on "A4b shipped", so it equally covers records simply
+   improving, and it is not a chore repeated the next time a guard moves (Class 8).
+11. **Loosening a name guard needs the variant guard widened in the SAME change.** Admitting
+   street-numbered names makes `10835 CAMARILLO STREET APARTMENTS LLC → 10835 CAMARILLO APARTMENTS
+   LLC` read as a real transfer, and A2 would write it as history. The widening is
+   street-token-equality (15 rows, **all 15 read as the same party**); the tempting
+   ordered-token-subsequence alternative was measured and **rejected at 108 newly dropped rows across
+   63 properties** to prevent one phantom.
 
 ## 5. What is left
 
 | # | Item | Size |
 |---|---|---|
-| **A2b** | `repeat_transfer_unrepresentable` — one conveyance recorded on several dates (the `gsa_lease_diff` flicker). Producer fix. | 14 tasks / 32 links |
-| **A4b** | A P138 guard misfires on **street-numbered SPEs** (`\m[0-9]{5}\M` rejects any SPE named for a street number ≥ 10000). **10 of 18 recoverable, and the defect is wider than this lane.** | 18 tasks |
+| **A2b** | `repeat_transfer_unrepresentable` — one conveyance recorded on several dates (the `gsa_lease_diff` flicker). Producer fix. **A4b left its 3 `all_guarded` self-transitions untouched — they are the same flicker and belong here.** | 14 tasks / 32 links |
+| **A4b-res** | `is_name_variant` still misses **spaced-letter legal forms and TIC** (`1201 CORBIN, L. L. C.`, `1325 J STREET L P`, `321 E 2nd St TIC`) — measured at **18 address-arm names**, sized deliberately and NOT folded into A4b, whose blast radius was graded on a different rule. | ~18 names |
 | **V8a** | Settle **Boyd ↔ FGF** before confirming `fgf` — 90 SPEs ride on it. | 👤 |
 | **V8c** | Merge the Madison duplicates, then one clean confirm. | 2 |
 | **A3-residue** | ~31 chains with no sponsor family — the genuine integrity lane. **Sized, surface deliberately not built.** | ~31 |
@@ -106,4 +139,5 @@ absorbed into a bucket it does not belong to.
 | `docs/audits/A2a_AMBIGUOUS_ENTITY_MERGE_2026-08-27.md` | duplicate-entity merge; round trip proven before the batch |
 | `docs/audits/A3_OWNERSHIP_MISMATCH_SPONSOR_FAMILY_2026-08-27.md` | sponsor↔SPE; why the bare-token key was rejected |
 | `docs/audits/A4_OWNERSHIP_LANE_RETIRE_AND_ADJUDICATE_2026-08-27.md` | the 74 retired; the guard defect measured |
+| `docs/audits/A4b_TRANSITION_CLEAN_GUARD_2026-08-27.md` | the street-numbered-SPE defect: fleet-wide size, the measured discriminator, the variant pairing, the re-draft sensor |
 | `docs/audits/V8_SPONSOR_FAMILY_REVIEW_2026-08-27.md` | Scott's 12 answers + the evidence check that changed 4 |

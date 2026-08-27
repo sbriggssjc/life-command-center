@@ -110,7 +110,12 @@ function toNumberOrNull(v) {
 //   * is_self_transition   — A→A, an artifact, not a transfer.
 //   * is_oscillating_pair  — gsa_lease_diff flickers between an SPE and its
 //                            parent; the DATE is real, the DIRECTION is not.
-//   * is_name_variant      — a strict prefix extension of the same name.
+//   * is_name_variant      — the same name wearing a variant: a strict prefix
+//                            extension, or (A4b) equal once street-type tokens
+//                            are removed. The SQL view is the single owner of
+//                            that judgement; nothing here re-derives it, because
+//                            a JS copy of a SQL normalizer is the drift this repo
+//                            has paid for repeatedly.
 //   * *_is_clean           — junk/brokerage-polluted party names.
 //   * transfer_date        — an undated link cannot be ordered, and an ordered
 //                            chain is the entire deliverable.
