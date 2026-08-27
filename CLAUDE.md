@@ -499,10 +499,61 @@ All three converge on `api/_shared/intake-om-pipeline.js::stageOmIntake`:
     rate decays straight back to zero after it (08-26: 0 of 21). Assert on the **new-row rate
     over the last 7 days**, never a cumulative percentage a backfill can carry. Same class as
     P176: *a one-shot repair of a recurring producer is a chore you repeat silently forever.*
-  - Ruled out already, do not re-walk: stale deploy (live `/version` **includes** the P61
-    commit), a second writer (exactly one insert site, `intake-extractor.js:751`, with both
-    guards on the lines above it), a flow writing the table directly (none).
-    Full measurement + the open hypothesis: `docs/audits/W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md`.
+  - ~~Ruled out already, do not re-walk: stale deploy, a second writer, a flow writing the
+    table directly.~~ **ANSWERED P194 — see the next bullet. All three were ruled out
+    correctly and all three were the wrong question.**
+    Full measurement + the answer: `docs/audits/W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md`.
+
+- **⚠️ A RETIRED DEPLOYMENT THAT STILL ANSWERS IS A SECOND WRITER — AND THE ONLY THING
+  POINTING AT IT MAY BE A URL IN A CLIENT YOU DON'T DEPLOY (P194, 2026-08-27).** The sidebar
+  mystery above was never a second prompt. `extension/background.js` carried **seven hardcoded
+  fallbacks** to `https://life-command-center-nine.vercel.app` for the intake endpoints, under
+  a comment explaining that *"the intake endpoints live on Vercel, not on the Railway MCP
+  server."* That was true until **2026-07-20**, when Vercel was retired and `server.js` became
+  the single source of `/api/*` routing. **Nobody tore the Vercel deployment down.** It still
+  serves, and it still holds the LCC Opps service key — so the extension's POSTs did not fail,
+  they SUCCEEDED against a build frozen before Prompt 61, writing into the same table.
+  - **The row shape is the fingerprint: the P61 key set MINUS exactly the 7 keys P61 added**
+    (43 observed vs 50 in `EXTRACTION_SCHEMA_KEYS`), plus no `_provider` even though
+    `ensureProviderStamp` is unconditional at the single write site. When a snapshot is missing
+    a guard that cannot be skipped, the row did not come from your build. **Read that as a
+    provenance fact, not a bug in the guard.**
+  - **THE DEPLOY CHECK THAT RULED THIS OUT WAS RUN AGAINST THE WRONG DEPLOYMENT.** The 2026-08-26
+    "not a stale deploy" verdict (`git merge-base --is-ancestor <p61> <live /version>`) was
+    correct and irrelevant: it interrogated Railway, and these rows were never on Railway. **A
+    `/version` probe answers for the host you asked. Before trusting it, establish that the
+    traffic in question actually reaches that host** — the P131 lesson ("check the fix against
+    the deployed sha") has a prior step nobody wrote down: *which* deployed sha.
+  - **Diagnose it from Supabase `edge_logs`, not app logs.** Every PostgREST write carries the
+    calling server's `request.headers.cf_connecting_ip`. Railway is a small set of STABLE
+    addresses (`152.55.x`, `162.220.232.x`) carrying tens of thousands of requests; a serverless
+    stand-in is a rotating pool of ephemeral AWS IPs each appearing for 40–255 requests with one
+    narrow path fingerprint. Joining those log lines to `created_at` separated 25 of 25 rows on
+    2026-08-26 with **zero crossovers** — including two same-hour pairs (14:09 email hardened vs
+    14:30 sidebar bare; 21:33 vs 21:37), which kills deploy-timing, model-drift and
+    rate-limit-fallback in one stroke. **This works for any "two behaviours, one table" puzzle.**
+  - **A stale host is invisible to every check this repo runs.** It does not error, does not
+    404, does not show in `/version`, and the producer lives in a Chrome extension that CI never
+    builds. Prompt 82's own test header names the symptom — *"the sidebar / cloud-fallback
+    channels wrote bare snapshots"* — then fixes a code path that channel was not running, and
+    the "100% stamp coverage" that followed was a **backfill** over rows the foreign writer had
+    produced. **Grep for a retired origin in the CLIENTS (extensions, PA flows, scripts, docs),
+    not just in the repo that used to deploy there.**
+  - **Detector, live:** `v_lcc_intake_extraction_provenance` + `lcc_check_intake_extraction_provenance()`
+    (cron `lcc-intake-extraction-provenance`, 06:58) open a deduped
+    `lcc_health_alerts(alert_kind='intake_extraction_foreign_writer')` for any channel whose
+    **new rows over 7 days** are 0% `_provider`-stamped, and auto-resolve when coverage returns.
+    The predicate is the provenance invariant, not a quality metric, so it catches the *next*
+    stale host or forked build without knowing anything about prompts. Guard on the client side:
+    `test/extension-intake-host.test.mjs` (verified RED on the pre-fix `background.js`).
+    **Read `alerts_opened`/`alerts_resolved`, never `already_open`.**
+  - **CLOSED, do not re-open: the 101 rich-seed CoStar page captures are NOT losing data.**
+    All 101 carry a `domain_property_id`, i.e. the sidebar pipeline had already written the
+    domain row; verified gov `properties` 31516 carries a live `available_listings` row at
+    `asking_price 6,500,000` / `asking_cap_rate 0.0700`, byte-for-byte the seed. The seed on the
+    intake is a **receipt for a write that already happened**, not an unconsumed payload.
+    (Separate, unfixed: those intakes still mark `discarded/non_deal_no_address` because the
+    disposition reads only the snapshot and never the seed.)
 - Full reference: `docs/architecture/om_intake_pipeline.md`.
 
 ### Multi-model AI fallback (extraction)

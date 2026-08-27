@@ -1,6 +1,9 @@
 # W5.3 re-opened — the intake grade has been averaging two different channels
 
 **Measured 2026-08-26 (Cowork), live against LCC Opps `xengecqvemvfknjvbvrq`.**
+**§3 ANSWERED 2026-08-27 (Prompt 194): the sidebar channel was posting to the RETIRED Vercel
+deployment, which still serves a pre-Prompt-61 build. Verdict = defect. Jump to
+[§3 ✅ ANSWERED](#-answered-prompt-194-2026-08-27--it-was-never-a-second-prompt-it-was-a-second-host).**
 Picks up the thread left off by `W53_AND_OLLAMA_HYGIENE_KICKOFF.md` →
 `W5_3_LOCAL_LLM_EVALUATION_2026-08-06.md` (+ its 2026-08-11 re-grade addendum) →
 prompts 61 / 82 / 93.
@@ -73,7 +76,8 @@ first unmixed measurement **is not yet established** and must not be asserted ei
 ## 3. Why the sidebar rows are unhardened — hypotheses tested
 
 Three obvious causes were checked and **all three are ruled out**. Recording them so the next
-pass does not re-walk them:
+pass does not re-walk them. (**The answer is at the end of this section** — none of these, and
+none of the corrected hypothesis either: it was a second HOST, not a second prompt.)
 
 | hypothesis | verdict | evidence |
 |---|---|---|
@@ -124,6 +128,135 @@ here.** Verify before treating it as either a leak or a non-issue.
 **Both remaining questions need Railway logs for one sidebar intake end to end, which is why they
 go to Claude Code rather than being guessed at** → prompt `194`.
 
+---
+
+### ✅ ANSWERED (Prompt 194, 2026-08-27) — it was never a second prompt. It was a second HOST.
+
+**Verdict: DEFECT, not design.** The corrected hypothesis above — *"a distinct sidebar
+document-extraction path with its own, older prompt"* — is right about the symptom and wrong
+about the mechanism. There is no second prompt in this repo, and there never was. There is a
+second **deployment**.
+
+**The named branch:** `extension/background.js` resolved the intake host as
+`syncConfig.LCC_VERCEL_URL || 'https://life-command-center-nine.vercel.app'` — **six hardcoded
+fallbacks** (plus a seventh, `chrome.storage.local.lccHost`, for
+`/api/intake-outlook-message`) covering `prepare-upload`, `stage-om` and `document-notify`. The
+comment above them stated the reason, and it had become false:
+
+> *"The intake endpoints (prepare-upload, stage-om, extract) live on Vercel, not on the Railway
+> MCP server — so `LCC_RAILWAY_URL` is the wrong host to use here. Hardcode the Vercel origin…"*
+
+That was true until **2026-07-20**, when Vercel was retired and `server.js` became the single
+source of `/api/*` routing on Railway. **The Vercel deployment was never torn down.** It still
+serves, and it still holds the LCC Opps service key — so the sidebar's POSTs did not fail. They
+succeeded, against a build frozen before Prompt 61, writing into this very table.
+
+That is why the row shape is *exactly* the Prompt-61 key set **minus the seven keys Prompt 61
+added** (43 keys observed vs 50 declared in `EXTRACTION_SCHEMA_KEYS`), and why `_provider` is
+absent even though `ensureProviderStamp` is unconditional at the write site: the sidebar rows
+never reach that write site.
+
+#### The runtime evidence
+
+Railway logs were not reachable from the session, so the trace was taken one layer down, where it
+is actually stronger: **every PostgREST write is logged by Supabase with the calling server's
+IP.** For 2026-08-26 the `POST /rest/v1/staged_intake_extractions` log lines join to the DB rows
+1:1 on millisecond timestamps. All 25 rows written that day, in order:
+
+| row `created_at` | channel | stamped / hardened | writer IP | host |
+|---|---|---|---|---|
+| 14:09:10.161 | email | ✅ / ✅ | `152.55.177.106` | **Railway** |
+| 14:30:49.058 | sidebar | ❌ / ❌ | `3.235.172.208` | AWS us-east-1 |
+| 14:46:59 · 14:49:53 · 14:51:33 | sidebar ×3 | ❌ / ❌ | `32.197.125.63` | AWS us-east-1 |
+| 15:25:32.041 | sidebar | ❌ / ❌ | `3.80.87.42` | AWS us-east-1 |
+| 15:57:26 · 15:57:40 | email ×2 | ✅ / ✅ | `162.220.232.32` | **Railway** |
+| 21:33:08.682 | email | ✅ / ✅ | `152.55.176.197` | **Railway** |
+| 21:37:15.841 | sidebar | ❌ / ❌ | `52.205.204.153` | AWS us-east-1 |
+| 21:58:03 · 21:59:44 | sidebar ×2 | ❌ / ❌ | `18.206.224.24` | AWS us-east-1 |
+| 22:06 → 22:18 (×7) | sidebar ×7 | ❌ / ❌ | `98.84.35.201` | AWS us-east-1 |
+| 22:26:26 · 22:31:59 · 22:38:16 · 22:49:51 | sidebar ×4 | ❌ / ❌ | `3.235.147.184`, `100.56.12.176`, `3.84.183.231`, `34.229.11.72` | AWS us-east-1 |
+
+**25 of 25 separate cleanly, with zero crossovers.** Every stamped-and-hardened row was written
+from a stable Railway IP (`152.55.x` / `162.220.232.x` — the same ranges that carry 21,365 and
+9,217 requests each in a 3-hour window, i.e. the whole app). Every unstamped, pre-P61 row was
+written from an **ephemeral** AWS us-east-1 address that appears for 40–255 requests and then
+never again — a serverless invocation pool, and each one's path fingerprint is *only*
+`workspace_memberships → storage/v1/object/upload/sign/lcc-om-uploads/… → users →
+connector_accounts → inbox_items → staged_intake_items → staged_intake_artifacts →
+staged_intake_extractions`. That is the stage-om sequence and nothing else.
+
+Two same-hour pairs make it airtight: **14:09 email (Railway, hardened) vs 14:30 sidebar
+(lambda, bare)**, and **21:33 email (Railway, hardened) vs 21:37 sidebar (lambda, bare)**. Same
+minute of the same day, same table, opposite results — which rules out deploy timing, model
+drift, and rate-limit fallback in one stroke.
+
+#### Why it hid for six weeks
+
+- **The stale host does not error.** A retired deployment that still answers 200 and still holds
+  the DB key is indistinguishable from the live one at every surface the operator looks at. The
+  sidebar "worked" the entire time.
+- **The 67 stamped sidebar rows are all backfill.** They date `2026-08-08 … 08-11`, **48 of them
+  on a single day carrying `final_provider: 'none'`**, and **0 of 67 are hardened**. There has
+  never been one organic sidebar stamp. Prompt 82's own test header attributes the gap to *"the
+  sidebar / cloud-fallback channels wrote bare snapshots"* — it named the channel correctly and
+  then fixed a code path that channel was not running.
+- **Nothing in the repo could see it.** The producer lives in a Chrome extension; the symptom
+  lives in a Postgres table; the only object connecting them is a URL string in a comment.
+
+#### The second question — CLOSED, nothing is being discarded
+
+The docs assertion was checked, not repeated. All **101 of 101** rich-seed rows carry a
+`domain_property_id`, which means the sidebar pipeline had already resolved and written the
+domain property *before* staging the document. Spot-checked both domains:
+
+- gov `properties.property_id = 31516` (`11618 Hwy 70 E`, Clayton NC) carries a live
+  `available_listings` row with **`asking_price = 6,500,000`** and **`asking_cap_rate = 0.0700`**
+  — byte-for-byte the seed's `$6,500,000` / `7.00%`.
+- dia `properties.property_id = 51173` (`227 N Lee St`, Americus GA) exists and was updated the
+  same day.
+
+**So the structured CRE data is not lost — `sidebar-pipeline.js` writes the domain DBs directly,
+as `CLAUDE.md` says, and the seed on the intake is a receipt for a write that already happened.**
+No capture loss on those 101 rows. Question closed; do not build a rescue path for it.
+
+*(One smaller finding falls out and is deliberately NOT fixed here: those 101 intakes are marked
+`status='discarded'`, `discard_reason='non_deal_no_address'`, because the disposition reads only
+the snapshot and the brochure PDF extracted to all-nulls — even though the seed carries a known
+address, domain and `domain_property_id`. That is a disposition bug, separate from this one.)*
+
+#### What shipped
+
+1. **The producer fix.** `extension/background.js` now has ONE owner of the host decision —
+   `pickIntakeHost()` / `getIntakeHost()`, resolving `LCC_RAILWAY_URL` **first** (already
+   configured; the side panel has used it all along), keeping `LCC_VERCEL_URL` only as a
+   deliberate staging override, and defaulting to the Railway origin. All seven call sites route
+   through it. Manifest `1.0.44 → 1.0.45`. **⚠️ Operator step: the unpacked extension must be
+   reloaded before any of this takes effect.**
+2. **The guard.** `test/extension-intake-host.test.mjs` — the retired hostname may appear in
+   prose but not in executable code; exactly one `DEFAULT_INTAKE_HOST`, pointing at Railway; no
+   intake endpoint built from a literal origin; `LCC_VERCEL_URL` dereferenced exactly once.
+   Verified **3/3 RED** against the pre-fix `background.js` and 3/3 green after.
+3. **The sweep — a detector, deliberately NOT a backfill.** Migration
+   `20261002090000_lcc_p194_intake_extraction_provenance.sql` (applied live) adds
+   `v_lcc_intake_extraction_provenance` (per-channel **new-row** coverage over a trailing 7 days)
+   and `lcc_check_intake_extraction_provenance()`, cron `lcc-intake-extraction-provenance`
+   (06:58 UTC). Its predicate is a **provenance invariant, not a quality metric**: `_provider` is
+   stamped unconditionally at the single write site, so a channel writing ≥5 rows in 7 days with
+   **zero** stamped did not come through this codebase at all. It opens a deduped
+   `lcc_health_alerts(alert_kind='intake_extraction_foreign_writer')` and auto-resolves when
+   coverage returns — so this fires for the *next* stale host, forked build or second writer too,
+   without knowing anything about prompts. It is **live and open on `intake_channel:sidebar`
+   right now**, and will close itself once the reloaded extension writes its first stamped row.
+
+   Auto-resolve proven by a self-rolling-back synthetic gate: stamp one live sidebar row →
+   `open_before=1, open_after=0, alerts_resolved=1` → `RAISE` rolled it back, **0 residue**
+   verified.
+
+**No backfill was run.** The 350 existing rows stay as they are; they are honestly separable at
+query time (absent `_provider` = not written by us) and re-extracting them would be the same
+one-shot repair that produced the 08-10 spike. Re-grading W5.3 is still backlog **L8** and still
+comes after the channel actually separates.
+
 ### ⚠️ And the lesson generalises past this table
 
 "Split by channel" was right and **not sufficient** — the channel that mattered had to be split
@@ -142,9 +275,17 @@ document-only average (87%) differ by 51 points and describe different things.
    (`ROLLOUT_STATUS.md` W5.3, `PLANNED-BACKLOG.md` L8).
 3. **`_provider` stamp coverage is a live defect, not a closed one.** Assert on the **rate for
    new rows in the last 7 days**, never on a cumulative percentage a backfill can carry.
+   *(P194: that rate is now a view — `v_lcc_intake_extraction_provenance` — and a 0% channel
+   opens a health alert. Before the fix: sidebar 0/23, email 21/21, folder_feed 5/5.)*
 4. **Sidebar's high structured coverage is an asset, not a problem.** If those fields are as good
    as they look, the question is whether the email path should seed from equivalent structured
    capture — not whether sidebar should be "fixed" to look like email.
+5. **P194 adds one more, and it is the general one: a retired deployment that is still reachable
+   and still holds live credentials is a SECOND WRITER.** Retiring a platform is not finished when
+   traffic moves — it is finished when the old origin can no longer answer. Until then every
+   client holding the old URL keeps running the old code, successfully, against production data.
+   Grep for a retired origin in *clients* (extensions, flows, scripts, docs), not just in the repo
+   that used to deploy there.
 
 ## 5. Reproduction queries
 
