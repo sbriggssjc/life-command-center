@@ -28,8 +28,13 @@ import {
   fetchOwnershipLaneTaskIds, reorderByIds,
 } from '../api/_shared/ownership-lane-split.js';
 
+// A3 (2026-08-27) re-issued the WHOLE split-view body to add the `sponsor_spe`
+// action. Both migrations are read, so these structural guards describe the
+// CURRENT definition rather than a superseded one — a guard pinned to the older
+// file would keep passing while the shipped view drifted away from it.
 const MIGRATION = readdirSync('supabase/migrations')
-  .filter((f) => f.includes('ownership_history_lane_split'))
+  .filter((f) => f.includes('ownership_history_lane_split')
+              || f.includes('ownership_mismatch_sponsor_family'))
   .map((f) => readFileSync(`supabase/migrations/${f}`, 'utf8'))
   .join('\n');
 
@@ -75,9 +80,11 @@ test('it LEFT JOINs, so an undrafted task is visible rather than dropped', () =>
   assert.match(VIEW_SQL, /'unrecognised_payload'/);
 });
 
-test('exactly four actions, and awaiting/unrecognised are NOT among them', () => {
+test('exactly five actions, and awaiting/unrecognised are NOT among them', () => {
+  // A3 added `sponsor_spe`. It is an ACTION (a bucket the operator can filter
+  // to and the rollup counts), never a pending state.
   assert.deepEqual([...OWNERSHIP_LANE_ACTIONS].sort(),
-    ['agrees', 'all_guarded', 'mismatch', 'no_records']);
+    ['agrees', 'all_guarded', 'mismatch', 'no_records', 'sponsor_spe']);
   for (const p of OWNERSHIP_LANE_PENDING_STATES) {
     assert.equal(isOwnershipLaneAction(p), false, `${p} is a split_state, not an action`);
     assert.equal(isOwnershipLaneBucket(p), true, `${p} must still be selectable/countable`);
@@ -99,6 +106,9 @@ test('only mismatch + all_guarded count as human work', () => {
   // retires it). A badge counting either is the badge-that-is-noise failure.
   assert.equal(OWNERSHIP_LANE_HUMAN_ACTIONS.includes('agrees'), false);
   assert.equal(OWNERSHIP_LANE_HUMAN_ACTIONS.includes('no_records'), false);
+  // A3: a confirmed sponsor family has been ANSWERED — counting it as human
+  // work would re-ask a question a human already settled once per sponsor.
+  assert.equal(OWNERSHIP_LANE_HUMAN_ACTIONS.includes('sponsor_spe'), false);
   assert.match(VIEW_SQL, /human_actionable/,
     'the view must expose the honest badge count, not leave it to the client');
 });
