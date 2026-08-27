@@ -1,3 +1,5 @@
+> **📍 CANONICAL REFERENCE: [`docs/architecture/tier0-owner-contact-system.md`](../architecture/tier0-owner-contact-system.md)** (entity identity + merges) and **[`docs/architecture/ownership-history-lane.md`](../architecture/ownership-history-lane.md)** (the chains). **This file is the EVIDENCE for one round; read the canonical pages first.** ⚠️ Its recommendation is NOT applied — three decisions are pending in §6.
+
 # N15b — `entities.canonical_name` has SEVEN authors, and the merge detector is not one of its readers
 
 **Measured live on LCC Opps (`xengecqvemvfknjvbvrq`), 2026-08-27, over 62,363 live entities**
