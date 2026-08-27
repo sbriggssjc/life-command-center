@@ -403,6 +403,54 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 (Cowork) — V8 reviewed: Scott's evidence condition was tested, and it changes 4 of 12
+
+Scott answered all 12 sponsor proposals, approving three **conditionally**: *"so long as there is
+more evidence than just the name."* **That condition was tested rather than taken as approval, and
+it fails on two, is weak on one, and one row turned out worse than it looked.**
+
+**What evidence exists at all: almost none.** Commonwealth, Carrington, Sequoia and FGF sponsor
+entities carry **no email, no phone, no metadata company, 0–1 relationships**, and their only
+`external_identities` row is **the `gov` source record itself** — the thing being matched, not
+corroboration. gov `true_owners` adds nothing: no `contact_info`, no `sf_account_id`, no `state`.
+The only available signal is **naming-program structure** (gov `true_owners`): `boyd` **140** SPEs,
+`fgf` **90**, `B9 SEQUOIA` **5**, `carrington` 6, `commonwealth` 15.
+
+- **⛔ Commonwealth — recommend NO.** The 15 "Commonwealth" entities are demonstrably different
+  parties, **including government bodies**: `Commonwealth Of Virginia Department`,
+  `Commonwealth Ports Authority`, `Commonwealth Partners, L.l.c.`, `5309 Commonwealth LLC`.
+  `Commonwealth Owner LLC` has no distinguishing element. **Precisely the case the condition exists
+  to catch.**
+- **⚠️ FGF — HOLD, and it is the riskiest row in the set** *because of Scott's own note* that these
+  are Boyd subsidiaries. The sponsor map is **forward-looking** and there are **90 FGF SPEs**, so
+  confirming `fgf → FGF Management LLC` could misattribute a Boyd program at scale. **Settle
+  Boyd↔FGF first** — no LCC relationship records it either way.
+- **⚠️ Carrington — weak** (name-family only, $1.8M): recommend deferring rather than spending a
+  judgement.
+- **🟡 Sequoia — pattern evidence only.** `B9 SEQUOIA` is a consistent 5-member program, so `B9` is
+  a program prefix rather than noise — which answers the specific worry without producing
+  independent evidence. Scott's call, and the honest boundary of what we hold.
+
+**Six clean confirms are ready** (Boyd incl. the JV, Highwoods, RXR, ARC, East Lake, Sunflower) —
+**24 of 32 chains, the same coverage as the original recommendation without the two risky
+attributions.** SQL and reversal in `docs/audits/V8_SPONSOR_FAMILY_REVIEW_2026-08-27.md`.
+
+### ⭐ Two pieces of Scott's domain knowledge that are model requirements, not review notes
+
+1. **JV / fund / partnership ownership is MULTI-PARTY, and the model cannot express it.** Scott:
+   connect SPEs to true owners as now, *"but link to **multiple true owners** for each true owner in
+   the JV… investors will own assets outright, in JV, and maybe in a fund like a DST."* Today the
+   chain is single-valued (`recorded owner → SPE → ONE true owner`). **`Boyd Watterson JV UBP` is
+   the live worked example** — approved into Boyd, so its second partner is currently invisible.
+   Filed as **P1c / J1–J4**, including the downstream question nobody has asked: what the
+   prospecting surfaces do with a two-principal asset.
+2. **"Lessee" is a REAL ownership interest, not a weaker one.** A ground lease splits fee (dirt)
+   from leasehold (improvements); the leasehold SPE is the landlord counterparty to the tenant. So
+   `Cr Sunflower Lessee LLC` is a genuine owner — **my flag on that row was wrong, and Scott's
+   correction is the durable fact.** The model should distinguish fee / leasehold / both, or a
+   ground-leased asset silently reads as one owner when it has two (**J3**).
+
+
 ## 2026-08-27 13:28 UTC (Cowork) — the on-box Analyst's Take produces for the first time; A2a drafted
 
 **V9 ✅ / V7 ✅ — R8 Stage 1 works.** `LCC_DEFAULT_WORKSPACE_ID` set on `tranquil-delight`,
