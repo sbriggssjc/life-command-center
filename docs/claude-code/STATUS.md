@@ -17,6 +17,29 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 18:45 UTC — the gov lock hid a migration that was RUNNING BUT NOT MERGED
+
+Clearing GovernmentProject's orphaned `.git/HEAD.lock` (0 bytes, sandbox-owned, dated **2026-08-20**)
+revealed **two files staged and never committed**:
+`sql/20260827_gov_a4b_transition_clean_legal_form_gate.sql` and
+`tests/unit/test_a4b_transition_clean_gate.py`.
+
+**⚠️ `add` and `commit` take DIFFERENT locks.** `add` takes `index.lock`; `commit` takes
+`HEAD.lock`. With an orphaned `HEAD.lock`, **staging succeeds and committing fails — and
+`git status` looks tidy**, which is why this sat for a week without anyone noticing.
+
+**Verified live before assuming a gap: the gov database is CORRECT.** All three functions exist on
+`scknotsqkcheojiaewwh` and read **8 of 8 on named rows** — `EGP 17101 BROOMFIELD LLC`,
+`CA-10880 WILSHIRE LIMITED PARTNERSHIP` and `JBG/12420 PARKLAWN, L.L.C` clean; `Houston, Harris
+County, Texas 77007` and the other two junk names rejected.
+
+**So this is the MIRROR of the doctrine this repo documents everywhere.** CLAUDE.md carries
+*"merged is not running"* in several places; this is **running and not merged**. A DB-only change
+ships instantly, which is precisely why nothing forces the commit, and the repo quietly stops being
+a record of what the database does. Recorded as gov `CLAUDE.md` critical rule **12**, plus a row in
+`GITHUB-WORKFLOW.md`'s error table. **The check is `git log --oneline -3 -- sql/<file>`, never "the
+function works."** Same family as P194: a second copy that is correct beats no copy at all.
+
 ## 2026-08-27 18:30 UTC — N15b decision 1 ANSWERED; N17 recorded; and a false "lost work" alarm
 
 **✅ Scott's decision on the N15b token rule: a DST, its Trust and its LLC are ONE entity — the
