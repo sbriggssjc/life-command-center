@@ -97,7 +97,18 @@ match-disambig, next-step: all healthy.
   **mix**, not the prompt. This reverts the W5.3 "validated" verdict to *unproven* (not refuted).
   → `docs/audits/W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md`, backlog **N8 / L8 / V6**.
 
-**Live prompt queue — three files in `docs/claude-code/prompts/`:**
+## ⚠️ Two audit windows run in parallel — establish which one you are before doing anything
+
+| | **App audit** (desktop) | **Data-process & automation audit** |
+|---|---|---|
+| Scope | LCC the application — defects, lanes, surfaces, code | our data processes end to end + where AI/automation raises productivity |
+| Owns | prompts **189 / 192 / 194**; backlog N3a–N3c, AC1b–AC10, N8/N8a | the W5.3 / Ollama-hygiene lineage; backlog **L1–L10, N4–N7, V6** |
+
+**A *finding* about a data process belongs to the automation thread even when its *code fix*
+belongs to the app thread.** The W5.3 sidebar discovery is the worked example. **Ask Scott which
+window you are in if it is not obvious from his first message.**
+
+**Live prompt queue — three files in `docs/claude-code/prompts/`, all owned by the APP audit:**
 
 | # | What | State |
 |---|---|---|

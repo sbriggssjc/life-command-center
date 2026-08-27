@@ -62,6 +62,65 @@ one that stays on the card. **UIRC has seven candidates** — auto-picking there
 mistake at 5× the blast radius. Spec: `prompts/193-*.md`.
 
 
+## 2026-08-26 (Cowork, automation window) — the end-to-end data-process audit: we are not short of automation, we are short of CONSUMPTION
+
+Picked up the Ollama-hygiene thread in its broader framing — *audit our data processes end to end,
+recommend where AI/automation raises productivity*. Full writeup:
+`docs/audits/DATA_PROCESS_AUTOMATION_AUDIT_2026-08-26.md`.
+
+**~3,000 research tasks and 419 decisions are open. 983 tasks sit in lanes that have NEVER
+completed a single item** — one of them for 68 days. Meanwhile the auto-retire sweeps are working
+well (9,605 skipped across the healthy lanes) and every assist is producing. The gap is not
+production and not retirement; it is the middle.
+
+**⭐ The biggest single win, and it needs no model at all.** `establish_ownership_history`:
+**545 open, 0 completed in 68 days** — while **453 finished, deterministic, record-cited answers
+sit in `lcc_clean_assist_proposals`** from P131/P133. Reading their confidence shows why nobody
+works the lane: it is **three completely different jobs wearing one label.**
+
+| bucket | n | what it really is | correct action |
+|---|---|---|---|
+| agrees with current owner | **380** | a **confirmation**, not a question — and it carries ~707 ownership links the BD spine is missing | auto-apply, no human |
+| **⚠️ MISMATCH** | **73** | last recorded grantee **≠** our current owner — our record is contradicted | a data-integrity **alert**, not research |
+| nothing on file | **92** | unanswerable from what we hold | auto-retire, terminal |
+
+**The 73 is exactly the "~73 mismatch flags" backlog V3 predicted as "a free data-integrity
+signal."** It is free, it is real, and it is buried under 472 items that are not questions.
+A lane that mixes *confirm what you already believe* with *your ownership record is wrong* with
+*this cannot be answered* trains the operator to skip all three — which is precisely what 68 days
+of zero completions looks like.
+
+**P131 lens: category (a) — already on-box and STRUCTURED. This is plumbing, not an LLM.** The
+most promising-looking model opportunity in the system turned out to need no model. Third time
+that lens has paid.
+
+Filed as backlog **P1b / A1–A7**. Also flagged: six lanes with **zero** lifetime completions
+(119 items) needing a consumer or honest retirement; `confirm_true_owner` **stalled** not dead
+(35 decided once, 0 in 7d); `match_disambiguation` ranked for 81 days with **1** decision.
+
+**Negatives recorded too** — no evidence the assists under-produce, no evidence the sweeps are too
+aggressive, and **no new LLM opportunity surfaced by this pass.**
+
+
+## 2026-08-26 — ⚠️ TWO AUDIT WINDOWS ARE RUNNING IN PARALLEL. Know which one you are in.
+
+Scott is running two Cowork chats against this repo at once. **They have different scopes and must
+not cross**, or the same finding gets built twice or dropped by both.
+
+| | **App audit** (desktop window) | **Data-process & automation audit** (this thread) |
+|---|---|---|
+| **Scope** | LCC the application — defects, lanes, surfaces, code fixes | Our **data processes end to end**, and where AI/automation (incl. the on-prem Ollama model) can raise productivity |
+| **Owns** | prompts **189** (duplicate owner entities), **192** (Tier 0 auto-attach + living loop), **194** (sidebar extraction bypass) | the W5.3 / Ollama-hygiene lineage: `W53_AND_OLLAMA_HYGIENE_KICKOFF.md`, `LOCAL-MODEL-LEVERAGE-MAP.md`, `LOCAL-MODEL-GAP-AUDIT.md`, backlog **P2 (L1–L10)** + **N4–N7** |
+| **Backlog rows** | N3a/N3b/N3c, AC1b–AC1d, AC2–AC10, N8/N8a | L1–L10, N4, N5, N6, N7, V6 |
+
+**The split that matters and is easy to get wrong:** a *finding* about a data process stays here
+even when its *code fix* goes there. The W5.3 sidebar-channel discovery is the worked example —
+the measurement, the refuted seed hypothesis and the "split by channel, then split again" lesson
+are **this** thread's output; prompt 194, which repairs the writer, is the **app** thread's.
+
+**Do not action 189 / 192 / 194 from this chat.** They are drafted, correct, and dispatched.
+
+
 ## 2026-08-26 (Cowork, late) — sized the W5.3 channel split; the obvious next build is refuted
 
 Scott asked what the email/PDF path would gain if it seeded from structured capture the way

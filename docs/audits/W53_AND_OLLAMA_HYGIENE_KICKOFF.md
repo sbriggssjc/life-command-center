@@ -1,3 +1,13 @@
+> **⚠️ STATUS 2026-08-26 — this kickoff's original scope is COMPLETE; the thread continues elsewhere.**
+> **Part 2 (the W8 hygiene campaign) shipped in full** — U1 junk pre-screen, U2 dup-pairs, U3 link
+> propagation, U4 findings report, U5 naming hygiene are all built and all read `on`.
+> **Part 1 (W5.3) was re-opened and corrected**: the 2026-08-11 "validated" grade averaged three
+> channels with different input types, so it reverts to *unproven* for the email/PDF path →
+> `W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md`.
+> **The living thread is now the end-to-end data-process & automation audit** →
+> **`DATA_PROCESS_AUTOMATION_AUDIT_2026-08-26.md`** (backlog P1b / A1–A7). Start there.
+> Keep this file for its grading method and the campaign's original doctrine, both still sound.
+
 # Kickoff — W5.3 Local-LLM Evaluation + Ollama Data-Hygiene Campaign (W8)
 
 > Written 2026-08-06 (Cowork session 36cc) as the grounding for a fresh chat.
