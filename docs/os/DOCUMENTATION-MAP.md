@@ -31,6 +31,7 @@ bootstraps a fresh chat and points at them.
 | Claude Code's response (.docx) | `docs/claude-code/responses/` | → `responses/done/` once reconciled |
 | **Audit / measurement writeup** | `docs/audits/<TOPIC>_<YYYY-MM-DD>.md` | the finding and its reproduction queries |
 | Architecture / subsystem design | `docs/architecture/<subsystem>.md` | one canonical file per subsystem |
+| **A subsystem spanning many audits** | one canonical page + a **banner in each audit pointing at it** | Live example: `docs/architecture/tier0-owner-contact-system.md` covers twelve rounds (P186–P197 + A1–A4). The canonical page carries live state, decisions-already-made and traps-paid-for; the audits stay as the EVIDENCE. **A trap list is only a guard if it is on the path someone walks** — so the pointer goes in the audit, not only in the index |
 | Runbook / setup / operator procedure | `docs/setup/` | |
 | Rules that sync to AI surfaces | `docs/os/canon/blocks/*.md` | **bump `CANON_VERSION`, then run the render script.** Never hand-edit a file whose header says GENERATED |
 | Superseded per-round narrative | `docs/history/` (+ `worklogs/` for one-off worklogs) | archive with an INDEX row — **never delete** |

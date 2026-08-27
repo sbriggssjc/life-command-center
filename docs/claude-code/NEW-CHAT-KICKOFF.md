@@ -60,8 +60,12 @@ Government `scknotsqkcheojiaewwh`.
 ## Where things actually stand (measured 2026-08-26 evening)
 
 **Scott is actively working the Tier 0 owner-contact lane** — 27 confirms logged today, lane
-**109 → 87 open** (78 `ask` / $237M, 9 `auto` / $10M). That is the highest-value operator surface
-in the system and it is draining. His track and the build track do not block each other.
+**109 → 96 open** (87 `ask` / 9 `auto`; re-measured 2026-08-27 14:26 UTC after P197). That is the
+highest-value operator surface in the system and it is draining. His track and the build track do
+not block each other.
+📍 **Anything Tier 0 → read [`docs/architecture/tier0-owner-contact-system.md`](../architecture/tier0-owner-contact-system.md) FIRST.**
+It is the one door into twelve rounds: live state, the objects, **seven decisions already made that
+must not be re-litigated**, and **ten traps already paid for** (three of them were made twice).
 *(That −22 is three effects mixed: Scott's confirms, P193's SPE inheritance removing cards, and
 P191 restoring some. Don't quote it as a confirm rate.)*
 

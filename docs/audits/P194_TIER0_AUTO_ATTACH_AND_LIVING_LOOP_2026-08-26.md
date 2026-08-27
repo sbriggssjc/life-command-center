@@ -1,3 +1,5 @@
+> **📍 CANONICAL REFERENCE: [`docs/architecture/tier0-owner-contact-system.md`](../architecture/tier0-owner-contact-system.md)** — live state, the objects, the decisions already made, and the traps paid for. **This file is the EVIDENCE for one round; read the canonical page first to find out whether you need this one.**
+
 # P194 — the Tier 0 auto-attach sweep, and what a "living loop" actually needs
 
 **Date:** 2026-08-26 · **Prompt:** 192 (§1 auto-attach, §2 the living loop, §4 learning from verdicts)

@@ -1,3 +1,5 @@
+> **📍 CANONICAL REFERENCE: [`docs/architecture/tier0-owner-contact-system.md`](../architecture/tier0-owner-contact-system.md)** — live state, the objects, the decisions already made, and the traps paid for. **This file is the EVIDENCE for one round; read the canonical page first to find out whether you need this one.**
+
 # P197 — the Tier 0 lane read ONE employer source, by ONE key (2026-08-27)
 
 **Result:** `no_employer_on_file` **67 → 54** cards ($131.2M → $113.6M), parked **142 → 137**,
