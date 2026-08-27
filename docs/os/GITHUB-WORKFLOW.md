@@ -110,6 +110,42 @@ Budget for it: roughly three minutes per re-run, and if `main` moves again durin
 may do it twice. **Merging the moment the first green appears is how PR #1793 shipped a red
 suite** — the checks were still running.
 
+## 2a. ⚠️ WHILE `.git/index.lock` IS HELD, `git status` FROM THE SANDBOX IS NOT TRUSTWORTHY
+
+**2026-08-27.** Cowork inspected the repo, reported the working tree as "two modified files plus two
+untracked", and drafted a recovery on that basis. The first command failed immediately:
+
+```
+docs/claude-code/STATUS.md: needs merge
+error: you need to resolve your current index first
+```
+
+There was an **unresolved merge already in progress** — `STATUS.md` was `UU` (both modified) — and
+the sandbox's `git status` never showed it. With the lock held, git cannot refresh the index, so it
+answers from stale state: the `UU` line was simply absent. Every command in the drafted sequence
+assumed a clean tree, so the branch was never created, the cherry-pick refused, and a later
+`git add -A` re-staged the very conflict markers §2b was written about.
+
+**This is the same class as everything else in this file: a surface that answers confidently
+instead of erroring.**
+
+**The rule:** §6 rule 4 permits read-only git from the sandbox — but **not while the lock exists.**
+Before trusting any sandbox-read repo state:
+
+```powershell
+Remove-Item .git\index.lock -ErrorAction SilentlyContinue   # Windows only; the sandbox cannot
+git status                                                  # then read it HERE, not from Cowork
+```
+
+**And always read `git status` unfiltered.** The Cowork call that missed this piped through
+`grep -v test/fixtures`, which would have hidden a `UU` line even if git had reported one. Filter
+the output you *show*, never the output you *judge from*.
+
+**Recovery, when it does happen:** `git reset --hard origin/main` is the right move and it is safe
+for committed work — it moves the branch pointer and **does not delete commits**. Anything of value
+is still in the reflog (`git log --oneline -1 <sha>`). Losing two documentation notes that can be
+rewritten in one turn is cheaper than a bad conflict resolution on a hot file.
+
 ## 2b. ⚠️ `git stash pop` after a long gap WILL conflict — and `git add -A` commits the markers
 
 **This happened on 2026-08-27 and reached `main`.** `docs/claude-code/STATUS.md` was merged
@@ -161,7 +197,22 @@ merge) fails naming file and line, and runs **even on documentation-only PRs**, 
 reason it can see this file at all (§3a, §4b). It landed after this repair, as it had to: it was
 red on `STATUS.md` until this repair merged.
 
-## 3a. Documentation-only PRs skip the suite (2026-08-27)
+## 3a. Documentation-only PRs skip the suite (2026-08-27) — ✅ **PROVEN IN PRODUCTION**
+
+> **The skip path executed for the first time on the `fix/status-conflict-markers` PR and reported
+> green in seconds instead of ~3 minutes.** Recorded deliberately, because §6 rule 3 says a CI job
+> is not shipped until it has been green once on `main` — and **the skip branch of a conditional
+> job is a second code path needing its own first green run.** The PR that *introduced* the skip
+> touched `.github/workflows/`, so it correctly ran the full suite and proved nothing about the
+> skip itself.
+>
+> **If `npm test` ever sits at `Expected` on a docs-only PR, revert `test-suite.yml` immediately** —
+> that is the `paths-ignore` deadlock arriving by another route.
+>
+> ⚠️ **The docs-only path is not empty.** `test/no-conflict-markers.test.mjs` still runs on it, and
+> must: both committed-marker instances found on 2026-08-27 were `docs/*.md`, and the `STATUS.md`
+> one arrived **through a documentation-only PR (#1801)**. A guard that cannot see the population
+> it exists for is not a guard. It costs ~1 second and needs no `npm ci`.
 
 Scott: *"only require tests when a substantive change that requires a test gets pushed or merged.
 It's not worth the wait for minor or documentation changes."*
