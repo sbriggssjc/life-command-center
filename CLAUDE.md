@@ -2918,6 +2918,19 @@ Writeup: `docs/audits/A5c_RESEARCH_TASK_VALUE_GATE_2026-08-27.md`.
   means it is a FLOOR. And **`gate_reasons_seen` must contain only `admitted`**; anything else means
   the filter did not take. **The dia research badge now counts gated rows** (198, not the raw 29,643
   pool) — `count=exact`, because the planner's estimate over the gated view is off ~58×.
+- **LIVE 2026-08-27 (merge `7de1791`), crons 34/35 re-enabled, first run `inserted` gov 161 + dia
+  182 = 343 — hundreds, not thousands.** dia's `feed: 198` with `admitted_head_exhausted: true`
+  matches the SQL-measured admitted population exactly — the cross-check that the filter is in the
+  SELECTION. Two lanes minted their first tasks ever (dia `property_missing_county_record` 109, gov
+  `owner_needs_salesforce` 108). `closed: 0`; the only `gap_resolved` rows in 24h are 10 from cron
+  34's 06:00 run *before* A5a deployed. ⚠️ Open counts went **up** (2,000 → 2,343, converging to
+  ≈2,530 admitted + ≈1,844 pre-gate residue) — that is the fix working (A5a).
+- **⚠️ THE `/version` PROBE IS UNREACHABLE FROM THE SANDBOX (proxy 403), SO THE DEPLOY WAS CONFIRMED
+  BEHAVIOURALLY — and that check earned its keep.** `lcc_cron_post` → `?dry_run=1` →
+  `net._http_response`, reading for `value_gated`, a field that only exists post-A5c. **Two minutes
+  after the merge it was still ABSENT and `would_insert` still read the ungated 2,586** — had the
+  crons been re-enabled on the strength of "it merged", cron 34 would have minted the entire flood
+  with the gate sitting inert in the DB beside it. The DB half ships instantly; the JS does not.
 - **Performance measured both directions:** the gov ranked head got **FASTER** (1,149 → 591 ms — the
   constant-false SOS arm is pruned and the sort set drops 41,805 → 2,332), and the probe is
   unchanged (44 → 51 ms) because the gate's LATERAL aggregates report `never executed` under its id
