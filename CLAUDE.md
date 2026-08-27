@@ -52,6 +52,25 @@ deleted (Vercel retired after 40+ failed deploys against the old Hobby 12-functi
 - **Supabase view/migration changes are live immediately** — the CM export reads views per request
   (`no-store`), so data-layer fixes need no deploy.
 
+## ⛔ `main` IS PROTECTED — branch → PR → CI green → merge. You cannot push to `main`.
+
+Since **2026-08-27**, *"npm test"* is a **required status check**. A direct push to `main`
+(`git push origin <branch>:main`) is rejected by the rule engine before anything else happens —
+a required check cannot run without a pull request, so **retrying will never work**. Both
+*"App boots"* and *"npm test"* must be green **before** you merge; PR #1793 was merged 58 seconds
+after opening, before CI finished, carrying a red suite.
+
+**Full procedure, failure-mode table, and the current unlock sequence:
+[`docs/os/GITHUB-WORKFLOW.md`](docs/os/GITHUB-WORKFLOW.md).**
+**Where every doc, plan, audit and design is filed:
+[`docs/os/DOCUMENTATION-MAP.md`](docs/os/DOCUMENTATION-MAP.md)** — the root of the repo is code and
+config; **do not add a new `.md` there.**
+
+⚠️ **`main` is currently BLOCKED**: `test-suite.yml` on `main` is pinned `node-version: '20'` and
+three test files import Deno `.ts` modules Node 20 cannot load, so the required check has never
+been green. The fix is `beb3aecd`'s version of that workflow file; land it on its own branch off
+current `main` and every other PR unblocks. Details in the workflow doc §4.
+
 ## Rules
 
 0. **`LCC_API_KEY` auth is production-ready.** Frontend `auth.js` auto-injects `X-LCC-Key` via a global fetch
@@ -239,6 +258,21 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
     (repo Settings → Branches → main → required status checks), and until it is flipped, every
     "guarded by `test/x.test.mjs`" line in this file remains a regression detector, not a gate.
     Backlog row **N9** in `docs/os/PLANNED-BACKLOG.md`.
+  - **⚠️ AND THE NEW WORKFLOW HAS NEVER ONCE BEEN GREEN — INCLUDING ON `main` (2026-08-27).**
+    `test-suite.yml` shipped pinned `node-version: '20'`, **copied from `boot-check.yml`**. Three
+    test files import Deno edge-function modules (`supabase/functions/**/*.ts`) directly, and
+    **Node 20 cannot load a `.ts` file** — `ERR_UNKNOWN_FILE_EXTENSION`, thrown before any test
+    body runs, 0 pass. Node 22.18+ strips types by default; the suite is **4,606 pass / 0 fail**
+    on Node 22. `boot-check.yml` stays on 20 **deliberately** — it never imports a `.ts` module,
+    which is precisely why copying its pin was the wrong default. `engines` stays `>=20.0.0`: the
+    server runs fine on 20, only the suite needs type stripping.
+  - **The durable rule: a NEW CI job is not shipped until it has been green once on `main`.**
+    A job that is red on every run is not a gate — it is **a badge people learn to merge past**,
+    which is the exact failure N9 existed to close. PR #1793 demonstrated it live: merged **58
+    seconds after opening, before CI finished**, with the suite red.
+  - **⚠️ "Red on my PR" is not "my PR is broken."** Check the BASE branch first — this one had
+    failed on all four runs since it shipped, twice on `main` itself. And it was **not flaky**;
+    "flake" would have been the wrong answer and the expensive one.
 
 ## Core doctrines (apply to every change)
 
