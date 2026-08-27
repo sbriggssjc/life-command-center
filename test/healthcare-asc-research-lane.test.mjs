@@ -186,6 +186,56 @@ test('parent buildings allow a missing street suffix only with corroborated enro
   );
 });
 
+test('terminal Township municipality aliases require exact location and explicit tenant corroboration', () => {
+  const target = {
+    candidate_fingerprint: sha('8'),
+    address_token: '1000 GALLOPING HILL RD|UNION|NJ|07083',
+    cms_identity: {
+      facility_name: 'Atlantic Surgery Center at Union',
+      address: '1000 Galloping Hill Road', city: 'Union', state: 'NJ', zip: '07083',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Union Surgery Center, LLC'],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/union-medical-park',
+    address: '1000 Galloping Hill Rd', city: 'Union Township', state: 'NJ', zip: '07083',
+    square_footage: '150,400',
+    tenants: [{ name: 'Union Surgery Center', occupied_sf: '15,722' }],
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.identity_match.mode, 'tenant_corroborated_municipality_alias');
+  assert.equal(built.identity_match.corroboration_basis, 'cms_enrollment_organization');
+  assert.equal(built.identity_match.cms_city_preserved, 'Union');
+  assert.equal(built.identity_match.captured_city, 'Union Township');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenants: [{ name: 'Unrelated Medical Group' }] }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, address: '1002 Galloping Hill Rd' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, city: 'Union City' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, state: 'PA' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, zip: '07084' }),
+    /does not match/,
+  );
+});
+
 test('adjacent civic numbers require an evidence-backed candidate alias and tenant corroboration', () => {
   const alias = {
     status: 'approved',
