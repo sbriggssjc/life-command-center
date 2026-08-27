@@ -161,6 +161,32 @@ Filed as backlog **P1b / A1–A7**. Also flagged: six lanes with **zero** lifeti
 **Negatives recorded too** — no evidence the assists under-produce, no evidence the sweeps are too
 aggressive, and **no new LLM opportunity surfaced by this pass.**
 
+**Follow-up, same session — the structured payload corrected my own measurement twice.** Drafting
+A1 meant checking whether the classifier I had measured with (`reason ilike '%does not match the
+current owner%'`) was safe to build on. It is not — that is the **P182 trap**, a text detector over
+prose the drafter generates. `proposed_link` already carries `terminates_at_current_owner`,
+`draftable`, `insufficient_reason`, `continuity.contiguous` and `research_task_id`. Both methods
+agree at **380 / 73 / 92**, so the finding stands — but only the structured one is buildable, and
+it surfaced two corrections:
+
+1. **⚠️ The 92 are TWO populations, not one.** **74 `no_transitions_on_file`** (genuinely nothing
+   recorded) and **18 `all_transitions_guarded`** — transfers **do exist** and every one was
+   rejected by a P138 guard. Those 18 are *"data we chose to distrust"*, not *"no data"*, and a
+   marginally over-strict guard is recoverable. **Auto-retiring all 92 together would silently
+   discard the recoverable half** — P181 recurring. Split into A4 (the 74) and **A4b** (the 18).
+2. **The "~707 links" figure I published hours earlier is stale** — it was P131's original count.
+   Measured now: **570 links across all 453 draftable chains, 450 of them in the 380 auto-appliable
+   ones.** Corrected in the audit doc and backlog A2. Do not quote 707.
+
+**Prompt drafted: `prompts/A1-ownership-lane-three-actions-2026-08-26.md`.** ⚠️ **New numbering
+convention, because two windows are drafting prompts at once:** the automation window uses
+**letters matching its backlog rows** (A1, A2, …); the app window keeps the **numeric** series
+(189, 192, 194, …). They can no longer collide.
+
+**A1 splits only** — no writes, no retirement, no auto-apply; A2/A3/A4/A4b each land separately and
+reversibly. Its acceptance test is deliberately not "the view exists": it is
+**`establish_ownership_history` completing its first task ever.**
+
 
 ## 2026-08-26 — ⚠️ TWO AUDIT WINDOWS ARE RUNNING IN PARALLEL. Know which one you are in.
 

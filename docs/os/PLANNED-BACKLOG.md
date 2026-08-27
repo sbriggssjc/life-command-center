@@ -69,13 +69,24 @@ They need deterministic plumbing. Do NOT put a model anywhere in this path.**
 
 | # | Item | State | Notes |
 |---|---|---|---|
-| **A1** | **Split `establish_ownership_history` into its three real actions** — agrees / mismatch / not-on-file — **before** automating any of them. The classifier already exists in the data: `confidence = 0` and the `does not match the current owner` predicate inside `reason`. | 🟢 | everything below depends on it; smallest possible change |
-| **A2** | **Auto-apply the 380 "agrees" chains** through the existing merge/provenance path — dry-run first, reversible by batch tag, honest counts (report links written, never chains scanned). Adds **~707 missing ownership links** to `lcc_entity_portfolio_facts`, which is the exact gap the lane was minted for. **Never a new SQL writer that skips the shape gates.** | 🟢 | removes 380 of 545 from a human queue |
+| **A1** | **Split `establish_ownership_history` into its FOUR real actions** — agrees / mismatch / no-records / all-guarded — **before** automating any of them. ⚠️ **Classify from the STRUCTURED payload** — `proposed_link` already carries `terminates_at_current_owner`, `draftable`, `insufficient_reason`, `continuity.contiguous` and `research_task_id` — **never from the rendered `reason` prose** (the P182 trap; both methods agree at 380/73/92 today, but only the structured one survives a wording change *and* exposes the 74/18 split). **Prompt drafted → `prompts/A1-ownership-lane-three-actions-2026-08-26.md`.** | 🟢 | everything below depends on it; smallest possible change |
+| **A2** | **Auto-apply the 380 "agrees" chains** through the existing merge/provenance path — dry-run first, reversible by batch tag, honest counts (report **links written**, never chains scanned). Adds **450 missing ownership links** to `lcc_entity_portfolio_facts`, the exact gap the lane was minted for. ⚠️ *An earlier draft said ~707 — that was P131's stale figure; measured now it is 570 across all 453 draftable, 450 in the 380 auto-appliable.* **Never a new SQL writer that skips the shape gates.** | 🟢 | removes 380 of 545 from a human queue |
 | **A3** | **Route the 73 MISMATCH rows to a data-integrity lane**, value-ranked, with **both readings on the card** — our owner may be wrong, or the chain may be incomplete. Do not presume which. | 🟢 | highest value *per item* in the audit, currently invisible |
-| **A4** | **Auto-retire the 92 "nothing on file"** with a terminal, dated state that re-opens if new records land. | 🟢 | stops permanently-unanswerable items ageing into "overdue" |
+| **A4** | **Auto-retire the 74 `no_transitions_on_file`** with a terminal, dated state that re-opens if new records land. ⚠️ **Only the 74 — NOT all 92.** | 🟢 | stops permanently-unanswerable items ageing into "overdue" |
+| **A4b** | **⚠️ The other 18 are `all_transitions_guarded` and are NOT "no data."** Transfers exist and **every one was rejected by a P138 guard** (self-transition, oscillating pair, unclean name, missing `true_owner_id`). A guard that is marginally too strict is recoverable; retiring these alongside the 74 would silently discard the recoverable half. Sample them, name which guard fired, decide per guard. | 🟡 | the P181 lesson — one label covering two different facts |
 | **A5** | **Give a consumer to — or retire — six lanes with ZERO lifetime completions:** `milestone_confirm` (56 open, 21d), `confirm_tenant_mismatch` (26, 64d), `npi_new_registration` (17, 20d), `state_lease_distress_review` (8, 21d), `person_email_merge_review` (8, 14d), `confirm_deed_transfer_sale` (4, 42d). **119 items.** Per doctrine a producer with no consumer should not have shipped — **retirement is often the honest fix, not a new surface.** | 🔴 👤 | one decision per lane; Scott's call on which are worth consuming |
 | **A6** | **Re-measure `confirm_true_owner`** — 152 open, 35 ever decided, **0 in 7 days**, 82 days old. It decided 35 once, so it is *stalled*, not dead: a different diagnosis. Ask what advances its working set. | 🔍 | |
 | **A7** | **Decide `match_disambiguation`'s fate** — a ranked lane with **1** lifetime decision in 81 days. Either surface it or stop paying to rank it. | 🔴 👤 | ranking a queue nobody works is spend with no return |
+
+**Areas for further exploration (E1–E6)** — questions this audit opened but did not measure, kept
+so they are not lost. **None is a recommendation yet.** Full detail in the audit doc §5:
+**E1** are the 9,605 `skipped` genuinely retired or is work hiding there · **E2** measure the
+healthy lanes' **7-day rate**, not their lifetime totals (the P176/V6 trap) · **E3** where Scott's
+time actually goes *outside* any queue — likely the biggest wins and invisible to every table here
+· **E4** do the 73 mismatches cluster by `data_source`, turning a 73-item human lane into one
+producer fix (**measure before building A3**) · **E5** re-test whether `owner_contact_manual`'s
+egress block is still true or now a dated blocker · **E6** size the CM book-copy saving in hours
+before building the top-ranked new automation (N4).
 
 ## P2 — Local-model gaps still open (R5–R9)
 

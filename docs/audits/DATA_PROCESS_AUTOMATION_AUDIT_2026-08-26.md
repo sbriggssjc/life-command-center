@@ -68,11 +68,34 @@ reference** as the citation, which cannot be hallucinated. Their confidence enco
 quality*, and that turns out to split the lane into **three completely different actions that are
 currently presented as one undifferentiated "go research this" queue:**
 
-| bucket | n | what it actually is | correct action |
-|---|---|---|---|
-| **Agrees with the current owner** | **380** | the recorded chain ends at the owner we already hold. This is a **confirmation**, not a question. (337 gap-free @0.85–0.95; 43 with disclosed gaps @0.80) | **auto-apply** — write the historical links, no human |
-| **⚠️ MISMATCH** | **73** | the last recorded grantee **≠** our current owner. Either our owner is wrong or the chain is incomplete. | **a data-integrity ALERT**, not a research task — highest value per item in the whole audit |
-| **Nothing on file** | **92** | no recorded transfers exist in the government records | **auto-retire** with a terminal "Not on file" — it is not answerable from what we hold |
+| bucket | n | links | what it actually is | correct action |
+|---|---|---|---|---|
+| **Agrees with the current owner** | **380** | **450** | the recorded chain ends at the owner we already hold. A **confirmation**, not a question. (337 contiguous, 43 with disclosed gaps) | **auto-apply** — write the historical links, no human |
+| **⚠️ MISMATCH** | **73** | 120 | the last recorded grantee **≠** our current owner. Either our owner is wrong or the chain is incomplete. | **a data-integrity ALERT**, not a research task — highest value per item in the whole audit |
+| **Not draftable** | **92** | 0 | ⚠️ **two different facts under one label** — see below | **two different actions** |
+
+> **⚠️ The 92 are NOT one population, and the prose hid it.** The structured payload splits them:
+> **74 `no_transitions_on_file`** — genuinely nothing recorded, unanswerable from what we hold →
+> auto-retire; and **18 `all_transitions_guarded`** — **transfers DO exist and every one was
+> rejected by the P138 guards** (self-transition, oscillating pair, unclean name, missing
+> `true_owner_id`). Those 18 are not "no data", they are "data we chose to distrust", and a guard
+> that is slightly too strict is recoverable. **Retiring both identically would silently discard
+> the recoverable half** — the P181 lesson (one label covering two different facts) recurring.
+
+### ⚠️ Classify from the STRUCTURED payload, never from the rendered `reason`
+
+My first measurement bucketed on `reason ilike '%does not match the current owner%'` — a text match
+on generated prose, which is the **P182 trap** (a detector structurally unable to survive a wording
+change). It happened to be right, and it was verified against the structured fields rather than
+trusted: `proposed_link` already carries **`terminates_at_current_owner`**, **`draftable`**,
+**`insufficient_reason`**, `continuity.contiguous` and `research_task_id`. Both methods return
+**380 / 73 / 92 exactly** — but only the structured one is safe to build on, and only it exposes
+the 74/18 split above. **The production classifier must read those booleans.**
+
+> **Correction, same change:** an earlier draft of this audit and backlog row V3 cited **"~707
+> links"**, carried over from P131's original run. Measured now: **570 links across all 453
+> draftable chains, of which 450 belong to the 380 auto-appliable ones.** 707 is stale — do not
+> quote it.
 
 **Nobody has completed one in 68 days because every item looks identical from the outside.** A
 lane that mixes "please confirm what you already believe" with "your ownership record is
@@ -80,9 +103,9 @@ contradicted" with "this is unanswerable" trains the operator to skip all three.
 
 - The **73** exactly matches the "~73 current-owner-vs-deed mismatch flags" that backlog row V3
   predicted as *"a free data-integrity signal."* It is free, it is real, and it is buried.
-- The **380** carry ~707 historical ownership links that the BD spine is missing — the lane exists
-  precisely because `owner_links <= 1` in `lcc_entity_portfolio_facts`. Applying them is a genuine
-  data enrichment, not a bookkeeping no-op.
+- The **380** carry **450** historical ownership links that the BD spine is missing — the lane
+  exists precisely because `owner_links <= 1` in `lcc_entity_portfolio_facts`. Applying them is a
+  genuine data enrichment, not a bookkeeping no-op.
 
 **P131 lens:** this is category **(a)** — *the answer is already on-box and STRUCTURED*. It needs
 **deterministic plumbing, not an LLM.** No model should be added anywhere in this path.
@@ -118,7 +141,21 @@ Recording the negatives, because they are what stop the next pass re-walking the
 - **No new LLM opportunity surfaced by this pass.** The biggest apparent one (§2) is deterministic.
   That is the P131 lens working as designed, for the third time.
 
-## 5. Reproduction
+## 5. Areas for further exploration (opened by this pass, not yet measured)
+
+Recorded so they are not lost. **None is a recommendation yet** — each needs its own measurement
+before it can be ranked honestly, and several may refute themselves the way N8b did.
+
+| # | Question | Why it is worth asking |
+|---|---|---|
+| **E1** | **Is the `skipped` state hiding work, or genuinely retiring it?** 9,605 tasks are skipped across three lanes. The healthy lanes' skips look like a working auto-retire — but nobody has sampled them. If even 5% were skipped for a fixable reason, that is ~480 recoverable items. | The A4b shape at scale: a bulk state whose members were never individually assessed (cf. the P119 `inbox_triaged` trap, where a bulk-set status admitted the whole historical population). |
+| **E2** | **What is the actual completion *rate* of the healthy lanes, and is it decaying?** `property_missing_recorded_owner` shows 4,772 lifetime completions — a cumulative number, which this repo has been burned by twice (P176, V6). **Measure the 7-day rate, not the total.** | A lane can read healthy on a lifetime figure while having stopped weeks ago. |
+| **E3** | **Where does Scott's time actually go, as opposed to where the queues are?** This audit measured *queued work*, which is a proxy. The Tier 0 lane got 27–33 verdicts today; every other lane got ~0. **The real productivity question is what he does that never enters a queue at all** — email triage, call prep, LOI review, book copy. | The biggest automation wins may not be visible in any table measured here. Likely needs asking him, not querying. |
+| **E4** | **Do the 73 mismatches cluster by source or by guard?** If most trace to one `data_source` (e.g. `gsa_lease_diff`, already known to emit oscillating pairs), the fix is upstream and cheap rather than 73 individual judgements. | Turns a 73-item human lane into possibly one producer fix. **Measure before building A3.** |
+| **E5** | **Is `owner_contact_manual` (311, zero completions, 60 days) genuinely egress-blocked, or has that become a dated blocker?** P131 measured 6 decidable / 310 blocked, but the standing doctrine is that a dated blocker is a hypothesis. | 311 items is the second-largest dead lane; the cost of re-testing is one query. |
+| **E6** | **What would the CM quarterly book copy (R8 Stage 2 / backlog N4) actually save?** It is ranked the top new on-box build, on the strength of "templated, private, repetitive" — **which has never been measured in hours.** | Before building the highest-ranked new automation, size its return the way this audit sized the lanes. |
+
+## 6. Reproduction
 
 ```sql
 -- research lanes by throughput (the zero-completed column is the finding)

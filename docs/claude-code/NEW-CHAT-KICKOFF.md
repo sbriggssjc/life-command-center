@@ -108,6 +108,10 @@ match-disambig, next-step: all healthy.
 belongs to the app thread.** The W5.3 sidebar discovery is the worked example. **Ask Scott which
 window you are in if it is not obvious from his first message.**
 
+**⚠️ Prompt-numbering convention (both windows draft prompts concurrently — they must not collide):**
+the **app** window keeps the **numeric** series (189, 192, 194, 195…); the **automation** window
+uses **letters matching its backlog rows** (A1, A2, A3…). Name the file for its row.
+
 **Live prompt queue — three files in `docs/claude-code/prompts/`, all owned by the APP audit:**
 
 | # | What | State |
