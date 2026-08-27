@@ -530,6 +530,52 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 17:15 UTC (Cowork) — A2b + A4b landed; refreshed the kickoff doc, which carried a DANGEROUS instruction
+
+**Lane: `all_guarded` 18 → 7, `awaiting_draft` 0 → 11** (the A4b recovery mid-flight, not a defect
+— the drafter re-runs at 06:45 and cron 244 applies at 06:49). `agrees` 64 · `mismatch` 49 ·
+`sponsor_spe` 25 · `no_records` 0. Verified `split_state='awaiting_draft'` with `action=NULL` is the
+**designed** shape, so the distinct-state invariant holds — my initial worry there was unfounded.
+
+**⚠️ A2b refuted my prompt's premise, and it had been repeated in three places.** I wrote it as the
+P138 `gsa_lease_diff` flicker. It is not: **that flicker has a RETURN LEG** (`A→B` *and* `B→A`) and
+is caught by `is_oscillating_pair`; this population has none. It is **one conveyance observed more
+than once** — per-lease fan-out (a GSA building carries many leases and the lessor of record updates
+on each separately: one distinct `lease_number` per date, **13 of 13** testable properties) plus
+cross-source lag. **The correction is load-bearing:** if it *were* the flicker the direction would
+be untrustworthy and collapsing unsafe; it is not, so the only thing wrong is that one fact is
+stored several times. `CLAUDE.md` and the canonical doc now carry the correction — **the sixth
+hypothesis of mine refuted by measurement in this arc.**
+
+**A2b** collapsed 32 links → 15 across 14 tasks (**$26.2M per OWNER**; the per-link sum reads $88.5M,
+a 3.4× overstatement). Fixed in the **drafter**, never the applier — the PK is right, the input was
+wrong — and it removed a **phantom chain break**, since `A→B, A→B` reads as a gap. All 14 now report
+`contiguous: true`.
+
+**A4b** corrected the gov guard. **The 7 remaining `all_guarded` are correctly guarded, name by
+name** — three punctuation-variant self-transitions, a CMBS trust artifact, a strict-prefix variant,
+a concatenated brokerage, and one with six `Unknown` grantors. **There is no further recoverable
+population there**, which is a real answer rather than a leftover.
+
+### ⚠️ The kickoff doc had gone stale in a way that would have caused harm
+
+`NEW-CHAT-KICKOFF.md` still instructed a future chat to verify reachability by
+*"`reachability_harvest_review` passes 4"* — **the exact criterion measurement disproved.** A fresh
+chat following it would have diagnosed a false failure on a healthy lane and spent a cycle on code
+that was never broken. **Corrected, and the reason kept in place rather than deleted**, because the
+generalisation is what matters: *before writing any verification, ask what the worker emits when it
+succeeds and finds nothing.*
+
+Also refreshed: the CI section (now "`npm test` is a required check; `main` is protected" rather
+than "CI runs no tests"), and a pointer to the canonical lane doc + its Tier 0 sibling, with the
+warning that **the two share `lcc_merge_entity`, `lcc_owner_sponsor_domain` and the owner
+entities**, so a merge confirmed in one changes the other.
+
+**This is the third time a doc in this repo has aged into being actively wrong within days.** The
+pattern is consistent: the *state* rots fast, the *lessons* do not. Files that carry both should
+lead with the lesson.
+
+
 ## 2026-08-27 (Cowork) — consolidated the lane into ONE canonical doc; drafted A2b + A4b
 
 **Seven documents now covered one subsystem** (`DATA_PROCESS_AUTOMATION_AUDIT`, A1, A2, A2a, A3,
