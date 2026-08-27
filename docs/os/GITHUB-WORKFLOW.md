@@ -154,10 +154,12 @@ in one mapping**, which was structurally invalid, and GitHub could not build a r
 so the required check reported *nothing* and no re-run fixed it. **Ask whether the two sides are
 alternatives or additions.** Prose in a log: additions. A key in a mapping: alternatives.
 
-*(A guard test — `test/no-conflict-markers.test.mjs` — is on `claude/conflict-marker-guard-sxcpoy`
-along with the repair for `docs/architecture/panel-redesign-verification.md`, which carries the
-same damage from an earlier merge. **That branch must land AFTER this repair, or its new guard goes
-red on `STATUS.md`.**)*
+**The guard now enforces the last line of that checklist automatically** —
+`test/no-conflict-markers.test.mjs` (shipped 2026-08-27 with the repair for
+`docs/architecture/panel-redesign-verification.md`, which carried the same damage from an earlier
+merge) fails naming file and line, and runs **even on documentation-only PRs**, which is the only
+reason it can see this file at all (§3a, §4b). It landed after this repair, as it had to: it was
+red on `STATUS.md` until this repair merged.
 
 ## 3a. Documentation-only PRs skip the suite (2026-08-27)
 
@@ -180,6 +182,7 @@ it is conditional.**
 | **runs** | **anything else — the direction is fail-safe.** An unrecognised path runs the suite |
 | **runs** | **`.sql` migrations** — several guards assert on SQL/source *content*, so a migration genuinely can turn a test red |
 | **runs** | **every push to `main`**, regardless of content — it is the base every branch is cut from |
+| **runs even when skipped** | **the conflict-marker guard** (`test/no-conflict-markers.test.mjs`) — committed markers land in *prose*, so exempting docs would blind it to its whole population (§2b, §4b). ~1 s, no `setup-node`, no `npm ci` |
 
 ## 3b. ⚠️ `npm test` is NOT a reliable pre-push gate on Windows
 
@@ -289,6 +292,31 @@ ADDITIONS.** Two competing values for one key are alternatives — pick one. Onl
 **And the outcome was to abandon the branch, not repair it** — `main` already carried the fix, so
 the right move was closing the PR and deleting the branch. **A branch whose purpose has been
 served elsewhere is finished, not broken.**
+
+**The worst case is the one with no symptom at all, and it was live on `main` for 75 days.**
+`docs/architecture/panel-redesign-verification.md` carried the conflict **markers themselves** as
+file content — 148 lines of them, committed by `5bbe8c0f`. **Git does not flag this**: there is no
+`UU`, because as far as git is concerned the conflict *was* resolved. Prose has no parser, so
+nothing else caught it either. In YAML the same mistake made a workflow unrunnable and was
+therefore loud; in prose it silently voided half a verification document. **Guard, shipped
+2026-08-27:** `test/no-conflict-markers.test.mjs` scans every tracked text file and fails naming
+file and line. ⚠️ A bare `=======` is a valid Markdown setext underline, so it is reported **only
+inside** a `<<<<<<<`…`>>>>>>>` span — if a file legitimately needs a start-of-line marker, exclude
+it **by path** via that test's `ALLOWLIST`; weakening the pattern is how the detector would start
+returning comfortable zeros.
+
+**⚠️ And it is a PATTERN, not one file — the guard's very first CI run caught a second, live
+instance.** `docs/claude-code/STATUS.md`, described in full in **§2b** (a `git stash pop`, repaired
+on `main` in PR #1804). The durable lesson §2b does not carry: its markers read
+`<<<<<<< Updated upstream` / `>>>>>>> Stashed changes`, **not** `HEAD` and a sha — so **match on the
+marker CHARACTERS, never on the label text after them**, or the stash flavour walks straight past.
+
+**⚠️ The documentation-only skip (§3a) had made this guard blind to exactly the files it exists
+for.** **Both instances are `docs/*.md`**, and PR #1801 was itself documentation-only — so the
+guard would never have run on the PR that introduced the second one. The docs-only branch of
+`test-suite.yml` therefore runs `node --test test/no-conflict-markers.test.mjs` on its own: ~1
+second, no `setup-node`, no `npm ci` (node builtins + git only), so the skip still does what it was
+added to do. **A guard that cannot see the population it exists for is not a guard.**
 
 ### ⚠️ 4c. Verify the branch base actually updated
 
