@@ -2,6 +2,28 @@
 
 > # 🔁 RE-AUDIT 2026-08-27 (evening) — the method worked; the next target is a DIFFERENT lane
 >
+> ## ⛔ SUPERSEDED IN PART, 2026-08-27 (late) — READ `docs/audits/A5_TRUE_OWNER_SALESFORCE_STALL_2026-08-27.md` FIRST
+>
+> **The completion-rate table below is measuring an instrument artifact, and two of its three
+> verdicts are wrong.** `generate-research-tasks` reads a **29,643-row** dia feed (and the gov feed)
+> through a call **PostgREST caps at 1,000 rows**, then auto-closes every open task outside that
+> window as `gap_resolved` — because its guard compares the **requested** `limit` (2000) against a
+> **capped** response. Measured consequences:
+>
+> | claim below | measured 2026-08-27 |
+> |---|---|
+> | `true_owner_needs_salesforce` — *"proven consumable, 596 lifetime completions"* | **Refuted.** All 596 are the auto-close; **170 of 183 sampled (93%) still have `salesforce_id IS NULL`.** Nobody ever worked one. **`815 open` is `1000 − 185`** — leftover window slots, not a backlog |
+> | `property_missing_recorded_owner` — *"healthiest lane in the system, 908/30d, leave it alone"* | **Refuted.** Open pinned at **exactly 1,000** (the cap); **885 of 885** completions are the same auto-close; **146 of 146** sampled properties still have `recorded_owner_id IS NULL`. **Zero real work in 30 days**, and it cannot clear because its open count is a constant |
+> | `owner_contact_manual` — egress-blocked | **Unchanged and still correct** |
+>
+> **The durable lesson:** the re-audit switched from lifetime totals to completion *rates*
+> specifically to avoid being fooled — and was fooled anyway, because **the rate was computed over a
+> terminal status that no human or worker ever writes.** Before ranking lanes by throughput, check
+> **who writes the terminal status** and **verify on the underlying rows** that the premise actually
+> cleared. `gap_resolved` is a re-discovery artifact (P159a) that reads exactly like work.
+> Fix is backlog **A5a**; `establish_ownership_history` (this arc's lane, a different producer with
+> real verdicts) is unaffected.
+>
 > **Read this block first. §1–§3 below are the original audit and several of their numbers are now
 > historical.**
 >
