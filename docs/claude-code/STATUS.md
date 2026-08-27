@@ -17,6 +17,40 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 19:15 UTC — N15c drafted: the BUILD prompt, and two measurements that changed its shape
+
+**Lane split confirmed with Scott:** this thread continues the **N15b → N15c** line (entity
+identity / `canonical_name`); **the other thread owns A5 and the `gap_resolved` auto-close class**
+(playbook Class 18). N15c says so explicitly and tells Claude Code not to touch
+`handleGenerateResearchTasks` or the research lanes.
+
+**Checked first that the build was unclaimed** — no N15b/N15c migration, no competing prompt, and
+`lcc_r2_w1_canonicalizer_source_registry` (which *sounds* like this machinery) is provenance
+bookkeeping for `field_source_priority`, not a dedup key. Reviewing existing machinery before
+building, per doctrine.
+
+**⚠️ Two live measurements changed the prompt's shape, and the first would have been a real bug:**
+
+- **Do NOT point `canonical_name` at `lcc_owner_domain_core`.** N15b recommended it and Scott's
+  decision endorsed its *token rule* — but the function ends `string_agg(tok, '')`, **no
+  separator**. It matches only **1,973 of 62,368** rows today. Measured over 43,219 organization
+  entities: **space-joined gives 37,519 distinct keys, no-separator gives 37,404 — those 115 fewer
+  keys are false collisions** (the `Gate Way`/`Gateway` hazard). The adopted key is the **token
+  stoplist, joined with SPACES**, built as **one token list with two join styles** so
+  `lcc_owner_domain_core` keeps byte-identical output for P187/P188/P198.
+- **The writer census missed one — there are EIGHT.** `field_source_priority` carries
+  `entities.canonical_name → w8_u5_naming_hygiene@40`. It also means this column sits inside the
+  provenance system, so the new writer must be registered or `v_field_provenance_unranked` flags
+  drift.
+
+Also sized for the prompt: **75 organization entities reduce to an empty key** under the adopted
+rule and need a named fallback (the P189 blind-spot precedent). And the producer is confirmed live
+again — **+5 live entities in ~40 minutes** between two of today's measurements.
+
+**Still Scott's, and the prompt says surface-don't-guess:** the 540 stale rows (recomputing
+discards a captured string some preserve) and whether `canonical_name` becomes an enforced UNIQUE
+key (**3,930 groups violate it today**).
+
 ## 2026-08-27 19:00 UTC — A5 was ALREADY DONE and I recommended re-sending it; playbook Class 18
 
 **⚠️ My recommendation to send A5 to Claude Code was wrong — it had already completed and merged**
