@@ -163,7 +163,7 @@ the domain-keyed fix P189 already rejected at 25%.
 | **P196** | merge made reversible; park reasons |
 | **P197** | the employer resolver; `no_employer_on_file` 68 → 54 |
 | **P198** | the prefix-8 arm is load-bearing (refuted a tightening); co-proposal at 7%; **12 owner merges — 3 approved pairs + N3h's 9, which reunited Gardner's split deal history (270 → 512 relationships)** |
-| **N15b** | **the producer behind all of the above** — `entities.canonical_name` has seven authors and 16.6% of live entities are invisible to `ensureEntityLink`'s own lookup. Measurement only; three decisions pending. ⚠️ It does **not** feed `v_lcc_merge_candidates` |
+| **N15b → N15c** | **the producer behind all of the above** — `entities.canonical_name` has **eight** authors (the census missed `w8_u5_naming_hygiene@40`) and **16.6% of live entities are invisible to `ensureEntityLink`'s own lookup**. N15b measured; **N15c builds**. ⚠️ It does **not** feed `v_lcc_merge_candidates`. ⚠️ **Adopt the token RULE, not `lcc_owner_domain_core` itself** — that function joins with no separator and would create `Gate Way`/`Gateway` collisions as a name key |
 | **A1–A4b, A2a, A2b** | the ownership-lane arc — sibling workstream, same entity graph: [`ownership-history-lane.md`](ownership-history-lane.md) |
 
 **Design intent:** `account-based-contact-intelligence.md` (who to pursue) ·
