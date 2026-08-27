@@ -883,6 +883,55 @@ first time on `428C9: cannot insert a non-DEFAULT value into column "is_current"
 ALWAYS` column, a footgun already written down in `CLAUDE.md`, restored with a bare `select *`. A
 reversal path that has never been executed is a claim, not a capability.
 
+## Class 19 — a PREDICATE that constrains nothing (a column compared to itself)
+
+**Symptom:** a computed figure is plausible, non-zero, and wrong. Nothing errors, the query plans
+fine, and the number is stable enough to look trustworthy. A correlated subquery whose predicate is
+`x.col = x.col` reduces to a `One-Time Filter`: the correlation is gone, so the subquery is
+evaluated once over the whole table and the enclosing aggregate multiplies it out.
+
+**Detector — cheap, and there is a guard test for it:**
+
+```sql
+-- every view definition where an alias is compared to ITSELF
+select schemaname, viewname from pg_views
+where schemaname = 'public'
+  and definition ~ '(\m[a-z_]+)\.([a-z_]+)\s*=\s*\1\.\2\M';
+```
+
+⚠️ **Strip comments first.** A migration header that *quotes the broken predicate while explaining
+the fix* will match, and a detector that reports the bug it just removed is worse than none.
+Source-side guard: `test/sql-self-comparison-guard.test.mjs` (mutation-verified). It must not fire
+on a real self-JOIN (`a.parent_id = b.id`) or a shared prefix (`a.x = ab.x`).
+
+**First run (N18, 2026-08-27).** `v_lcc_developer_classification_candidates.attributed_rent`
+correlated on `pof.source_property_id = pof.source_property_id`. Result: **1 distinct value across
+every row** — and it is also a **P118 correlated subplan**, so fixing the predicate fixed both:
+**1,602 ms → 128 ms, buffers 2,102,242 → 3,904**, distinct values **1 → 5**.
+
+**Three traps this one carried, each worth more than the fix:**
+
+- **⚠️ The wrong VALUE was attributed to the wrong MECHANISM, twice.** Two documents called
+  $34,920,891.77 *"the gov-wide sum."* It is the gov-wide **`max()`** — the sum is $3.5B, two orders
+  of magnitude larger. The real shape is `props × domain_max`. **Re-derive the mechanism before
+  quoting a magnitude**; a plausible explanation attached to a real signal is still wrong.
+- **⚠️ "One distinct value" was a property of the SURVIVING SLICE, not an invariant.** All six
+  visible rows carry `props = 1`. Across the full 277-candidate population the broken expression
+  takes **11 distinct values, up to $279M**. The Class 11 signal was genuine; the generalisation
+  from it was not.
+- **⚠️ A tie across EVERY sort key is an unordered list wearing a rank.** The consumer ordered by
+  `attributed_rent.desc, props.desc` with both constant, so the "value-prioritized" worker returned
+  whatever the plan emitted. Corrected, **every position moved except one** (Heritage 5→1;
+  a row overstated 20.4×).
+
+**And it was a LIVE-ONLY defect — the repo never carried it.** The newest committed body was
+correct; the live view had been hand-patched twice and never committed. See the "running but not
+merged" mirror (gov `CLAUDE.md` §13.12, and P194): **after hand-applying any view change live,
+commit the WHOLE body the same day** — a rebuild from the repo would have silently reverted an
+unrelated repoint (267 → 196 candidates resolved).
+
+---
+
 ## Class 18 — an OPEN COUNT that is really a QUERY WINDOW, and a terminal status nobody earned
 
 **Symptom:** a lane shows a large, stable open count and a healthy-looking completion history. Both

@@ -17,6 +17,65 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 20:45 UTC — N15e and N18 both landed; and BOTH corrected numbers I had briefed
+
+Audits: [`N15d_N15e_PRODUCER_VERIFY_AND_HELD_RECOMPUTE_2026-08-27.md`](../audits/N15d_N15e_PRODUCER_VERIFY_AND_HELD_RECOMPUTE_2026-08-27.md)
+· [`N18_ATTRIBUTED_RENT_SELF_COMPARISON_2026-08-27.md`](../audits/N18_ATTRIBUTED_RENT_SELF_COMPARISON_2026-08-27.md).
+
+### N15e — applied. Every live entity now keys correctly.
+
+**537 rewritten, `v_lcc_canonical_name_drift` 537 → 0, no class at all.** All 62,368 live entities
+key to `lcc_entity_canonical_key(name)`. Gates: `auto_mergeable` **3,040 → 3,040**, Tier 0
+**82 / 9 / 137 unmoved**, `lcc_owner_domain_core` byte-identical (same md5 before and after),
+ledger 537/537, round trip run and rolled back, suite 4,772 pass. **47 entities / 73 pairs**
+surfaced as duplicate candidates — surfaced, not merged, as specified.
+
+### ⏳ N15d did NOT pass — and refusing to claim it did is the right call
+
+The trigger landed 20:03–20:05 UTC; the check ran at 20:26. **Elapsed window 21 minutes, entities
+created in it ZERO.** At ~4/day — one per six hours — a detector over an empty population returns 0
+regardless of what the producer does. **That is exactly the Class 11 "a detector that cannot fail is
+not evidence" trap, and reporting a pass would have been literally true and completely
+uninformative.** **The wall-clock re-run is still due 2026-08-28**, and even a full day at ~4/day is
+weak (daily counts range 0–8).
+
+⚠️ **N15b's recurrence query is not published**, so "re-run it" was not literally executable. Three
+reconstructions were built against pre-backfill values rebuilt from the ledger; all three reproduce
+the burst (1,760–1,789 vs 1,789) and the most-recent date exactly, and put the trickle at **70–94
+against the quoted 79**. Quote the band, not the 79 as if reproduced.
+
+### ⚠️ My briefed UNIQUE figure was stale — 3,930 is now 6,608
+
+I wrote *"3,930 groups violate it today"* into both the backlog and the N15d prompt. That is the
+**pre-N15c** number: **collapsing keys is precisely what creates collisions.** 3,930 → **6,584**
+after N15c's backfill → **6,608** after N15e. **The honest input to Scott's UNIQUE-key decision is
+6,608**, 68% above the figure the question was framed against. My own dated-claim trap, caught on a
+number rather than a blocker, and one query would have caught it.
+
+### N18 — fixed, and it corrected the mechanism I had described
+
+**1 → 5 distinct values** ($431,643 – $2,226,661); **1,602 ms → 128 ms**; buffers **2,102,242 →
+3,904**. Guard `test/sql-self-comparison-guard.test.mjs`, 5 mutations verified RED.
+
+⚠️ **The fabricated value is the domain-wide MAX, not the SUM** — N15c §6 said "sum" and **I
+repeated it in the N18 brief**. The gov-wide sum is **$3.52B**; $34,920,891.77 is the gov-wide
+`max(annual_rent)`. The real shape is `props × domain_max`. ⚠️ **And "one distinct value" was a
+property of the surviving 6-row slice, not an invariant** — all six carry `props = 1`; across the
+full 277-candidate population the broken expression takes **11 distinct values, up to $279M**. The
+Class 11 signal was real; the explanation attached to it was not.
+
+⚠️ **The ranking was not merely wrong, it was arbitrary.** Both sort keys were constant, so the
+"value-prioritized" worker returned whatever the plan emitted. Corrected, **every position moved
+except rank 4** (Heritage 5→1; one row overstated 20.4×).
+
+⚠️ **It was a LIVE-ONLY defect — the repo never carried it.** The newest committed body was correct;
+the live view had been hand-patched twice and never committed. Same class as the gov A4b migration
+found this afternoon. A rebuild from the repo would have silently reverted N15c's repoint
+(**267 → 196**). The migration therefore carries the WHOLE view body.
+
+**Recorded as playbook Class 19** — *a predicate that constrains nothing* — with the detector, the
+comment-stripping caveat, and all three traps.
+
 ## 2026-08-27 20:25 UTC — two prompts drafted; and the N15e objection shrank under measurement
 
 **Two prompts, deliberately not three.** `prompts/N15d-producer-check-and-held-row-recompute-2026-08-27.md`
