@@ -13,6 +13,38 @@ self.addEventListener('unhandledrejection', (event) => {
   }
 });
 
+// ── Intake API host — ONE owner of the decision (Prompt 194) ────────────────
+//
+// ⚠️ These endpoints used to live on Vercel. Vercel was RETIRED 2026-07-20 and
+// every /api/* route is now mounted by server.js on Railway. The retired
+// Vercel deployment (life-command-center-nine.vercel.app) is STILL SERVING a
+// frozen pre-retirement build that still holds the LCC Opps service key — so
+// posting to it does not fail, it succeeds against a months-old copy of the
+// pipeline and writes into the same tables.
+//
+// Measured 2026-08-26 (docs/audits/W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md):
+// every sidebar OM staged through that host landed in staged_intake_extractions
+// with the PRE-Prompt-61 43-key schema and no `_provider` stamp — 0 of 350 rows
+// in 30 days hardened — while email/folder_feed rows written from Railway in the
+// SAME HOUR were 100% stamped and hardened. Correlated 25/25 by writer IP.
+//
+// So: resolve Railway FIRST (LCC_RAILWAY_URL is already configured — the side
+// panel has used it all along), keep LCC_VERCEL_URL only as a DELIBERATE
+// staging override, and default to the Railway origin. Never hardcode a host at
+// a call site again — add it here.
+const DEFAULT_INTAKE_HOST = 'https://tranquil-delight-production-633f.up.railway.app';
+
+function pickIntakeHost(cfg) {
+  const raw = (cfg && (cfg.LCC_RAILWAY_URL || cfg.LCC_VERCEL_URL)) || DEFAULT_INTAKE_HOST;
+  // Strip trailing slash(es) to avoid `host//api/...` 404s.
+  return String(raw).trim().replace(/\/+$/, '') || DEFAULT_INTAKE_HOST;
+}
+
+async function getIntakeHost() {
+  const cfg = await chrome.storage.sync.get(['LCC_RAILWAY_URL', 'LCC_VERCEL_URL']);
+  return pickIntakeHost(cfg);
+}
+
 // ── Install / startup ───────────────────────────────────────────────────────
 
 chrome.runtime.onInstalled.addListener((details) => {
@@ -45,7 +77,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
   // POST to intake as a URL-sourced item
   const settings = await chrome.storage.local.get(['lccApiKey', 'lccWorkspace', 'lccHost']);
-  const host = settings.lccHost || 'https://life-command-center-nine.vercel.app';
+  // Prompt 194: `lccHost` stays an explicit per-machine override; the default
+  // now resolves through pickIntakeHost (Railway), never the retired Vercel origin.
+  const host = String(settings.lccHost || '').trim().replace(/\/+$/, '') || await getIntakeHost();
 
   const resp = await fetch(`${host}/api/intake-outlook-message`, {
     method: 'POST',
@@ -697,7 +731,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
     //           email-to-flow, mobile shortcuts) keep working. Only used if
     //           Path C fails AND a flow URL is configured.
     //  Path B — direct inline POST to /api/intake/stage-om with
-    //           `bytes_base64`. Subject to Vercel's ~4.5 MB body cap; last
+    //           `bytes_base64`. Subject to the host's request-body cap; last
     //           resort when Path C is misconfigured and Flow A isn't wired.
     (async () => {
       // ---- Shared setup ---------------------------------------------------
@@ -714,14 +748,14 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
       }
 
       // API key lives in `chrome.storage.sync` under LCC_API_KEY (where
-      // settings.js writes it). The intake endpoints (prepare-upload,
-      // stage-om, extract) live on Vercel, not on the Railway MCP server —
-      // so `LCC_RAILWAY_URL` is the wrong host to use here. Hardcode the
-      // Vercel origin with an optional LCC_VERCEL_URL override for staging
-      // environments. Strip trailing slashes to avoid `host//api/...` 404s.
-      const syncConfig  = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
+      // settings.js writes it). Host comes from pickIntakeHost — see its
+      // header. (The comment that used to sit here said the intake endpoints
+      // "live on Vercel, not on the Railway MCP server, so LCC_RAILWAY_URL is
+      // the wrong host". That was true until 2026-07-20 and is the reason this
+      // channel silently ran a months-old pipeline for weeks afterwards.)
+      const syncConfig  = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_RAILWAY_URL', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
       const localConfig = await chrome.storage.local.get(['lccIntakeFlowUrl']);
-      const rawHost = syncConfig.LCC_VERCEL_URL || 'https://life-command-center-nine.vercel.app';
+      const rawHost = pickIntakeHost(syncConfig);
       const settings = {
         lccApiKey:        syncConfig.LCC_API_KEY     || '',
         lccWorkspace:     syncConfig.LCC_WORKSPACE   || '',
@@ -1021,8 +1055,8 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           return;
         }
 
-        const syncConfig  = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
-        const rawHost = syncConfig.LCC_VERCEL_URL || 'https://life-command-center-nine.vercel.app';
+        const syncConfig  = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_RAILWAY_URL', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
+        const rawHost = pickIntakeHost(syncConfig);
         const host = String(rawHost).replace(/\/+$/, '');
         const apiHeaders = {
           'X-LCC-Key': syncConfig.LCC_API_KEY || '',
@@ -1146,8 +1180,8 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         const digest = await crypto.subtle.digest('SHA-256', buf);
         const contentHash = 'sha256:' + Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 
-        const syncConfig = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
-        const host = String(syncConfig.LCC_VERCEL_URL || 'https://life-command-center-nine.vercel.app').replace(/\/+$/, '');
+        const syncConfig = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_RAILWAY_URL', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
+        const host = pickIntakeHost(syncConfig);
         const apiHeaders = {
           'X-LCC-Key': syncConfig.LCC_API_KEY || '',
           ...(syncConfig.LCC_WORKSPACE ? { 'X-LCC-Workspace': syncConfig.LCC_WORKSPACE } : {}),
@@ -1246,8 +1280,8 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
         const sizeBytes = bytes.byteLength;
 
-        const syncConfig = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
-        const rawHost = syncConfig.LCC_VERCEL_URL || 'https://life-command-center-nine.vercel.app';
+        const syncConfig = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_RAILWAY_URL', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
+        const rawHost = pickIntakeHost(syncConfig);
         const host = String(rawHost).replace(/\/+$/, '');
         const apiHeaders = {
           'X-LCC-Key': syncConfig.LCC_API_KEY || '',
@@ -1432,8 +1466,8 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         const mimeType = tabFetch.mimeType || 'application/pdf';
         if (!bytes.byteLength) { respond({ ok: false, error: 'empty_doc' }); return; }
 
-        const syncConfig = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
-        const host = String(syncConfig.LCC_VERCEL_URL || 'https://life-command-center-nine.vercel.app').replace(/\/+$/, '');
+        const syncConfig = await chrome.storage.sync.get(['LCC_API_KEY', 'LCC_RAILWAY_URL', 'LCC_VERCEL_URL', 'LCC_WORKSPACE']);
+        const host = pickIntakeHost(syncConfig);
         const apiHeaders = {
           'X-LCC-Key': syncConfig.LCC_API_KEY || '',
           ...(syncConfig.LCC_WORKSPACE ? { 'X-LCC-Workspace': syncConfig.LCC_WORKSPACE } : {}),
