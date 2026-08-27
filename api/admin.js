@@ -25,6 +25,11 @@ import { authenticate, requireRole, primaryWorkspace, handleCors, authReadiness 
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler, fetchWithTimeout } from './_shared/ops-db.js';
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
+import {
+  FEED_PAGE_SIZE, NBA_FEED_ORDER, PROBE_CHUNK_SIZE,
+  feedKeyOf, openTaskKeyOf, planAutoClose, planMintHead, mintHeadPageCount,
+  chunkProbeIds, probeIdIsSafe, probeChunkIsTrustworthy,
+} from './_shared/nba-feed-sweep.js';
 import { invokeExtractionAI } from './_shared/ai.js';
 import {
   buildNewsAlertExtractionPrompt, parseNewsAlertExtractionJson, normalizeNewsAlertExtraction,
@@ -18672,22 +18677,38 @@ async function handleResolveCmsChainDrift(req, res) {
 // Local stripNulls — admin.js doesn't import the sidebar-pipeline version
 // to avoid pulling its full dependency tree just for one helper.
 // ============================================================================
-// RESEARCH-TASK GENERATOR (O-9, 2026-05-21)
+// RESEARCH-TASK GENERATOR (O-9, 2026-05-21; A5a truncation fix 2026-08-27)
 // Materializes the gov/dia `v_next_best_research` NBA feed into LCC
 // `research_tasks`. Cross-DB: reads the gap feed via the data-query edge
 // function (?_source=gov|dia), upserts into research_tasks keyed on
 // (domain, research_type, source_record_id).
 //   POST /api/admin?_route=generate-research-tasks&domain=gov|dia|both&limit=N
-// Auto-close (filled gap -> completed/gap_resolved) only fires when the full
-// feed fit under `limit` — never on a capped slice.
+//        [&dry_run=1]
+//
+// ⚠️ TWO BUDGETS, NOT ONE — this is the whole shape of the A5a fix.
+//   * The AUTO-CLOSE needs COMPLETENESS. It asserts "this gap is resolved", so
+//     it runs only when the generator has ASKED the feed about every open
+//     subject and every answer came back untruncated (probeNbaFeedMembership).
+//     It used to infer the same thing from a single 1,000-row read, because its
+//     guard compared the REQUESTED limit against the RETURNED rows; that
+//     produced 5,763 closures, ~95% of them false on the largest lane.
+//   * The MINT needs PRIORITISATION, and is capped at `limit` — the ranked head
+//     only. The producer has no value gate yet (A5c), so open counts converge to
+//     min(limit, feed size) per domain instead of running to the feed's 71,448.
+// Everything about truncation, ordering and fail-closed lives in
+// `api/_shared/nba-feed-sweep.js`, which is the single owner of those rules.
 // ============================================================================
-async function fetchNbaFeed(source, limit, req) {
+async function fetchNbaFeed(source, limit, req, offset = 0) {
   const url = new URL(DATA_QUERY_EDGE_URL);
   url.searchParams.set('_source', source);
   url.searchParams.set('table', 'v_next_best_research');
   url.searchParams.set('select', 'research_type,entity_kind,entity_id,label,priority,instructions,domain');
-  url.searchParams.set('order', 'priority.desc');
+  // A TOTAL order — `priority` alone ties across tens of thousands of rows
+  // because every gap arm hard-codes it, so an untied sort makes both the
+  // window and the paging non-deterministic (pages can drop or repeat rows).
+  url.searchParams.set('order', NBA_FEED_ORDER);
   url.searchParams.set('limit', String(limit));
+  if (offset > 0) url.searchParams.set('offset', String(offset));
   url.searchParams.set('count', 'false');
   const r = await fetch(url.toString(), {
     method: 'GET',
@@ -18697,6 +18718,86 @@ async function fetchNbaFeed(source, limit, req) {
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`data-query ${source} ${r.status}: ${JSON.stringify(body).slice(0, 200)}`);
   return Array.isArray(body.data) ? body.data : [];
+}
+
+// The RANKED MINT HEAD: the top `mintLimit` feed rows, read at exactly the
+// server's page cap (a larger stride silently skips rows). Nothing here decides
+// the auto-close — that is settled by probeNbaFeedMembership below.
+async function fetchNbaMintHead(source, mintLimit, req) {
+  const rows = [];
+  const pages = mintHeadPageCount(mintLimit, FEED_PAGE_SIZE);
+  for (let i = 0; i < pages; i += 1) {
+    const want = Math.min(FEED_PAGE_SIZE, mintLimit - rows.length);
+    if (want <= 0) break;
+    const page = await fetchNbaFeed(source, want, req, rows.length);
+    rows.push(...page);
+    if (page.length < want) break;   // RETURNED count, never the requested one
+  }
+  return rows;
+}
+
+// Ask the feed, directly, which of these open-task subjects are STILL a gap.
+//
+// ⚠️ This is the completeness guarantee, and it is deliberately a probe rather
+// than a full download. Measured 2026-08-27: the gov feed view materialises and
+// external-sorts all 41,805 rows on EVERY ordered request (1,149 ms, 8 MB
+// spilled), so a 42-page offset sweep would burn ~48 s of gov DB time per run,
+// 48 runs a day, on the shared PostgREST pool the 2026-08-12 incident wedged.
+// The SAME query filtered to a list of ids pushes the predicate into every
+// UNION arm: 44 ms. So we ask about the ~2,000 open subjects instead of
+// downloading 71,448 rows to infer the same answer less directly.
+//
+// `complete` is true only if every subject was asked about AND every chunk came
+// back UNDER the response cap. Anything else fails closed.
+async function probeNbaFeedMembership(source, req, openTasks) {
+  const present = new Set();
+  const chunks = chunkProbeIds(openTasks, PROBE_CHUNK_SIZE);
+  let complete = true;
+  let reason = null;
+  let probed = 0;
+
+  for (const chunk of chunks) {
+    const safe = chunk.filter(probeIdIsSafe);
+    if (safe.length !== chunk.length) { complete = false; reason = 'unsafe_subject_id'; }
+    if (!safe.length) continue;
+    const url = new URL(DATA_QUERY_EDGE_URL);
+    url.searchParams.set('_source', source);
+    url.searchParams.set('table', 'v_next_best_research');
+    url.searchParams.set('select', 'research_type,entity_id');
+    url.searchParams.set('filter', `entity_id=in.(${safe.map(id => `"${id}"`).join(',')})`);
+    url.searchParams.set('limit', String(FEED_PAGE_SIZE));
+    url.searchParams.set('count', 'false');
+    let body;
+    try {
+      const r = await fetch(url.toString(), {
+        method: 'GET',
+        headers: buildEdgeProxyHeaders(req),
+        signal: AbortSignal.timeout(25000),
+      });
+      body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(`data-query ${source} ${r.status}: ${JSON.stringify(body).slice(0, 160)}`);
+    } catch (err) {
+      // A probe we could not run is not evidence of absence.
+      complete = false;
+      reason = reason || `probe_error: ${String(err?.message || err)}`;
+      continue;
+    }
+    const data = Array.isArray(body.data) ? body.data : [];
+    if (!probeChunkIsTrustworthy(data.length, FEED_PAGE_SIZE)) {
+      // At/over the cap the answer may be truncated, and a truncated membership
+      // answer under-reports presence — i.e. it closes live gaps. Refuse it.
+      complete = false;
+      reason = reason || 'probe_chunk_hit_response_cap';
+      continue;
+    }
+    probed += safe.length;
+    for (const row of data) {
+      const key = feedKeyOf(row);
+      if (key) present.add(key);
+    }
+  }
+
+  return { present, complete, reason, chunks: chunks.length, subjects_probed: probed };
 }
 
 async function handleGenerateResearchTasks(req, res) {
@@ -18712,16 +18813,28 @@ async function handleGenerateResearchTasks(req, res) {
   if (!['gov', 'dia', 'both'].includes(domainParam)) {
     return res.status(400).json({ error: "domain must be gov, dia, or both" });
   }
+  // `limit` is now the MINT budget only — never the feed window. The feed is
+  // always swept in full (see sweepNbaFeed); this caps how many of its
+  // priority-ranked head may become tasks in one run.
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 500, 1), 2000);
+  const dryRun = ['1', 'true', 'yes'].includes(String(req.query.dry_run || '').toLowerCase());
   const sources = domainParam === 'both' ? ['gov', 'dia'] : [domainParam];
 
-  const result = { ok: true, by_domain: {} };
+  const result = { ok: true, dry_run: dryRun, mint_limit: limit, by_domain: {} };
 
   for (const source of sources) {
     const domain = source === 'dia' ? 'dialysis' : 'government';
-    const summary = { feed: 0, inserted: 0, refreshed: 0, closed: 0, skipped_ignored: 0, deduped: 0, errors: [] };
+    const summary = {
+      feed: 0, mint_head: 0,
+      inserted: 0, would_insert: 0, refreshed: 0, would_refresh: 0,
+      closed: 0, would_close: 0,
+      membership_complete: false, membership_chunks: 0, subjects_probed: 0,
+      auto_close_skipped_reason: null,
+      skipped_ignored: 0, deduped: 0, errors: [],
+    };
     try {
-      const feed = await fetchNbaFeed(source, limit, req);
+      // Read only the RANKED HEAD — this is the mint budget, never the close set.
+      const feed = await fetchNbaMintHead(source, limit, req);
       summary.feed = feed.length;
 
       const ignoreRes = await opsQuery('GET',
@@ -18750,23 +18863,31 @@ async function handleGenerateResearchTasks(req, res) {
         if (page.length < 1000) break;
       }
       const openByKey = new Map(openTasks.map(t => [`${t.research_type}|${t.source_record_id}`, t]));
-      const feedKeys = new Set();
 
-      for (const row of feed) {
+      // ── MINT SET: the priority-ranked head only. Bounded on purpose; see the
+      // two-budgets note on the generator header.
+      const mintRows = planMintHead(feed, limit);
+      summary.mint_head = mintRows.length;
+
+      for (const row of mintRows) {
         const entityId = row.entity_id == null ? null : String(row.entity_id);
         if (!entityId) continue;
         if (ignored.has(entityId)) { summary.skipped_ignored += 1; continue; }
         const key = `${row.research_type}|${entityId}`;
-        feedKeys.add(key);
         const existing = openByKey.get(key);
         const priority = row.priority != null ? Number(row.priority) : 0;
         if (existing) {
           if (Number(existing.priority) !== priority) {
-            await opsQuery('PATCH', `research_tasks?id=eq.${pgFilterVal(existing.id)}`,
-              { priority, updated_at: new Date().toISOString() });
-            summary.refreshed += 1;
+            summary.would_refresh += 1;
+            if (!dryRun) {
+              await opsQuery('PATCH', `research_tasks?id=eq.${pgFilterVal(existing.id)}`,
+                { priority, updated_at: new Date().toISOString() });
+              summary.refreshed += 1;
+            }
           }
         } else {
+          summary.would_insert += 1;
+          if (dryRun) continue;
           const title = (row.label && String(row.label).slice(0, 200)) || `${row.research_type} — ${entityId}`;
           const ins = await opsQuery('POST', 'research_tasks', {
             workspace_id:    workspaceId,
@@ -18789,18 +18910,36 @@ async function handleGenerateResearchTasks(req, res) {
         }
       }
 
-      if (feed.length < limit) {
-        for (const t of openTasks) {
-          const key = `${t.research_type}|${t.source_record_id}`;
-          if (!feedKeys.has(key)) {
-            await opsQuery('PATCH', `research_tasks?id=eq.${pgFilterVal(t.id)}`,
-              { status: 'completed', outcome: 'gap_resolved',
-                completed_at: new Date().toISOString(), updated_at: new Date().toISOString() });
-            summary.closed += 1;
-          }
+      // ── AUTO-CLOSE. Settled by ASKING the feed about every open subject, and
+      // gated on every one of those answers being complete and untruncated —
+      // never on a requested limit. planAutoClose fails closed: a probe error, an
+      // unsafe id or a chunk that hit the response cap closes NOTHING and says so.
+      //
+      // An entity the operator muted stays in the close-exempt set: muting is not
+      // resolution, so closing its task as `gap_resolved` would be a second false
+      // claim. This can only ever REDUCE closures.
+      const membership = await probeNbaFeedMembership(source, req, openTasks);
+      summary.membership_complete = membership.complete;
+      summary.membership_chunks = membership.chunks;
+      summary.subjects_probed = membership.subjects_probed;
+      if (membership.reason) summary.errors.push(`membership probe: ${membership.reason}`);
+      const presentKeys = membership.present;
+      for (const t of openTasks) {
+        const eid = t.source_record_id == null ? null : String(t.source_record_id);
+        if (eid && ignored.has(eid)) presentKeys.add(openTaskKeyOf(t));
+      }
+      const closePlan = planAutoClose({
+        membershipComplete: membership.complete, openTasks, presentKeys,
+      });
+      summary.would_close = closePlan.close.length;
+      summary.auto_close_skipped_reason = closePlan.reason;
+      if (!dryRun) {
+        for (const t of closePlan.close) {
+          await opsQuery('PATCH', `research_tasks?id=eq.${pgFilterVal(t.id)}`,
+            { status: 'completed', outcome: 'gap_resolved',
+              completed_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+          summary.closed += 1;
         }
-      } else {
-        summary.note = 'feed capped at limit; auto-close skipped';
       }
     } catch (err) {
       summary.errors.push(String(err?.message || err));
