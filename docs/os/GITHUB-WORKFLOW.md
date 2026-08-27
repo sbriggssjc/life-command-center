@@ -110,6 +110,55 @@ Budget for it: roughly three minutes per re-run, and if `main` moves again durin
 may do it twice. **Merging the moment the first green appears is how PR #1793 shipped a red
 suite** — the checks were still running.
 
+## 3a. Documentation-only PRs skip the suite (2026-08-27)
+
+Scott: *"only require tests when a substantive change that requires a test gets pushed or merged.
+It's not worth the wait for minor or documentation changes."*
+
+`npm test` now decides internally whether the suite is warranted. A PR whose changed files are
+**all** documentation reports green in ~15 seconds instead of ~3 minutes.
+
+**⚠️ It is deliberately NOT implemented with `paths-ignore`, and that distinction is the whole
+point.** A **required** status check that never runs is not "skipped" — GitHub reports it as
+**Expected** forever and the PR becomes unmergeable. Adding `paths-ignore` to a required check is
+the most common way to deadlock a protected branch, and it would have re-created the exact
+rejection this file was written for. **The job always runs and always reports; only the work inside
+it is conditional.**
+
+| | |
+|---|---|
+| skipped | every changed file matches `docs/`, `*.md`, `LICENSE`, `.github/ISSUE_TEMPLATE/` |
+| **runs** | **anything else — the direction is fail-safe.** An unrecognised path runs the suite |
+| **runs** | **`.sql` migrations** — several guards assert on SQL/source *content*, so a migration genuinely can turn a test red |
+| **runs** | **every push to `main`**, regardless of content — it is the base every branch is cut from |
+
+## 3b. ⚠️ `npm test` is NOT a reliable pre-push gate on Windows
+
+**Measured 2026-08-27.** Four test files fail on Scott's Windows machine and **pass on Linux —
+59 tests, 0 failures** — including in CI, which is `ubuntu-latest`:
+
+`lease-ocr-backfill` · `sf-deal-promotion` · `sf-file-collector` · `sf-file-discovery`
+
+The cause is platform-native path separators. `scripts/lease-ocr-backfill.mjs:144` ends
+`return join(libraryRoot, ...rel.split('/'))`, and `path.join` emits `\` on Windows:
+
+```
+actual:   '\Users\scott\Team Briggs - Documents\PROPERTIES\x.pdf'
+expected: '/Users/scott/Team Briggs - Documents/PROPERTIES/x.pdf'
+```
+
+**The code is correct and the test is over-specified.** `localPathFor` builds a path for the local
+filesystem; a backslash on Windows *is* the right answer. The test asserts a POSIX string literal
+against a platform-native operation.
+
+**Consequences, both worth internalising:**
+
+1. **§3's advice "run `npm test` locally before you push" does not hold on Windows** — you will see
+   red that CI will not. Treat a local failure in one of those four files as environmental until
+   proven otherwise, and **check the file name against the list above before debugging.**
+2. **The fix is in the tests, not the code:** assert against `path.join(...)` (or normalise
+   separators before comparing) so the expectation is platform-native too. Backlog **N12**.
+
 ## 4. The Node-version lockout — RESOLVED 2026-08-27
 
 > **Re-measured and rewritten. The section that stood here described a lockout that has since been
