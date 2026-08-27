@@ -19,7 +19,34 @@ name: Test Suite
 # The suite runs fully offline: no secrets, no network, no database. So it needs
 # no environment and can gate every PR the same way boot-check does.
 #
-# Make this a required check in branch protection alongside "App boots".
+# ─────────────────────────────────────────────────────────────────────────────
+# 2026-08-27 — DOCUMENTATION-ONLY CHANGES SKIP THE SUITE (Scott's call)
+#
+# "Only require tests when a substantive change that requires a test gets pushed
+#  or merged. It's not worth the wait for minor or documentation changes."
+#
+# ⚠️ THIS IS DELIBERATELY *NOT* IMPLEMENTED WITH `paths-ignore`, AND THAT MATTERS.
+#   A REQUIRED status check that never runs is not "skipped" — GitHub reports it
+#   as **Expected** forever and the PR can never be merged. Adding `paths-ignore`
+#   to a required check is the single most common way to deadlock a protected
+#   branch, and it would have re-created exactly the rejection this repo hit on
+#   2026-08-27.
+#
+#   So the JOB ALWAYS RUNS AND ALWAYS REPORTS. It decides internally whether the
+#   suite is warranted; when it is not, it reports success in ~15 seconds instead
+#   of ~3 minutes. The required check stays satisfiable in every case.
+#
+# ⚠️ FAIL-SAFE DIRECTION: the suite is skipped only when EVERY changed file is
+#   documentation. Anything unrecognised runs the suite. A new file type must be
+#   explicitly added to the allowlist to become skippable — silence means run.
+#
+# ⚠️ MIGRATIONS ARE NOT SKIPPABLE, though they look like they should be. Several
+#   guards assert on SQL/source *content* (the ownership-lane classifier, the
+#   research-embed invariant, the block-slice guards CLAUDE.md warns about), so a
+#   .sql change genuinely can turn a test red. Only prose is exempt.
+#
+# ⚠️ PUSHES TO `main` ALWAYS RUN THE FULL SUITE, regardless of content. `main`
+#   is the base every branch is cut from; its verified state is worth 3 minutes.
 
 on:
   pull_request:
@@ -37,17 +64,74 @@ jobs:
   test:
     name: npm test
     runs-on: ubuntu-latest
-    # The full suite runs in ~3 minutes locally; 20 leaves generous headroom on
-    # a cold runner without letting a hung test burn an hour.
+    # The full suite runs in ~3 minutes; 20 leaves generous headroom on a cold
+    # runner without letting a hung test burn an hour.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Needed to diff against the PR base. 0 = full history.
+          fetch-depth: 0
+
+      - name: Decide whether this change needs the suite
+        id: scope
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # A push to main always runs the suite - see the header.
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "reason=push to ${{ github.ref_name }} - always verified" >> "$GITHUB_OUTPUT"
+            echo "needs_tests=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base="origin/${{ github.base_ref }}"
+          git fetch --no-tags --depth=0 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
+          changed="$(git diff --name-only "$base"...HEAD || true)"
+
+          if [ -z "$changed" ]; then
+            # No diff resolved - do not guess, run the suite.
+            echo "reason=could not resolve the changed-file list; running the suite" >> "$GITHUB_OUTPUT"
+            echo "needs_tests=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Changed files:"; echo "$changed" | sed 's/^/  /'
+
+          # Documentation allowlist. EVERYTHING ELSE RUNS THE SUITE.
+          # Note `docs/**` also covers the Claude Code prompt/response worklog.
+          non_doc="$(echo "$changed" | grep -Ev '^(docs/|.*\.md$|LICENSE$|\.github/ISSUE_TEMPLATE/)' || true)"
+
+          if [ -z "$non_doc" ]; then
+            echo "needs_tests=false" >> "$GITHUB_OUTPUT"
+            echo "reason=documentation only" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_tests=true" >> "$GITHUB_OUTPUT"
+            echo "reason=substantive files changed" >> "$GITHUB_OUTPUT"
+            echo "Substantive files:"; echo "$non_doc" | sed 's/^/  /'
+          fi
+
+      - name: Skipped - documentation only
+        if: steps.scope.outputs.needs_tests != 'true'
+        run: |
+          echo "::notice title=Suite skipped::Every changed file is documentation."
+          echo "Reason: ${{ steps.scope.outputs.reason }}"
+          echo "The check reports success so the required gate stays satisfiable;"
+          echo "it is NOT implemented with paths-ignore, which would leave a"
+          echo "required check permanently 'Expected' and block the merge."
+
       - uses: actions/setup-node@v4
+        if: steps.scope.outputs.needs_tests == 'true'
         with:
           # Four established tests import TypeScript modules directly. Match the
           # repository's Node 24 development/runtime baseline so the required
           # merge gate exercises those tests instead of failing at module load.
           node-version: '24'
           cache: npm
+
       - run: npm ci
+        if: steps.scope.outputs.needs_tests == 'true'
+
       - run: npm test
+        if: steps.scope.outputs.needs_tests == 'true'
