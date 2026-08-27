@@ -176,9 +176,35 @@ All nine carry **$0 current rent**, so they are invisible to every rent-ranked s
 row matters most: **that firm's deal history is split across two live entities**, which is exactly
 the P177 failure — a survivor under-reporting the transaction history prospecting ranks on.
 
-**Not merged — Scott approved three named pairs, and an approval is not extended by inference.**
-Sized and surfaced as backlog **N3h**. ⚠️ Gardner's `min_loser_sim` is **0.667** (not
-byte-identical) so it needs reading; Easterly and Cambridge are 1.000.
+**Not merged in this pass — Scott approved three named pairs, and an approval is not extended by
+inference.** Sized and surfaced as backlog **N3h**, and **approved and executed separately at
+2026-08-27 17:05 UTC** — see §6.
+
+## 6. N3h EXECUTED 2026-08-27 17:05 UTC — and Gardner was the point
+
+All 9 merged through `lcc_merge_entity`; **all 9 `reversible = true`**.
+
+| | before | after |
+|---|---:|---:|
+| live entities | 62,365 | 62,356 (−9) |
+| **Gardner Tanenbaum Holdings — relationships** | **270** | **512 (+242)** |
+| Gardner — assets | 17 | 22 |
+| Easterly — relationships | ~1,006 | 1,021 |
+| lane `ask` | 84 | 83 |
+| `auto` / parked | 9 / 137 | 9 / 137 — unchanged |
+| `auto_mergeable` | 3,043 | **3,040 (−3)** — exactly the three groups resolved |
+| duplicate groups on the three winners | 3 | **0** |
+| `lcc_entity_merge_log` | 35 | 44 |
+
+**The +242 relationships on Gardner is the whole result.** That firm's transaction history was
+split across two live entities, so the survivor — the one every surface points at — was reporting
+270 of its 512 relationships. Prospecting ranks on exactly that signal (P177). **At $0 current rent
+on every one of the nine losers, no rent-ranked surface would ever have shown this.** It was found
+only by chasing a guard counter that moved by 2.
+
+⚠️ **`min_loser_sim` 0.667 on the Gardner group was read before merging, not waved through**: the
+low score comes from `Gardner Tanenbaum` vs `Gardner Tanenbaum Holdings` — a suffix, not a
+different party. Easterly's 3 and Cambridge's 2 were 1.000 (byte-identical).
 
 ## 4. Verify by
 
