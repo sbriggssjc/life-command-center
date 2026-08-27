@@ -782,6 +782,36 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
 - **Entity ops:** `lcc_merge_entity` (two-step DELETE-then-UPDATE; the single "move backrefs loser→winner"
   path — reconciles portfolio/identities/relationships/cadence **plus, since P160, the ownership/BD
   backrefs**), `lcc_normalize_entity_name`,
+  - **⚠️ THE MERGE IS REVERSIBLE SINCE P196 (2026-08-27) — AND IT WAS NOT BEFORE, ON A PATH THAT
+    RUNS ~285 TIMES A MONTH.** `lcc_merge_entity` now calls
+    `lcc_merge_snapshot_loser` → `lcc_merge_fold_pivot` → the reconcile with **`p_snapshot => true`**,
+    action-labels every P160 dedup/repoint into `r40_merge_reconcile_backup`, and logs the merge in
+    `lcc_entity_merge_log`. Reverse one with **`lcc_unmerge_entity(loser)`**; see which tombstones can
+    be reversed at all in `v_lcc_entity_merge_reversibility` (**2,411 pre-P196 tombstones read
+    `reversible=false` and always will**). Three durable lessons:
+    - **"Dormant" described the LOOP, not the function.** N11 correctly measured that
+      `lcc_apply_fuzzy_merges` has no caller (0 cron rows, 0 in `api/`) — but `lcc_merge_entity` has
+      **nine human-verdict call sites** and **285 entities were merged in 30 days, 176 in 7**. Before
+      filing a shared function as latent risk, count the callers of the FUNCTION, not of the one
+      wrapper you were told about.
+    - **"Uncorrelated EXISTS" was never the bug.** `owner_contact_pivot` and `lcc_property_owner` are
+      both PK `(entity_id)`, so the un-correlated `EXISTS` is equivalent to a correlated one. The bug
+      was that the statement **DELETED content instead of FOLDING it** — measured on `bamproperties`,
+      the loser held the group's only named contact. Correlating the predicate would have looked like
+      a fix and moved nothing.
+    - **⚠️ A `BEFORE INSERT` TRIGGER THAT *SKIPS* A ROW SILENTLY DEFEATS `ON CONFLICT DO UPDATE`.**
+      P177's `trg_lcc_entity_rel_resolve_survivor` returns NULL for an edge that duplicates one the
+      resolved entity already holds, so the row never reaches the conflict clause and the DO UPDATE
+      never runs. Restoring three byte-identical `purchases` edges brought back ONE and left two on
+      the winner, while the unmerge reported `restored`. **Repoint a surviving row with `UPDATE`
+      (both survivor triggers are INSERT-only) and INSERT only what was deleted** — and count what
+      came back, because a partial restore otherwise reads exactly like a clean one. Only the live
+      round trip found it; the same family as P195's `428C9 is_current is GENERATED ALWAYS`. Guard:
+      `test/merge-entity-reversible.test.mjs`. Writeup:
+      `docs/audits/P196_MERGE_REVERSIBILITY_AND_PARK_REASONS_2026-08-27.md`.
+    - **Making it reversible is NOT a decision to auto-merge.** `lcc_apply_fuzzy_merges` is still
+      unwired and `auto_mergeable` is still 3,053. Reversibility lowers the cost of being wrong; it
+      does not replace P195 §1's grading of what a byte-identical name actually proves.
   - **⚠️ WHEN YOU ADD A TABLE WITH AN ENTITY FK, ADD IT TO THE MERGE PATH (P160, 2026-08-20).**
     `lcc_reconcile_tombstone_backrefs` moves portfolio facts, external identities, relationships and
     cadence — and for a long time nothing else. `lcc_property_owner`, `lcc_property_owner_evidence`,
@@ -2146,6 +2176,9 @@ read 9/9 correct on named rows**. Deliberately NOT extended to `domain_is_core_p
   three person signals for George Washington University, employed by a poultry company) and would restore
   exactly the noise P192 removed. The instrument is `v_lcc_tier0_park_watch`; the one genuinely
   link-shaped unwired signal is *a deal shown to that buyer* (`lcc_listing_events`) — a stated gap.
+  ⚠️ **Re-measured 2026-08-27 (P196): 146 parked / 105 owners / $180.3M**, and every card now names
+  WHY (`park_reason`). The 95/$118M above was true when written; re-read `v_lcc_tier0_park_watch`
+  rather than quoting it.
 - **⚠️ "LEARN FROM THE REJECTS" HAS NO INPUT, AND THE ATTACH ANALOGUE IS REFUTED.**
   `lcc_tier0_confirm_log` holds **27 attaches and zero rejects** (the 6 `reject` rows in `lcc_decisions`
   are `status='superseded'` — the `owner_already_reachable` no-op, not an operator saying "wrong firm"),
@@ -2169,6 +2202,53 @@ read 9/9 correct on named rows**. Deliberately NOT extended to `domain_is_core_p
   chain reads, on a card that stays open.
 - **Judge it by `cards_drained`, never `attached`** (`v_lcc_tier0_auto_attach_run_health`); every
   `skipped_*` is a re-discovery tally. Reverse a batch by `batch_tag LIKE 't0auto_%'`.
+
+## P196 — a park needs a REASON, and the two prescribed fixes were measured (2026-08-27)
+
+Every parked Tier 0 card now carries **`park_reason`** plus both compared strings
+(`v_lcc_tier0_owner_contact_lane_triage` → `v_lcc_tier0_park_watch`, and the ungated
+`GET /api/tier0-auto-attach-tick` dry run). Live: **146 parked / 105 owners / $180.3M** =
+`employer_on_file_differs` 76 / 67 / $96.3M, `no_employer_on_file` 68 / 56 / $132.3M,
+`employer_not_comparable` 2 / 2 / $1.9M. Writeup:
+`docs/audits/P196_MERGE_REVERSIBILITY_AND_PARK_REASONS_2026-08-27.md`.
+
+- **The parks are mostly CORRECT — `employer_on_file_differs` is the gate working, not a defect
+  count.** Same class as the `hero_gap` correction earlier in this file: a number that reads like a
+  backlog and is really the guard doing its job. What was actually missing was VISIBILITY — parked
+  cards never reach the Decision Center (`_open` serves only `ask`/`auto`), so before this the
+  operator saw a count and nothing else.
+- **`employer_not_comparable` is deliberately its OWN reason.** The comparator has a 6-char floor on
+  both sides; for those rows it could not run at all, which is a different fact from "it ran and
+  disagreed". One label covering two questions is the P181 failure.
+- **⚠️ THE PRESCRIBED COMPANY-STRING NORMALISATION UNPARKS 0 OF 146 — IMPLEMENTED, MEASURED,
+  REJECTED.** Stripping `www`/`com`/punctuation before comparing looks obviously right and the
+  motivating row does not survive its own fix: `Savlan Cc Property LLC` → `savlanccproperty` vs
+  `savlancapital` fails containment and then fails the 8-char prefix arm on `savlancc` vs
+  `savlanca`. **The mismatch is at character 8, not in the www/com noise.** A change that moves
+  nothing is not free — it is a new arm nobody has graded. Savlan is a *sponsor-shaped* park.
+- **⚠️ A LEXICAL SPONSOR DETECTOR IS A NOISE GENERATOR AT ~25% PRECISION — THE SAME NUMBER P189
+  MEASURED AND REJECTED.** Leading-brand-token equality alone returns 19 pairs over the parked
+  population, dominated by **shared GIVEN NAMES** (`George Kurz` ← *George's Inc* — P188's Gary
+  George trap wearing a new dress; two `JAMES` trusts ← a shared CPA at `jameshowardcpa.com`, the
+  grouping P189 already named) and **PLACE/NATURE words** (`MAPLE HILL` ← *Mapletree Investments*,
+  a Singapore REIT; `Steel Station Rd, LLC` ← *Steel Equities*). Three guards in
+  `lcc_tier0_sponsor_brand_token` — the owner must carry an SPE/portfolio marker, must not read as a
+  street, must not be person-shaped (brokerage companies excluded on principle) — take it to
+  **4 of 6, and the 4 are the top 4 by rent** (Gardner $8.0M, Salus $5.3M, Oxford $2.5M, Savlan
+  $2.0M; the 2 false ones at $1.26M and $0.84M). `v_lcc_tier0_sponsor_map_proposals` is therefore
+  **value-ranked and human-confirm-only** — the confirm is the existing curated
+  `insert into lcc_owner_sponsor_domain(...)`, ONE decision covering an SPE family. **Nothing in
+  Unit 2 writes.** Stated gaps: `lcc_looks_like_person` calls `Genesis Kc Dev` a person (a plausible
+  proposal is dropped — a false negative costs one card, a false positive writes a stranger's firm
+  onto an SPE family), and `lcc_owner_name_is_brokerage` misses *Wilson Kibler Commercial Real
+  Estate*.
+- **⚠️ THE DECIDABILITY CASE IS UNCHANGED — ask 77 / auto 9 / parked 146 before and after.**
+  Un-parking on person evidence remains refuted (P188/P192); `test/tier0-park-reasons.test.mjs`
+  goes RED if `n_person_evidence` ever appears in that CASE, and RED on any `ilike` in the
+  `park_reason` classifier (a text detector over generated prose is the A1 defect even while it
+  agrees with the boolean).
+- **The SQL CASE is the single owner of both classifications** — the handler renders what the server
+  decided; there is no JS mirror.
 
 ## P195 — merging the byte-identical owner groups, and the two traps in doing it (2026-08-27)
 
@@ -2428,6 +2508,10 @@ Related invariants from the same round:
     nothing writes that person into `owner_contact_pivot`. Result: **11 owners, $240.5M,
     suppressed AND invisible.** Whenever a surface excludes a population on the grounds that
     it is "already handled", name the thing that handles it and verify that it does.
+- **Merge reversibility + Tier 0 park reasons (P196):**
+  `docs/audits/P196_MERGE_REVERSIBILITY_AND_PARK_REASONS_2026-08-27.md` — the shared merge path's undo,
+  the BEFORE-INSERT trigger that silently defeats `ON CONFLICT DO UPDATE`, and the two prescribed
+  Tier 0 fixes that were measured (one refuted at 0 of 146, one taken from 25% to 4-of-6 precision).
 - **Byte-identical owner duplicates (P189→P195):** `docs/audits/P189_MERGE_DETECTOR_BLIND_SPOT_2026-08-26.md`
   (the blind spot) → `docs/audits/P195_BYTE_IDENTICAL_OWNER_MERGE_2026-08-27.md` (the merge that landed
   it, the generic-name gate, and the unsnapshotted pivot delete inside `lcc_merge_entity`).

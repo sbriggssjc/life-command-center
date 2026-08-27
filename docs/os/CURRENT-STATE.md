@@ -84,6 +84,27 @@ historical ownership facts** (12,724 → 13,028), 280 owners, **$579.9M**. Night
 entities (**A2a**, no new code needed), 28 by a `gsa_lease_diff` flicker (**A2b**).
 → `docs/audits/A1_OWNERSHIP_LANE_SPLIT_2026-08-27.md`, `DATA_PROCESS_AUTOMATION_AUDIT_2026-08-26.md`
 
+### The shared entity-merge path is REVERSIBLE (2026-08-27, P196 / N11)
+`lcc_merge_entity` snapshots the whole loser side, **folds `owner_contact_pivot` fill-blanks before
+the dedup DELETE**, calls the reconcile with `p_snapshot => true`, and action-labels every P160
+dedup/repoint. Reverse with **`lcc_unmerge_entity(loser)`**; ledger `lcc_entity_merge_log`;
+instrument `v_lcc_entity_merge_reversibility`. Round-trip proven on live data (16 rows before, 16
+after, 0 lost, 0 new; `auto_mergeable` 3,053 → 3,053). ⚠️ **The "dormant" verdict described the
+auto-merge LOOP, not the function** — `lcc_merge_entity` has 9 human-verdict call sites and ran
+**285 merges in 30 days**. ⚠️ **2,411 pre-P196 tombstones are `reversible=false` and always will
+be.** `lcc_apply_fuzzy_merges` is still unwired — that is a separate decision. **A2a is unblocked.**
+→ `docs/audits/P196_MERGE_REVERSIBILITY_AND_PARK_REASONS_2026-08-27.md` §1–6
+
+### Parked Tier 0 cards now say WHY (2026-08-27, P196 / N3e)
+**146 parked / 105 owners / $180.3M**, each carrying `park_reason` + both compared strings:
+`employer_on_file_differs` 76 (the gate working), `no_employer_on_file` 68,
+`employer_not_comparable` 2. Sponsor-shaped parks surface as
+`v_lcc_tier0_sponsor_map_proposals` → a curated `lcc_owner_sponsor_domain` INSERT (one decision per
+SPE family). ⚠️ The prescribed company-string normalisation was **measured and refuted** (0 of 146),
+and a naive sponsor detector reads **~25% precision** — three guards take it to 4 of 6, top-4 by
+rent. **The un-park was NOT widened** (ask 77 / auto 9 / parked 146, before and after).
+→ same audit, §7–13
+
 ### Conflict-marker guard (2026-08-27)
 `test/no-conflict-markers.test.mjs` — committed conflict markers had been sitting on `main` in
 **two** files, from **two different mechanisms** (a merge, and a `git stash pop`). Git flags
