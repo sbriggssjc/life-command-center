@@ -10225,8 +10225,9 @@ async function handleDecisionVerdict(req, res) {
             details: { from: oldVal, to: newName, hygiene_class: review.hygiene_class, deterministic: review.deterministic } },
           { headers: { Prefer: 'return=representation' } });
         const applyBatchId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].batch_id : null;
-        // Build the PATCH body. For LCC-native entities also recompute canonical_name
-        // via the house normalizer; a unique-canonical collision -> conflict (below).
+        // Build the PATCH body. Renames the display name only; canonical_name is
+        // derived by the trigger (see below). A unique-canonical collision ->
+        // conflict, handled after the PATCH.
         const patchBody = { [target.nameCol]: newName };
         // N15c: this used to recompute canonical_name here via
         // rpc/lcc_normalize_entity_name — the AGGRESSIVE normalizer, which is
