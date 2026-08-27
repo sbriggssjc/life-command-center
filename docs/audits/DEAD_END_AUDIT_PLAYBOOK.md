@@ -883,6 +883,49 @@ first time on `428C9: cannot insert a non-DEFAULT value into column "is_current"
 ALWAYS` column, a footgun already written down in `CLAUDE.md`, restored with a bare `select *`. A
 reversal path that has never been executed is a claim, not a capability.
 
+## Class 17 — a RULE proposed for removal because its false positives are the only part you can see
+
+**Symptom:** a matching or admission rule produces a handful of obviously-wrong outputs. They are
+easy to name, they look like the whole story, and removing the rule looks like an unambiguous
+quality win. **Nobody measures what currently depends on the rule**, because what a rule holds up
+leaves no trace on the surface — only what it lets through does.
+
+**The detector.** Before demoting, weakening or deleting any rule, split the consumer population
+by *which rule admitted it*, and ask what each slice falls back to:
+
+```sql
+-- for every item on the surface, is this rule its ONLY qualifying evidence?
+select case when <other_arm> then 'survives'
+            when <this_arm>  then 'THIS RULE IS THE ONLY REASON IT IS HERE'
+            else 'qualified some other way' end as bucket,
+       count(*), sum(value)
+from <surface> group by 1;
+```
+
+**First run (P198, 2026-08-27).** Two Tier 0 `ask` cards rested on a generic eight-character word
+stem (`innovati` → an operator, `corporat` → a generic firm), so the prefix-8 arm of
+`ev_company_matches_owner` was recommended for tightening. Measured: that arm is the **only** link
+evidence on **28 of 87 cards / $146.9M** — including the highest-rent card in the system
+($85.0M) — and it is the un-park mechanism for **25 of 32 `weak_partial`** cards, whose
+`no link evidence` count is exactly **0**. The tightening would have parked ~$147M of reach to
+remove ~$5.6M of wrong. Arm precision, read on all 44 rows: **25 of 30 cards correct.**
+
+**This is Class 2 of P179 read backwards.** That rule says *measure the throughput of whatever a
+promotion would displace*; the mirror is that a demotion displaces something too, and the thing it
+displaces is harder to see. Corollary: **a rule's residue is only a defect if the residue is not
+individually rejectable.** These five were each a one-second reject, because the card already
+carried the employer string and the match key — so the cheap fix was already shipped and the
+expensive one was never needed.
+
+**Related traps met in the same session:** an aggregate that collapses both sides of a pair
+(`min(a.name)`, `min(b.name)` under one `GROUP BY`) reported *everything in one bucket, nothing in
+any other* — 95/95/0/0 — which is the Class 11 implausibility signal, and keyed properly inverted
+the conclusion to 0/7/88. And a guard named `lcc_name_has_spe_marker` returns **FALSE for every
+name containing the literal string "SPE"** (it detects a *portfolio* marker): **read the function,
+never the function's name.**
+
+---
+
 ## Class 13 — a MATCHING RULE whose eligibility test silently excludes the highest-value population
 
 **Symptom:** a matcher runs fast, returns thousands of rows, and reads as a rich, healthy bench.
