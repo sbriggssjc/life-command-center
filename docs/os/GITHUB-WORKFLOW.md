@@ -67,7 +67,51 @@ A required check only protects you if you let it run. Both checks must be green:
 no database — so a red CI run is almost always reproducible on your machine in less time than the
 round trip.
 
-## 4. ⚠️ CURRENT LOCKOUT and the exact unlock (as of 2026-08-27)
+## 4. ~~CURRENT LOCKOUT~~ — ✅ RESOLVED 2026-08-27. Read this section for the lesson, not the status.
+
+**The gate is green and `main` accepts PRs again.** `test-suite.yml` on `main` now pins
+**`node-version: '24'`** (one key, single source) via **P196**, and both `ci/test-suite-node-22`
+and the docs PR merged cleanly afterwards (#1797).
+
+### ⚠️ Two lessons from how it got fixed, and they are the durable part
+
+**(a) Two audit windows fixed the same infrastructure independently, hours apart.** The automation
+window branched `ci/test-suite-node-22`; the app window shipped **P196 pinning Node 24** to `main`
+in the same window of time. Same correct diagnosis (three tests import Deno `.ts` modules), two
+different Node choices, both defensible. The prompt-numbering convention keeps *filenames* from
+colliding and does **nothing** for two windows editing the same config file.
+**→ Before opening a PR that touches shared infrastructure — a workflow, `package.json`, a
+migration — re-check whether `main` already fixed it:**
+
+```powershell
+git fetch origin
+git log origin/main --oneline -5 -- <the file>
+```
+
+That takes seconds and would have made this branch unnecessary before it was ever pushed.
+
+**(b) ⚠️ A conflict resolution that keeps BOTH sides can produce something structurally invalid,
+and no test will catch it.** Resolving `ci/test-suite-node-22` against the new `main` left **two
+`node-version` keys in one `setup-node` step** (`'22'` and `'24'`). Each hunk was correct in
+isolation and each carried a well-reasoned comment block, so "keep both" felt like the safe,
+conservative choice. For a **list** it usually is. For a **key–value mapping it is not** — a
+duplicate key is invalid, GitHub could not produce a run from the file, and the required check
+therefore **never reported at all.** The PR was not slow or flaky; it was unrunnable.
+
+**The symptom is distinctive and worth recognising: a required check stuck on *"Expected — waiting
+for status to be reported"* that no re-run fixes usually means the workflow file itself is
+invalid, not that a run is queued.** Re-running cannot help — there is nothing to re-run.
+Check the workflow file before hunting for a trigger.
+
+**When resolving a conflict in YAML or JSON, ask whether the two sides are ALTERNATIVES or
+ADDITIONS.** Two competing values for one key are alternatives: pick one. Only additions merge.
+
+**And the outcome was to abandon the branch, not repair it** — `main` already carried the fix, so
+the right move was closing the PR and deleting the branch. **A branch whose purpose has been
+served elsewhere is finished, not broken.**
+
+<details>
+<summary>The original lockout, kept for the record</summary>
 
 **`main` cannot accept any PR right now**, because *"npm test"* is required and
 `test-suite.yml` **on `main` is pinned to `node-version: '20'`** — and three test files import
@@ -92,6 +136,11 @@ test"* from the required list (Settings → Branches → main), merging the fix,
 **Re-add it** — an unenforced check is the badge-people-merge-past failure this rule exists to
 close.
 
+</details>
+
+**Status note for whoever reads this next:** the gate has now been **green on `main`**, which is
+the bar rule §6.3 sets for a new CI job. It is no longer a badge; it is a gate.
+
 ## 5. Common errors, and what they actually mean
 
 | message | cause | fix |
@@ -102,6 +151,8 @@ close.
 | `warning: … CRLF will be replaced by LF` | **not a defect.** `.gitattributes` already normalises to LF. Windows editors write CRLF; git converts on the way in, exactly as configured | ignore it |
 | `Unable to create '.git/index.lock'` | a Windows git process holds the lock; **the sandbox cannot delete it** | `Remove-Item .git\index.lock` from PowerShell |
 | CI red on your PR | **check the base branch first** — it may already be red on `main` | if `main` is red it is not your PR; see §4 |
+| A required check stuck on *"Expected — waiting for status to be reported"*, and **re-running does nothing** | usually **the workflow file is invalid**, so no run can be produced — commonly a conflict resolution that kept both sides of a key (see §4b) | read the workflow file; fix the file, not the trigger |
+| You are about to PR a fix to shared infra (workflow, `package.json`, a migration) | the other audit window may have already fixed it | `git fetch origin && git log origin/main --oneline -5 -- <file>` **before** you push (§4a) |
 
 ## 6. Rules that are not negotiable
 

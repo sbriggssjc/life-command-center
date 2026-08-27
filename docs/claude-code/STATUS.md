@@ -186,6 +186,48 @@ one that stays on the card. **UIRC has seven candidates** — auto-picking there
 mistake at 5× the blast radius. Spec: `prompts/193-*.md`.
 
 
+## 2026-08-27 — the gate is GREEN on `main`; two lessons from how it got there; A2 drafted
+
+**Both PRs merged** (#1797 docs + standards; the CI fix superseded by P196). `test-suite.yml` on
+`main` pins **`node-version: '24'`**, single key, and **has now been green on `main`** — which is
+the bar `GITHUB-WORKFLOW.md` §6.3 sets before a new CI job counts as a gate rather than a badge.
+The lockout section of that doc was **rewritten the same day it was written**: it described a
+blocker that no longer exists and named the wrong branch and Node version.
+
+**⚠️ Two durable lessons, both now in `CLAUDE.md` and `GITHUB-WORKFLOW.md` §4:**
+
+1. **Two audit windows fixed the same infrastructure independently, hours apart.** The automation
+   window branched `ci/test-suite-node-22`; the app window shipped **P196 pinning Node 24** to
+   `main`. Same correct diagnosis, two defensible Node choices. **The prompt-numbering convention
+   prevents filename collisions and does nothing for shared config files.** New rule: before
+   PR-ing a fix to a workflow / `package.json` / a migration, run
+   `git log origin/main -5 -- <file>` first. Seconds, and it would have made the branch
+   unnecessary before it was pushed.
+2. **⚠️ A conflict resolution that keeps BOTH sides can be structurally invalid, and no test
+   catches it.** Resolving that branch against the new `main` left **two `node-version` keys in
+   one `setup-node` step** (`'22'` and `'24'`). Each hunk was correct alone and each carried a
+   reasoned comment block, so "keep both" felt like the conservative choice — for a **list** it
+   usually is; for a **mapping** it is invalid. GitHub could not build a run, so the required
+   check **never reported**. **Distinctive symptom worth memorising: *"Expected — waiting for
+   status to be reported"* that no re-run fixes usually means an INVALID WORKFLOW FILE, not a
+   queued run.** Re-running cannot help; there is nothing to re-run. The fix was to **abandon the
+   branch, not repair it** — `main` already carried the fix, so the branch was finished, not
+   broken.
+
+**⏳ V1/V2/V7 are NOT yet verifiable and must not be read as failing.** Measured at **02:59 UTC**:
+property-twin still 200, reachability still 4 — but crons 212 (04:40), 220 (05:45), 239 (06:45)
+and 240 (10:18) **have not fired yet today.** The scheduled 6am-CT check runs after all four.
+Reporting these as stalled right now would be the same "window not yet reached" error the check's
+own prompt warns against.
+
+**Next in this thread: `prompts/A2-auto-apply-agrees-chains-2026-08-27.md`** — apply the 380
+`agrees` chains (450 links) into `lcc_entity_portfolio_facts` and complete their tasks.
+**Acceptance is deliberately not "rows written":** it is
+`establish_ownership_history … status='completed'` going above **zero for the first time in 69
+days**. A run that writes 450 links and leaves 380 tasks open has consumed nothing — which is the
+exact failure this whole arc exists to close.
+
+
 ## 2026-08-27 — ⛔ `main` IS PROTECTED AND CURRENTLY BLOCKED. Two standards docs.
 
 The docs commit was rejected:

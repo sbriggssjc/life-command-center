@@ -66,10 +66,20 @@ after opening, before CI finished, carrying a red suite.
 [`docs/os/DOCUMENTATION-MAP.md`](docs/os/DOCUMENTATION-MAP.md)** — the root of the repo is code and
 config; **do not add a new `.md` there.**
 
-⚠️ **`main` is currently BLOCKED**: `test-suite.yml` on `main` is pinned `node-version: '20'` and
-three test files import Deno `.ts` modules Node 20 cannot load, so the required check has never
-been green. The fix is `beb3aecd`'s version of that workflow file; land it on its own branch off
-current `main` and every other PR unblocks. Details in the workflow doc §4.
+✅ **RESOLVED 2026-08-27** — `test-suite.yml` on `main` pins **`node-version: '24'`** (P196) and the
+gate has now been **green on `main`**, which is the bar for a new CI job. Two durable lessons from
+the fix, both in `GITHUB-WORKFLOW.md` §4:
+
+- **Before PR-ing a fix to shared infrastructure** (a workflow, `package.json`, a migration),
+  **check whether the other audit window already fixed it** — `git log origin/main -5 -- <file>`.
+  Both windows diagnosed this identically hours apart and shipped different Node pins. The
+  prompt-numbering convention prevents filename collisions and does nothing for shared config.
+- **⚠️ A conflict resolution that keeps BOTH sides can be structurally invalid, and no test
+  catches it** — resolving that branch left **two `node-version` keys in one `setup-node` step**.
+  Each hunk was correct alone, so "keep both" felt safe; for a **mapping** it is not. GitHub could
+  not build a run from the file, so the required check **never reported** — a distinctive symptom:
+  *"Expected — waiting for status"* that no re-run fixes usually means **an invalid workflow file,
+  not a queued run.** In YAML/JSON, ask whether the two sides are alternatives or additions.
 
 ## Rules
 
