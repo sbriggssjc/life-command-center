@@ -71,6 +71,7 @@ cron **241 at 06:55 UTC**. The GET is an ungated dry run and writes nothing.
 | **Sponsor map: 8 confirmed** | Scott 2026-08-26/27 | ngp, uirc, hpi, jbg, gardner, salus, oxford, savlan. **fcp and tmg deliberately held** |
 | **Rejected sponsors** | Scott 2026-08-27 | `royal` (common word), `maple` (the Mapletree place-word trap) |
 | **A confirm lane, not an unattended promoter** | measured | link precision ~91% only above ~$16M, ~60–70% in the $2M SPE band |
+| **DST / Trust / LLC variants of one sponsor stay ONE entity — the TRUE OWNER** | Scott 2026-08-27 | Answers N15b §6 decision 1. `Rainier Rockford DST Trust` = `Rainier Rockford Llc`; `SE VALPO LLC` = `Se Valpo Dst`; `Chiapelone` = `Chiapelone Trust`. **So `lcc_owner_domain_core`'s `trust\|dst\|reit` strip is CORRECT and is the adopted rule** — what N15b listed as its "named residue" is the desired behaviour. ⚠️ **The aspirational future (individual investors as direct owners, and knowing they hold fractional positions in a DST/TIC/JV on similar deals) is a SEPARATE model and must NOT be built by splitting this dedup key** — see backlog **N17** |
 
 ## 5. ⚠️ Traps paid for — each cost a real cycle
 

@@ -17,6 +17,37 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 18:30 UTC — N15b decision 1 ANSWERED; N17 recorded; and a false "lost work" alarm
+
+**✅ Scott's decision on the N15b token rule: a DST, its Trust and its LLC are ONE entity — the
+TRUE OWNER.** `Rainier Rockford DST Trust` = `Rainier Rockford Llc`; `SE VALPO LLC` = `Se Valpo
+Dst`; Syndicated Equities likewise. **So `lcc_owner_domain_core`'s `trust|dst|reit` strip is
+CORRECT and is the adopted rule** — what the N15b audit listed as that rule's "named residue" is
+the *desired* behaviour, not a defect. N15b is now **ready to build**; decisions 2 (recompute the
+540 stale rows) and 3 (enforce UNIQUE — 3,930 groups violate it today) remain open.
+
+**New backlog row N17 — the aspirational feature, recorded so it is not lost:** individual
+investors as direct owners in our target markets, *and* knowing they hold **partial positions in a
+DST / TIC / JV** on similar deals. ⚠️ **This must NOT be built by splitting the `canonical_name`
+dedup key** — that decision went the other way. Fractional interest is a **relationship, not an
+identity split**: model it on `entity_relationships` the way `lcc_owner_sponsor_domain` models
+sponsor→SPE. Unsized.
+
+### ⚠️ A false "my edits were lost" alarm — the third instrument failure in this arc
+
+After the two genuine lock incidents, the reflex became *rewrite it.* **Wrong twice running.** A
+`grep -rl` over a file list containing one non-existent path exited **2**, the `$( )` came back
+empty, and the loop reported **`MISSING` for every pattern** — including ones plainly present.
+Harness "changed on disk" notices rendered a **cached older copy** and corroborated it.
+**The data was fine**: disk and `HEAD` both matched (`grep -c` 2 = 2), local `HEAD` == `origin/main`,
+mtimes seconds old. **Rule added to `GITHUB-WORKFLOW.md` §2a: before concluding content was lost,
+compare DISK against HEAD with `cat-file` — index-free and safe — and never trust a `grep -rl`
+sweep over an explicit file list.** Nothing was rewritten.
+
+**👤 GovernmentProject has an orphaned `.git/HEAD.lock`** — 0 bytes, owned by the sandbox uid,
+dated **2026-08-20 12:32**, i.e. a week old. Same class as the life-command-center incident; the
+sandbox cannot remove it. PowerShell one-liner supplied.
+
 ## 2026-08-27 17:05 UTC — N15b landed (measurement only); N3h executed; Gardner's deal history reunited
 
 ### N3h — 9 merges, and the one that mattered
