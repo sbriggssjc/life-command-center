@@ -17,6 +17,42 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 16:28 UTC — P198 §5: three merges DONE; 9 more duplicates surfaced; and a lost-work postmortem
+
+Easterly, Cambridge and Gardner merged through `lcc_merge_entity`. **Six cards became three.**
+Easterly is now ONE card: **$114,864,150 / 89 assets / 7 eligible people** — the pre-merge combined
+total exactly, 0 lost. Lane `ask` **87 → 84**; `auto` 9 and parked 137 unchanged; pairs 696 → 684;
+live entities 62,366 → 62,363. **All three `reversible = true`** (snapshots 67 / 27 / 14 rows).
+Winners by P195's **ownership-first** rule, not rent (Easterly REIT owns 79 assets vs 10).
+
+**Both pairs already carried the SAME confirmed contact on both sides** — Alison Bernard on both
+Easterly entities, Constance MacOn on both Cambridge entities. Scott had confirmed the same person
+twice, once per duplicate. Nothing lost to the pivot fold, and the double-confirm is independent
+evidence the duplicates were real.
+
+**⚠️ `auto_mergeable` moved 3,041 → 3,043 and chasing it found the next thing.** Benign in itself
+(each winner now heads a byte-identical group that was already auto-mergeable; the added assets
+flipped two winner selections) — but it surfaced **9 MORE duplicate entities on the same three
+firms, all at $0 current rent** and therefore invisible to every rent-ranked surface: Easterly 3,
+Cambridge 2, **Gardner 4 — one of which alone holds 240 relationships while the asset-holding
+entity holds 13 assets. That firm's deal history is split across two live entities** (the P177
+failure). **Not merged — an approval of three named pairs is not extended by inference.** Backlog
+**N3h**.
+
+### ⚠️ POSTMORTEM — Cowork's own `git status` orphaned `.git/index.lock`, and clearing it discarded a turn of doc edits
+
+The lock that blocked three of Scott's commands was **0 bytes and owned by the sandbox uid** —
+`git status` is not read-only, it refreshes the index and takes the lock, and the sandbox can
+neither reuse nor unlink it. `GITHUB-WORKFLOW.md` §2a previously blamed "a Windows git process";
+that was wrong and is corrected, and §6 rule 4 no longer exempts `status`/`diff`.
+
+**Worse, and now recorded: after the stale lock was removed, the next index-writing command
+reconciled the working tree to HEAD and SILENTLY DISCARDED all seven uncommitted doc edits.**
+`git status` went from 7 modified files to clean between two commands, `git add` staged nothing,
+and `git commit` reported *"nothing to commit."* Nothing warned. The edits were reconstructed by
+hand. **A long-held stale lock means the index and the working tree have diverged — treat clearing
+it as a destructive operation and commit or stash BEFORE the first git command after removal.**
+
 ## 2026-08-27 15:10 UTC — P198: the tightening I recommended was measured and REFUTED
 
 Full writeup: [`docs/audits/P198_PREFIX8_ARM_IS_LOAD_BEARING_2026-08-27.md`](../audits/P198_PREFIX8_ARM_IS_LOAD_BEARING_2026-08-27.md).

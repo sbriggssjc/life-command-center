@@ -6,7 +6,8 @@
 > refuted, and NOT shipped.** One read-only view was added
 > (`v_lcc_tier0_coproposed_owner_duplicates`, migration `20260827230000`) surfacing **3
 > owner-merge decisions**, two of them on the highest-rent owner in the system.
-> Lane unchanged: **ask 87 / auto 9 / parked 137 / pairs 696**, before and after.
+> Lane unchanged by the view: **ask 87 / auto 9 / parked 137 / pairs 696**.
+> **Scott approved all three merges and they are DONE (§5) — lane now ask 84 / auto 9 / parked 137.**
 
 ---
 
@@ -124,6 +125,60 @@ through `lcc_merge_entity`, reversible since P196.
   *because* of that inversion (both true duplicates are portfolio-marked on both sides; all four
   SPE-sibling pairs are not), which is a tiebreak worth surfacing on 7 rows and far too thin to
   promote to a rule. **Read the function, never the function's name.**
+
+## 5. EXECUTED 2026-08-27 16:28 UTC — Scott approved all three; all three merged
+
+| pair | winner | loser | snapshot rows | pivot |
+|---|---|---|---|---|
+| Easterly | Easterly Gov Properties (REIT) | Easterly Government Properties | 67 | `same_contact_bench_folded` |
+| Cambridge | Cambridge Holdings | Cambridge Properties Inc | 27 | `same_contact_no_change` |
+| Gardner | Gardner Tanenbaum Holdings | Gardner-Tannenbaum | 14 | `loser_has_no_pivot` |
+
+Winners by P195's **ownership-first** rule, not rent: Easterly REIT owns **79 assets vs 10**;
+Gardner Holdings **13 vs 4**; Cambridge tied at 1 asset each so it fell through to rent
+($9.32M vs $3.88M).
+
+| | before | after |
+|---|---:|---:|
+| live entities | 62,366 | 62,363 (−3) |
+| lane `ask` | 87 | **84** |
+| lane `auto` | 9 | 9 |
+| parked | 137 | 137 |
+| candidate pairs | 696 | 684 |
+| Easterly: assets / current rent | 89 / $114,864,150 across **two** entities | **89 / $114,864,150 on ONE** |
+| `lcc_entity_merge_log` | 32 | 35 |
+| rows left in the co-proposal view | 7 | **4** (the sibling-SPE pairs, correctly) |
+
+**Six cards became three**, one per firm — Easterly is now a single card at $114.9M with 7 eligible
+people. **All three are `reversible = true`** in `v_lcc_entity_merge_reversibility` (P196),
+snapshotted, undoable with `lcc_unmerge_entity(loser)`.
+
+**Both duplicate pairs already carried the SAME confirmed contact on both sides** (Alison Bernard
+on both Easterly entities, Constance MacOn on both Cambridge entities) — Scott had confirmed the
+same person twice, once per duplicate. Nothing was lost to the pivot fold, and the double-confirm
+is itself independent evidence the duplicates were real.
+
+### ⚠️ `auto_mergeable` moved 3,041 → 3,043, and chasing it found the next defect
+
+P195 held that counter at 3,053 → 3,053 and A2a moved it 3,053 → 3,041 with a verified reason, so
+a move is always checked. Cause here is benign: each of the three winners now **heads a
+byte-identical duplicate group that was already `auto_mergeable`**, and giving the survivor more
+assets flipped two groups' winner selection. But it surfaced that **the same three firms carry 9
+MORE duplicate entities**:
+
+| firm | further duplicates | what they carry |
+|---|---:|---|
+| Easterly Gov Properties (REIT) | 3 (all byte-identical names) | 15 relationships |
+| Gardner Tanenbaum Holdings | 4 | **5 assets and 244 relationships — one entity alone holds 240** |
+| Cambridge Holdings | 2 | 2 relationships |
+
+All nine carry **$0 current rent**, so they are invisible to every rent-ranked surface. The Gardner
+row matters most: **that firm's deal history is split across two live entities**, which is exactly
+the P177 failure — a survivor under-reporting the transaction history prospecting ranks on.
+
+**Not merged — Scott approved three named pairs, and an approval is not extended by inference.**
+Sized and surfaced as backlog **N3h**. ⚠️ Gardner's `min_loser_sim` is **0.667** (not
+byte-identical) so it needs reading; Easterly and Cambridge are 1.000.
 
 ## 4. Verify by
 
