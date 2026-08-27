@@ -5,7 +5,7 @@
 > The dated audits under `docs/audits/` are the **evidence trail** — go there for *why*, come here
 > for *what is true now*.
 >
-> **Last measured: 2026-08-27 22:30 UTC.** Re-measure before quoting any number.
+> **Last measured: 2026-08-27 16:30 UTC.** Re-measure before quoting any number.
 
 ---
 
@@ -39,7 +39,7 @@ distrust every record we have* — which trains an operator to skip all of it.
 has not reached is *not* `no_records`, and a payload matching nothing must surface rather than be
 absorbed into a bucket it does not belong to.
 
-## 3. Current state (2026-08-27 22:30 UTC)
+## 3. Current state (2026-08-27 16:30 UTC)
 
 **Completed ever 314 · open 156 · skipped 1,766.** From 0 completions in 69 days.
 
