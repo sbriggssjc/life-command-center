@@ -191,6 +191,37 @@ If work does vanish, **do not assume it is recoverable from git** — it was nev
 is no blob. Check whether the file content still exists on disk first (`grep` for a distinctive
 string); if it does not, it must be rewritten.
 
+### ⚠️ THIRD INCIDENT — "the content is gone from disk" was a BROKEN DETECTOR, twice
+
+After the two incidents above, the reflex became *"my edits are missing, rewrite them."*
+**That reflex was wrong the next two times it fired, and would have cost a full turn each.**
+
+A Cowork sweep ran `grep -rl "<pattern>" fileA fileB fileC …` inside a `$( )` over a list
+containing **one path that did not exist**. grep exited **2**, the substitution came back empty,
+and the loop printed **`MISSING` for every pattern** — including patterns plainly present.
+Separately, the harness's "file changed on disk" notices rendered a **cached older copy** of two
+files, which corroborated the false conclusion.
+
+**Both were instrument failures; the data was fine.** Disk and `HEAD` each contained the text
+(`grep -c` = 2 on both), local `HEAD` == `origin/main`, and the mtimes were **seconds old** — the
+merge had just landed.
+
+**The rule: before concluding content was lost, compare DISK against HEAD directly.**
+
+```bash
+echo "disk: $(grep -c '<distinctive string>' path/to/file)"
+git --no-pager cat-file -p HEAD:path/to/file | grep -c '<distinctive string>'  # index-free, safe
+git --no-pager rev-parse --short HEAD origin/main                              # equal?
+ls -la --time-style=full-iso path/to/file                                      # how old is it really?
+```
+
+- **`grep -rl` over an explicit file list is not a detector** — one missing path poisons the whole
+  result. Check one file at a time and print `exists`/`MISSING` per file.
+- **An implausible result is a bug signal** (Class 11): *every* pattern missing from *every* file,
+  immediately after a successful merge, is not a plausible state of the world.
+- **`cat-file`, `log`, `rev-parse`, `rev-list` are index-free and safe from the sandbox** — they
+  answer exactly this question and cannot create the lock that started the sequence.
+
 **The original rule (kept — still true while a lock exists, whoever created it):**
 
 ```powershell
