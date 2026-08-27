@@ -102,7 +102,11 @@ Two durable lessons from the fix, both expanded in
     instance was already on `main` — `docs/claude-code/STATUS.md` (PR #1801, ~1 hour earlier) — and
     it came from a **`git stash pop`**, not a merge: `<<<<<<< Updated upstream` /
     `>>>>>>> Stashed changes`. **Match on the marker CHARACTERS, never the label text after them**,
-    or the stash flavour walks straight through.
+    or the stash flavour walks straight through. (Repaired on `main` by a parallel window in
+    PR #1804, independently and identically — the §4a two-windows-one-file lesson, again. Cause and
+    prevention live in `GITHUB-WORKFLOW.md` §2b: **`git status` + `git diff --check` after every
+    `stash pop`**, because `git add -A` stages a half-merged file and `git commit` does not refuse
+    it.)
   - **Both times the two sides were NOT alternatives** — §4.2e vs §4.2f of one verification doc;
     two different entries of one newest-first worklog. Picking a side would have deleted real
     content. **Keep both, restore the document's own ordering, change no number, and where the two

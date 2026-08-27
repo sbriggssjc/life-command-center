@@ -110,6 +110,57 @@ Budget for it: roughly three minutes per re-run, and if `main` moves again durin
 may do it twice. **Merging the moment the first green appears is how PR #1793 shipped a red
 suite** — the checks were still running.
 
+## 2b. ⚠️ `git stash pop` after a long gap WILL conflict — and `git add -A` commits the markers
+
+**This happened on 2026-08-27 and reached `main`.** `docs/claude-code/STATUS.md` was merged
+carrying `<<<<<<< Updated upstream` / `=======` / `>>>>>>> Stashed changes`.
+
+The sequence that produced it is the one in §2, and it is a **correct** sequence — with one missing
+step:
+
+```powershell
+git stash -u          # park local edits
+git checkout main
+git pull --rebase     # ← local main was 10 commits BEHIND
+git checkout -b <branch>
+git stash pop         # ← conflicted, silently, in the working tree
+git add -A            # ← staged the conflict markers
+git commit            # ← and committed them
+```
+
+**Two things make this near-certain rather than unlucky:**
+
+1. **The longer you were behind, the worse it is.** `STATUS.md` is the most-written file in the
+   repo — Cowork and Claude Code both append to it every session. Ten commits of drift means a
+   collision on that file is the expected outcome, not the exception.
+2. **`git add -A` is the amplifier.** It stages everything including a half-merged file. `git
+   commit` does not refuse conflict markers, and neither did any check.
+
+**THE MISSING STEP — do this after every `stash pop`:**
+
+```powershell
+git stash pop
+git status                       # "Unmerged paths" means STOP and resolve
+git diff --check                 # flags whitespace AND leftover conflict markers
+git grep -nE '^(<<<<<<< |>>>>>>> |=======$)'   # belt and braces; expect NO output
+```
+
+**Resolving a chronological log like `STATUS.md`: keep BOTH sides.** The entries are *additions*,
+not alternatives — order them newest-first and delete only the three marker lines.
+
+**⚠️ But do not generalise "keep both" into a rule.** CLAUDE.md records the opposite case: a
+conflict resolution that kept both sides of a `setup-node` step produced **two `node-version` keys
+in one mapping**, which was structurally invalid, and GitHub could not build a run from the file —
+so the required check reported *nothing* and no re-run fixed it. **Ask whether the two sides are
+alternatives or additions.** Prose in a log: additions. A key in a mapping: alternatives.
+
+**The guard now enforces the last line of that checklist automatically** —
+`test/no-conflict-markers.test.mjs` (shipped 2026-08-27 with the repair for
+`docs/architecture/panel-redesign-verification.md`, which carried the same damage from an earlier
+merge) fails naming file and line, and runs **even on documentation-only PRs**, which is the only
+reason it can see this file at all (§3a, §4b). It landed after this repair, as it had to: it was
+red on `STATUS.md` until this repair merged.
+
 ## 3a. Documentation-only PRs skip the suite (2026-08-27)
 
 Scott: *"only require tests when a substantive change that requires a test gets pushed or merged.
@@ -131,6 +182,7 @@ it is conditional.**
 | **runs** | **anything else — the direction is fail-safe.** An unrecognised path runs the suite |
 | **runs** | **`.sql` migrations** — several guards assert on SQL/source *content*, so a migration genuinely can turn a test red |
 | **runs** | **every push to `main`**, regardless of content — it is the base every branch is cut from |
+| **runs even when skipped** | **the conflict-marker guard** (`test/no-conflict-markers.test.mjs`) — committed markers land in *prose*, so exempting docs would blind it to its whole population (§2b, §4b). ~1 s, no `setup-node`, no `npm ci` |
 
 ## 3b. ⚠️ `npm test` is NOT a reliable pre-push gate on Windows
 
@@ -254,19 +306,17 @@ it **by path** via that test's `ALLOWLIST`; weakening the pattern is how the det
 returning comfortable zeros.
 
 **⚠️ And it is a PATTERN, not one file — the guard's very first CI run caught a second, live
-instance.** `docs/claude-code/STATUS.md` lines 20/61/101 reached `main` in **PR #1801**, roughly an
-hour before the guard existed. That one was a **`git stash pop`** conflict, not a merge —
-`<<<<<<< Updated upstream` / `>>>>>>> Stashed changes` — so **match on the marker CHARACTERS, never
-on the label text after them.** Same resolution as the first: the two sides were two different
-worklog entries, not alternatives, and both were kept.
+instance.** `docs/claude-code/STATUS.md`, described in full in **§2b** (a `git stash pop`, repaired
+on `main` in PR #1804). The durable lesson §2b does not carry: its markers read
+`<<<<<<< Updated upstream` / `>>>>>>> Stashed changes`, **not** `HEAD` and a sha — so **match on the
+marker CHARACTERS, never on the label text after them**, or the stash flavour walks straight past.
 
-**⚠️ The documentation-only skip had made this guard blind to exactly the files it exists for.**
-The suite is skipped when every changed file is docs (see below), and **both instances are
-`docs/*.md`** — PR #1801 was itself documentation-only, so the guard would never have run on the PR
-that introduced the second one. The docs-only branch of `test-suite.yml` therefore runs
-`node --test test/no-conflict-markers.test.mjs` on its own: ~1 second, no `setup-node`, no `npm ci`
-(node builtins + git only), so the skip still does what it was added to do. **A guard that cannot
-see the population it exists for is not a guard.**
+**⚠️ The documentation-only skip (§3a) had made this guard blind to exactly the files it exists
+for.** **Both instances are `docs/*.md`**, and PR #1801 was itself documentation-only — so the
+guard would never have run on the PR that introduced the second one. The docs-only branch of
+`test-suite.yml` therefore runs `node --test test/no-conflict-markers.test.mjs` on its own: ~1
+second, no `setup-node`, no `npm ci` (node builtins + git only), so the skip still does what it was
+added to do. **A guard that cannot see the population it exists for is not a guard.**
 
 ### ⚠️ 4c. Verify the branch base actually updated
 
