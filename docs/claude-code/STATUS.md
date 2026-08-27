@@ -17,6 +17,44 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 05:00 UTC — repo fully synced; CI skip path PROVEN; two git traps recorded
+
+**State verified:** local `main` == `origin/main` (0 ahead / 0 behind), **zero conflict markers
+anywhere in the repo** (the `claude/conflict-marker-guard-sxcpoy` branch merged as #1803 and
+repaired `panel-redesign-verification.md`), A0 and A2 correctly filed in `prompts/done/`, and the
+live prompt queue is exactly **196**. The only working-tree noise is the long-standing
+`test/fixtures/healthcare-discovery/*.csv` modifications, which pre-date this arc.
+
+**✅ The docs-only CI skip is proven.** It executed on the `fix/status-conflict-markers` PR and
+reported green in seconds. Worth logging as its own event: §6 rule 3 says a CI job is not shipped
+until green once on `main`, and **the skip branch of a conditional job is a second code path
+needing its own first green run** — the PR that introduced it touched `.github/workflows/`, so it
+ran the full suite and proved nothing about the skip.
+⚠️ The docs-only path deliberately still runs `test/no-conflict-markers.test.mjs`: both marker
+instances were `docs/*.md`, and the `STATUS.md` one **arrived through a documentation-only PR**.
+
+### ⚠️ Two git traps, both caused by Cowork instructions, both now in `GITHUB-WORKFLOW.md`
+
+**§2a — while `.git/index.lock` is held, sandbox `git status` is not trustworthy.** Cowork read the
+tree as "two modified, two untracked" and drafted a recovery on it. There was an **unresolved merge
+in progress** (`STATUS.md` was `UU`) that never appeared, because git cannot refresh the index
+while the lock exists and answers from stale state. Every subsequent command assumed a clean tree:
+`checkout -b` refused, the cherry-pick refused, and a later `git add -A` re-staged the very markers
+§2b exists to prevent. **Same class as everything else in this file — a surface that answers
+confidently instead of erroring.** Compounding it, the Cowork call piped `git status` through
+`grep -v test/fixtures`, which would have hidden a `UU` line anyway: **filter what you show, never
+what you judge from.**
+
+**Resolution was the right one:** `git reset --hard origin/main`. It moves the branch pointer and
+**does not delete commits** — the discarded work stayed reachable by sha. Two documentation notes
+were rewritten from scratch rather than recovered, which is the cheaper trade against another
+conflict resolution on the repo's hottest file.
+
+**Dated checks at 04:32 UTC — both still pending, both still expected:** N9v auto-attach `0` writes
+(cron 241 fires **06:55 UTC**); N9w sidebar `0.0%` stamped, last row **2026-08-26 22:49 UTC**, still
+pre-reload.
+
+
 ## 2026-08-27 (Cowork, automation window) — ✅ THE LANE COMPLETED A TASK. 0 → 288 after 69 days.
 
 **A2 shipped (PR #1805) and the acceptance test passed.** This was never about rows written:
