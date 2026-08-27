@@ -1851,6 +1851,64 @@ A3/A4/A4b are untouched and unchanged at 73 / 74 / 18.
   entities — **48** of the 92 open tasks are blocked by that ALONE and need only a P195-style
   merge, after which cron 244 applies them unaided), `repeat_transfer_unrepresentable` 28, `placeholder` 26, `no_entity` 20.
 
+## A2a — merging the duplicates that blocked the chains; the producer was NOT r9 (2026-08-27)
+
+`establish_ownership_history` completed **288 → 314** (open 182 → 156, `agrees` 90 → 64) by merging
+the entities behind A1/A2's `ambiguous_entity` block: **26 groups / 28 losers merged, 17 groups HELD
+with reasons named, 30 facts written, 26 of them on an entity this pass created.** Migration
+`20260827210000`; plan `v_lcc_a2a_ambiguity_merge_plan`, holds `v_lcc_a2a_ambiguity_hold_watch`,
+ledger `lcc_a2a_merge_log`, reversal `lcc_a2a_unmerge(batch)`. **Not scheduled.** Writeup:
+`docs/audits/A2a_AMBIGUOUS_ENTITY_MERGE_2026-08-27.md`.
+
+- **⚠️ THE OBVIOUS PERSON GATE WOULD HAVE HELD SIX REAL COMPANIES.** `lcc_looks_like_person` is the
+  natural thing to reach for when asking "is this name a human, so a shared name is not identity?"
+  Over the 43 ambiguity names it returns TRUE for **`CANO FAMCO`, `Hokanson Companies`,
+  `HORAK DEVELOPMENT IV, L.P.`, `Matan Companies`, `Precor Ruffin` and `USAA Real Estate`** — six
+  organisations, one of them the $62M group. It is the documented two-capitalised-tokens false
+  positive (A3, P196), and using it here would have read as *more* careful while deleting the
+  batch's largest win. The gate reads the **recorded `entity_type`** instead: what LCC holds about
+  the ROW, not a regex guess about the STRING. Generalises the A2/P189 lesson one step further —
+  when a name-based guard is available, ask first whether a recorded FACT answers the same question.
+- **⚠️ A DUPLICATE ENTITY CAN MASK A SECOND DEFECT, AND MERGING IT IS WHAT MAKES THAT ONE VISIBLE.**
+  28 tasks were predicted to drain; **26 did**. The two that did not moved from `ambiguous_entity` to
+  `repeat_transfer_unrepresentable` (`ROSSLYN CENTER ASSOCIATES L.P.` gov 14293;
+  `Gate Properties LP`/`GATE PROPERTIES LP` gov 3891). A2 blocks when one `(grantor_entity, property)`
+  pair carries links on two dates — and **while the two case-spellings were two entities, each pair
+  carried exactly one link.** Both are the P138 `gsa_lease_diff` lessor flicker, which is *why* they
+  produced two entities. Expect a repair to move rows between blocked reasons, not only out of them,
+  and count the destinations.
+- **⚠️ `auto_mergeable` MOVING IS NOT AUTOMATICALLY A SIDE EFFECT.** P195 held it at 3,053; A2a took
+  it to **3,041**, and the −12 is the point: verified **0** auto-mergeable groups still contain any
+  A2a winner or loser, so those 12 left the candidate set because they were resolved. Check *which*
+  groups moved before treating a delta on a guarded counter as a regression.
+- **⚠️ THE PRODUCER IS `entities.canonical_name` HAVING MORE THAN ONE AUTHOR — `r9_chain_connect` WAS
+  MEASURED AND REFUTED.** The obvious suspect mints a prior-owner entity per chain name (cron 104,
+  5,207 live, 4,943 unattached). But `ensureEntityLink`'s `normalizeCanonicalName` lowercases **and**
+  strips punctuation, so it is strictly looser than `lcc_ownership_chain_name_key` on the axis these
+  duplicates differ on — it *cannot* mint a case-variant of a name it can already see. Creation order
+  agrees: of the 48 duplicating entities only **12 are r9**, and r9 is the FIRST entity in 18 of 43
+  groups. The real mechanism is that **`canonical_name` — the dedup key itself — is written by more
+  than one normalizer**: `"671 Poplar LLC"` is stored as both `671 poplar llc` and `671 poplar`,
+  `"BALTARA ENTERPRISES, L.P."` as both `baltara enterprises, l.p.` and `baltara enterprises l p`. A
+  producer looking up its own normalization misses the row and mints. **Fleetwide 2,037
+  byte-identical-name groups / 4,156 live entities carry disagreeing `canonical_name`.** This is the
+  normaliser drift this file warns about, sitting *inside the dedup key*. Backlog **N15b** (decide the
+  one normalization) and **N16** (retire r9's unattached output) — N16 is downstream, not a substitute.
+- **Value is per OWNER, and this population inflates on two axes.** 48 tasks / 52 links / 43 groups /
+  **44 owners**; per-owner **$72.0M**, per-task $76.7M, per-link $83.2M. A2's `$210.6M` matched none
+  of them and is corrected in that writeup.
+- **Held is a decision, not residue:** 10 `name_variant_beyond_case` (9 differ only by punctuation
+  inside the legal form and carry no corroborating evidence; the tenth, `Mr Champa LLC` vs
+  `M.R. Champa, LLC`, is genuinely undecidable) and 7 `person_typed_member`. Two guards fired on
+  **nothing** (`lcc_p195_name_has_distinctive_residue` 43/43 pass, placeholder/brokerage 0/43) and are
+  reported as measured rather than dropped — P195 measured the residue gate holding 4 groups on its
+  own population, so it discriminates; this one carries no pure-generic names.
+- **No third merge driver.** Every write is `lcc_merge_entity`, every reversal `lcc_unmerge_entity`;
+  A2a adds a plan and a batch ledger only. Round trip proven on **this** population before the batch —
+  `USAA Real Estate`, the only group where the destructive pivot dedup-DELETE fires: 153 rows before,
+  153 after, **0 lost / 0 new / 0 changed**, self-loop-deleted edge and folded pivot bench both back
+  byte-identical. Guard: `test/a2a-ambiguity-merge.test.mjs` (13 tests, mutation-verified red on 14).
+
 ## A3 — the `mismatch` lane is a REPRESENTATION question; 74 chains → 12 decisions (2026-08-27)
 
 The A1 `mismatch` bucket (*the last recorded grantee ≠ the owner we hold*) reads like a
