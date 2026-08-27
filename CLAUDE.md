@@ -1685,6 +1685,72 @@ rollup `v_lcc_ownership_history_lane_actions`), migration `20260827090000`. Full
   split alone cannot change that — A2/A3/A4/A4b are what move it. Verify on
   `research_tasks … status='completed'`, never on the view existing or the chips rendering.
 
+## A2 — the lane's first completion, and three traps in getting there (2026-08-27)
+
+`establish_ownership_history` **completed 0 → 288** (open 545 → 257) by applying A1's `agrees`
+bucket: **322 historical facts into `lcc_entity_portfolio_facts`**, 280 owners, $579.9M.
+Migration `20260827130000`, cron **244** (06:49, after the 05:10 seeder and the 06:45 drafter),
+reversible by batch tag. Full writeup: `docs/audits/A2_OWNERSHIP_CHAIN_APPLY_2026-08-27.md`.
+A3/A4/A4b are untouched and unchanged at 73 / 74 / 18.
+
+- **⚠️ `on conflict do nothing` + A JOIN BACK TO THE PLAN = A COUNT THAT OVER-REPORTS, AND THE DRY
+  RUN CANNOT SEE IT.** The first apply reported `facts_inserted: 365`; the table received **347**.
+  The PK is `(entity_id, source_domain, source_property_id)` — one interval per party per property
+  — and 14 (grantor, property) pairs carried two or three links, so 18 inserts were silently
+  dropped while the ledger, fed from a join back to the plan, logged all 365. **Count from the
+  INSERT's own `RETURNING` set, never from the ledger write that follows it**, and reconcile the
+  ledger row count against the table before believing either. Same family as the documented "a send
+  counter is NOT a write counter" — `intent` and `effect` differ precisely where a conflict clause
+  is doing its job. And the rows that collided were not repeat ownership: all 14 were ONE conveyance
+  recorded on several dates (`SENTINEL SQUARE I → WASHINGTON DC VI FGF` on 2020-02, 2020-03 AND
+  2020-04) — the `gsa_lease_diff` lessor flicker P138 documents, surviving P131's `(from, to, date)`
+  dedup because the DATE differs.
+- **⚠️ AN EXACT-MATCH STOPLIST IS DEFEATED BY A DECORATED PLACEHOLDER.** The gate blocked
+  `Previous Owner`; the gov feed also writes `Previous Owner Name`, `Previous Owner Name Unknown`
+  and `Previous Owner LLC`, all of which had already been **minted as entities**, and all of which
+  sailed through and took 13 portfolio facts with them. **Neither shared guard catches any of
+  them** — `lcc_is_placeholder_owner_name` lists `current owner` but not `previous owner`, and the
+  JS `isPlaceholderOwnerName` matches bare buyer/seller/escrow but not this. The fix is an ANCHORED
+  PREFIX, not a `contains` (P158a: a contains rule swallows real firms), and the blast radius is
+  measured before shipping — over all 62,356 live entities it matches **exactly 3 rows, all three
+  placeholders, none holding a current portfolio fact**.
+- **⚠️ `lcc_owner_strict_core` IS NOT THE UNIVERSAL IDENTITY COMPARATOR — IT WAS TRIED HERE AND
+  REJECTED ON NAMED ROWS.** It drops tokens shorter than 2 characters and sorts the rest, so
+  **`BAMMF (8) LLC == BAMMF (3) LLC == BAMMF (9) LLC == BAMMF (S) LLC`** (four different SPEs) and
+  **`F R M ASSOCIATES, L L C == G B A Associates == J/4 Associates == M.O.B. I ASSOCIATES`** (core:
+  `associates`). It matched **393 of 396** grantors against some entity — the implausibly clean
+  number that is a bug signal, not a finding (P182). Where the parties are SPE- or initials-named,
+  the right comparator is `lcc_ownership_chain_name_key` (lower() **then** strip non-alphanumerics,
+  no token removal, no sorting — the same rule `chainNameKey` already used for chain continuity),
+  unambiguous-only, resolved through `lcc_entity_survivor`. **The lesson generalises the P189 one:
+  the hazard travels with the TECHNIQUE, so a comparator sanctioned for one gate must be re-graded
+  on named rows for the next.**
+- **⚠️ `completed` IS NOT EXCLUDED BY THE SEEDER — THE FACT IS WHAT STOPS THE RE-MINT.**
+  `lcc_generate_chain_research_tasks` (cron 144) skips a property only for an OPEN task or a
+  TERMINAL skip, so completing a task changes nothing on its own. What closes the loop is that one
+  historical fact takes `owner_links` to ≥2, which flips
+  `v_ownership_chain_worklist.suggested_research_type` to `trace_ownership_to_developer`. Verified
+  after the run: **0 of the 288 completed properties can be re-seeded into this lane**, 284 moved
+  to that lane (which is LIVE — 40 lifetime completions). **The corollary is the completion rule: a
+  task completed WITHOUT a fact would be re-seeded tomorrow**, so a task completes only when every
+  link reached a terminal good disposition. 92 stay open, named.
+- **Every fact carries a non-null `ownership_end_date`, and that is structural, not stylistic** —
+  `is_current` is `GENERATED ALWAYS AS (ownership_end_date IS NULL)`, so a historical fact without
+  one reads as a CURRENT owner on `lcc_owner_known_annual_rent`, the priority queue and the Tier 0
+  lane. At a chain gap the START stays NULL (never bridged) and the party whose END is unknown is
+  **not written at all** — writing NULL would claim they still own it.
+- **A PRODUCER THAT MINTS AND ATTACHES TO NOTHING:** `/api/chain-connect-tick` (`r9_chain_connect`,
+  cron 104, every 30 min) mints an entity per chain owner name and never writes a portfolio fact,
+  so `owner_links` never grows, `chain_complete` stays false and the property is re-scanned forever.
+  **291 of the 331 grantors A2 resolved are its output** — retirable by the gov feeder's own
+  predicate ("a minted entity with no evidence and no portfolio fact has no consumer"). A2 is the
+  missing consumer. Before building a resolver, check whether an existing producer already minted
+  the parties and simply never attached them.
+- **Read `facts_inserted` / `tasks_completed`** (`v_lcc_ownership_chain_apply_run_health`), never
+  `links_already_present`. Residue is named, not lumped: `ambiguous_entity` 54 (LCC duplicate
+  entities — 41 of the 92 open tasks need only a P195-style merge, after which cron 244 applies
+  them unaided), `repeat_transfer_unrepresentable` 28, `placeholder` 26, `no_entity` 20.
+
 ## P138 / R8 Stage 1 — the brief's "Analyst's Take", generated ON-BOX (2026-08-26)
 
 The daily brief has rendered a `renderAnalystTake` section since v2 and the column has
