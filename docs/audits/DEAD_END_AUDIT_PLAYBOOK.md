@@ -706,6 +706,45 @@ proposals once and stalled again at row 1,001, with the failure now more expensi
 The fix is a cursor that advances and a selection that joins.
 
 
+## Class 16 — a DORMANCY claim measured on the WRAPPER instead of the FUNCTION
+
+**Symptom:** a destructive path is assessed as "built but nothing calls it", the urgency is
+downgraded, and it has been executing all along through a different entry point. The measurement is
+correct; it answers about the wrong object.
+
+**First run (P196, 2026-08-27).** `lcc_merge_entity` performs unrecoverable dedup DELETEs. Asked
+whether that was live risk, I measured what calls **`lcc_apply_fuzzy_merges`** — the auto-merge loop
+the write-up named — and found **zero cron rows and zero app callers**. Correct, and I concluded
+"dormant, not armed: fix before anything wires it up, do not escalate."
+
+**Measured properly: `lcc_merge_entity` has NINE human-verdict call sites, and 285 entities were
+merged in 30 days — 176 in the last 7.** The irreversible pivot delete had been running the whole
+time. On `bamproperties` it would have destroyed the group's only named contact.
+
+**The detector:** when a shared function is reported as reachable only through one dormant wrapper,
+**count the callers of the FUNCTION, not of the wrapper.** Grep the function name across cron, the
+API, migrations and other SQL functions — a wrapper is one caller among many, and it is the one
+someone happened to mention.
+
+**Two corollaries from the same repair, both about fixes that would have "worked" and moved
+nothing:**
+
+- **The named defect was not the defect.** The write-up blamed an *uncorrelated* `EXISTS`. Both
+  tables are PK `(entity_id)`, so the predicate is already equivalent to a correlated one —
+  correlating it changes nothing. The real bug is that it **DELETES rather than FOLDS**, with no
+  ledger. *Verify that the mechanism you were told to fix is the mechanism doing the damage.*
+- **The obvious one-line fix was insufficient in a way the flag name hides.** `p_snapshot => true`
+  snapshots what the *reconcile* touches; the four P160 backrefs live in `lcc_merge_entity` itself
+  and were snapshotted in **no** mode. *Ask which code the flag actually governs.*
+
+**And the reversal path, once built, failed its first real round trip** — P177's `BEFORE INSERT`
+trigger skips a duplicate edge, so `ON CONFLICT DO UPDATE` never fires: three byte-identical edges
+restored **one**, left two behind, and the unmerge still reported `restored`. **A reversal that has
+never been RUN is a claim, not a capability** (playbook Class 11's cousin: the instrument reporting
+success it did not achieve).
+
+---
+
 ## Class 14 — a WRITE whose scope is wider than the QUESTION it answers
 
 **Symptom:** a surface asks a narrow question and records the answer against a broader key. Every
