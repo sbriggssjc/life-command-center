@@ -52,6 +52,25 @@ deleted (Vercel retired after 40+ failed deploys against the old Hobby 12-functi
 - **Supabase view/migration changes are live immediately** — the CM export reads views per request
   (`no-store`), so data-layer fixes need no deploy.
 
+## ⛔ `main` IS PROTECTED — branch → PR → CI green → merge. You cannot push to `main`.
+
+Since **2026-08-27**, *"npm test"* is a **required status check**. A direct push to `main`
+(`git push origin <branch>:main`) is rejected by the rule engine before anything else happens —
+a required check cannot run without a pull request, so **retrying will never work**. Both
+*"App boots"* and *"npm test"* must be green **before** you merge; PR #1793 was merged 58 seconds
+after opening, before CI finished, carrying a red suite.
+
+**Full procedure, failure-mode table, and the current unlock sequence:
+[`docs/os/GITHUB-WORKFLOW.md`](docs/os/GITHUB-WORKFLOW.md).**
+**Where every doc, plan, audit and design is filed:
+[`docs/os/DOCUMENTATION-MAP.md`](docs/os/DOCUMENTATION-MAP.md)** — the root of the repo is code and
+config; **do not add a new `.md` there.**
+
+⚠️ **`main` is currently BLOCKED**: `test-suite.yml` on `main` is pinned `node-version: '20'` and
+three test files import Deno `.ts` modules Node 20 cannot load, so the required check has never
+been green. The fix is `beb3aecd`'s version of that workflow file; land it on its own branch off
+current `main` and every other PR unblocks. Details in the workflow doc §4.
+
 ## Rules
 
 0. **`LCC_API_KEY` auth is production-ready.** Frontend `auth.js` auto-injects `X-LCC-Key` via a global fetch

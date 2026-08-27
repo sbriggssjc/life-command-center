@@ -186,6 +186,58 @@ one that stays on the card. **UIRC has seven candidates** — auto-picking there
 mistake at 5× the blast radius. Spec: `prompts/193-*.md`.
 
 
+## 2026-08-27 — ⛔ `main` IS PROTECTED AND CURRENTLY BLOCKED. Two standards docs.
+
+The docs commit was rejected:
+
+```
+remote: - Required status check "npm test" is expected.
+! [remote rejected] publish-c868140 -> main (push declined due to repository rule violations)
+```
+
+**Not a transient error.** `git push origin <branch>:main` is a **direct push to `main`**, and a
+required status check cannot run without a pull request — so the rule engine rejects it before
+anything else. Retrying never works. **Every change now goes branch → PR → both checks green →
+merge.**
+
+**⚠️ `main` is BLOCKED, which is the more urgent half.** *"npm test"* is required and
+`test-suite.yml` on `main` is pinned `node-version: '20'` — three test files import Deno `.ts`
+edge modules Node 20 cannot load, so the check has never been green on `main`. **No PR can pass it
+until a one-file workflow fix lands.** The corrected file is `beb3aecd:.github/workflows/
+test-suite.yml` (Node 22 + a comment block explaining why). ⚠️ **Do not cherry-pick that whole
+commit** — it also edits `CLAUDE.md`, which has since moved 581 lines on `main`; take **only the
+workflow file** onto a fresh branch off current `main`.
+
+**Diagnosed and dismissed — not defects:**
+- **CRLF warnings are correct behaviour.** `.gitattributes` exists and already normalises to LF
+  (`* text=auto eol=lf`, `.ps1`/`.bat`/`.cmd` kept CRLF). Windows editors write CRLF; git converts
+  on the way in, exactly as configured. Nothing to fix.
+- `cannot pull with rebase: You have unstaged changes` → dirty tree (the 11
+  `test/fixtures/healthcare-discovery/*.csv` predate this session). Stash or commit.
+- `The upstream branch … does not match` → `git push origin HEAD`, **never `HEAD:main`**.
+
+**⚠️ And a process trap worth recording: `git stash` silently swept a session's work.** Stashing to
+clear the rebase block also stashed that turn's *tracked* doc edits (`CLAUDE.md`, `CURRENT-STATE`,
+`STATUS`, the kickoff), while the two *untracked* new files survived on disk — so the branch that
+got pushed carried the earlier commit and **none of the standards work**. It looked complete and
+was half-missing. **`git stash` is not a scratch buffer; check `git stash list` before assuming a
+branch has everything.** Recovered by re-applying the edits against current `main` rather than
+popping a stash taken from a 49-commit-older base.
+
+**Two standards docs, wired into `CLAUDE.md`, `CURRENT-STATE.md` and the kickoff:**
+
+- **`docs/os/GITHUB-WORKFLOW.md`** — the standard loop with exact PowerShell, the wait-for-CI rule,
+  a failure-mode table mapping every message above to its real cause, the unlock sequence, and six
+  non-negotiables (never push to `main`; never merge before green; **a new CI job is not shipped
+  until it has been green once on `main`**; never run git from the sandbox; *merged ≠ running*;
+  Scott merges, Claude Code never merges its own PR).
+- **`docs/os/DOCUMENTATION-MAP.md`** — where every artifact is filed, the five files that carry
+  state, the lifecycle *found → shipped → retired-with-a-reason*, the two-window labelling and
+  prompt-numbering convention, and a **"do not create"** list headed by *no new `.md` at the repo
+  root* — **exactly how K13–K20 stayed invisible for 17 days.** It also encodes the pre-archive
+  checklist that recovered them.
+
+
 ## 2026-08-27 (Cowork, automation window) — A1 shipped; E4 answered; and the CI gate we just built is red on main
 
 **A1 is merged and live** (`542896a`, PR #1793). `v_lcc_ownership_history_lane_split` +
