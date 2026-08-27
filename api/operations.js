@@ -2579,7 +2579,11 @@ async function bridgeSelectBuyerContact(req, res, user, workspaceId) {
 
   // Create a new person entity when requested.
   if (!contactEntityId && !sfContactId && newName) {
-    const canon = (typeof normalizeCanonicalName === 'function') ? normalizeCanonicalName(newName) : newName.toLowerCase();
+    // N15c: the `typeof` guard's fallback (`newName.toLowerCase()`) was a TWELFTH
+    // normalization of this column — it would have written a key no lookup
+    // could reproduce. normalizeCanonicalName is a static import at the top of
+    // this file, so the guard was dead code protecting nothing.
+    const canon = normalizeCanonicalName(newName);
     const ins = await opsQuery('POST', 'entities',
       { workspace_id: workspaceId, entity_type: 'person', name: newName, canonical_name: canon, domain: 'lcc' });
     const row = (ins.ok && Array.isArray(ins.data)) ? ins.data[0] : null;
@@ -2804,7 +2808,11 @@ async function bridgeSelectProspectingContact(req, res, user, workspaceId) {
 
   // Create a new person entity when requested.
   if (!contactEntityId && !sfContactId && newName) {
-    const canon = (typeof normalizeCanonicalName === 'function') ? normalizeCanonicalName(newName) : newName.toLowerCase();
+    // N15c: the `typeof` guard's fallback (`newName.toLowerCase()`) was a TWELFTH
+    // normalization of this column — it would have written a key no lookup
+    // could reproduce. normalizeCanonicalName is a static import at the top of
+    // this file, so the guard was dead code protecting nothing.
+    const canon = normalizeCanonicalName(newName);
     const ins = await opsQuery('POST', 'entities',
       { workspace_id: workspaceId, entity_type: 'person', name: newName, canonical_name: canon, domain: 'lcc' });
     const row = (ins.ok && Array.isArray(ins.data)) ? ins.data[0] : null;

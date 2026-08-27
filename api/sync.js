@@ -2714,11 +2714,9 @@ async function handleListingWebhook(req, res) {
   try {
     // ---- Step 1: Create or update the listing entity ----
     const entityName = listing.name || listing.address || deal_name || 'New Listing';
-    const canonicalName = entityName.trim().toLowerCase()
-      .replace(/\b(llc|inc|corp|ltd|co|company|group|partners|lp|llp)\b\.?/gi, '')
-      .replace(/[^a-z0-9\s]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
+    // N15c: writer #9 of entities.canonical_name — an inline copy the N15b
+    // census missed. Routed through the one normalizer.
+    const canonicalName = normalizeCanonicalName(entityName);
 
     // Check for existing entity by SF listing ID (avoid duplicates)
     let existingEntity = null;

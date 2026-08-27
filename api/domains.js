@@ -17,7 +17,7 @@
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
-import { canonicalIdentitySystem, canonicalEntityDomain } from './_shared/entity-link.js';
+import { canonicalIdentitySystem, canonicalEntityDomain, normalizeCanonicalName } from './_shared/entity-link.js';
 
 export default withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
@@ -511,12 +511,11 @@ function listTemplates(req, res) {
 // FIELD MAPPING — apply column mapping from domain record to canonical entity
 // ============================================================================
 
+// N15c: writer #10 of entities.canonical_name — an inline copy the N15b census
+// missed. Kept as a named wrapper so the two call sites below read unchanged,
+// but the RULE now lives in exactly one place.
 function buildCanonicalName(name) {
-  return name.trim().toLowerCase()
-    .replace(/\b(llc|inc|corp|ltd|co|company|group|partners|lp|llp)\b\.?/gi, '')
-    .replace(/[^a-z0-9\s]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return normalizeCanonicalName(name);
 }
 
 function applyFieldMapping(record, mapping) {

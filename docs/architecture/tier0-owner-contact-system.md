@@ -133,12 +133,15 @@ own deal history (P177). `auto_mergeable` 3,043 → 3,040, exactly the three gro
 ⚠️ **All nine losers carried $0 current rent** — no rent-ranked surface would ever have shown this;
 it was found by chasing a guard counter that moved by 2.
 
-**👤 Needs Scott (new, N15b — three decisions, audit §6):** `canonical_name` has **seven authors**
-and **10,340 live entities (16.6%) are invisible to `ensureEntityLink`'s own lookup**. Which token
-rule (the `trust|dst|reit` residue is a genuine judgement — should a DST and its LLC share a dedup
-key?); whether the 540 stale rows are recomputed; whether the column becomes an enforced unique key
-(3,930 groups would violate it today). ⚠️ **`v_lcc_merge_candidates` does NOT read this column** —
-a rewrite cannot move `auto_mergeable`.
+**👤 Needs Scott (N15c — TWO decisions left; the token rule is settled and built):**
+`entities.canonical_name` now has **one writer**. The adopted rule is the `lcc_owner_domain_core`
+token stoplist **joined with spaces** (never bare-concatenated — that collides `Gate Way` with
+`Gateway`, 115 false collisions measured). Still open: (1) the **537 stale rows** where `name` was
+repaired and the key left behind — recomputing discards a captured string some preserve, so they are
+excluded from the backfill by construction and are the entire residual (10,336 → 537); (2) whether
+the column becomes an enforced **unique** key (3,930 groups would violate it today).
+⚠️ **`v_lcc_merge_candidates` does NOT read this column** — the rewrite cannot move `auto_mergeable`,
+and it did not (3,040 → 3,040). Full build: `docs/audits/N15c_CANONICAL_NAME_SINGLE_WRITER_2026-08-27.md`.
 
 **🔴 Build:** N14 the 92 orphans blocking parked cards; N10 the 4 held generic-name groups (~$0,
 a name-repair job).
@@ -163,7 +166,7 @@ the domain-keyed fix P189 already rejected at 25%.
 | **P196** | merge made reversible; park reasons |
 | **P197** | the employer resolver; `no_employer_on_file` 68 → 54 |
 | **P198** | the prefix-8 arm is load-bearing (refuted a tightening); co-proposal at 7%; **12 owner merges — 3 approved pairs + N3h's 9, which reunited Gardner's split deal history (270 → 512 relationships)** |
-| **N15b → N15c** | **the producer behind all of the above** — `entities.canonical_name` has **eight** authors (the census missed `w8_u5_naming_hygiene@40`) and **16.6% of live entities are invisible to `ensureEntityLink`'s own lookup**. N15b measured; **N15c builds**. ⚠️ It does **not** feed `v_lcc_merge_candidates`. ⚠️ **Adopt the token RULE, not `lcc_owner_domain_core` itself** — that function joins with no separator and would create `Gate Way`/`Gateway` collisions as a name key |
+| **N15b → N15c** | **the producer behind all of the above.** N15b measured; **N15c BUILT it (2026-08-27)** — `lcc_entity_name_tokens` is the one token rule, `lcc_entity_canonical_key` (space join) is the key, `lcc_owner_domain_core` refactored onto it and **proven byte-identical over 103,710 values**. A `BEFORE INSERT OR UPDATE OF name` trigger is the sole writer. ⚠️ **The census was wrong twice — there are TEN writers**, and one more normalization hid in a dead ternary fallback; that is why the fix is at the DB, not in grep. ⚠️ **The TRIGGER is deliberately NOT applied until the JS deploys** (constraint-after-writer-deploy); the JS is dual-read so order is then safe. Invisible entities **10,336 → 537** (the held rows). `auto_mergeable` unmoved at 3,040 |
 | **A1–A4b, A2a, A2b** | the ownership-lane arc — sibling workstream, same entity graph: [`ownership-history-lane.md`](ownership-history-lane.md) |
 
 **Design intent:** `account-based-contact-intelligence.md` (who to pursue) ·
