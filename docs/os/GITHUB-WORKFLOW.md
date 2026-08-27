@@ -30,13 +30,22 @@ cd $env:USERPROFILE\life-command-center
 # 0. Never leave a lock behind (the sandbox cannot delete it; only Windows can)
 Remove-Item .git\index.lock -ErrorAction SilentlyContinue
 
-# 0b. ⚠️ CLEAR THE TREE FIRST. In this repo a dirty tree is the NORMAL state, not an
-#     exception — Cowork writes edits into the working tree continuously, so there are
-#     almost always uncommitted changes when you start. Both `git checkout main` and
-#     `git pull --rebase` REFUSE to run against one, and PowerShell keeps going to the
-#     next command anyway, so you end up branching off a stale base without noticing.
-#     This has caused three separate stale-base branches. Commit or stash, then verify:
-git status                        # must be "nothing to commit, working tree clean"
+# 0b. ⚠️ KNOW WHAT YOUR DIRTY FILES ARE. In this repo a dirty tree is the NORMAL state —
+#     Cowork writes edits into the working tree continuously, so there are almost always
+#     uncommitted changes. Dirtiness itself is fine and usually IS the work you are about
+#     to commit.
+#
+#     The danger is narrower: `git checkout main` and `git pull --rebase` REFUSE to run
+#     against a dirty tree, PowerShell carries on to the next command regardless, and you
+#     branch off a STALE BASE with nothing announcing it. Three branches were cut that way
+#     in one evening; one cost a full merge-resolution cycle across two files.
+#
+#     So the rule is conditional, not absolute:
+#       - Already ON main and up to date?  A dirty tree is FINE — those edits ride onto
+#         your new branch, which is normally exactly what you want.
+#       - Need to SWITCH or PULL?          Commit or stash FIRST, then confirm the switch
+#         and the pull actually succeeded (§4c) before branching.
+git status                        # read it; do not skip past it
 
 # 1. Start from current main, on a NAMED branch — never on main itself
 git checkout main
@@ -53,8 +62,15 @@ git commit -m "<what changed and why>"
 # 3. Push the BRANCH (not to main)
 git push -u origin HEAD
 
-# 4. Open the PR (the URL is printed by the push above), let CI finish,
-#    then merge from the GitHub UI once "App boots" AND "npm test" are both green.
+# 4. Open the PR (the URL is printed by the push above), let CI finish, then merge from
+#    the GitHub UI once "App boots" AND "npm test" are both green.
+#
+#    ⚠️ EXPECT A THIRD STEP. Branch protection requires branches to be up to date, so if
+#    `main` moved while you were working, the PR shows "This branch is out-of-date with
+#    the base branch" and Merge stays disabled EVEN WITH BOTH CHECKS GREEN. That is a
+#    normal gate, not an error. Click "Update branch", wait for BOTH CHECKS TO RE-RUN
+#    against the new merge (~3 min), then merge. With two audit windows active, `main`
+#    usually has moved — treat this as the common path, not the exception.
 
 # 5. After the merge, if the change touched JS/API code:
 git checkout main; git pull --rebase
@@ -77,6 +93,22 @@ A required check only protects you if you let it run. Both checks must be green:
 **Run `npm test` locally before you push.** The suite is fully offline — no secrets, no network,
 no database — so a red CI run is almost always reproducible on your machine in less time than the
 round trip.
+
+### ⚠️ A green check set goes STALE the moment `main` moves
+
+Branch protection requires branches to be up to date, so two green checks are **not** sufficient
+on their own. If `main` advanced while your PR sat there, GitHub shows **"This branch is
+out-of-date with the base branch"** and keeps Merge disabled. **This is the gate working, not a
+failure** — it is what stops a PR merging green against a base it was never actually tested
+against.
+
+**Click "Update branch", then wait for both checks to run AGAIN** against the new merge commit.
+Only that second green set describes what will actually land on `main`.
+
+With two audit windows committing, `main` moves often enough that this is the **common path**.
+Budget for it: roughly three minutes per re-run, and if `main` moves again during the re-run you
+may do it twice. **Merging the moment the first green appears is how PR #1793 shipped a red
+suite** — the checks were still running.
 
 ## 4. The Node-version lockout — RESOLVED 2026-08-27
 
@@ -174,7 +206,13 @@ branch that conflicted on two files and cost a full merge-resolution cycle.
 continuously, so **a dirty tree is this repo's normal state**, not an occasional slip. A procedure
 that assumes a clean tree will fail most of the time it is run.
 
-**The rule: clear the tree BEFORE switching, and verify twice —**
+**⚠️ But do not over-correct into "the tree must always be clean."** That rule would be violated
+almost every time it is read — Cowork edits the tree continuously — and **a rule you have to break
+daily stops being a rule.** Dirty is fine when you are *already on* an up-to-date `main`: those
+edits ride onto the new branch, which is usually the intent. The failure needs **a switch or a
+pull that silently refused**.
+
+**The rule: if you must SWITCH or PULL, clear the tree first — then verify twice —**
 
 ```powershell
 git status                 # (1) before switching: "working tree clean"
