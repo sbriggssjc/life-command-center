@@ -44,7 +44,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Four established tests import TypeScript modules directly. Match the
+          # repository's Node 24 development/runtime baseline so the required
+          # merge gate exercises those tests instead of failing at module load.
+          node-version: '24'
           cache: npm
       - run: npm ci
       - run: npm test

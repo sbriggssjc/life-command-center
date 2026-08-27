@@ -245,6 +245,50 @@ test('adjacent civic numbers require an evidence-backed candidate alias and tena
   );
 });
 
+test('evidence-backed aliases allow only terminal legal-entity suffix differences in tenant names', () => {
+  const target = {
+    candidate_fingerprint: sha('c'),
+    address_token: '10 RESEARCH LN|TESTVILLE|IL|60000',
+    cms_identity: {
+      facility_name: 'Synthetic Surgical Center Inc',
+      address: '10 Research Lane', city: 'Testville', state: 'IL', zip: '60000',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Surgical Center LLC'],
+      approved_parent_address_aliases: [{
+        status: 'approved',
+        reason_code: 'same_physical_building_dedicated_entry',
+        address_token: '12 RESEARCH LN|TESTVILLE|IL|60000',
+        authorized_by: 'research_owner',
+        authorized_at: '2026-08-27T12:00:00Z',
+        evidence_citations: [
+          { source: 'official_operator', url: 'https://example.org/operator-location' },
+          { source: 'property_manager', url: 'https://example.org/property-address-alias' },
+        ],
+      }],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/research-campus',
+    address: '12 Research Ln', city: 'Testville', state: 'IL', zip: '60000',
+    square_footage: '60,000', tenant_name: 'Synthetic Surgical Center',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.identity_match.mode, 'evidence_backed_parent_address_alias');
+  assert.equal(built.identity_match.corroborated_name, 'SYNTHETIC SURGICAL CENTER');
+
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenant_name: 'Synthetic Surgical Center East' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenant_name: 'Synthetic Surgery Center' }),
+    /does not match/,
+  );
+});
+
 test('migration is private, RLS-protected, exact-50, and hard-blocks prohibited writes', async () => {
   const sql = await readFile(new URL('../supabase/migrations/20261001120000_lcc_asc_research_swim_lane.sql', import.meta.url), 'utf8');
   for (const table of ['runs', 'candidates', 'captures', 'evidence', 'reviews']) {
