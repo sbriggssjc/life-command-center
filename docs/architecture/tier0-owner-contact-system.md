@@ -19,19 +19,19 @@ the ones nobody could act on, and asks Scott about the rest. A confirmed answer 
 active contact and a person→owner edge. **The account is the pursuit; who to call there is a
 separate, standing decision** (`account-based-contact-intelligence.md`).
 
-## 2. Live state — 2026-08-27 14:26 UTC
+## 2. Live state — 2026-08-27 16:30 UTC
 
 | | |
 |---|---|
-| candidate pairs | **696** |
-| lane cards shown to the operator | **96** (ask 87 + auto 9) |
+| candidate pairs | **684** |
+| lane cards shown to the operator | **93** (ask 84 + auto 9) |
 | parked, not shown | **137** |
 | human attaches recorded | **27** |
+| owner merges logged (all reversible) | **35** |
 | `tier0_auto` writes | **0** — see §6, this is a pending verification, not a failure |
 | curated sponsor entries | **8** |
 | `TIER0_AUTO_ATTACH` | **`off` in the registry** — it describes the RUNTIME, not the intent |
-| merge-detector blind groups remaining | **64** |
-| reversible merges logged | **32** |
+| merge-detector blind groups remaining | **64** (176 entities) |
 
 ## 3. The objects
 
@@ -115,10 +115,15 @@ cron **241 at 06:55 UTC**. The GET is an ungated dry run and writes nothing.
 15 candidates, Wells Fargo, the JP Morgan CMBS trust); **N15** whether the 1,475 Salesforce-campaign
 orphans get hub rows.
 
-**👤 Also needs Scott (new, P198):** **three owner-merge decisions** in
-`v_lcc_tier0_coproposed_owner_duplicates` — Easterly ×2 ($114.9M combined, the #1 and #3 cards),
-Gardner-Tannenbaum ×2 ($9.2M, a spelling variant), Cambridge ×2 ($13.2M, probable). Confirming
-Easterly alone takes the lane 87 → 85 and collapses four cards on one firm into two.
+**✅ Done 2026-08-27 16:28 UTC (P198 §5):** Scott approved and all three merges landed — Easterly,
+Cambridge, Gardner. Six cards became three; **Easterly is now ONE card at $114,864,150 / 89 assets /
+7 eligible people**, the combined pre-merge total exactly. Lane `ask` 87 → 84. All reversible.
+
+**👤 Needs Scott (new, N3h):** the same three firms carry **9 MORE duplicate entities**, all at $0
+current rent so invisible to every rent-ranked surface. **Gardner is the one that matters — its
+deal history is split, with 240 relationships on a live entity separate from the one holding its 13
+assets** (the P177 failure). Not merged, because an approval of three named pairs is not extended
+by inference. ⚠️ Gardner's `min_loser_sim` is 0.667, so read it; Easterly/Cambridge are 1.000.
 
 **🔴 Build:** N14 the 92 orphans blocking parked cards; N10 the 4 held generic-name groups (~$0,
 a name-repair job).

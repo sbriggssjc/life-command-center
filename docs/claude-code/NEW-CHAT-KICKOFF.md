@@ -60,7 +60,8 @@ Government `scknotsqkcheojiaewwh`.
 ## Where things actually stand (measured 2026-08-26 evening)
 
 **Scott is actively working the Tier 0 owner-contact lane** — 27 confirms logged today, lane
-**109 → 96 open** (87 `ask` / 9 `auto`; re-measured 2026-08-27 14:26 UTC after P197). That is the
+**109 → 93 open** (84 `ask` / 9 `auto`; re-measured 2026-08-27 16:30 UTC after P197 and the three
+P198 owner merges — Easterly is now ONE card at $114.9M instead of four). That is the
 highest-value operator surface in the system and it is draining. His track and the build track do
 not block each other.
 📍 **Anything Tier 0 → read [`docs/architecture/tier0-owner-contact-system.md`](../architecture/tier0-owner-contact-system.md) FIRST.**
