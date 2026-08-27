@@ -410,3 +410,17 @@ test('dual-source missingness upsert uses the named primary key to avoid output-
   assert.match(sql, /security\s+invoker/i);
   assert.doesNotMatch(sql, /delete\s+from/i);
 });
+
+test('captured pending ASC targets keep their normal completion control after a refresh', async () => {
+  const [handler, sidepanel] = await Promise.all([
+    readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
+    readFile(new URL('../extension/sidepanel.js', import.meta.url), 'utf8'),
+  ]);
+  assert.match(handler, /healthcare_research_captures\?run_id=eq/);
+  assert.match(handler, /countMode:\s*'exact'/);
+  assert.match(handler, /capture_count:\s*captureCount/);
+  assert.match(sidepanel, /Number\(target\.capture_count\)\s*>\s*0/);
+  assert.match(sidepanel, /data-asc-capture-complete/);
+  assert.match(sidepanel, /Complete property capture/);
+  assert.match(sidepanel, /missing\.disabled\s*=\s*true/);
+});

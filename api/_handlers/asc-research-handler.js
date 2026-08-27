@@ -46,9 +46,18 @@ export async function handleAscResearchTarget(req, res) {
     '&order=sample_ordinal.asc&limit=1', null, { countMode: 'none' });
   if (!rows.ok) return fail(res, rows.status || 500, 'asc_research_target_failed', rows.data);
   const candidate = rows.data?.[0];
+  let captureCount = 0;
+  if (candidate) {
+    const captures = await opsQuery('GET',
+      `healthcare_research_captures?run_id=eq.${pgFilterVal(run.run_id)}` +
+      `&candidate_fingerprint=eq.${pgFilterVal(candidate.candidate_fingerprint)}` +
+      '&select=capture_id&limit=1', null, { countMode: 'exact' });
+    if (!captures.ok) return fail(res, captures.status || 500, 'asc_research_target_failed', captures.data);
+    captureCount = Number(captures.count) || 0;
+  }
   return res.status(200).json({
     ok: true,
-    target: candidate ? { ...run, ...candidate, lane: 'asc', controls: { canonical_write_authorized: false, salesforce_write_authorized: false, outreach_authorized: false } } : null,
+    target: candidate ? { ...run, ...candidate, capture_count: captureCount, lane: 'asc', controls: { canonical_write_authorized: false, salesforce_write_authorized: false, outreach_authorized: false } } : null,
     reason: candidate ? null : 'sample_capture_complete',
   });
 }
