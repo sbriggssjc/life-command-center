@@ -361,6 +361,31 @@ from being obviously wrong.**
   (#1789, 23:13 UTC) *during* this very diagnosis; `/version` moved from `bb26453a` to `870445f1`
   mid-session. A recommendation written five minutes earlier would have shipped stale.
 
+### ⚠️ ASSERT ON THE RIGHT OUTPUT — A WORKER'S STATE DELTA MAY BE A *NEGATIVE* RECORD (2026-08-27)
+
+The standing rule is *assert on the state delta, never the flag or the worker's own tally.*
+**That is necessary and not sufficient: you also have to assert on the RIGHT delta.**
+
+The reachability harvest (P136) was written up as stalled, and its verification — in the backlog
+row *and* in a scheduled check — was "the proposal count must move past 4." Measured 2026-08-27:
+**`reachability_harvest_review` is still 4, and the lane is working correctly.**
+`reachability_harvest_target_marker` holds **60 markers, all written that morning, the last at
+04:40:19** — inside cron 212's run. P136's entire design is a **negative marker** recording
+*checked, and empty*, precisely so a target that yields nothing stops being re-selected forever.
+**Targets with no evidence correctly produce no proposal**, so the proposal count is the one metric
+that reads zero while the fix works perfectly.
+
+- **Before writing a verification, ask what this worker EMITS when it succeeds and finds nothing.**
+  If the answer is a marker, a tombstone, a `checked_at`, or any other negative record, **that is
+  the delta to assert on.** Asserting only on the positive output reports a false stall — and a
+  false stall costs a diagnosis cycle on code that was never broken.
+- **This is the mirror of the re-discovery-tally trap.** `already_annotated` reads like throughput
+  while nothing moves; a negative-marker worker reads like a stall while everything moves. Both
+  come from asserting on the convenient counter instead of the one the design actually advances.
+- **⚠️ And a `pg_net` timeout is not a failure.** Cron 212 records `timed_out: true` at exactly
+  60,000 ms — `lcc_cron_post` stops listening at 60s while the handler runs to completion (P123).
+  Its markers landed 19 seconds in. **Read the worker's own output, never the caller's patience.**
+
 ### ⚠️ RE-MEASURE A DATED BLOCKER BEFORE QUOTING IT (2026-08-20)
 
 This file and its siblings are full of dated findings — "X is blocked", "Y returns 401", "Z yields
