@@ -71,24 +71,43 @@ must not be re-litigated**, and **ten traps already paid for** (three of them we
 P191 restoring some. Don't quote it as a confirm rate.)*
 
 **The local-model arc is essentially complete.** 30 flags `on`, 27 `off`, 2 `partial`. The on-box
-daily-brief **Analyst's Take is LIVE and producing** (774 chars, `source = onprem_ollama`).
-Clean-assist, ownership-chain drafts, sf-link, junk pre-screen, naming hygiene, dup-pairs,
-match-disambig, next-step: all healthy.
+daily-brief **Analyst's Take produces** (`source = onprem_ollama`). Clean-assist, ownership-chain
+drafts, sf-link, junk pre-screen, naming hygiene, dup-pairs, match-disambig, next-step: all healthy.
 
-**Three things are open and cheap, and all three are "verify," not "build":**
+**⭐ The biggest thing that happened in this arc: a dead research lane got a working consumer.**
+`establish_ownership_history` sat at **545 open / 0 completed for 69 days** while 545 finished,
+record-cited drafts sat unused. It is now **314 completed / 156 open**, with **+304 historical
+ownership facts** ($579.9M, 280 owners) and every remaining item named and routed rather than
+pooled. **The whole subsystem is one document —
+[`docs/architecture/ownership-history-lane.md`](../architecture/ownership-history-lane.md)** — read
+that, not the seven dated audits behind it. Its sibling for entity identity is
+`docs/architecture/tier0-owner-contact-system.md`; **the two share `lcc_merge_entity`,
+`lcc_owner_sponsor_domain` and the owner entities**, so a merge confirmed in one changes the other.
 
-1. **⏳ THREE LANES ARE AWAITING THEIR FIRST POST-DEPLOY RUN — check these before anything else.**
-   property-twin, reachability-harvest and the Analyst's Take all had merged fixes that were
-   **never deployed** (they landed after the 16:03 UTC cutoff on 2026-08-26; PR #1789 shipped them
-   at 23:13 UTC). **They were not broken — they were not running.** Verify by the delta:
+**The method that produced it, which is the transferable part:** split a lane into the *distinct
+jobs* it is actually asking, give each its own consumer, and **measure before building** — five
+plausible hypotheses were refuted by one query each along the way (A2b↔A3 shared population, the
+`gsa_lease_diff` flicker twice, the oscillating-pair guard, and a `sponsor_token` key that would
+have asserted false ownership facts).
 
-   | lane | cron | window (UTC) | passes when |
-   |---|---|---|---|
-   | property-twin | 220 | 05:45 | proposals pass **200** |
-   | reachability-harvest | 212 | 04:40 | `reachability_harvest_review` passes **4** |
-   | Analyst's Take | 240 | 10:18 (weekdays) | a take lands with `generated_at` **inside** that window |
+**✅ All three post-deploy verifications closed 2026-08-27 — V1, V2, V7/V9.** They were never
+broken; their fixes had landed after a deploy cutoff. Property-twin resumed (200 → 240),
+reachability is healthy, and the on-box Analyst's Take produces (`LCC_DEFAULT_WORKSPACE_ID` was
+missing → HTTP 400). **Kept here only for the lesson, which recurs:**
 
-   If any is still flat, *now* it is a code stall. → backlog V1/V2/V7.
+> ⚠️ **The reachability check in this file used to read *"`reachability_harvest_review` passes 4"*.
+> That criterion is WRONG and would report a false failure on a healthy lane.** P136's design emits
+> a **negative marker** (`reachability_harvest_target_marker` — *checked, and empty*), so targets
+> with no evidence **correctly produce no proposal**; the proposal count is the one metric that
+> reads zero while the fix works. **Before writing any verification, ask what the worker emits when
+> it succeeds and finds nothing.** Likewise a `pg_net` `timed_out: true` at 60,000 ms is **not**
+> failure — `lcc_cron_post` stops listening while the handler runs on.
+
+**Open and cheap — "verify," not "build":**
+
+1. **⏳ One unattended run still unproven: the Analyst's Take on cron 240** (10:18 UTC weekdays,
+   `generated_at` **inside** that window). It has been triggered manually and works; **a manual
+   trigger proves the config, not the schedule** — which was V7's entire lesson.
 2. **`OWNERSHIP_CHAIN_ROLE_LABELS` is built, merged (#1788), deployed, and still ungraded.** The
    endpoint is now live: `GET /api/ownership-chain-draft-tick?role_labels=1&generate=1` (ungated,
    write-free). Read `summary.providers` **first** — a cloud-fallback sample is not a grade of the
@@ -98,10 +117,14 @@ match-disambig, next-step: all healthy.
 
 **Two structural findings from 2026-08-26 that change how you read everything else:**
 
-- **⚠️ CI RUNS NO TESTS.** `boot-check.yml` is the only PR check and it runs `npm run check:boot`.
-  The 4,551-test suite **never executes on a PR** — which is how #1786 merged green with a red
-  suite. **Every "guarded by `test/*.test.mjs`" claim in `CLAUDE.md` is a local regression
-  detector, not a merge gate.** Fix is scoped and small; it needs Scott's word → backlog **N9**.
+- ~~**CI RUNS NO TESTS.**~~ ✅ **FIXED 2026-08-27 — `npm test` is now a REQUIRED status check** and
+  the gate has been green on `main`. **`main` is protected: you cannot push to it.** Branch → PR →
+  both checks green → merge, and **expect a third step** ("Update branch") whenever `main` moves,
+  which with two audit windows is most of the time. **Read
+  [`docs/os/GITHUB-WORKFLOW.md`](../os/GITHUB-WORKFLOW.md) before handing Scott any git commands** —
+  it is written from five PRs' worth of real failures, including three stale-base branches and two
+  conflict resolutions that kept both sides (one of which made a workflow file *unrunnable*, so the
+  required check never reported at all).
 - **⚠️ `staged_intake_extractions` is not one population.** Three channels with different *input
   types* feed it, and the sidebar channel — **56% of rows, 0 hardened-schema extractions out of
   350** — has never run the Prompt-61 prompt. Any unsplit coverage number measures the channel
