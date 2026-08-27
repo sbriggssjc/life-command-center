@@ -6,6 +6,13 @@
 > for *what is true now*.
 >
 > **Last measured: 2026-08-27 16:30 UTC.** Re-measure before quoting any number.
+>
+> 🔗 **Sibling subsystem, same entity graph:**
+> [`tier0-owner-contact-system.md`](tier0-owner-contact-system.md) — matching a PERSON to an owner
+> (the Decision Center Tier 0 lane, the sponsor map, owner-entity merges). **The two share
+> `lcc_merge_entity`, `lcc_owner_sponsor_domain` and the owner entities themselves**, so a merge
+> confirmed there changes the chains here. Read that page before touching entity identity; read
+> this one before touching ownership history.
 
 ---
 
