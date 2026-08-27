@@ -77,6 +77,70 @@ buckets the NGP SPEs as "genuinely different"); the answer came from reading the
 Suite **4,592 tests / 0 fail**; the new guard verified RED on the pre-fix predicate.
 
 
+## 2026-08-26 — RECONCILED: 189, 192/194 and the sidebar P194 all merged. **Two of my own claims were refuted.**
+
+Live state: Tier 0 lane **86 cards** (27 attaches logged), 146 parked, merge groups **5,222 → 5,343**
+(+121 fallback), `auto_mergeable` **3,053 → 3,053** (proven unchanged), sponsor map 4 rows, sidebar
+foreign-writer alert **open** (waiting on the extension reload).
+
+### ✅ P189 — the merge detector's blind spot is fixed
+`v_lcc_merge_candidates` now carries a namespaced `dc:<lcc_owner_domain_core>` fallback key. **RMR
+Group appears** — the stated verification target. Newly visible: **121 groups / 300 entities /
+$136.5M, of which 60 groups carry BYTE-IDENTICAL names ($102.4M)** — "NGP Capital" ×5, "AVG
+Partners" ×4, "GI Partners" ×3. Safety was **proven, not asserted**: the blind population is all
+`norm_name IS NULL`, zero empty-string, therefore disjoint from every existing group — gated against
+a pre-migration snapshot at `auto_mergeable` 3,053 → 3,053, 0 pre-existing groups altered. Fallback
+groups are forced `auto_mergeable = false` because `lcc_apply_fuzzy_merges()` loops that flag
+straight into `lcc_merge_entity()`. **No entity was merged** — all 121 are proposals.
+
+### ⚠️ MY RECOMMENDATION IN 189 §1b WAS MEASURED AND REJECTED
+I wrote that grouping duplicates on the **shared email domain** was *"far better evidence than any
+name comparison"* and said to consider it first. Graded over every same-domain owner pair: **4
+net-new pairs, exactly 1 a genuine duplicate (Easterly). 25% precision.** The rest — plus 13 NGP
+pairs — are **sponsor↔SPE**: the domain is shared *because an SPE family shares its sponsor's
+domain*, i.e. real evidence answering a **different question**, the same shape as Gary George. A
+domain-keyed view would have been a noise generator, so it was correctly not built.
+*(Side findings kept: `jameshowardcpa.com` groups two unrelated owners through a shared CPA, and
+`lcc_is_spe_shell_name` under-detects place-named SPEs — a stated gap, not a second detector.)*
+
+### ⚠️ AND MY PROMPT 192 §2 WAS WRONG IN A WAY THAT MATTERS
+I claimed that because decidability is computed live, *"a parked card returns to the queue
+automatically the moment new evidence lands"*, and listed six signals. **True for exactly one of
+them.** Only `n_link_evidence > 0` (or a sponsor row) un-parks. Correspondence, SF campaigns, SF
+contact records and titles all move `n_person_evidence`, **which the decidability `CASE` never
+reads**. Measured: **95 of the 146 parked cards ($118M) already carry person evidence and are parked
+permanently** — Class 10 hiding inside a Class 10 fix.
+**It was correctly NOT widened** — admitting person evidence restores exactly the Gary George noise
+the triage removed. `v_lcc_tier0_park_watch` now makes the real mechanism observable. **The right
+fix is a different resolution path for those 95, not a looser un-park.**
+And §4 ("start with the reject signal") had **no input at all**: 27 attaches, **zero rejects** — a
+consumer with no producer, so the demotion engine was correctly not built.
+
+### ⚠️ CLASS 14 RECURRED INSIDE ITS OWN FIX
+P191 narrowed the lane exclusion to `active_source <> 'tier0_confirm'`. P194 added a second value,
+`'tier0_auto'` — **which satisfies that inequality**, so the first auto-attach would again have
+hidden every other card for that owner (**3 of 9 auto owners hold a second card, two of them live
+`ask`**). Worse, `cards_drained` would have *risen* because questions were deleted rather than
+answered. Fixed to a SET. **When you add a value to a column an exclusion tests with `<>`, go read
+the exclusion.**
+
+### ✅ P194 (sidebar) — a retired Vercel deployment was a second writer
+The Chrome extension had seven hardcoded fallbacks to the **retired Vercel deployment**, which still
+serves and still holds the service key — so sidebar intake POSTs succeeded against a build frozen
+before Prompt 61. The earlier "not a stale deploy" verdict was **run against the wrong deployment**:
+the merge-base test interrogated Railway, and those rows were never on Railway. Fixed with one
+`pickIntakeHost()`; a provenance-invariant detector (not a quality metric) now alerts on any channel
+writing ≥5 rows in 7d with zero `_provider` stamps.
+
+### 👤 OPERATOR STEPS OUTSTANDING
+1. **Reload the unpacked extension** — the sidebar fix is inert until then, and the open alert is
+   watching for exactly that.
+2. **Add `npm test` to branch protection** on `main` (Settings → Branches). The workflow exists; a
+   workflow is not a merge gate.
+3. **Read `GET /api/tier0-auto-attach-tick`** (ungated, no writes) — the 9 proposals it lists are
+   what should decide flipping `TIER0_AUTO_ATTACH`, not the 9/9 measured internally.
+
+
 ## 2026-08-26 (Cowork) — P193: SPE subsidiaries should inherit the sponsor's answer (Scott, from the lane)
 
 Scott, working the lane: *"I'm seeing duplicates that are subsidiaries and matching the correct
