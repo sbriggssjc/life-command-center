@@ -802,6 +802,67 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 21:40 UTC (Cowork) — A5c shipped. The producer is now CORRECT, GATED — and feeding lanes with zero consumers.
+
+**A5c is complete and verified independently.** Pool **71,448 → 2,530 admitted (3.5%)**, gate in the
+producer's **selection** (appended `gate_pass`/`gate_reason`/`gate_value` to `v_next_best_research`
+on both domains), floor reused as-is at **$500k**, operators excluded by **recorded fact** rather
+than a name test, placeholders via the existing predicate plus 13 anchored literals with a measured
+blast radius of **7 rows / 0 real firms**.
+
+**⚠️ Crons 34 and 35 are back ON — checked first, because it was the deliverable most likely to be
+forgotten.** First live run: gov 161 + dia 182 = **343 minted, `closed: 0`,
+`gate_reasons_seen: ["admitted"]`**. Cron 35 then fired on its own schedule at 21:09 and succeeded.
+**Hundreds, not thousands.**
+
+**A5a confirmed in production, not just in dry run:** the only `gap_resolved` closures in 30 hours
+are **10, all in the 06:00 hour — before A5a deployed.** Zero since. The bug is fixed in the live
+path.
+
+**⚠️ The deploy check earned its keep, and this is the reusable part:** `/version` is unreachable
+from the sandbox (proxy 403), so the deploy was confirmed **behaviourally** — and **two minutes
+after the merge the gate was still absent, with `would_insert` still reading the ungated 2,586.**
+Re-enabling the crons on "it merged" would have minted the entire flood with the gate sitting inert
+in the database beside it. *Merged is not running* — again.
+
+### 🎯 The finding that sets the next priority: a correct producer feeding a void
+
+| lane | minted 4h | open | **real completions ever** |
+|---|---:|---:|---:|
+| `property_missing_county_record` | 109 | 109 | **0** |
+| `owner_needs_salesforce` | 108 | 108 | **0** |
+| `property_missing_recorded_owner` | 104 | 1,289 | **0** |
+| `true_owner_needs_salesforce` | 22 | 837 | **0** |
+| **`establish_ownership_history`** | 0 | 156 | **314** |
+| `trace_ownership_to_developer` | 0 | 152 | **52** |
+
+**Every lane this producer feeds has ZERO real completions, ever** (`outcome NOT ILIKE
+'%gap_resolved%'`). The only two lanes in the system with genuine completions are the two this arc
+built consumers for.
+
+**So the work is now one level up.** A5a made the producer correct; A5c made it selective. **Neither
+gives it a consumer** — and the Consumption-Layer doctrine is explicit that *no new producer ships
+without a named consumer*. We have built an excellent pipeline into a void, and the honest next
+question is **who consumes `owner_needs_salesforce`** — 1,675 admitted rows, **$4.01B, 66% of
+everything the fleet will mint**, first-ever emission, no consumer.
+
+**⚠️ And `establish_ownership_history` cannot be starved by any of this** — it is fed by
+`v_lcc_ownership_chain_completeness`, a *different* generator. My guardrail question, answered
+directly.
+
+**Also filed by A5c, none built:** **A5g** (`owner_needs_sos`, 24,077 rows, emits nothing —
+`lane_no_consumer` recorded per row because SOS-direct is bot-walled; the gate makes the zero
+explicit rather than pretending), **A5h** (watch the gov SF lane), **A5d** (~1,844 pre-gate open
+tasks stay open; the probe is ungated so none is falsely closed), **A5e** (`value_unknown` is 20,487
+rows — a **rent-coverage** problem, not a value one), **A5f** (`is_operator_not_owner` unset on 11
+real operators).
+
+**One behaviour to expect and not misread:** with cron 35 at `limit=300`, gov's head is the same top
+300 each run, so it inserts 0 until cron 34's daily `limit=2000` walks further — and that run reaches
+2,000 of gov's 2,332 admitted, leaving **~332 unminted**. `admitted_head_exhausted: false` says
+gov's feed is a **floor**. That is a cap, not completeness.
+
+
 ## 2026-08-27 20:07 UTC (Cowork) — crons 34/35 PAUSED pending A5c; and a false alarm worth recording
 
 ### ⚠️ I raised an alarm that was wrong. Recording it, because the reasoning is the reusable part.
