@@ -92,3 +92,11 @@ The rule that would have prevented the K13–K20 loss:
    passing; the rest are real, and they belong in `PLANNED-BACKLOG.md` **before** the file moves.
 4. **Write an INDEX.md** in the archive folder naming what was recovered and where it went.
 5. **Repoint any live references** in the same change.
+6. **⚠️ Check the source location AGAIN after other branches merge.** A file MOVE is **not
+   conflict-safe across parallel branches.** The 2026-08-27 archive recorded 31 worklogs as
+   *delete-at-root + create-in-history* rather than as renames, so a branch based on an older
+   commit — still carrying the root copies — **re-added all 31 on merge, silently and with no
+   conflict.** Git resolved *"you deleted it / they still have it"* by keeping the file, which is
+   the safe default for content and the wrong one for a move. For a day, every archived worklog
+   existed twice. **Verify byte-identity before removing the resurrected copies** (all 31 were),
+   and prefer landing a move when no long-lived parallel branch predates it.
