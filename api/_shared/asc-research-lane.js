@@ -50,6 +50,9 @@ export function normalizeAscAddressToken({ address, city, state, zip } = {}) {
     .replace(/\b(STREET|ST)\b/g, 'ST')
     .replace(/\b(AVENUE|AVE)\b/g, 'AVE')
     .replace(/\b(BOULEVARD|BLVD)\b/g, 'BLVD')
+    // One frozen CMS ASC row contains the source typo "BLFD". Preserve the
+    // raw CMS identity, but compare that unambiguous token as BLVD.
+    .replace(/\bBLFD\b/g, 'BLVD')
     .replace(/\b(ROAD|RD)\b/g, 'RD')
     .replace(/\b(DRIVE|DR)\b/g, 'DR')
     .replace(/\b(LANE|LN)\b/g, 'LN')
@@ -115,6 +118,42 @@ function corroboratingTenant(target, context) {
     .map(normalizeTenantIdentityName).filter(Boolean);
   const organization = organizations.find((name) => tenants.includes(name));
   return organization ? { basis: 'cms_enrollment_organization', matched_name: organization } : null;
+}
+
+const GENERIC_ORG_FAMILY_TOKENS = new Set([
+  'THE', 'CENTER', 'CENTRE', 'SURGERY', 'SURGICAL', 'MEDICAL', 'HEALTH',
+  'HEALTHCARE', 'CARE', 'CLINIC', 'HOSPITAL', 'GROUP', 'ASSOCIATES',
+]);
+
+function singleTenantOrganizationFamilyCorroboration(target, context) {
+  if (!/\bSINGLE\b/i.test(clean(context.tenancy_type))) return null;
+  const evidence = target.cms_evidence || {};
+  if (evidence.enrollment_corroborated !== true) return null;
+  const cmsNames = [
+    target.cms_identity?.facility_name,
+    ...(Array.isArray(evidence.enrollment_org_names) ? evidence.enrollment_org_names : []),
+  ].map(normalizeTenantIdentityName).filter(Boolean);
+  const capturedNames = contextTenantNames(context);
+  for (const cmsName of cmsNames) {
+    const cmsTokens = cmsName.split(' ');
+    for (const capturedName of capturedNames) {
+      const capturedTokens = capturedName.split(' ');
+      const prefix = [];
+      for (let i = 0; i < Math.min(cmsTokens.length, capturedTokens.length); i += 1) {
+        if (cmsTokens[i] !== capturedTokens[i]) break;
+        prefix.push(cmsTokens[i]);
+      }
+      if (prefix.length < 3
+        || prefix.slice(0, 3).some((token) => GENERIC_ORG_FAMILY_TOKENS.has(token))
+        || prefix.slice(0, 3).join('').length < 15) continue;
+      return {
+        basis: 'single_tenant_organization_family',
+        matched_name: capturedName,
+        organization_family: prefix.slice(0, 3).join(' '),
+      };
+    }
+  }
+  return null;
 }
 
 function buildingAddressTokensAgree(left, right) {
@@ -202,7 +241,8 @@ export function buildAscStructuredCapture(target, context = {}) {
   let identityMatch = { mode: 'exact_address_token' };
   if (addressToken !== target.address_token) {
     const cmsIdentity = target.cms_identity || {};
-    const corroboration = corroboratingTenant(target, context);
+    const corroboration = corroboratingTenant(target, context)
+      || singleTenantOrganizationFamilyCorroboration(target, context);
     const addressAlias = approvedParentAddressAlias(target, addressToken);
     const parentBuildingMatch = hasAscSublocation(cmsIdentity.address)
       && buildingAddressTokensAgree(
@@ -240,9 +280,14 @@ export function buildAscStructuredCapture(target, context = {}) {
     } : {
       mode: corroboration.basis === 'facility_name'
         ? 'tenant_corroborated_parent_building'
+        : corroboration.basis === 'single_tenant_organization_family'
+          ? 'single_tenant_organization_family_parent_building'
         : 'enrollment_org_corroborated_parent_building',
       corroboration_basis: corroboration.basis,
       corroborated_name: corroboration.matched_name,
+      ...(corroboration.organization_family
+        ? { organization_family: corroboration.organization_family, second_review_required: true }
+        : {}),
       cms_sublocation_preserved: clean(cmsIdentity.address),
       captured_building_address: clean(context.address),
       facility_name: clean(cmsIdentity.facility_name),
