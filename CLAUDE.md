@@ -2796,6 +2796,54 @@ Writeup: `docs/audits/N15d_N15e_PRODUCER_VERIFY_AND_HELD_RECOMPUTE_2026-08-27.md
   against. Whether `canonical_name` becomes an enforced UNIQUE key is **still Scott's**, and the
   honest input is 6,608.
 
+## N18 — a column compared to ITSELF returns a plausible, wrong number (2026-08-27)
+
+`v_lcc_developer_classification_candidates.attributed_rent` correlated on
+**`pof.source_property_id = pof.source_property_id`**, so the scalar subquery degenerated to a
+`One-Time Filter` and returned `props × domain_max_current_rent`. Fixed live + committed
+(`20260827250000`); guard `test/sql-self-comparison-guard.test.mjs` (5 mutations RED). Distinct
+values **1 → 5**, execution **1,602 ms → 128 ms**, buffers **2,102,242 → 3,904**, equivalence diff
+**0 rows both directions** on every other column. Writeup:
+`docs/audits/N18_ATTRIBUTED_RENT_SELF_COMPARISON_2026-08-27.md`.
+
+- **⚠️ THE VALUE WAS THE DOMAIN-WIDE *MAX*, NOT THE SUM — N15c §6 and the N18 brief both said sum,
+  and both were wrong.** The gov-wide sum is **$3.52B**; $34,920,891.77 is the gov-wide
+  `max(annual_rent)`. And **"one distinct value" was a property of the surviving 6-row slice, not an
+  invariant** — all six carry `props = 1`. Across all 277 candidates the broken expression takes
+  **11 distinct values, max $279,367,134.16** (8 × the domain max). The Class 11 signal was real;
+  the explanation attached to it was not. **Re-derive the mechanism before quoting a magnitude.**
+- **⚠️ IT WAS A LIVE-ONLY DEFECT — THE REPO NEVER CARRIED IT.** The newest committed body
+  (`20260609170000`) is correct; the live view had *both* the typo and N15c's uncommitted repoint.
+  This is the gov **"running but not merged"** class and the mirror of "merged is not running".
+  A rebuild from the repo would have silently reverted the repoint (**267 → 196** resolved). So the
+  migration restates the **WHOLE view** — P194 again: *a second copy that is correct beats no copy
+  at all.* **After hand-applying any view change live, commit the whole body the same day.**
+- **⚠️ THE RANKING WAS NOT WRONG, IT WAS ARBITRARY.** Both sort keys were constant
+  (`attributed_rent` tied, `props` all 1), so `order=attributed_rent.desc,props.desc` returned
+  whatever the plan emitted while the handler called itself "value-prioritized". Corrected, **every
+  position moves except rank 4** (Heritage 5→1 at $2.23M; Curtis 2→5 at $431k, overstated 80.9×).
+  **A tie across every sort key is an unordered list wearing a rank.**
+- **Impact bounded honestly:** `attributed_rent` is **never persisted** (the classification log has
+  no such column), **no value gate reads it**, and at 6 rows against `limit=25` every candidate was
+  drained anyway — the cost was sequence and the operator-facing number, not coverage.
+- **⚠️ THE CORRECTNESS FIX WAS THE PERFORMANCE FIX, AND THE SUBPLAN IS NOT "GONE" — IT IS NOW
+  INDEX-SATISFIABLE.** It still runs at `loops=385`; that is correct for a per-property lookup
+  (**P118 corollary 2**: a genuine per-row lookup is exactly when an index IS the fix). The
+  pathology was that a self-equality constrains nothing, so each probe scanned all 3,183 current
+  facts. Not hoisted — 5 ms is not worth widening the change. Dominant remaining cost is now
+  `lcc_match_buyer_parent_by_name` at `loops=277` (~98 ms of 128 ms): surfaced, not fixed.
+- **⚠️ A SOURCE DETECTOR MUST STRIP COMMENTS, OR IT REPORTS THE BUG IT JUST REMOVED.** The
+  migration's header quotes the broken predicate three times while explaining the fix. This is
+  **A5c inverted** (there, prose made assertions pass over deleted code). And with the population at
+  **zero across every migration**, the guard carries a positive control — while still not firing on
+  a real self-JOIN (`a.parent_id = b.id`) or a shared prefix (`a.x = ab.x`).
+- **⚠️ Row count is 6 because 266 of 277 candidate groups are already in the log** — small by
+  construction, not a small population. **N15b's "222 of 274" does not reproduce off this view**;
+  never quote the two interchangeably.
+- 👤 **Ungraded:** the corrected top-10 has never been seen by an operator, and the handler's own
+  header gates cron registration on Scott blessing that list — which until now was ordered by a
+  constant.
+
 ## A5 — a truncated feed auto-closed the work it could not see (2026-08-27)
 
 `true_owner_needs_salesforce` read **815 open / 596 lifetime completions / 1 in the last week** and
