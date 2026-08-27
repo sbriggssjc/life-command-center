@@ -33,6 +33,9 @@ Remove-Item .git\index.lock -ErrorAction SilentlyContinue
 # 1. Start from current main, on a NAMED branch — never on main itself
 git checkout main
 git pull --rebase
+git status        # ⚠️ MUST say "up to date with origin/main". If it says "behind by N",
+                  #    the pull FAILED (usually a dirty tree) — fix that first. Branching
+                  #    off a stale base is how a branch ends up conflicting (§4c).
 git checkout -b docs/<short-topic>        # or fix/… feat/… chore/…
 
 # 2. Commit
@@ -108,6 +111,59 @@ been changed. Do not "fix" it without measuring the app.
 **Never resolve a red required check by un-requiring it.** An unenforced check is the
 badge-people-merge-past failure. Fix the check.
 
+### ⚠️ 4a. Two audit windows fixed this same file independently — check `main` first
+
+The automation window branched `ci/test-suite-node-22` while the app window shipped **P196 pinning
+Node 24** to `main`, hours apart. Same correct diagnosis, two defensible Node choices, one wasted
+branch. **The prompt-numbering convention keeps *filenames* from colliding and does nothing for
+two windows editing the same config file.**
+
+**Before opening a PR that touches shared infrastructure — a workflow, `package.json`, a
+migration — check whether `main` already fixed it:**
+
+```powershell
+git fetch origin
+git log origin/main --oneline -5 -- <the file>
+```
+
+Seconds, and it would have made that branch unnecessary before it was pushed. **This rule was
+then broken by the session that wrote it** — the §4 rewrite above collided with `574a9bff` doing
+the same job. Read that as evidence the check has to be a habit, not a good intention.
+
+### ⚠️ 4b. A conflict resolution that keeps BOTH sides can be structurally invalid
+
+Resolving `ci/test-suite-node-22` against the new `main` left **two `node-version` keys in one
+`setup-node` step** (`'22'` and `'24'`). Each hunk was correct in isolation and each carried a
+reasoned comment block, so "keep both" felt like the conservative choice. For a **list** it
+usually is. For a **key–value mapping it is not** — a duplicate key is invalid, GitHub could not
+build a run from the file, and the required check **never reported at all.** The PR was not slow
+or flaky; it was unrunnable.
+
+**Distinctive symptom worth memorising: a required check stuck on *"Expected — waiting for status
+to be reported"* that no re-run fixes usually means the workflow file itself is invalid, not that
+a run is queued.** Re-running cannot help — there is nothing to re-run. Read the file before
+hunting for a trigger.
+
+**When resolving a conflict in YAML or JSON, ask whether the two sides are ALTERNATIVES or
+ADDITIONS.** Two competing values for one key are alternatives — pick one. Only additions merge.
+*(This section is itself an addition, folded onto the account above rather than replacing it.)*
+
+**And the outcome was to abandon the branch, not repair it** — `main` already carried the fix, so
+the right move was closing the PR and deleting the branch. **A branch whose purpose has been
+served elsewhere is finished, not broken.**
+
+### ⚠️ 4c. Verify the branch base actually updated
+
+`git pull --rebase` **fails silently into your next command** when the tree is dirty
+(`cannot pull with rebase: You have unstaged changes`). Running `git checkout -b` straight after
+cuts the branch from a **stale base** — that is how one branch here ended up 4 commits behind and
+conflicting. **After the pull, confirm `git status` says *"up to date with origin/main"*, not
+*"behind by N"*, before branching.**
+
+
+**Status note for whoever reads this next:** the gate has now been **green on `main`**, which is
+the bar rule §6.3 sets for a new CI job. It is no longer a badge; it is a gate.
+
 ## 5. Common errors, and what they actually mean
 
 | message | cause | fix |
@@ -118,6 +174,8 @@ badge-people-merge-past failure. Fix the check.
 | `warning: … CRLF will be replaced by LF` | **not a defect.** `.gitattributes` already normalises to LF. Windows editors write CRLF; git converts on the way in, exactly as configured | ignore it |
 | `Unable to create '.git/index.lock'` | a Windows git process holds the lock; **the sandbox cannot delete it** | `Remove-Item .git\index.lock` from PowerShell |
 | CI red on your PR | **check the base branch first** — it may already be red on `main` | if `main` is red it is not your PR; see §4 |
+| A required check stuck on *"Expected — waiting for status to be reported"*, and **re-running does nothing** | usually **the workflow file is invalid**, so no run can be produced — commonly a conflict resolution that kept both sides of a key (see §4b) | read the workflow file; fix the file, not the trigger |
+| You are about to PR a fix to shared infra (workflow, `package.json`, a migration) | the other audit window may have already fixed it | `git fetch origin && git log origin/main --oneline -5 -- <file>` **before** you push (§4a) |
 
 ## 6. Rules that are not negotiable
 
