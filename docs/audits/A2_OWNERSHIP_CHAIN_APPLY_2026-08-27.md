@@ -10,7 +10,7 @@ research_tasks where research_type='establish_ownership_history'
   status open        : 545 →  257
 ```
 
-**288 tasks completed, 322 historical ownership facts written, $579.9M of owner rent.**
+**288 tasks completed, 304 historical ownership facts written, $579.9M of owner rent.**
 Read `facts_inserted` and `tasks_completed`; `links_already_present` is a re-discovery tally
 that reads exactly like throughput (P159a) and on a quiet re-run it is the whole population
 against 0 written.
@@ -20,10 +20,10 @@ against 0 written.
 | `establish_ownership_history` completed ever | 0 | **288** |
 | open | 545 | 257 |
 | `agrees` bucket open | 380 | 92 |
-| `lcc_entity_portfolio_facts` | 12,724 | 13,046 (**+322**) |
+| `lcc_entity_portfolio_facts` | 12,724 | 13,028 (**+304**) |
 | …of those reading `is_current` | — | **0** |
-| `v_ownership_chain_worklist` → `establish_ownership_history` | 2,177 | 1,874 |
-| `v_ownership_chain_worklist` → `trace_ownership_to_developer` | 1,418 | 1,719 |
+| `v_ownership_chain_worklist` → `establish_ownership_history` | 2,177 | 1,891 |
+| `v_ownership_chain_worklist` → `trace_ownership_to_developer` | 1,418 | 1,702 |
 | `v_lcc_portfolio_ownership_conflict` | 0 | 0 |
 
 ## What a link licenses
@@ -109,17 +109,18 @@ reached a terminal good disposition. 92 stay open.
 **`ambiguous_entity` is LCC holding duplicates, not two different companies.** The set is
 dominated by case-variant pairs — `Duke Realty Limited Partnership` /
 `DUKE REALTY LIMITED PARTNERSHIP`, `Gate Properties LP` / `GATE PROPERTIES LP` — the exact
-population P189/P195 work on. **41 of the 92 still-open tasks are blocked by ambiguity alone**, so
+population P189/P195 work on. **48 of the 92 still-open tasks are blocked by ambiguity alone** ($210.6M), so
 merging those pairs unblocks them and the next nightly run applies them with no further work. A2
 never picks a winner: a byte-identical name is a merge question, not a licence (P195).
 
 `v_lcc_ownership_chain_apply_blocked` carries the rival entity names for ambiguity and the
 alternate dates for a repeat pair, so each follow-up is one query away.
 
-## Two defects the live apply exposed in A2 itself
+## Three defects the live apply exposed in A2 itself
 
-The first apply ran, was measured, was found wrong twice, and was **reversed in full** before the
-corrected run. Both are worth recording because both were invisible to the dry run.
+The apply ran, was measured, was found wrong, and was **reversed in full** — twice — before the
+corrected run. All three are worth recording because **none of them was visible to a dry run**: each
+one needed the real write and a real re-measurement of the surfaces downstream of it.
 
 **1. An exact-match stoplist is defeated by a decorated placeholder.** The gate blocked
 `Previous Owner` and the gov feed also writes `Previous Owner Name`, `Previous Owner Name Unknown`
@@ -137,6 +138,25 @@ source_property_id)` — one interval per party per property — and 14 (grantor
 carried more than one link, so 18 inserts were silently dropped while the ledger, fed from a join
 back to the plan, logged all 365. Two fixes: the counter now comes from the INSERT's own
 `RETURNING` set, and the repeat pairs are **blocked**, not silently collapsed.
+
+**3. A PARTIAL apply flips the lane's seed predicate, and the residue then goes invisible.**
+Writing ONE link of a chain takes `owner_links` to ≥2, which flips
+`v_ownership_chain_worklist.suggested_research_type` to `trace_ownership_to_developer` — and R60
+Sweep A then closes the **still-open** task as `skipped / chain_gap_resolved_or_changed` on its next
+05:10 run, because the worklist no longer suggests this type. Measured on the corrected apply:
+**17 tasks were partially applied and 19 of the 92 left open would have been swept the next
+morning.** A skipped task leaves the open lane, so it leaves the split view, so it leaves the plan
+and the blocked view — its remaining links become unapplied **and invisible, permanently**, and
+merging the duplicate entities behind its `ambiguous_entity` blocks would then fix nothing, because
+nothing would ever look at that task again.
+
+Fixed by making the apply **all-or-nothing per task**: the write set is the links of *completable*
+tasks only (`_a2_writable`). 18 fewer facts (322 → **304**), and `partially_applied` and
+`would_be_swept` both measure **0** after the corrected run. The dry run counts the same write set,
+so it describes what the apply does rather than what the plan wanted.
+
+The current-owner start-date fill is deliberately **not** gated: it UPDATES an existing row rather
+than adding one, so it cannot change `owner_links` and cannot flip the seed predicate.
 
 They are not repeat ownership. Read on named rows, all 14 are ONE conveyance recorded several
 times — `SENTINEL SQUARE I → WASHINGTON DC VI FGF` on 2020-02, 2020-03 **and** 2020-04;
@@ -169,17 +189,18 @@ disagreement would be the wrong call. That is a choice, stated here so it can be
 - **Reversal proven on real data before the real run, not asserted** (the P195 lesson). A capped
   3-task apply → `lcc_a2_unapply_ownership_chains` → re-measure: facts 12,726 → 12,724,
   `completed_ever` 2 → 0, open 545, `agrees` 380, **0 outcome residue, 0 unreversed ledger rows**,
-  the filled owner start date restored to NULL. The full first apply (347 facts / 305 tasks) was
-  then reversed the same way with the same result.
-- **`is_current` invariant:** 0 of 322 written facts read current.
-- **Ledger 1:1 with the table:** 322 `fact_inserted` rows against 322 facts.
+  the filled owner start date restored to NULL. The two superseded full applies (347 facts / 305 tasks,
+  then 322 / 288) were reversed the same way with the same result — three clean round trips.
+- **`is_current` invariant:** 0 of 304 written facts read current.
+- **Ledger 1:1 with the table:** 304 `fact_inserted` rows against 304 facts.
 - **No new ownership conflicts:** `v_lcc_portfolio_ownership_conflict` 0 before and after.
 - **`npm test`** with `test/ownership-chain-apply.test.mjs` (20 tests), **mutation-verified red on
-  nine separate breakages** and green on restore: re-deriving the classification instead of reading
+  eleven separate breakages** and green on restore: re-deriving the classification instead of reading
   `action`; using `lcc_owner_strict_core` for identity; dropping the ambiguity gate; completing a
   task with blocked links; counting the ledger instead of the insert; allowing an undated link;
   bridging a chain gap; scheduling before the drafter; and emitting vocabulary the JS module does
-  not carry. Every assertion anchors on an identifier — a view name, a column, a quoted enum — and
+  not carry; writing links of a non-completable task; and a dry run counted off the plan instead of
+  the write set. Every assertion anchors on an identifier — a view name, a column, a quoted enum — and
   strips `--` comments, `comment on` docs and long prose literals first, because this migration's
   header deliberately names the things the code must not do.
 
@@ -194,18 +215,20 @@ repeated silently forever (P176).
 ## Reversal
 
 ```sql
-select lcc_a2_unapply_ownership_chains('a2-20260827-r2');
+select lcc_a2_unapply_ownership_chains('a2-20260827-r3');
 select cron.unschedule('lcc-a2-ownership-chain-apply');
 -- object teardown: see the foot of supabase/migrations/20260827130000_*.sql
 ```
 
 ## What this does NOT claim
 
-- **92 `agrees` tasks are still open** and 128 links unapplied. 41 of those tasks need nothing but
+- **92 `agrees` tasks are still open** and 128 links unapplied — and, since the apply is
+  all-or-nothing, **none of them has a partial chain**: each is intact and re-appliable the night
+  after its blocker clears. 41 of those tasks need nothing but
   a duplicate-entity merge; 20 links need a party LCC does not hold; 28 need the drafter's dedup
   key widened or the P138 name-variant guard loosened.
 - **A3 / A4 / A4b are untouched.** A2 reads `action='agrees'` and only that; the other three
   buckets are unchanged at 73 / 74 / 18.
-- **`trace_ownership_to_developer` gained ~301 properties.** It is a live lane with 40 lifetime
+- **`trace_ownership_to_developer` gained ~284 properties.** It is a live lane with 40 lifetime
   completions and a working consumer (`chain-classify-tick`, cron 102), so this is a handoff, not
   a second dead queue — but it is a handoff, and its drain rate is now worth watching.

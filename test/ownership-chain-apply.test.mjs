@@ -166,6 +166,28 @@ test('the applier completes tasks, and only when every link is terminal-good', (
   assert.match(SQL, /citation_ownership_ids/, 'the outcome must name what was applied');
 });
 
+test('a task is applied ALL-OR-NOTHING — a partial apply flips the seed predicate', () => {
+  // Writing ONE link of a chain takes owner_links to >=2, which flips the
+  // worklist's suggested_research_type — and R60 Sweep A then closes the
+  // still-open task as `skipped`, so its remaining links become unapplied AND
+  // invisible. Measured on the first full apply: 17 tasks partially applied,
+  // 19 of the 92 left open would have been swept the next morning.
+  assert.match(SQL, /create temp table _a2_writable[\s\S]{0,200}?join _a2_completable/i,
+    'the write set must be the links of COMPLETABLE tasks only');
+  // Both link writes read the write set, not the plan.
+  assert.doesNotMatch(SQL, /from _a2_plan p\s*\n\s*where p\.disposition = 'insert'/i,
+    'the insert must read _a2_writable, not _a2_plan');
+  assert.doesNotMatch(SQL, /from _a2_plan p\s*\n\s*where p\.disposition = 'fill_start_date'/i,
+    'the start fill must read _a2_writable, not _a2_plan');
+  assert.match(SQL, /from _a2_writable p\s*\n\s*where p\.disposition = 'insert'/i);
+});
+
+test('the dry run counts the WRITE set, so it describes what apply does', () => {
+  assert.match(SQL, /into v_ins, v_fill from _a2_writable/i,
+    'a dry run counted off the plan while apply writes the completable set is '
+    + 'two answers to one question');
+});
+
 test('the schedule runs AFTER the seeder and the drafter', () => {
   assert.match(SQL, /cron\.schedule\('lcc-a2-ownership-chain-apply'/i);
   const m = SQL.match(/cron\.schedule\('lcc-a2-ownership-chain-apply',\s*'(\d+)\s+(\d+)/i);

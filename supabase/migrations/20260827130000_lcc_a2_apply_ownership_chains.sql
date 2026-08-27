@@ -510,6 +510,7 @@ begin
   drop table if exists _a2_plan;
   drop table if exists _a2_owner;
   drop table if exists _a2_completable;
+  drop table if exists _a2_writable;
 
   -- The task slice, value-ranked (priority was stamped by P179).
   create temp table _a2_tasks on commit drop as
@@ -552,10 +553,35 @@ begin
   group by research_task_id
   having bool_and(disposition in ('insert','already_present','fill_start_date'));
 
+  -- ⚠️ A TASK IS APPLIED ALL-OR-NOTHING, AND THAT IS A CORRECTNESS RULE, NOT TIDINESS.
+  -- Writing ONE link of a chain takes `owner_links` to >= 2, which flips
+  -- `v_ownership_chain_worklist.suggested_research_type` to
+  -- `trace_ownership_to_developer` -- and R60 Sweep A then closes the still-open
+  -- task as `skipped / chain_gap_resolved_or_changed` on its next 05:10 run,
+  -- because the worklist no longer suggests this type for that property.
+  --
+  -- Measured on the first full apply: 17 tasks were partially applied and **19
+  -- of the 92 left open would have been swept the next morning**. A skipped task
+  -- leaves the open lane, so it leaves `v_lcc_ownership_history_lane_split`, so
+  -- it leaves this plan and `v_lcc_ownership_chain_apply_blocked` -- its
+  -- remaining links become unapplied AND invisible, permanently, and the residue
+  -- worklist silently shrinks. Merging the duplicate entities behind its
+  -- `ambiguous_entity` blocks would then fix nothing, because nothing would ever
+  -- look at that task again.
+  --
+  -- So the write set is the links of COMPLETABLE tasks only: 18 fewer facts, and
+  -- no task is ever left in a half-state that the next sweep reads as resolved.
+  create temp table _a2_writable on commit drop as
+  select p.* from _a2_plan p
+  join _a2_completable c on c.research_task_id = p.research_task_id;
+
   if p_dry_run then
+    -- Counted off the WRITE set, not the plan. A dry run that reports what the
+    -- plan wanted while the apply writes what is completable is two answers to
+    -- one question, and the grade would describe something other than what ships.
     select count(*) filter (where disposition='insert'),
            count(*) filter (where disposition='fill_start_date')
-      into v_ins, v_fill from _a2_plan;
+      into v_ins, v_fill from _a2_writable;
     select count(*) filter (where disposition='fill') into v_ownfill from _a2_owner;
     select count(*) into v_done from _a2_completable;
     v_out := jsonb_build_object(
@@ -591,7 +617,7 @@ begin
     select p.grantor_entity_id, p.source_domain, p.source_property_id,
            p.proposed_start_date, p.proposed_end_date,
            'gov_ownership_chain:' || p.ownership_id, now()
-    from _a2_plan p
+    from _a2_writable p
     where p.disposition = 'insert'
     on conflict (entity_id, source_domain, source_property_id) do nothing
     returning entity_id, source_domain, source_property_id,
@@ -610,7 +636,7 @@ begin
            jsonb_build_object('data_source', p.data_source, 'gap_before', p.gap_before,
                               'grantee_name', p.grantee_name)
     from ins i
-    join _a2_plan p
+    join _a2_writable p
       on p.grantor_entity_id = i.entity_id
      and p.source_domain = i.source_domain
      and p.source_property_id = i.source_property_id
@@ -623,7 +649,7 @@ begin
   with upd as (
     update lcc_entity_portfolio_facts f
        set ownership_start_date = p.proposed_start_date, updated_at = now()
-    from _a2_plan p
+    from _a2_writable p
     where p.disposition = 'fill_start_date'
       and f.entity_id = p.grantor_entity_id
       and f.source_domain = p.source_domain
@@ -642,6 +668,11 @@ begin
   select (select count(*) from upd) into v_fill;
 
   -- ---- WRITE 3: the current owner's acquisition date ------------------------
+  -- Deliberately NOT gated on completability. It UPDATES the current owner's
+  -- existing fact rather than adding a row, so it cannot change `owner_links`
+  -- and cannot flip the seed predicate -- the reason WRITE 1 and WRITE 2 are
+  -- gated does not apply to it, and a blank acquisition date is worth filling
+  -- on a task that stays open.
   with upd as (
     update lcc_entity_portfolio_facts f
        set ownership_start_date = o.proposed_start_date, updated_at = now()

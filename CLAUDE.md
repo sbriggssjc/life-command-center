@@ -1685,10 +1685,10 @@ rollup `v_lcc_ownership_history_lane_actions`), migration `20260827090000`. Full
   split alone cannot change that — A2/A3/A4/A4b are what move it. Verify on
   `research_tasks … status='completed'`, never on the view existing or the chips rendering.
 
-## A2 — the lane's first completion, and three traps in getting there (2026-08-27)
+## A2 — the lane's first completion, and four traps in getting there (2026-08-27)
 
 `establish_ownership_history` **completed 0 → 288** (open 545 → 257) by applying A1's `agrees`
-bucket: **322 historical facts into `lcc_entity_portfolio_facts`**, 280 owners, $579.9M.
+bucket: **304 historical facts into `lcc_entity_portfolio_facts`**, 280 owners, $579.9M.
 Migration `20260827130000`, cron **244** (06:49, after the 05:10 seeder and the 06:45 drafter),
 reversible by batch tag. Full writeup: `docs/audits/A2_OWNERSHIP_CHAIN_APPLY_2026-08-27.md`.
 A3/A4/A4b are untouched and unchanged at 73 / 74 / 18.
@@ -1725,6 +1725,19 @@ A3/A4/A4b are untouched and unchanged at 73 / 74 / 18.
   unambiguous-only, resolved through `lcc_entity_survivor`. **The lesson generalises the P189 one:
   the hazard travels with the TECHNIQUE, so a comparator sanctioned for one gate must be re-graded
   on named rows for the next.**
+- **⚠️ A PARTIAL APPLY FLIPS A SEED PREDICATE, AND THE RESIDUE THEN GOES INVISIBLE.** Writing ONE
+  link of a chain takes `owner_links` to ≥2, which flips
+  `v_ownership_chain_worklist.suggested_research_type` — and R60 Sweep A then closes the
+  **still-open** task as `skipped / chain_gap_resolved_or_changed` at 05:10, because the worklist no
+  longer suggests this type. Measured: **17 tasks partially applied, 19 of the 92 left open would
+  have been swept the next morning**, and a skipped task leaves the open lane → leaves the split
+  view → leaves the plan and the blocked worklist, so its remaining links are unapplied AND
+  invisible forever. **Whenever a writer's output feeds the predicate that decides whether its own
+  queue row survives, the unit of work is the whole row, not the individual write.** A2 is
+  all-or-nothing per task (18 fewer facts; `partially_applied` and `would_be_swept` both 0 after),
+  and its dry run counts the same write set so the grade describes what ships. Note the exemption
+  that proves the rule: the current-owner start-date fill UPDATES an existing row rather than adding
+  one, so it cannot move `owner_links` and is deliberately left ungated.
 - **⚠️ `completed` IS NOT EXCLUDED BY THE SEEDER — THE FACT IS WHAT STOPS THE RE-MINT.**
   `lcc_generate_chain_research_tasks` (cron 144) skips a property only for an OPEN task or a
   TERMINAL skip, so completing a task changes nothing on its own. What closes the loop is that one
@@ -1748,8 +1761,8 @@ A3/A4/A4b are untouched and unchanged at 73 / 74 / 18.
   the parties and simply never attached them.
 - **Read `facts_inserted` / `tasks_completed`** (`v_lcc_ownership_chain_apply_run_health`), never
   `links_already_present`. Residue is named, not lumped: `ambiguous_entity` 54 (LCC duplicate
-  entities — 41 of the 92 open tasks need only a P195-style merge, after which cron 244 applies
-  them unaided), `repeat_transfer_unrepresentable` 28, `placeholder` 26, `no_entity` 20.
+  entities — **48** of the 92 open tasks are blocked by that ALONE and need only a P195-style
+  merge, after which cron 244 applies them unaided), `repeat_transfer_unrepresentable` 28, `placeholder` 26, `no_entity` 20.
 
 ## P138 / R8 Stage 1 — the brief's "Analyst's Take", generated ON-BOX (2026-08-26)
 
