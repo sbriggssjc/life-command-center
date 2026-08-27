@@ -6,7 +6,7 @@
 > the traps already paid for.
 >
 > **Nothing here replaces the per-round audits — they are the evidence and they stay.** This page
-> tells you which one to open. Last measured **2026-08-27 17:05 UTC**.
+> tells you which one to open. Last measured **2026-08-27 20:50 UTC**.
 >
 > 🔗 **Sibling subsystem, same entity graph:**
 > [`ownership-history-lane.md`](ownership-history-lane.md) — the `establish_ownership_history`
@@ -25,12 +25,12 @@ the ones nobody could act on, and asks Scott about the rest. A confirmed answer 
 active contact and a person→owner edge. **The account is the pursuit; who to call there is a
 separate, standing decision** (`account-based-contact-intelligence.md`).
 
-## 2. Live state — 2026-08-27 17:05 UTC
+## 2. Live state — 2026-08-27 20:50 UTC
 
 | | |
 |---|---|
 | candidate pairs | **684** |
-| lane cards shown to the operator | **92** (ask 83 + auto 9) |
+| lane cards shown to the operator | **91** (ask 82 + auto 9) |
 | parked, not shown | **137** |
 | human attaches recorded | **27** |
 | owner merges logged (all reversible) | **44** |
@@ -38,6 +38,7 @@ separate, standing decision** (`account-based-contact-intelligence.md`).
 | curated sponsor entries | **8** |
 | `TIER0_AUTO_ATTACH` | **`off` in the registry** — it describes the RUNTIME, not the intent |
 | merge-detector blind groups remaining | **64** (176 entities) |
+| `canonical_name` drift / invisible to `ensureEntityLink` | **0 / 0** — N15c+N15e complete, all 62,368 keyed |
 
 ## 3. The objects
 
@@ -136,10 +137,10 @@ it was found by chasing a guard counter that moved by 2.
 **👤 Needs Scott (N15c — TWO decisions left; the token rule is settled, built AND LIVE):**
 `entities.canonical_name` now has **one writer**. The adopted rule is the `lcc_owner_domain_core`
 token stoplist **joined with spaces** (never bare-concatenated — that collides `Gate Way` with
-`Gateway`, 115 false collisions measured). Still open: (1) the **537 stale rows** where `name` was
-repaired and the key left behind — recomputing discards a captured string some preserve, so they are
-excluded from the backfill by construction and are the entire residual (10,336 → 537); (2) whether
-the column becomes an enforced **unique** key (3,930 groups would violate it today).
+`Gateway`, 115 false collisions measured). ✅ **(1) The 537 stale rows are DONE** — Scott approved recomputing; batch `n15e_go` applied
+2026-08-27, drift **537 → 0**. 👤 **(2) Still open: whether the column becomes an enforced UNIQUE
+key.** ⚠️ **The input to that decision moved: 3,930 was PRE-N15c and is now 6,608** — collapsing
+keys is exactly what creates collisions (3,930 → 6,584 after N15c → 6,608 after N15e).
 ⚠️ **`v_lcc_merge_candidates` does NOT read this column** — the rewrite cannot move `auto_mergeable`,
 and it did not (3,040 → 3,040). Full build: `docs/audits/N15c_CANONICAL_NAME_SINGLE_WRITER_2026-08-27.md`.
 ⏳ **N15d — the Class-8 recurrence check is due 2026-08-28** and is the only thing that proves the
