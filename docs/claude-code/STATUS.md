@@ -17,6 +17,48 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 (Cowork, automation window) — the merge procedure is now written from failures, not theory
+
+Five PRs went through the new protected-`main` flow in one evening, and **every step of the
+standard loop that failed got rewritten from the failure.** `docs/os/GITHUB-WORKFLOW.md` is now
+the record of what actually goes wrong here, not a description of the happy path:
+
+| what failed | how often | now in the doc |
+|---|---|---|
+| Direct push to `main` rejected (`Required status check "npm test" is expected`) | 1× | §1 — not transient; retrying never works, it needs a PR |
+| Branch cut from a **stale base** because `git checkout main` / `git pull --rebase` refused a dirty tree and PowerShell carried on | **3×** | §0b + §4c — **clear the tree first, verify twice** |
+| Conflict "resolved" by keeping both sides | 2× (one YAML, one prose) | §4b |
+| Two windows fixing the same file independently | 2× | §4a — check `git log origin/main -5 -- <file>` first |
+| Merge blocked by "out-of-date with base" **with both checks green** | 1× | §2 step 4 + §3 — **expect a third step**; a green check set goes stale when `main` moves |
+
+**⚠️ The stale-base failure is structural here, not carelessness.** Cowork writes edits into the
+working tree continuously, so **a dirty tree is this repo's normal state** — a procedure that
+assumes a clean one fails most times it is run. That is why §0b now leads with `git status`
+rather than mentioning it in passing.
+
+**⚠️ And the "out-of-date" gate is the COMMON path, not an exception**, because two audit windows
+commit to `main` all day. Two green checks are not sufficient on their own: they describe a base
+the PR may no longer be merging into. Only the green set **after** "Update branch" describes what
+actually lands.
+
+**Also found, filed, and not yet fixed — committed conflict markers on `main`.**
+`docs/architecture/panel-redesign-verification.md` lines **424–571** (148 lines) are an
+unresolved merge committed as file content, from `5bbe8c0f`, unnoticed since. Git does not flag it
+(no `UU` — the conflict *was* resolved, by committing the markers) and prose has no parser. Third
+instance of the keep-both-sides class in one evening: in YAML it made a workflow unrunnable; here
+it silently voided half a verification document. → prompt **A0**, backlog row **A0**.
+
+**Queue (this window): A0** (conflict-marker guard + repair) and **A2** (apply the 380 `agrees`
+chains). A2 is the priority — it is the one that makes `establish_ownership_history` complete a
+task for the first time in 69 days, and the first prompt in this thread that **writes production
+data** rather than adding a view.
+
+**⏳ Still unverified: V1/V2/V7.** Measured 03:32 UTC — crons 212 (04:40), 220 (05:45), 239
+(06:45), 240 (10:18) had not fired. Property-twin's last write was `2026-08-19 05:45:55`, exactly
+cron 220's slot, which **confirms the cron fires and rules out a broken schedule** — consistent
+with the undeployed-fix diagnosis. The 6am-CT scheduled check runs after all four windows.
+
+
 ## 2026-08-27 (Cowork) — P195: the byte-identical owner merge landed, and two traps in landing it
 
 **66 entities merged into 56 survivors; $102,216,468 of current annual rent consolidated; 0 live

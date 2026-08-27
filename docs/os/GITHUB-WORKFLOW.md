@@ -53,8 +53,15 @@ git commit -m "<what changed and why>"
 # 3. Push the BRANCH (not to main)
 git push -u origin HEAD
 
-# 4. Open the PR (the URL is printed by the push above), let CI finish,
-#    then merge from the GitHub UI once "App boots" AND "npm test" are both green.
+# 4. Open the PR (the URL is printed by the push above), let CI finish, then merge from
+#    the GitHub UI once "App boots" AND "npm test" are both green.
+#
+#    ⚠️ EXPECT A THIRD STEP. Branch protection requires branches to be up to date, so if
+#    `main` moved while you were working, the PR shows "This branch is out-of-date with
+#    the base branch" and Merge stays disabled EVEN WITH BOTH CHECKS GREEN. That is a
+#    normal gate, not an error. Click "Update branch", wait for BOTH CHECKS TO RE-RUN
+#    against the new merge (~3 min), then merge. With two audit windows active, `main`
+#    usually has moved — treat this as the common path, not the exception.
 
 # 5. After the merge, if the change touched JS/API code:
 git checkout main; git pull --rebase
@@ -77,6 +84,22 @@ A required check only protects you if you let it run. Both checks must be green:
 **Run `npm test` locally before you push.** The suite is fully offline — no secrets, no network,
 no database — so a red CI run is almost always reproducible on your machine in less time than the
 round trip.
+
+### ⚠️ A green check set goes STALE the moment `main` moves
+
+Branch protection requires branches to be up to date, so two green checks are **not** sufficient
+on their own. If `main` advanced while your PR sat there, GitHub shows **"This branch is
+out-of-date with the base branch"** and keeps Merge disabled. **This is the gate working, not a
+failure** — it is what stops a PR merging green against a base it was never actually tested
+against.
+
+**Click "Update branch", then wait for both checks to run AGAIN** against the new merge commit.
+Only that second green set describes what will actually land on `main`.
+
+With two audit windows committing, `main` moves often enough that this is the **common path**.
+Budget for it: roughly three minutes per re-run, and if `main` moves again during the re-run you
+may do it twice. **Merging the moment the first green appears is how PR #1793 shipped a red
+suite** — the checks were still running.
 
 ## 4. The Node-version lockout — RESOLVED 2026-08-27
 
