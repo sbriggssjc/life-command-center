@@ -212,6 +212,67 @@ async function supersedeStaleDrafts(subjectRefs) {
   return superseded;
 }
 
+// ---------------------------------------------------------------------------
+// A4b RE-DRAFT PASS — the eye for a guard that got LOOSER.
+//
+// A4b narrowed the P138 address-shaped arms in
+// `gov.v_ownership_transitions_portfolio` so a street-numbered SPE
+// (`EGP 17101 BROOMFIELD LLC`) is no longer disqualified by its own street
+// number. A view change is live the instant it is applied — but the DRAFTS
+// built from the old view are not, and `fresh` excludes any task that already
+// carries a proposal. Without this pass the 11 tasks the correction unblocks
+// keep their stale `all_transitions_guarded` draft FOREVER and the fix is
+// invisible on every surface: the predicate is right and the lane never drains.
+// Exactly the A4 stale-draft trap, from the other direction.
+//
+// ⚠️ IT IS DELIBERATELY NOT KEYED ON "A4b SHIPPED". A one-shot supersede is a
+// chore repeated silently the next time any guard moves (P176/Class 8). The
+// predicate here is the STATE — this task's draft says every transfer was
+// guarded away, and the gov view now says at least one passes — so it
+// self-clears, and it equally covers a property whose records simply improved.
+// It re-uses `fetchTransitionsFor` + `OCD.guardTransition`, never a second copy
+// of either.
+//
+// Runs BEFORE `fetchExistingDrafts()`, so the very same run re-drafts what it
+// supersedes: 06:45 draft -> 06:49 A2 apply.
+// ---------------------------------------------------------------------------
+async function fetchAllGuardedTasks() {
+  const r = await opsQuery('GET',
+    'v_lcc_ownership_history_lane_split?select=research_task_id,domain,source_record_id'
+    + '&action=eq.all_guarded&order=research_task_id.asc&limit=1000',
+    undefined, { countMode: 'none' });
+  return (r.ok && Array.isArray(r.data)) ? r.data : [];
+}
+
+async function runA4bRedraftPass(apply, errors) {
+  const out = { guarded_checked: 0, now_has_passing_link: 0, drafts_superseded: 0 };
+  const guarded = await fetchAllGuardedTasks();
+  out.guarded_checked = guarded.length;
+  if (!guarded.length) return out;
+
+  const byDomain = new Map();
+  for (const t of guarded) {
+    if (!byDomain.has(t.domain)) byDomain.set(t.domain, []);
+    byDomain.get(t.domain).push(String(t.source_record_id));
+  }
+
+  for (const [domain, propertyIds] of byDomain) {
+    const { byProp, errors: fErr } = await fetchTransitionsFor(domain, propertyIds);
+    for (const e of fErr) errors.push(`a4b_redraft_${e}`);
+    // A fetch that returned nothing must read as "no change", never as
+    // "now draftable" — an empty map supersedes nothing.
+    const unblocked = propertyIds.filter((id) => {
+      const ts = byProp.get(id) || [];
+      return ts.some((t) => OCD.guardTransition(t) === null);
+    });
+    out.now_has_passing_link += unblocked.length;
+    if (!unblocked.length || !apply) continue;
+    out.drafts_superseded += await supersedeStaleDrafts(
+      unblocked.map((id) => OCD.ocdSubjectRef(domain, id)));
+  }
+  return out;
+}
+
 async function runA4ReopenPass(apply, errors) {
   const out = { retired_checked: 0, transitions_landed: 0, reopened: 0, drafts_superseded: 0 };
   const retired = await fetchA4RetiredTasks();
@@ -595,6 +656,9 @@ export async function handleOwnershipChainDraftTick(req, res) {
   // A4 re-open runs FIRST: a property whose gov records landed must be back in
   // the lane before this run reads it, or it waits a whole extra night.
   const a4Reopen = await runA4ReopenPass(isApply, scanErrors);
+  // A4b runs after the re-open and BEFORE the existing-draft read, so a task
+  // whose guard verdict is now stale is re-drafted by this same run.
+  const a4bRedraft = await runA4bRedraftPass(isApply, scanErrors);
   const existing = await fetchExistingDrafts();
   const laneScanLimit = Math.max(limit, 600);
   const openRows = await fetchOpenLaneRows(laneScanLimit);
@@ -630,7 +694,7 @@ export async function handleOwnershipChainDraftTick(req, res) {
     const out = {
       ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
       role_labels_enabled: roleLabels, lane: LANE_TYPE, limit,
-      a4_reopen: a4Reopen, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+      a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
       lane_scan_capped: laneScanCapped,
       counts, scan_errors: scanErrors,
       note: 'Annotation-only, NO writes in dry-run. The chain is assembled DETERMINISTICALLY from '
@@ -747,7 +811,7 @@ export async function handleOwnershipChainDraftTick(req, res) {
     await closeRunLog(runLogId, {
       status: 'completed', ok: true,
       finished_at: new Date().toISOString(), duration_ms: Date.now() - startedMs,
-      a4_reopen: a4Reopen, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+      a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
       written_draftable: 0, written_insufficient: 0, failed_writes: 0,
       backlog_remaining: fresh.length, capped: fresh.length > 0,
       budget_stopped: false, lane_scan_capped: laneScanCapped,
@@ -758,14 +822,14 @@ export async function handleOwnershipChainDraftTick(req, res) {
         : {}),
     });
     return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false,
-      lane: LANE_TYPE, a4_reopen: a4Reopen, open_lane_rows: openRows.length, fresh: fresh.length,
+      lane: LANE_TYPE, a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, open_lane_rows: openRows.length, fresh: fresh.length,
       lane_scan_capped: laneScanCapped, counts });
   }
 
   const sourceRunId = 'p131_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)
     + '_' + randomUUID().slice(0, 8);
   const summary = { source_run_id: sourceRunId, lane: LANE_TYPE, enabled: true,
-    role_labels_enabled: roleLabels, a4_reopen: a4Reopen, open_lane_rows: openRows.length,
+    role_labels_enabled: roleLabels, a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, open_lane_rows: openRows.length,
     already_drafted: existing.size, fresh: fresh.length,
     written_draftable: 0, written_insufficient: 0, failed: 0,
     role_labels_applied: 0, role_labels_dropped: 0,
@@ -797,7 +861,7 @@ export async function handleOwnershipChainDraftTick(req, res) {
       status: 'failed', ok: false,
       finished_at: new Date().toISOString(), duration_ms: Date.now() - startedMs,
       source_run_id: sourceRunId,
-      a4_reopen: a4Reopen, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+      a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
       written_draftable: summary.written_draftable,
       written_insufficient: summary.written_insufficient,
       failed_writes: summary.failed,
@@ -833,7 +897,7 @@ export async function handleOwnershipChainDraftTick(req, res) {
     status: 'completed', ok: summary.failed === 0,
     finished_at: new Date().toISOString(), duration_ms: Date.now() - startedMs,
     source_run_id: sourceRunId,
-    a4_reopen: a4Reopen, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+    a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
     written_draftable: summary.written_draftable,
     written_insufficient: summary.written_insufficient,
     failed_writes: summary.failed,
