@@ -74,9 +74,15 @@ exactly 73/74/18.**
   LIMITED PARTNERSHIP). **A2a needs no new code** — merge the pairs and cron 244 applies those
   chains the same night. Highest value-per-effort item currently in the backlog.
 - **28 links are one conveyance recorded on several dates** — the `gsa_lease_diff` flicker.
-  **This corroborates E4 independently:** I measured 46 of 73 mismatch chains touching
-  `gsa_lease_diff`, and A2 hit the same producer from a different direction. **A2b and A3 are
-  likely one upstream fix**, which is exactly what E4 said to test before building 73 human cards.
+  ⚠️ **I first wrote that this corroborated E4 and that "A2b and A3 are likely one upstream fix."
+  MEASURED AND REFUTED within the hour:** 46 mismatch properties carry a `gsa_lease_diff` link,
+  12 properties are blocked `repeat_transfer_unrepresentable`, and the **overlap is ZERO**.
+  Same producer *name*, **disjoint populations, two distinct failure modes.** Fixing one does not
+  fix the other, and **A3 cannot be collapsed into A2b.**
+  **The lesson: a shared producer name is not a shared population.** Two findings that both cite
+  `gsa_lease_diff` felt like one story; a single join showed they touch no property in common.
+  Same shape as the P189 domain-grouping trap — plausible evidence answering a *different*
+  question. **Join on the rows before merging two findings into one fix.**
 
 **Three defects A2 found in its own code, none visible to a dry run** — each caught by measuring
 the live write and fully reversed. Three clean round trips, which also **proved the reversal path
