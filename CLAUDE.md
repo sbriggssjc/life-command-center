@@ -76,6 +76,20 @@ how many tests exist, a module that cannot load does. ⚠️ `package.json` stil
 runs on 20 is unmeasured and affects Railway, so it was left alone. Details:
 [`docs/os/GITHUB-WORKFLOW.md`](docs/os/GITHUB-WORKFLOW.md) §4.
 
+Two durable lessons from the fix, both expanded in
+[`docs/os/GITHUB-WORKFLOW.md`](docs/os/GITHUB-WORKFLOW.md) §4a/§4b:
+
+- **Before PR-ing a fix to shared infrastructure** (a workflow, `package.json`, a migration),
+  **check whether the other audit window already fixed it** — `git log origin/main -5 -- <file>`.
+  Both windows diagnosed this identically hours apart and shipped different Node pins. The
+  prompt-numbering convention prevents filename collisions and does nothing for shared config.
+- **⚠️ A conflict resolution that keeps BOTH sides can be structurally invalid, and no test
+  catches it** — resolving that branch left **two `node-version` keys in one `setup-node` step**.
+  Each hunk was correct alone, so "keep both" felt safe; for a **mapping** it is not. GitHub could
+  not build a run from the file, so the required check **never reported** — a distinctive symptom:
+  *"Expected — waiting for status"* that no re-run fixes usually means **an invalid workflow file,
+  not a queued run.** In YAML/JSON, ask whether the two sides are alternatives or additions.
+
 ## Rules
 
 0. **`LCC_API_KEY` auth is production-ready.** Frontend `auth.js` auto-injects `X-LCC-Key` via a global fetch
