@@ -68,6 +68,10 @@ jobs:
           # this back to 20 to match boot-check.yml — boot-check never imports a
           # .ts module, which is why it is green on 20.
           node-version: '22'
+          # Four established tests import TypeScript modules directly. Match the
+          # repository's Node 24 development/runtime baseline so the required
+          # merge gate exercises those tests instead of failing at module load.
+          node-version: '24'
           cache: npm
       - run: npm ci
       - run: npm test
