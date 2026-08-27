@@ -802,6 +802,43 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 (Cowork) — C1 drafted, and measuring first refuted the plan before it was written
+
+The plan implied by A5 was *"automate the 293 that resolve ID-to-ID, retire the rest."* **Measured
+against the OPEN QUEUE, that work does not exist:**
+
+| lane | open | resolves to an LCC entity | **entity already has a `salesforce` identity** |
+|---|---:|---:|---:|
+| dia `true_owner_needs_salesforce` | 837 | **716 (86%)** | **27** |
+| gov `owner_needs_salesforce` | 108 | **0** | **0** |
+
+**⚠️ A5's "293" is across the full 6,324-gap population, not the open queue.** Both numbers are
+correct and answer different questions — **but quoting 293 as available work would have sized the
+build ~10× too big.** In the queue it is **27 (3%)**. *This is the "measure the queue, not the
+source" lesson (P131) recurring: a queue is the residue the automation already picked over.*
+
+**Two consequences that shape the whole design:**
+
+1. **The gov lane has NO entity linkage — 0 of 108.** Those owners are not in
+   `external_identities`, so **no ID-based automation can touch them**, now or after further
+   minting — and **1,675 gov rows are admitted behind that.** It is the *owner* form of the
+   documented "asset-identity coverage is what gates owner resolution" gate.
+2. **Where dia does resolve (86%), the entity has no SF link either.** So the gap is genuinely
+   **outside our systems** — not a join we forgot, and not something an LLM could read.
+
+**C1 is written as diagnosis-first** (`prompts/C1-*.md`) with two doctrine checks the design must
+clear before anyone builds: `sf-link-reconcile.js` runs the **opposite direction** (it mirrors an
+existing `salesforce_id` *onto* the entity — **read a handler's direction before counting it as a
+consumer**), and `CLAUDE.md` states LCC **never writes back to clean Salesforce**, so a consumer
+that mass-creates Accounts may violate standing doctrine. It also asks whether the gov lane should
+be minting at all before entity coverage exists — `lane_no_consumer` already exists as machinery
+and precedent.
+
+**And it says plainly that retirement is a success.** A4 retired 74 unanswerable tasks and that was
+the right result. *"Retire two lanes and automate 27"* would be a better outcome than a consumer
+nobody uses.
+
+
 ## 2026-08-27 21:40 UTC (Cowork) — A5c shipped. The producer is now CORRECT, GATED — and feeding lanes with zero consumers.
 
 **A5c is complete and verified independently.** Pool **71,448 → 2,530 admitted (3.5%)**, gate in the
