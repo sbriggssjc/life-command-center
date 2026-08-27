@@ -2,11 +2,11 @@
 
 > **START HERE for anything about matching a person to an owner, the Decision Center Tier 0 lane,
 > the sponsor map, or owner-entity merges.** This is the one door into an arc that otherwise spans
-> **twelve** audit documents. Live state, the objects that exist, the decisions already made, and
+> **thirteen** audit documents (P186–P198). Live state, the objects that exist, the decisions already made, and
 > the traps already paid for.
 >
 > **Nothing here replaces the per-round audits — they are the evidence and they stay.** This page
-> tells you which one to open. Last measured **2026-08-27 16:30 UTC**.
+> tells you which one to open. Last measured **2026-08-27 17:05 UTC**.
 >
 > 🔗 **Sibling subsystem, same entity graph:**
 > [`ownership-history-lane.md`](ownership-history-lane.md) — the `establish_ownership_history`
@@ -25,15 +25,15 @@ the ones nobody could act on, and asks Scott about the rest. A confirmed answer 
 active contact and a person→owner edge. **The account is the pursuit; who to call there is a
 separate, standing decision** (`account-based-contact-intelligence.md`).
 
-## 2. Live state — 2026-08-27 16:30 UTC
+## 2. Live state — 2026-08-27 17:05 UTC
 
 | | |
 |---|---|
 | candidate pairs | **684** |
-| lane cards shown to the operator | **93** (ask 84 + auto 9) |
+| lane cards shown to the operator | **92** (ask 83 + auto 9) |
 | parked, not shown | **137** |
 | human attaches recorded | **27** |
-| owner merges logged (all reversible) | **35** |
+| owner merges logged (all reversible) | **44** |
 | `tier0_auto` writes | **0** — see §6, this is a pending verification, not a failure |
 | curated sponsor entries | **8** |
 | `TIER0_AUTO_ATTACH` | **`off` in the registry** — it describes the RUNTIME, not the intent |
@@ -125,11 +125,19 @@ orphans get hub rows.
 Cambridge, Gardner. Six cards became three; **Easterly is now ONE card at $114,864,150 / 89 assets /
 7 eligible people**, the combined pre-merge total exactly. Lane `ask` 87 → 84. All reversible.
 
-**👤 Needs Scott (new, N3h):** the same three firms carry **9 MORE duplicate entities**, all at $0
-current rent so invisible to every rent-ranked surface. **Gardner is the one that matters — its
-deal history is split, with 240 relationships on a live entity separate from the one holding its 13
-assets** (the P177 failure). Not merged, because an approval of three named pairs is not extended
-by inference. ⚠️ Gardner's `min_loser_sim` is 0.667, so read it; Easterly/Cambridge are 1.000.
+**✅ Done 2026-08-27 17:05 UTC (N3h):** the 9 further duplicates on those same three firms are
+merged, all reversible. **Gardner Tanenbaum Holdings: relationships 270 → 512 (+242)** — its
+transaction history had been split across two live entities, so the survivor was reporting half its
+own deal history (P177). `auto_mergeable` 3,043 → 3,040, exactly the three groups resolved.
+⚠️ **All nine losers carried $0 current rent** — no rent-ranked surface would ever have shown this;
+it was found by chasing a guard counter that moved by 2.
+
+**👤 Needs Scott (new, N15b — three decisions, audit §6):** `canonical_name` has **seven authors**
+and **10,340 live entities (16.6%) are invisible to `ensureEntityLink`'s own lookup**. Which token
+rule (the `trust|dst|reit` residue is a genuine judgement — should a DST and its LLC share a dedup
+key?); whether the 540 stale rows are recomputed; whether the column becomes an enforced unique key
+(3,930 groups would violate it today). ⚠️ **`v_lcc_merge_candidates` does NOT read this column** —
+a rewrite cannot move `auto_mergeable`.
 
 **🔴 Build:** N14 the 92 orphans blocking parked cards; N10 the 4 held generic-name groups (~$0,
 a name-repair job).
@@ -153,8 +161,9 @@ the domain-keyed fix P189 already rejected at 25%.
 | **P195** | 66 entities merged, $102.2M consolidated |
 | **P196** | merge made reversible; park reasons |
 | **P197** | the employer resolver; `no_employer_on_file` 68 → 54 |
-| **P198** | the prefix-8 arm is load-bearing (refuted a tightening); co-proposal at 7%; 3 merge decisions |
-| **A1–A4, A2a** | the ownership-lane arc (a sibling workstream, same entity graph) |
+| **P198** | the prefix-8 arm is load-bearing (refuted a tightening); co-proposal at 7%; **12 owner merges — 3 approved pairs + N3h's 9, which reunited Gardner's split deal history (270 → 512 relationships)** |
+| **N15b** | **the producer behind all of the above** — `entities.canonical_name` has seven authors and 16.6% of live entities are invisible to `ensureEntityLink`'s own lookup. Measurement only; three decisions pending. ⚠️ It does **not** feed `v_lcc_merge_candidates` |
+| **A1–A4b, A2a, A2b** | the ownership-lane arc — sibling workstream, same entity graph: [`ownership-history-lane.md`](ownership-history-lane.md) |
 
 **Design intent:** `account-based-contact-intelligence.md` (who to pursue) ·
 `contact-reconciliation-outbound.md` (getting the record back out).

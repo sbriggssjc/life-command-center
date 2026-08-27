@@ -17,6 +17,65 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 17:05 UTC — N15b landed (measurement only); N3h executed; Gardner's deal history reunited
+
+### N3h — 9 merges, and the one that mattered
+
+Scott approved; all 9 merged, **all 9 reversible**. **Gardner Tanenbaum Holdings: relationships
+270 → 512 (+242)**, assets 17 → 22. That firm's transaction history was split across two live
+entities, so the survivor every surface points at was reporting **half its own deal history** — the
+P177 failure, and prospecting ranks on precisely that signal. Live entities 62,365 → 62,356;
+`ask` 84 → 83; `auto` 9 and parked 137 unchanged; **`auto_mergeable` 3,043 → 3,040, which is exactly
+the three groups resolved**; 0 duplicate groups left on the three winners.
+
+**At $0 current rent on all nine losers, no rent-ranked surface would ever have surfaced this.** It
+was found only by chasing a guard counter that moved by 2 — the discipline, not a detector.
+⚠️ Gardner's `min_loser_sim` 0.667 was read before merging: it is `Gardner Tanenbaum` vs
+`Gardner Tanenbaum Holdings`, a suffix, not a different party.
+
+### N15b — measurement only, nothing written, and it corrected TWO of my prompt's premises
+
+Full writeup: [`docs/audits/N15b_CANONICAL_NAME_AUTHORS_2026-08-27.md`](../audits/N15b_CANONICAL_NAME_AUTHORS_2026-08-27.md).
+
+**Headline: 10,340 live entities (16.6%) are invisible to `ensureEntityLink`'s own lookup by their
+own name.** That is the duplicate factory stated as one number. `canonical_name` has **seven
+authors**, four live and distinguishable — including **two JS copies of the same rule that drifted
+apart on a single character** (`[^a-z0-9\s]` → space vs deleted). ⚠️ It has **no unique
+constraint** — a de-facto dedup key nothing enforces.
+
+**⚠️ My prompt was wrong twice, and both corrections matter:**
+- **"3,400 rows match no known normalization → a third author"** → adding the two JS rules takes the
+  unexplained set to **540**, and they are not a normalizer at all: they are `canonical_name` left
+  **stale after `name` was later repaired** (`Scott W. Beynon` still keyed
+  `buyer contactsscott w beynon 801 568 1031 p`). That is the *inverse* failure and needs a
+  different fix — recompute on name change.
+- **The entire `auto_mergeable` gate I specified is unsatisfiable**: `v_lcc_merge_candidates`
+  **does not read `canonical_name`**. It groups on `lcc_normalize_entity_name(e.name)`; the column
+  is a dead passthrough. **Rewriting it cannot move `auto_mergeable`.** I asserted a blast radius
+  without checking the view definition — the exact "read the function, not its name" failure this
+  file keeps recording.
+
+**The real blast radius is elsewhere and one surface is already broken:**
+`v_lcc_developer_classification_candidates` joins `canonical_name` against
+`lcc_normalize_entity_name(developer_name)` and is **~19% blind — 222 of 274 resolve today, 269
+would if aligned**. Nobody had noticed.
+
+**Recurrence is a burst plus a trickle: quote 79 in 21 days (~4/day), never the blended 1,879/30d**
+— off by ~24×. Confirmed live: entities rose 62,363 → 62,365 in the ~30 minutes between two of
+today's measurements.
+
+**Recommendation (not applied):** adopt the `lcc_owner_domain_core` **token rule** (pure legal forms
+only, keep every semantic token), enforced by a `BEFORE INSERT OR UPDATE OF name` trigger that
+returns NEW unconditionally, and delete the inline copy in `entities-handler.js`. ⚠️ **Not**
+`lcc_normalize_entity_name` — banned for identity, NULL for 1,070 entities, and as a *link* key it
+would silently auto-link `Century Park Partners` to `Century Park Properties LLC` with no human
+review.
+
+**👤 Three questions for Scott** in §6 of the audit: which token rule (the `trust|dst|reit` residue
+is a real judgement — should a DST and its LLC share a dedup key?); whether the 540 stale rows get
+recomputed (it discards a captured string some of them preserve); and whether `canonical_name`
+becomes an enforced unique key (**3,930 groups would violate it today**).
+
 ## 2026-08-27 16:40 UTC — merge state confirmed; docs cross-linked; N15b drafted
 
 **Everything is on `main`.** PR #1830 (P198 view + audit + migration) and #1833 (the merge results
