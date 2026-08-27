@@ -1,5 +1,51 @@
 # End-to-end data-process audit — where the operator's hands are actually required
 
+> # ✅ THE BUG IS FIXED (A5a, 2026-08-27) — and the blast radius was 15× what A5 measured.
+>
+> Full writeup: **`docs/audits/A5a_AUTOCLOSE_TRUNCATION_FIX_2026-08-27.md`**.
+> The correction block below stands; these are the post-fix numbers it was missing.
+>
+> **The metric is now honest, but the rankings in this document are still built on the corrupted
+> one and have NOT been recomputed.** Do not re-rank lanes off anything below the fold.
+>
+> | | A5 said | **measured across BOTH domains** |
+> |---|---:|---:|
+> | feed rows | 29,643 (dia only) | **71,448** (gov 41,805 + dia 29,643) |
+> | gaps that have never had a task | 5,509 | **69,448** |
+> | lanes that have NEVER minted a single task | not counted | **4 lane-domains, 47,562 rows** |
+> | lifetime `gap_resolved` closures | 5,377 | **5,763** across **4** lanes |
+> | real completions by this generator, ever | — | **0** |
+>
+> **⚠️ Three lanes are absent from every table in this document because they have never emitted:**
+> gov `owner_needs_sos` (16,873), gov `owner_needs_salesforce` (13,724), dia
+> `property_missing_county_record` (9,761), dia `owner_needs_sos` (7,204). A lane that has never
+> minted a task has no row to group by — **enumerate the PRODUCER's population, not the consumer's
+> table.**
+>
+> **⚠️ And the correction was not uniformly right either.** Per-lane, on named rows:
+> gov `property_missing_recorded_owner` **239/250 false (95.6%)**; dia `true_owner_needs_salesforce`
+> 170/183 (92.9%); dia `property_missing_recorded_owner` **195/369 (52.8%, full census)**; gov
+> `property_missing_true_owner` **0/250 — those 386 closures were LEGITIMATE**, its feed genuinely
+> fell to 28 rows. **A blanket "all of them were false" would have been as wrong as the original
+> claim.** Estimated genuinely re-openable subjects: **≈2,044 of 2,631** — filed as **A5b-repair**,
+> deliberately not built.
+>
+> **The decisive number:** all **1,000** open gov tasks are still in the live feed, so the first
+> *correct* run closes **0**. Every closure the old code would have made on gov tonight would have
+> been false.
+>
+> **What changes operationally:** the close is now settled by ASKING the feed which open subjects
+> are still a gap (a bounded, chunked membership probe that fails closed on any truncated or failed
+> answer), while minting reads only the ranked head, capped at the caller's `limit`. ⚠️ Paging the
+> whole 71,448-row feed was implemented and then **rejected on an `EXPLAIN`** — the view re-sorts all
+> 41,805 gov rows per request (1,149 ms, 8 MB spilled), so a full sweep would cost ~64 min/day of DB
+> time on the pool the 2026-08-12 incident wedged; the filtered probe is 44 ms. Expect
+> **≈+2,000 new tasks once**, then a plateau — including gov `owner_needs_salesforce`'s first 430
+> tasks ever. **Open counts going UP is the fix working.** The number that must fall is
+> `gap_resolved`-per-day.
+>
+> ---
+>
 > # ⛔ THE RE-AUDIT BELOW WAS WRONG ON BOTH ITS HEADLINE CALLS. Read this first (A5, 2026-08-27).
 >
 > **Every completion count in this document — and every ranking built on one — was measured on a
