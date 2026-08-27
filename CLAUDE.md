@@ -2783,6 +2783,60 @@ work.** Diagnosis only, nothing built. Writeup:
   this lane's downstream, not its consumer. The only code that ever *fills* the column is unscheduled
   Python in the **Dialysis** repo. **Read a handler's direction before counting it as a consumer.**
 
+## A5a — FIXED, and the blast radius was 15× the diagnosis (2026-08-27)
+
+`handleGenerateResearchTasks` now settles the auto-close by ASKING the feed which of its open
+subjects are still a gap — a chunked membership probe that **fails closed** on any truncated or
+failed answer — while minting reads only the ranked head (total order
+`priority.desc,research_type.asc,entity_id.asc`) capped at the caller's `limit`. Single owner of
+the rules: `api/_shared/nba-feed-sweep.js`; guard `test/nba-feed-truncation-guard.test.mjs`
+(14 tests, **all 9 mutations verified RED**). Writeup:
+`docs/audits/A5a_AUTOCLOSE_TRUNCATION_FIX_2026-08-27.md`.
+
+- **⚠️ "PAGE THE WHOLE FEED" WAS IMPLEMENTED AND THEN REJECTED ON AN `EXPLAIN` — MEASURE THE READ
+  BEFORE YOU CHOOSE THE FIX.** `v_next_best_research` materialises and external-sorts **all 41,805
+  gov rows on every ordered request** (1,149 ms, 8 MB spilled to disk, at every offset) — the
+  documented *"an `ORDER BY` forces the whole view to materialise, so the `LIMIT` is irrelevant"*
+  footgun. A 42-page offset sweep is ~48 s of gov DB time per run and cron 35 fires every 30
+  minutes: **~64 min/day of pure re-sorting on the shared PostgREST pool the 2026-08-12 incident
+  wedged**, and O(pages²) in work. The SAME query filtered to an id list pushes the predicate into
+  every UNION arm: **44 ms**. **Asking a bounded question beat downloading an unbounded answer** —
+  and it is the STRONGER guarantee, because a downloaded list only ever supports "close if absent"
+  and is only as complete as the fetch that built it, which is precisely how the 1,000-row
+  truncation came to mean "the gap resolved".
+
+- **⚠️ A GUARD THAT COMPARES A REQUEST AGAINST A RESPONSE IS NOT A GUARD.** The comment said the
+  auto-close fires *"never on a capped slice"*; the code tested `feed.length (1000) < limit (2000)`
+  — **the slice it asked for.** Wherever a server-side cap exists, the only honest signal is the
+  RETURNED count. Raising `limit` cannot help (the `CAND_LIMIT = 1200` lie, P123).
+- **⚠️ THE FEED IS 71,448 ROWS, NOT 29,643 — A5 MEASURED ONE DOMAIN.** gov 41,805 + dia 29,643;
+  **69,448 gaps had never had a task**, and **four lane-domains have never minted one in their
+  lives** (gov `owner_needs_sos` 16,873, gov `owner_needs_salesforce` 13,724, dia
+  `property_missing_county_record` 9,761, dia `owner_needs_sos` 7,204 = **47,562 rows**). They were
+  invisible to every audit because **a lane that has never emitted has no row to GROUP BY** —
+  enumerate the PRODUCER's population, never the consumer's table. Both domains' open counts read
+  **exactly 1,000**: an open count equal to a query window is a reading of the instrument.
+- **⚠️ COMPLETENESS AND PRIORITISATION ARE DIFFERENT BUDGETS, AND CONFLATING THEM FORCED A FALSE
+  CHOICE.** The close set must see the whole feed (it asserts a gap resolved); the mint set must
+  stay ranked and bounded. Splitting them is what let the fix land without minting 71,448 tasks into
+  a producer with no value gate (that gate is **A5c**). Emission: **≈+2,000 once, then a plateau**;
+  open converges to min(`limit`, feed) per domain.
+- **⚠️ THE CORRECTION WAS NOT UNIFORMLY RIGHT EITHER — MEASURE PER LANE, ON NAMED ROWS.** Still-in-
+  feed rates: gov `property_missing_recorded_owner` **239/250 (95.6% false)**, dia
+  `true_owner_needs_salesforce` 170/183 (92.9%), dia `property_missing_recorded_owner` **195/369
+  (52.8%, full census)**, gov `property_missing_true_owner` **0/250 — those 386 closures were
+  LEGITIMATE** (its feed genuinely fell to 28 rows). A blanket "all 5,763 were false" would have
+  been as inaccurate as the claim it replaced.
+- **Decisive safety check: all 1,000 open gov tasks are still in the feed, so the first CORRECT run
+  closes 0.** Every closure the old code would have made on gov that night would have been false;
+  the ~29/day gov "throughput" was 100% window churn.
+- **Read `would_close`/`closed` and `feed_exhausted`, never `feed`** — a rows-scanned tally that
+  reads exactly like throughput (P159a). `?dry_run=1` reports the whole plan without writing.
+  **⚠️ Open counts going UP is the fix working**; the number that must fall is `gap_resolved`-per-day.
+- **A5b-repair is FILED, NOT BUILT** — ≈2,044 of 2,631 distinct closed subjects are genuinely
+  re-openable. Recommended: re-label the false closures out of the throughput metric, then let the
+  corrected producer re-mint what ranks. Do not re-open before A5c makes the lane finite.
+
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
 Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration
