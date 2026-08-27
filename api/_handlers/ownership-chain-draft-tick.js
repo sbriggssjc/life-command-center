@@ -273,6 +273,87 @@ async function runA4bRedraftPass(apply, errors) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// A2b RE-DRAFT PASS — the eye for a DRAFTER that got smarter.
+//
+// A2b taught `buildChainDraft` to collapse one conveyance recorded on several
+// dates. Every draft built from now on is collapsed at birth — but the drafts
+// built BEFORE it are not, and `fresh` excludes any task that already carries a
+// proposal. Without this pass the 14 tasks the collapse unblocks keep their
+// pre-A2b draft forever: the planner is right, A2 still refuses them, and the
+// fix is invisible on every surface. That is invariant #10 — the same stale-draft
+// trap A4b hit, from the drafter's side rather than the guard's.
+//
+// ⚠️ IT IS DELIBERATELY NOT KEYED ON "A2b SHIPPED", AND THAT IS NOT PEDANTRY
+// HERE — THE PRODUCER IS LIVE. `gsa_lease_diff` is dormant (newest row
+// 2026-03-27, zero in 90 days), but the repeat-pair population is still GROWING:
+// 323 pairs fleet-wide, 58 completed in the last 90 days, 9 in the last 30, most
+// recent 2026-08-24 — because `costar_sidebar` is live (271 rows/30d) and lands a
+// SECOND observation of a pair the lease-diff already recorded (91 of 323 are
+// cross-source). A one-shot supersede would therefore be a chore repeated
+// silently forever (P176/Class 8). The predicate is the STATE — this task is
+// blocked as `repeat_transfer_unrepresentable` and the drafter now collapses it —
+// so it self-clears once re-drafted and equally catches a pair whose second
+// observation arrives next month. That is why A2b ships no cron of its own: the
+// sweep is this pass, inside the drafter's existing 06:45 run.
+//
+// ⚠️ It re-runs the REAL planner rather than trusting the blocked reason, so a
+// gov fetch that returns nothing supersedes NOTHING ("the fetch failed" must
+// never read as "now collapsible"), and a task blocked for a reason A2b does not
+// actually fix keeps its draft instead of being churned.
+//
+// Runs BEFORE `fetchExistingDrafts()`, so the same run re-drafts what it
+// supersedes: 06:45 draft -> 06:49 A2 apply.
+// ---------------------------------------------------------------------------
+async function fetchRepeatBlockedTasks() {
+  const r = await opsQuery('GET',
+    'v_lcc_ownership_chain_apply_blocked?select=research_task_id,source_domain,source_property_id'
+    + '&blocked_reason=eq.repeat_transfer_unrepresentable'
+    + '&order=research_task_id.asc&limit=1000', undefined, { countMode: 'none' });
+  if (!r.ok || !Array.isArray(r.data)) return [];
+  // The view is one row per LINK; the unit of work is the TASK (invariant #2).
+  const byRef = new Map();
+  for (const row of r.data) {
+    byRef.set(`${row.source_domain}|${row.source_property_id}`, {
+      domain: row.source_domain, source_record_id: String(row.source_property_id),
+    });
+  }
+  return [...byRef.values()];
+}
+
+async function runA2bRedraftPass(apply, errors) {
+  const out = { repeat_blocked_checked: 0, now_collapsible: 0, links_collapsed: 0, drafts_superseded: 0 };
+  const blocked = await fetchRepeatBlockedTasks();
+  out.repeat_blocked_checked = blocked.length;
+  if (!blocked.length) return out;
+
+  const byDomain = new Map();
+  for (const t of blocked) {
+    if (!byDomain.has(t.domain)) byDomain.set(t.domain, []);
+    byDomain.get(t.domain).push(String(t.source_record_id));
+  }
+
+  for (const [domain, propertyIds] of byDomain) {
+    const { byProp, errors: fErr } = await fetchTransitionsFor(domain, propertyIds);
+    for (const e of fErr) errors.push(`a2b_redraft_${e}`);
+    const collapsible = [];
+    for (const id of propertyIds) {
+      const ts = byProp.get(id) || [];
+      if (!ts.length) continue;
+      const d = OCD.buildChainDraft(ts, {});
+      if (d.draftable && d.collapsed_conveyances > 0) {
+        collapsible.push(id);
+        out.links_collapsed += d.collapsed_conveyances;
+      }
+    }
+    out.now_collapsible += collapsible.length;
+    if (!collapsible.length || !apply) continue;
+    out.drafts_superseded += await supersedeStaleDrafts(
+      collapsible.map((id) => OCD.ocdSubjectRef(domain, id)));
+  }
+  return out;
+}
+
 async function runA4ReopenPass(apply, errors) {
   const out = { retired_checked: 0, transitions_landed: 0, reopened: 0, drafts_superseded: 0 };
   const retired = await fetchA4RetiredTasks();
@@ -659,6 +740,9 @@ export async function handleOwnershipChainDraftTick(req, res) {
   // A4b runs after the re-open and BEFORE the existing-draft read, so a task
   // whose guard verdict is now stale is re-drafted by this same run.
   const a4bRedraft = await runA4bRedraftPass(isApply, scanErrors);
+  // A2b runs last of the three, for the same reason: a task whose repeat-pair
+  // draft is now stale must be re-drafted by THIS run, not the next one.
+  const a2bRedraft = await runA2bRedraftPass(isApply, scanErrors);
   const existing = await fetchExistingDrafts();
   const laneScanLimit = Math.max(limit, 600);
   const openRows = await fetchOpenLaneRows(laneScanLimit);
@@ -694,7 +778,7 @@ export async function handleOwnershipChainDraftTick(req, res) {
     const out = {
       ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
       role_labels_enabled: roleLabels, lane: LANE_TYPE, limit,
-      a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+      a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, a2b_redraft: a2bRedraft, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
       lane_scan_capped: laneScanCapped,
       counts, scan_errors: scanErrors,
       note: 'Annotation-only, NO writes in dry-run. The chain is assembled DETERMINISTICALLY from '
@@ -811,7 +895,7 @@ export async function handleOwnershipChainDraftTick(req, res) {
     await closeRunLog(runLogId, {
       status: 'completed', ok: true,
       finished_at: new Date().toISOString(), duration_ms: Date.now() - startedMs,
-      a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+      a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, a2b_redraft: a2bRedraft, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
       written_draftable: 0, written_insufficient: 0, failed_writes: 0,
       backlog_remaining: fresh.length, capped: fresh.length > 0,
       budget_stopped: false, lane_scan_capped: laneScanCapped,
@@ -822,14 +906,14 @@ export async function handleOwnershipChainDraftTick(req, res) {
         : {}),
     });
     return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false,
-      lane: LANE_TYPE, a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, open_lane_rows: openRows.length, fresh: fresh.length,
+      lane: LANE_TYPE, a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, a2b_redraft: a2bRedraft, open_lane_rows: openRows.length, fresh: fresh.length,
       lane_scan_capped: laneScanCapped, counts });
   }
 
   const sourceRunId = 'p131_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)
     + '_' + randomUUID().slice(0, 8);
   const summary = { source_run_id: sourceRunId, lane: LANE_TYPE, enabled: true,
-    role_labels_enabled: roleLabels, a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, open_lane_rows: openRows.length,
+    role_labels_enabled: roleLabels, a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, a2b_redraft: a2bRedraft, open_lane_rows: openRows.length,
     already_drafted: existing.size, fresh: fresh.length,
     written_draftable: 0, written_insufficient: 0, failed: 0,
     role_labels_applied: 0, role_labels_dropped: 0,
@@ -861,7 +945,7 @@ export async function handleOwnershipChainDraftTick(req, res) {
       status: 'failed', ok: false,
       finished_at: new Date().toISOString(), duration_ms: Date.now() - startedMs,
       source_run_id: sourceRunId,
-      a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+      a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, a2b_redraft: a2bRedraft, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
       written_draftable: summary.written_draftable,
       written_insufficient: summary.written_insufficient,
       failed_writes: summary.failed,
@@ -897,7 +981,7 @@ export async function handleOwnershipChainDraftTick(req, res) {
     status: 'completed', ok: summary.failed === 0,
     finished_at: new Date().toISOString(), duration_ms: Date.now() - startedMs,
     source_run_id: sourceRunId,
-    a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+    a4_reopen: a4Reopen, a4b_redraft: a4bRedraft, a2b_redraft: a2bRedraft, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
     written_draftable: summary.written_draftable,
     written_insufficient: summary.written_insufficient,
     failed_writes: summary.failed,
