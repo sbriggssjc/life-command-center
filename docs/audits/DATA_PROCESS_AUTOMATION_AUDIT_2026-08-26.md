@@ -1,5 +1,30 @@
 # End-to-end data-process audit — where the operator's hands are actually required
 
+> ## ✅ STATUS 2026-08-27 — the headline finding has been ACTED ON. Read this before quoting §2.
+>
+> This audit's central claim was **`establish_ownership_history`: 545 open, 0 completed in 68
+> days.** That is no longer true, and the correction is the point of the audit rather than a
+> footnote:
+>
+> | | at audit (08-26) | now (08-27) |
+> |---|---|---|
+> | completed **ever** | **0** | **288** |
+> | open | 545 | **257** |
+> | historical ownership facts | — | **+304** (12,724 → 13,028), 280 owners, **$579.9M** |
+>
+> **A1** split the lane into its four real actions (view + honest badge: 91, not 545). **A2**
+> applied the `agrees` bucket and completed the tasks — nightly on **cron 244** (06:49 UTC),
+> reversible by batch tag (`lcc_a2_unapply_ownership_chains('a2-20260827-r3')`).
+>
+> **The 92 `agrees` still open are named, not residual:** **48 tasks ($210.6M) blocked purely by
+> duplicate LCC entities** (→ **A2a**, which needs *no new code* — merge the pairs and cron 244
+> applies them the same night), and **28 links that are one conveyance recorded on several dates**
+> — the `gsa_lease_diff` flicker (→ **A2b**, a producer fix, which also bears directly on **A3**
+> and on this audit's **E4**).
+>
+> **§1's other rows are NOT re-measured** and keep their 2026-08-26 dates. The 983-tasks-in-
+> never-completed-lanes figure predates A2 and is now roughly **695**.
+
 **Measured 2026-08-26 (Cowork), live against LCC Opps `xengecqvemvfknjvbvrq`.**
 Continues the thread opened by `W53_AND_OLLAMA_HYGIENE_KICKOFF.md`: *audit our data processes end
 to end, and recommend where AI / automation — including the on-prem Ollama model — raises
@@ -151,7 +176,8 @@ before it can be ranked honestly, and several may refute themselves the way N8b 
 | **E1** | **Is the `skipped` state hiding work, or genuinely retiring it?** 9,605 tasks are skipped across three lanes. The healthy lanes' skips look like a working auto-retire — but nobody has sampled them. If even 5% were skipped for a fixable reason, that is ~480 recoverable items. | The A4b shape at scale: a bulk state whose members were never individually assessed (cf. the P119 `inbox_triaged` trap, where a bulk-set status admitted the whole historical population). |
 | **E2** | **What is the actual completion *rate* of the healthy lanes, and is it decaying?** `property_missing_recorded_owner` shows 4,772 lifetime completions — a cumulative number, which this repo has been burned by twice (P176, V6). **Measure the 7-day rate, not the total.** | A lane can read healthy on a lifetime figure while having stopped weeks ago. |
 | **E3** | **Where does Scott's time actually go, as opposed to where the queues are?** This audit measured *queued work*, which is a proxy. The Tier 0 lane got 27–33 verdicts today; every other lane got ~0. **The real productivity question is what he does that never enters a queue at all** — email triage, call prep, LOI review, book copy. | The biggest automation wins may not be visible in any table measured here. Likely needs asking him, not querying. |
-| **E4** | **Do the 73 mismatches cluster by source or by guard?** If most trace to one `data_source` (e.g. `gsa_lease_diff`, already known to emit oscillating pairs), the fix is upstream and cheap rather than 73 individual judgements. | Turns a 73-item human lane into possibly one producer fix. **Measure before building A3.** |
+| **E4** | ✅ **ANSWERED, then CORROBORATED from a second direction.** Measured: **46 of 73** mismatch chains carry a `gsa_lease_diff` link (50 links), vs `costar_sidebar` 21 chains and `sales_transaction` 15. Then **A2 hit the same producer independently** — its 28 unappliable links are *one conveyance recorded on several dates*, the same flicker, filed as **A2b**. Two different consumers landing on one producer is much stronger evidence than either alone. **A2b and A3 are probably one upstream fix — test that before building 73 human cards.** | *(original question below)* |
+| ~~E4~~ | **Do the 73 mismatches cluster by source or by guard?** If most trace to one `data_source` (e.g. `gsa_lease_diff`, already known to emit oscillating pairs), the fix is upstream and cheap rather than 73 individual judgements. | Turns a 73-item human lane into possibly one producer fix. **Measure before building A3.** |
 | **E5** | **Is `owner_contact_manual` (311, zero completions, 60 days) genuinely egress-blocked, or has that become a dated blocker?** P131 measured 6 decidable / 310 blocked, but the standing doctrine is that a dated blocker is a hypothesis. | 311 items is the second-largest dead lane; the cost of re-testing is one query. |
 | **E6** | **What would the CM quarterly book copy (R8 Stage 2 / backlog N4) actually save?** It is ranked the top new on-box build, on the strength of "templated, private, repetitive" — **which has never been measured in hours.** | Before building the highest-ranked new automation, size its return the way this audit sized the lanes. |
 
