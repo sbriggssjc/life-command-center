@@ -17,6 +17,53 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 20:05 UTC — N15c COMPLETE: `canonical_name` has ONE writer, live
+
+Full writeup: [`docs/audits/N15c_CANONICAL_NAME_SINGLE_WRITER_2026-08-27.md`](../audits/N15c_CANONICAL_NAME_SINGLE_WRITER_2026-08-27.md).
+**The trigger is applied, the backfill has run, and every gate held.**
+
+**Deploy precondition verified BEFORE applying the trigger, not assumed.** Live `/version` on
+`tranquil-delight` returns **`d8fcfbfef94a`** — the N15c merge commit itself — and `git_pinned` was
+corroborated by reading the SOURCE at that sha: `legacyCanonicalName` + the dual-read
+`canonical_name=in.(current,legacy)` present, the `entities-handler.js` inline copies gone,
+`sync.js`/`domains.js` routed through the shared function. That check is the whole reason the order
+was safe (P131: *check the fix against the deployed sha*).
+
+| gate | result |
+|---|---|
+| **invisible to `ensureEntityLink`'s own lookup** | **10,336 → 537** — and the 537 are *exactly* the held rows |
+| `v_lcc_canonical_name_drift` | only `held_stale_name_repair` = **537**; nothing else |
+| rows rewritten / ledgered | 15,402 / **15,402** (reversible by `batch_tag='n15c_go'`) |
+| **`auto_mergeable`** | **3,040 → 3,040** — the gate that proves the merge detector was untouched |
+| Tier 0 lane | ask **82** / auto **9** — unmoved |
+| rows keyed to the empty string | **114 → 0** (98 now on the `dc:` namespaced fallback) |
+
+**Named rows read correctly, including Scott's decision:** `Rainier Rockford DST Trust` and
+`Rainier Rockford Llc` **both key `rainier rockford`** — a DST and its LLC are one true owner, as
+decided. `671 Poplar LLC` → `671 poplar`; `BALTARA ENTERPRISES, L.P.` → `baltara enterprises l p`.
+
+**⚠️ The writer census was wrong three times running — 7 → 8 → 10**, plus a twelfth normalization
+hiding in a dead defensive ternary in `operations.js`. `api/sync.js` and `api/domains.js` were both
+missed by grep. **That is the argument for fixing it at the DATABASE**: a `BEFORE INSERT OR UPDATE
+OF name` trigger does not care how many writers exist, and it closes the staleness class in the
+same stroke. It returns `NEW` unconditionally (P196) and is `UPDATE OF name`, not a bare `UPDATE`,
+so the 537 held rows stay held.
+
+**A real firm was rescued from the empty key.** 114 entities shared `canonical_name = ''` — among
+them **18 copies of `Partners Group`**, a real firm whose two semantic tokens are *both* stripped by
+the outgoing normalizer, leaving it keyed identically to `--` junk. It now keys `partners group`,
+which also makes it visible to the merge detector for the first time — **that is N10's held
+`partnersgroup` group**, now groupable.
+
+**⏳ The Class 8 check is tomorrow, and it is the one that matters.** A backfill is not a fixed
+producer. Re-run the recurrence query: post-fix mints of disagreeing pairs should read **0** against
+the pre-fix **~4/day** (79 in 21 days — never the burst-blended 1,879/30d, off ~24×).
+
+**👤 Two decisions still Scott's:** the **537 held rows** (`canonical_name` left stale after `name`
+was repaired — recomputing discards a captured string some preserve, e.g. `Scott W. Beynon` still
+keyed `buyer contactsscott w beynon 801 568 1031 p`), and whether `canonical_name` becomes an
+**enforced UNIQUE key** (3,930 groups violate it today).
+
 ## 2026-08-27 19:15 UTC — N15c drafted: the BUILD prompt, and two measurements that changed its shape
 
 **Lane split confirmed with Scott:** this thread continues the **N15b → N15c** line (entity
@@ -715,6 +762,75 @@ conflict resolution on the repo's hottest file.
 **Dated checks at 04:32 UTC — both still pending, both still expected:** N9v auto-attach `0` writes
 (cron 241 fires **06:55 UTC**); N9w sidebar `0.0%` stamped, last row **2026-08-26 22:49 UTC**, still
 pre-reload.
+
+
+## 2026-08-27 19:xx UTC (Cowork) — A5a merged AND deployed, but has not RUN yet. Do not read the counts yet.
+
+**A5a merged as PR #1849** (both checks green before merge, on the post-Update-branch head).
+⚠️ **Claude Code correctly flagged it as inert until a redeploy** — the P131 trap. **Checked rather
+than assumed:** live `/version` is `d8fcfbfe` (#1850), and `git merge-base` confirms **A5a IS in the
+deployed build**, with **0 commits un-deployed**. It rode in on the N15c merge.
+
+**But it has not executed.** Cron 34 fires at **06:35 UTC**, and the counts are unchanged:
+`property_missing_recorded_owner` 1,185 open / `true_owner_needs_salesforce` 815 open, with
+`gap_resolved` in the last 24h still 9 and 1 — **all pre-fix**. Nothing here is evidence either way
+yet.
+
+### ✅ Dry run PASSED — the fix works, on both domains
+
+`generate-research-tasks&domain=both&limit=2000&dry_run=1`, HTTP 200:
+
+| domain | `membership_complete` | chunks | `would_close` | `would_insert` |
+|---|---|---:|---:|---:|
+| government | **true** | 7 | **0** | **1,000** |
+| dialysis | **true** | 7 | **0** | **1,586** |
+
+**`would_close` is 0 on BOTH** — including dia, which A5a had not measured and expected might be
+legitimately non-zero. **Zero false closures.** `membership_complete: true` with 7 chunks means the
+feed is genuinely exhausted rather than truncated. The bug is fixed.
+
+### ⚠️ But `would_insert` = 2,586, and the producer has no value gate yet
+
+**This is the flood A5a's own prompt warned about**, now measured. And it is sooner than the 06:35
+run: **cron 35 (`generate-research-tasks-inc`) fires every 30 minutes** at `limit=300`, so minting
+begins within the hour and continues until the pool drains — and **5,509 gaps have never had a
+task**, so 2,586 is the near-term head, not the total.
+
+**84% of that population owns zero properties**, and operators/placeholders (`DaVita Inc.` 2,626
+properties, `Independent` 754) carry 81% of the apparent value. Minting it un-gated is precisely the
+badge-that-is-noise failure the Consumption-Layer doctrine exists to prevent — *no new producer
+ships without a value gate.*
+
+**It is not dangerous** — these are research tasks, not production writes, and every one is
+reversible. The cost is that two lanes get noisier **before** A5c makes them cleaner.
+
+**Scott's call, and the pause is trivially reversible:**
+```sql
+select cron.alter_job(34, active := false);   -- daily 06:35, limit 2000
+select cron.alter_job(35, active := false);   -- every 30 min, limit 300
+-- undo: cron.alter_job(<id>, active := true);
+```
+⚠️ **Cost of pausing:** this generator serves **several** dia+gov lanes, so pausing starves all of
+them, not just this one. It has been mis-closing for months, so a day's pause is cheap — but say it
+out loud rather than pausing silently.
+
+⚠️ **The verification is inverted, restated because it will look wrong:** success is
+`gap_resolved`-per-day falling to ~0 and the **pinned open counts (1,000 / 815) moving.** **Open
+counts going UP is the fix working** — real gaps that were being silently closed now stay visible.
+
+**Bookkeeping note:** this was labelled A5c in the hand-off but the response file and the work are
+**A5a**. A5c has not been sent. Flagged so the record does not drift.
+
+### Still open, deliberately
+
+- **A5b-repair — ~2,044 falsely-closed subjects.** Claude Code's recommendation, which I agree with:
+  **re-label first** (kills the corrupted metric, adds zero surface), then let the corrected producer
+  re-mint whatever ranks. **Do not re-open before the producer is proven correct** — that just
+  refills a broken window.
+- **A5c is now the priority, and it is time-sensitive.** Without a value gate, the corrected producer
+  gives gov `owner_needs_salesforce` its **first 430 tasks** while **24,077 `owner_needs_sos` rows
+  stay unreachable** — a flood into one lane and continued invisibility for another. **84% of the
+  population owns zero properties.**
 
 
 ## 2026-08-27 (Cowork) — A5a drafted: fix the producer before repairing anything it broke
