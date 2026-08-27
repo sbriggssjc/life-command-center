@@ -473,3 +473,14 @@ test('single-tenant organization family corroborates an exact parent building wi
     /does not match/,
   );
 });
+
+test('CoStar value-first tenancy cards preserve the explicit single-tenant gate', async () => {
+  const costar = await readFile(
+    new URL('../extension/content/costar.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    costar,
+    /\/\^\(single\|multi\)\$\/i\.test\(line\)[\s\S]+\/\^tenancy\$\/i\.test\(next\)[\s\S]+data\.tenancy_type\s*=\s*line/,
+  );
+});
