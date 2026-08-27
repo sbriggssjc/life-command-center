@@ -403,6 +403,43 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 (Cowork) — consolidated the lane into ONE canonical doc; drafted A2b + A4b
+
+**Seven documents now covered one subsystem** (`DATA_PROCESS_AUTOMATION_AUDIT`, A1, A2, A2a, A3,
+A4, the V8 review) — the "one source per topic" rule broken by accretion, and a future chat would
+have had to read all seven to learn what is true.
+
+**Created `docs/architecture/ownership-history-lane.md`** — the living canonical reference: current
+state, the five actions and their consumers, **eight invariants each earned by a live failure**,
+what is left, and the dated audits as an explicit **evidence trail** (go there for *why*, come here
+for *what is true now*). Wired into `CURRENT-STATE.md`'s doc map. The audits are unchanged — this
+is consolidation by indexing, not by deletion.
+
+⚠️ **`OWNERSHIP_RESEARCH_FREE_FIRST_PLAN.md` was deliberately NOT folded in** — despite the name it
+is a different subsystem (LLC-research backlog / SOS / contact acquisition, 2026-07-29). Merging on
+a name match would have been the same error this repo keeps documenting.
+
+**Two prompts drafted, both unblocked:**
+
+- **A4b — a P138 guard rejects any SPE named after a street number.** `\m[0-9]{5}\M` kills
+  `EGP 17101 BROOMFIELD LLC` and `DE 10990 Wilshire, LLC`. **10 of 18 tasks recoverable, and the
+  defect is wider than this lane** (it also drops links inside chains that *did* draft). The
+  discriminator is already measured: junk carries **no legal form**, real SPEs always do. ⚠️ The
+  prompt insists on **sizing the fleet-wide blast radius before touching the predicate**, fixing it
+  in its home repo rather than forking a copy, and **splitting the two largest arms** —
+  A4 identified the 5-digit arm *inside* them but did not establish it explains all 23 rows.
+- **A2b — one conveyance recorded on several dates.** 14 tasks / 32 links; the `gsa_lease_diff`
+  flicker surviving P131's `(from, to, date)` dedup *because the date differs*. **A producer fix,
+  not an applier fix** — loosening the PK would write a history in which a party acquired the same
+  asset three times. The prompt forces the real judgement into the open (**which date is true** —
+  earliest / latest / when the lessor field changed) and requires the other observations be
+  preserved as evidence, not deleted. It also asks whether the flicker is **still producing**,
+  because that alone decides whether this ships a cron or a one-shot.
+
+**Both carry the population-drift warning** — A2's counts (12/28) already read 14/32, and the
+mismatch bucket moved 74 → 49 under the V8 confirms. **Re-measure, quote your own number.**
+
+
 ## 2026-08-27 14:00 UTC (Cowork) — V8 confirms APPLIED + A2a landed. Lane: 314 done / 156 open.
 
 ### V8 — six sponsors confirmed, and the lane moved exactly as predicted
