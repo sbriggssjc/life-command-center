@@ -96,7 +96,87 @@ the highest-collision token in the set (226), because the match is the whole nam
 
 ---
 
-## Recommended disposition
+---
+
+# ✅ Scott's answers + the evidence check (Cowork, 2026-08-27)
+
+Scott approved most rows, three of them **conditionally**: *"so long as there is more evidence than
+just the name."* **That condition was tested. It fails on two, is weak on one, and one row is worse
+than it looked.**
+
+**What "evidence" exists at all:** for Commonwealth, Carrington, Sequoia and FGF the sponsor
+entities carry **no email, no phone, no metadata company, zero (or one) relationships**, and their
+only `external_identities` row is the **`gov` source record itself** — which is the thing being
+matched, not independent corroboration. gov `true_owners` adds nothing: **no `contact_info`, no
+`sf_account_id`, no `state`** on any of them.
+
+So the only evidence available is **naming-program structure** — whether the SPE belongs to a
+systematic, multi-property convention. That is still name-derived, and it is weaker than address or
+principals, but it is not nothing. Counts in gov `true_owners`:
+
+| token | SPEs sharing the convention | reading |
+|---|---:|---|
+| `boyd` | **140** | a large, systematic program |
+| `fgf` | **90** | `<CITY> <ST> <ROMAN> FGF, LLC` — a program ⚠️ see below |
+| `B9 SEQUOIA` | **5** | `B9 SEQUOIA <asset> OWNER` — consistent; `B9` is a stable program prefix, not a stray JV code |
+| `carrington` | 6 | 3 are name variants of one firm (`Carrington Companies`, `Carrington Company, The`, `CARRINGTON, LLC`) |
+| `commonwealth` | 15 | ⚠️ **mostly unrelated parties** |
+
+## ⛔ Commonwealth — the condition FAILS. Recommend NOT confirming.
+
+The 15 "Commonwealth" entities are demonstrably **different parties**, including government bodies:
+`Commonwealth Of Virginia Department` · `Commonwealth Ports Authority` ·
+`Commonwealth Partners, L.l.c.` · `Commonwealth Development` ·
+`Commonwealth Centre Investors II, LLC` · `Commonwealth Acquisition Groups` · `5309 Commonwealth LLC`.
+
+`Commonwealth Owner LLC` carries **no distinguishing element** and could belong to any of them.
+There is no address, principal, SF record or shared identity linking it to Commonwealth Commercial
+Partners. **This is exactly the case the "more than the name" test was designed to catch.**
+
+## ⚠️ FGF — HOLD. Scott's own note makes this the riskiest row in the set.
+
+Scott: *"Both of these are also Boyd Watterson subsidiaries."* If that is right, confirming
+`fgf → FGF Management LLC` **attributes Boyd's assets to the wrong sponsor** — and this is not a
+2-chain decision: the sponsor map is **forward-looking**, and there are **90 FGF SPEs** in gov.
+
+**Settle the Boyd↔FGF relationship first.** If FGF is a Boyd program, the confirm should point at
+**Boyd**, not FGF Management. No LCC relationship currently records either way.
+
+## ⚠️ Carrington — weak. Name-family only.
+
+Three Carrington variants suggest one firm, but every signal is still the name. Scott's condition
+is arguably unmet. **Low value ($1.8M, 1 chain) — recommend deferring rather than spending judgement.**
+
+## 🟡 Sequoia — pattern evidence only, and it is real but name-derived.
+
+`B9 SEQUOIA` is a consistent 5-member program, so `B9` is a program prefix rather than noise. That
+answers the specific worry raised, without producing independent evidence. **Scott's call —
+recommend yes if naming-program consistency counts as "more than the name" to him; it is the
+honest boundary of what we hold.**
+
+## Domain knowledge Scott added, worth keeping
+
+- **"Lessee" is not a weaker claim** — it signals a **ground lease / leasehold split**: fee (dirt)
+  and leasehold (improvements) are separate estates, and the leasehold SPE is the landlord
+  counterparty to the tenant. `Cr Sunflower Lessee LLC` is therefore a genuine ownership interest.
+  **Sunflower approved.** *(This belongs in the domain model, not just this review — a leasehold
+  owner is a real owner.)*
+- **Madison → merge into one LCC company** (Scott). Confirmed as an A2a-style duplicate.
+
+## Revised disposition
+
+| verdict | rows |
+|---|---|
+| **Confirm now** | **Boyd** (all 7, incl. JV — Scott approved explicitly), **Highwoods**, **RXR**, **ARC**, **East Lake**, **Sunflower** |
+| **Hold — wrong sponsor risk** | **FGF** (90 SPEs; settle Boyd↔FGF first) |
+| **Hold — merge first** | **Madison ×2** |
+| **Recommend NO** | **Commonwealth** (15 unrelated parties incl. government bodies) |
+| **Scott's call** | **Sequoia** (program evidence only) · **Carrington** (name-family only, $1.8M) |
+
+**Confirming the six clean rows resolves 24 of 32 chains** — the same coverage as the original
+recommendation, without the two risky attributions.
+
+## Recommended disposition *(original, superseded by the block above)*
 
 | verdict | rows |
 |---|---|
@@ -117,6 +197,27 @@ where sponsor_token = 'boyd';
 ```
 
 Repeat per token you accept. **One row per (sponsor entity, token)** — never a bare token.
+
+### The six clean confirms, ready to run
+
+```sql
+-- Boyd (20 chains, $179.8M) · Highwoods · RXR · ARC · East Lake · Sunflower
+-- Deliberately EXCLUDES: fgf (Boyd-subsidiary question), madison (duplicate entities),
+--                        commonwealth (15 unrelated parties), carrington + sequoia (Scott's call)
+insert into lcc_ownership_sponsor_family
+  (sponsor_entity_id, sponsor_token, confirmed_by, confirmed_at, notes)
+select p.sponsor_entity_id, p.sponsor_token, 'scott.briggs', now(),
+       'V8 review 2026-08-27; evidence check in docs/audits/V8_SPONSOR_FAMILY_REVIEW_2026-08-27.md'
+from v_lcc_ownership_sponsor_family_proposals p
+where p.sponsor_token in ('boyd','highwoods','rxr','arc','east','sunflower')
+on conflict do nothing;
+
+-- verify: mismatch should FALL and sponsor_spe RISE by the same amount;
+-- agrees / all_guarded / no_records must NOT move.
+select action, count(*) from v_lcc_ownership_history_lane_split group by 1 order by 2 desc;
+```
+
+**Reversal:** `delete from lcc_ownership_sponsor_family where confirmed_at::date = current_date;`
 
 **Then verify the lane moved:**
 ```sql
