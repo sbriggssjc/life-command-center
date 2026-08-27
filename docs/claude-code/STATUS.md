@@ -17,6 +17,44 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 20:25 UTC — two prompts drafted; and the N15e objection shrank under measurement
+
+**Two prompts, deliberately not three.** `prompts/N15d-producer-check-and-held-row-recompute-2026-08-27.md`
+folds N15d and N15e into one because **N15d GATES N15e** — if the producer is still minting
+key-disagreement duplicates, recomputing the residue is polishing the output of a live leak. The
+prompt says stop-and-report if Unit 1 fails. `prompts/N18-developer-attributed-rent-self-comparison-2026-08-27.md`
+is the second.
+
+### ✅ Scott approved recomputing the 537 — and the measurement makes it a stronger yes
+
+The stated objection was *"recomputing discards a captured string some of them preserve."*
+Measured: that applies to **58 of 537 (11%)**, not all of them — and
+`lcc_n15c_canonical_backfill_log.old_canonical_name` **already preserves the old value**, so for
+those 58 nothing is destroyed; it moves from a key column to a ledger, which is where provenance
+belongs. **A dedup key is not an archive.**
+
+**⚠️ 39 held rows will collide with a live entity, and that is the BENEFIT.** Read on named rows,
+the collisions are **byte-identical names the stale key was hiding**: `1121 California Avenue LLC` ↔
+`1121 California Avenue LLC`, `Alex Lyman` ↔ `Alex Lyman`, `Crest Properties` ↔ `Crest Properties`,
+`Block RE Services` ↔ `Block Re Services`. The prompt requires them **surfaced, never merged** —
+merging stays a human confirm through `lcc_merge_entity`.
+
+**⚠️ Several collide ACROSS `entity_type`** — `David Siegel`, `Dennis Needleman`,
+`Constance Cincotta` and `Alexandria` each exist as both a **person** and an **organization**. A
+shared key is correct; reading it as identity is the person/org conflation `sf-account-link.js`
+exists to prevent, and the prompt forbids a cross-type merge proposal. And **`American Realty
+Capital` colliding with `American Realty Capital Trust` is Scott's adopted rule working**, not a
+defect — named so nobody "fixes" it later.
+
+### N18 confirmed still broken, live
+
+`v_lcc_developer_classification_candidates.attributed_rent`: **6 rows, exactly 1 distinct value —
+$34,920,892**, the gov-wide sum, on every row. The predicate correlates
+`pof.source_property_id = pof.source_property_id`, a column against itself. A single distinct value
+across every row is the Class 11 signal. It is also ~1,509 ms of the view's 1,666 ms (a P118
+correlated subplan at `loops=385`). The prompt requires the corrected **ranking** to be graded on
+named rows — an operator has been classifying against a constant.
+
 ## 2026-08-27 20:05 UTC — N15c COMPLETE: `canonical_name` has ONE writer, live
 
 Full writeup: [`docs/audits/N15c_CANONICAL_NAME_SINGLE_WRITER_2026-08-27.md`](../audits/N15c_CANONICAL_NAME_SINGLE_WRITER_2026-08-27.md).
