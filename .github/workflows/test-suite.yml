@@ -1,0 +1,50 @@
+name: Test Suite
+
+# Backlog N9. The mirror of the gap boot-check.yml was built to close.
+#
+# The 2026-07-20 incident: the suite stayed green while the app crash-looped,
+# because tests import individual modules and nothing imported the app. That
+# produced boot-check.yml. Its twin was left standing — CI imported the app and
+# never ran the tests.
+#
+# Measured 2026-08-26 (CLAUDE.md): boot-check.yml was the ONLY check running on
+# a pull request, and it runs `npm run check:boot` — a `node --check` sweep plus
+# a server.js import. The 4,500-test suite never executed on a PR. Every
+# "guarded by test/x.test.mjs" tripwire documented across CLAUDE.md — the
+# duplicate-definition pin, the frontend load-order guard, the subroute dispatch
+# check, the research-embed invariant — was a regression detector for whoever
+# remembered to run it locally, not a merge gate. That is how PR #1786 merged
+# green carrying a red suite and duplicated <script> tags.
+#
+# The suite runs fully offline: no secrets, no network, no database. So it needs
+# no environment and can gate every PR the same way boot-check does.
+#
+# Make this a required check in branch protection alongside "App boots".
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: test-suite-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: npm test
+    runs-on: ubuntu-latest
+    # The full suite runs in ~3 minutes locally; 20 leaves generous headroom on
+    # a cold runner without letting a hung test burn an hour.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm test
