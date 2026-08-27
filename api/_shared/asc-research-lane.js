@@ -127,6 +127,24 @@ function buildingAddressTokensAgree(left, right) {
   return stripStreetType(a[0]) === stripStreetType(b[0]);
 }
 
+function capturedRangeContainsFrozenEndpoint(frozenAddressToken, capturedAddressToken) {
+  if (!frozenAddressToken || !capturedAddressToken) return null;
+  const frozen = frozenAddressToken.split('|');
+  const captured = capturedAddressToken.split('|');
+  if (frozen.length !== 4 || captured.length !== 4
+    || frozen.slice(1).join('|') !== captured.slice(1).join('|')) return null;
+  const frozenStreet = frozen[0].match(/^(\d+)\s+(.+)$/);
+  const capturedStreet = captured[0].match(/^(\d+)\s+(\d+)\s+(.+)$/);
+  if (!frozenStreet || !capturedStreet) return null;
+  const frozenNumber = Number(frozenStreet[1]);
+  const rangeStart = Number(capturedStreet[1]);
+  const rangeEnd = Number(capturedStreet[2]);
+  if (rangeStart >= rangeEnd
+    || frozenStreet[2] !== capturedStreet[3]
+    || (frozenNumber !== rangeStart && frozenNumber !== rangeEnd)) return null;
+  return { frozen_number: frozenNumber, range_start: rangeStart, range_end: rangeEnd };
+}
+
 function approvedParentAddressAlias(target, capturedAddressToken) {
   const aliases = Array.isArray(target.cms_evidence?.approved_parent_address_aliases)
     ? target.cms_evidence.approved_parent_address_aliases
@@ -193,10 +211,23 @@ export function buildAscStructuredCapture(target, context = {}) {
       )
       && corroboration;
     const aliasMatch = addressAlias && corroboration;
-    if (!parentBuildingMatch && !aliasMatch) {
+    const rangeEndpoint = capturedRangeContainsFrozenEndpoint(target.address_token, addressToken);
+    const rangeEndpointMatch = rangeEndpoint && corroboration;
+    if (!parentBuildingMatch && !aliasMatch && !rangeEndpointMatch) {
       throw new Error('Captured page does not match the active frozen ASC candidate');
     }
-    identityMatch = aliasMatch ? {
+    identityMatch = rangeEndpointMatch ? {
+      mode: 'tenant_corroborated_range_endpoint',
+      frozen_street_number: rangeEndpoint.frozen_number,
+      captured_range_start: rangeEndpoint.range_start,
+      captured_range_end: rangeEndpoint.range_end,
+      corroboration_basis: corroboration.basis,
+      corroborated_name: corroboration.matched_name,
+      cms_address_preserved: clean(cmsIdentity.address),
+      captured_building_address: clean(context.address),
+      facility_name: clean(cmsIdentity.facility_name),
+      second_review_required: true,
+    } : aliasMatch ? {
       mode: 'evidence_backed_parent_address_alias',
       alias_reason_code: addressAlias.reason_code,
       alias_address_token: addressAlias.address_token,
