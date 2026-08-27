@@ -239,6 +239,21 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
     (repo Settings → Branches → main → required status checks), and until it is flipped, every
     "guarded by `test/x.test.mjs`" line in this file remains a regression detector, not a gate.
     Backlog row **N9** in `docs/os/PLANNED-BACKLOG.md`.
+  - **⚠️ AND THE NEW WORKFLOW HAS NEVER ONCE BEEN GREEN — INCLUDING ON `main` (2026-08-27).**
+    `test-suite.yml` shipped pinned `node-version: '20'`, **copied from `boot-check.yml`**. Three
+    test files import Deno edge-function modules (`supabase/functions/**/*.ts`) directly, and
+    **Node 20 cannot load a `.ts` file** — `ERR_UNKNOWN_FILE_EXTENSION`, thrown before any test
+    body runs, 0 pass. Node 22.18+ strips types by default; the suite is **4,606 pass / 0 fail**
+    on Node 22. `boot-check.yml` stays on 20 **deliberately** — it never imports a `.ts` module,
+    which is precisely why copying its pin was the wrong default. `engines` stays `>=20.0.0`: the
+    server runs fine on 20, only the suite needs type stripping.
+  - **The durable rule: a NEW CI job is not shipped until it has been green once on `main`.**
+    A job that is red on every run is not a gate — it is **a badge people learn to merge past**,
+    which is the exact failure N9 existed to close. PR #1793 demonstrated it live: merged **58
+    seconds after opening, before CI finished**, with the suite red.
+  - **⚠️ "Red on my PR" is not "my PR is broken."** Check the BASE branch first — this one had
+    failed on all four runs since it shipped, twice on `main` itself. And it was **not flaky**;
+    "flake" would have been the wrong answer and the expensive one.
 
 ## Core doctrines (apply to every change)
 

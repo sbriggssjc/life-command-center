@@ -227,5 +227,6 @@ Recorded here so the next chat does not re-inherit them, per the fix-the-note-in
 | `docs/history/AGENTS_full_2026-07.md` | The AGENTS.md counterpart |
 | `docs/history/STATUS_claude-code_2026-08-03_to_2026-08-12.md` | **New 2026-08-26** — the STATUS tail: comps arc prompts 19–60, Wave 8 hygiene, Wave 9 connectedness, ChatGPT/Copilot rollout |
 | `docs/history/DOCS_CONSOLIDATION_2026-08-26.md` | **New** — what this consolidation moved, and the full preservation manifest |
+| `docs/history/worklogs/` + its `INDEX.md` | **New 2026-08-27** — 31 one-off per-round worklogs moved verbatim from the **repo root**. ⚠️ Seven carried unfinished work, now recovered into `PLANNED-BACKLOG.md` P10 as **K13–K20** (five measured Capital-Markets chart defects among them). **P141 swept `docs/` and never looked at the root**, which is how they stayed invisible for 17 days. |
 | `docs/history/INDEX.md` | The archive index |
 | `docs/claude-code/done/` | Completed Claude Code prompts (66 files) |

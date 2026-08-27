@@ -37,7 +37,7 @@ Read-only reconciliation of the v2 gold-standard dossier design for 5247 Airways
 
 ## 2026-08-01 Prompt 07 Backlog Index Reconciliation
 - Objective: reconcile the P0-P3 follow-up index and tell Cowork which backlog items can close.
-- Close prompts 0-6. Prompt 5 is closed through prompt 04 loan propagation plus `DOSSIER_DEBT_GRAPH_FIX_WORKLOG.md`; prompt 6 wiring is closed because the documents endpoint now aggregates intake, CRE property documents, and Salesforce files with reconciled status.
+- Close prompts 0-6. Prompt 5 is closed through prompt 04 loan propagation plus `docs/history/worklogs/DOSSIER_DEBT_GRAPH_FIX_WORKLOG.md`; prompt 6 wiring is closed because the documents endpoint now aggregates intake, CRE property documents, and Salesforce files with reconciled status.
 - Keep prompt 7 open only for live Dialysis_DB migration apply credentials.
 - Keep prompt 8 open only for Census radius-demographics backfill after `CENSUS_API_KEY` is configured; map cache, Places callouts, ZIP fallback, payer mix, and rendering are implemented.
 

@@ -21,7 +21,7 @@ starts from the generator's known-good formulas.
 2. Emit both blanks: **NNN** and **MOB/MT**. Verify the DCR/DSCR formulas match the generator source and recompute
    with LibreOffice/openpyxl to confirm **zero formula errors** on an empty workbook.
 3. Diff the regenerated blank against the currently-uploaded template to enumerate every drifted cell (DSCR + any
-   others). Record the drift list in a short worklog (`PROMPT_34_WORKLOG.md`) so we know what the stale template
+   others). Record the drift list in a short worklog (`docs/history/worklogs/PROMPT_34_WORKLOG.md`) so we know what the stale template
    was getting wrong beyond DSCR.
 4. Deliver the two regenerated blank templates as files (do not overwrite the team's uploaded copies silently —
    Scott replaces the project-knowledge uploads and any `Templates/` copies).

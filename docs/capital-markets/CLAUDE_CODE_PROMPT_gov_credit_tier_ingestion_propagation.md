@@ -17,7 +17,7 @@ Do not mutate canonical records in the first pass. Produce a grounded audit with
 ## Required Reading
 1. `CLAUDE.md`
 2. `.github/AI_INSTRUCTIONS.md`
-3. `CAPMARKETS_TAB_PACKET_WORKLOG.md`
+3. `docs/history/worklogs/CAPMARKETS_TAB_PACKET_WORKLOG.md`
 4. `docs/capital-markets/ROUND66_DATA_AUDIT_2026-06-01.md`
 5. `docs/capital-markets/ROUND66_EXPORT_FEEDBACK_WORKLOG.md`
 6. `supabase/migrations/20260694_cm_round66_gov_export_feedback_view_fixes.sql`
