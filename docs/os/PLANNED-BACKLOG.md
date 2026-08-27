@@ -65,7 +65,9 @@ confirmed**. This repo's own rule is that a fix is not fixed until the populatio
 ## P1b — Consumption-layer repairs (data-process audit, 2026-08-26) — **owned by the automation chat**
 
 Source: `docs/audits/DATA_PROCESS_AUTOMATION_AUDIT_2026-08-26.md`. **~3,000 research tasks and 419
-decisions are open; 983 tasks sit in lanes that have never completed a single item.** The system is
+decisions are open; ~~983~~ → **695** tasks sit in lanes that have never completed a single item**
+(⚠️ **updated 2026-08-27: A2 took `establish_ownership_history` from 0 → 288 completions**, so it
+is no longer a never-completed lane — the first one to fall). The system is
 not short of automation — it is short of **consumption**. Ranked by operator-time saved per unit of
 build effort.
 

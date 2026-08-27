@@ -17,6 +17,70 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 (Cowork, automation window) — ✅ THE LANE COMPLETED A TASK. 0 → 288 after 69 days.
+
+**A2 shipped (PR #1805) and the acceptance test passed.** This was never about rows written:
+
+| | before | after |
+|---|---:|---:|
+| `establish_ownership_history` completed **ever** | **0** (69 days) | **288** |
+| open | 545 | **257** |
+| historical ownership facts | 12,724 | **13,028** (+304, 280 owners, **$579.9M**) |
+
+Nightly on **cron 244** (06:49 UTC — after the 05:10 seeder and 06:45 drafter), reversible by
+batch tag: `select lcc_a2_unapply_ownership_chains('a2-20260827-r3')`. **A3/A4/A4b untouched at
+exactly 73/74/18.**
+
+**⚠️ The 92 `agrees` still open are NAMED, not residue** — and the largest is free:
+- **48 tasks ($210.6M) blocked purely by duplicate LCC entities** (Duke Realty LP vs DUKE REALTY
+  LIMITED PARTNERSHIP). **A2a needs no new code** — merge the pairs and cron 244 applies those
+  chains the same night. Highest value-per-effort item currently in the backlog.
+- **28 links are one conveyance recorded on several dates** — the `gsa_lease_diff` flicker.
+  **This corroborates E4 independently:** I measured 46 of 73 mismatch chains touching
+  `gsa_lease_diff`, and A2 hit the same producer from a different direction. **A2b and A3 are
+  likely one upstream fix**, which is exactly what E4 said to test before building 73 human cards.
+
+**Three defects A2 found in its own code, none visible to a dry run** — each caught by measuring
+the live write and fully reversed. Three clean round trips, which also **proved the reversal path
+is a capability rather than a claim**:
+1. An exact-match placeholder stoplist blocked `Previous Owner` but not `Previous Owner Name` /
+   `… LLC` — 13 facts landed on placeholder entities.
+2. `on conflict do nothing` + a fan-out join reported **365 inserts against 347 actual**.
+3. **A partial apply flips the lane's own seed predicate** — one written link would have let R60
+   Sweep A close 19 still-open tasks as `skipped`, leaving their remaining links unapplied *and
+   invisible forever*.
+
+**Also found: `r9_chain_connect` (cron 104) mints a prior-owner entity per chain name and attaches
+it to nothing** — **291 of the 331 grantors A2 resolved are its unattached output.** A2 is its
+missing consumer, which is why name resolution landed as high as it did. A producer that has run
+for months with no consumer, discovered only because something finally consumed it.
+
+**And `lcc_owner_strict_core` was tried for identity here and rejected on named rows** (it
+collapses `BAMMF (8) LLC` onto `BAMMF (3) LLC`). The applier uses a narrower comparator,
+unambiguous-only, through `lcc_entity_survivor`. The hazard travels with the technique, not the
+function name — third time that lesson has been paid for.
+
+### ✅ A0 shipped too — and the guard caught a second instance on its first CI run
+
+`test/no-conflict-markers.test.mjs`, verified **red** on the pre-fix file. It found **two** damaged
+files, not one, from **two different mechanisms**: a merge (`panel-redesign-verification.md`,
+148 lines) and a **`git stash pop`** (`STATUS.md`). Both repaired; the genuine date conflict in
+the first was **flagged rather than adjudicated**, per doctrine.
+
+**⚠️ Two things worth keeping:**
+- **Match marker CHARACTERS, never label text.** Stash-pop markers read `Updated upstream` /
+  `Stashed changes` — a detector keyed on `HEAD` and a sha would have missed the second instance
+  entirely.
+- **The docs-only CI skip would have hidden the very population the guard exists for.** Both
+  instances were `docs/*.md`, and PR #1801 was itself docs-only. The docs-only path now runs this
+  one guard standalone (~1s, no `setup-node`, no `npm ci`). That was a deliberate step past A0's
+  "docs + test only" guardrail and was flagged as such — **it should stand.** A guard that cannot
+  see its own population is not a guard.
+
+**Folders clean:** A0/A2 prompts and responses filed to `done/` (114 prompts, 41 responses). Live
+queue in this window is **empty**; `196` belongs to the app window.
+
+
 ## 2026-08-27 (Cowork, automation window) — the merge procedure is now written from failures, not theory
 
 Five PRs went through the new protected-`main` flow in one evening, and **every step of the

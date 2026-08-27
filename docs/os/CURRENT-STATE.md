@@ -75,6 +75,24 @@ real branded signature, threading, and deal context; save-to-Outlook-Drafts (sav
 their data tab renders (`checkKpiSeriesConsistency` is the tripwire).
 → `CLAUDE.md` §"CM export", `public/reports/cm-brand.json`
 
+### Ownership-history lane — the first dead research lane with a working consumer (2026-08-27)
+`establish_ownership_history` produced **545 items and consumed none for 69 days**. A1 split it
+into four real actions (`v_lcc_ownership_history_lane_split`; badge reads **91 human-actionable**,
+not 545); A2 auto-applies the `agrees` bucket. **Completed ever: 0 → 288. Open: 545 → 257. +304
+historical ownership facts** (12,724 → 13,028), 280 owners, **$579.9M**. Nightly on **cron 244**
+(06:49 UTC), reversible by batch tag. Residue is named, not buried: 48 tasks blocked by duplicate
+entities (**A2a**, no new code needed), 28 by a `gsa_lease_diff` flicker (**A2b**).
+→ `docs/audits/A1_OWNERSHIP_LANE_SPLIT_2026-08-27.md`, `DATA_PROCESS_AUTOMATION_AUDIT_2026-08-26.md`
+
+### Conflict-marker guard (2026-08-27)
+`test/no-conflict-markers.test.mjs` — committed conflict markers had been sitting on `main` in
+**two** files, from **two different mechanisms** (a merge, and a `git stash pop`). Git flags
+neither: the conflict *was* resolved, by committing the markers. The guard is verified red on the
+pre-fix files and **also runs on the docs-only CI path**, because both instances were `docs/*.md`
+and the docs-only skip would otherwise have hidden the very population it exists for.
+⚠️ **Match marker CHARACTERS, never label text** — stash-pop markers read `Updated upstream` /
+`Stashed changes`, not `HEAD` and a sha. → `docs/os/GITHUB-WORKFLOW.md` §2b/§4b
+
 ### On-box generation (the newest capability)
 The daily brief's **Analyst's Take** generates on the GaryBuilt box. Today's
 `briefing_intel_snapshot` carries a 774-char take with `analyst_take_meta.source =
