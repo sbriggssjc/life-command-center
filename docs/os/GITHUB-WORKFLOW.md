@@ -30,6 +30,14 @@ cd $env:USERPROFILE\life-command-center
 # 0. Never leave a lock behind (the sandbox cannot delete it; only Windows can)
 Remove-Item .git\index.lock -ErrorAction SilentlyContinue
 
+# 0b. ⚠️ CLEAR THE TREE FIRST. In this repo a dirty tree is the NORMAL state, not an
+#     exception — Cowork writes edits into the working tree continuously, so there are
+#     almost always uncommitted changes when you start. Both `git checkout main` and
+#     `git pull --rebase` REFUSE to run against one, and PowerShell keeps going to the
+#     next command anyway, so you end up branching off a stale base without noticing.
+#     This has caused three separate stale-base branches. Commit or stash, then verify:
+git status                        # must be "nothing to commit, working tree clean"
+
 # 1. Start from current main, on a NAMED branch — never on main itself
 git checkout main
 git pull --rebase
@@ -155,10 +163,29 @@ served elsewhere is finished, not broken.**
 ### ⚠️ 4c. Verify the branch base actually updated
 
 `git pull --rebase` **fails silently into your next command** when the tree is dirty
-(`cannot pull with rebase: You have unstaged changes`). Running `git checkout -b` straight after
-cuts the branch from a **stale base** — that is how one branch here ended up 4 commits behind and
-conflicting. **After the pull, confirm `git status` says *"up to date with origin/main"*, not
-*"behind by N"*, before branching.**
+(`cannot pull with rebase: You have unstaged changes`), and so does `git checkout main`
+(`Your local changes … would be overwritten`). PowerShell runs the next command regardless, so
+`git checkout -b` cuts the branch from a **stale base** and nothing announces it.
+
+**This has now happened three times in one evening** — the first produced a 4-commits-behind
+branch that conflicted on two files and cost a full merge-resolution cycle.
+
+**Why it keeps happening here specifically:** Cowork writes edits into the working tree
+continuously, so **a dirty tree is this repo's normal state**, not an occasional slip. A procedure
+that assumes a clean tree will fail most of the time it is run.
+
+**The rule: clear the tree BEFORE switching, and verify twice —**
+
+```powershell
+git status                 # (1) before switching: "working tree clean"
+git checkout main
+git pull --rebase
+git status                 # (2) after pulling: "up to date with origin/main", NOT "behind by N"
+git checkout -b <branch>
+```
+
+If either check fails, stop and fix it — do not run the next command. **A stale-base branch is
+cheap to prevent and expensive to unwind.**
 
 
 **Status note for whoever reads this next:** the gate has now been **green on `main`**, which is
