@@ -66,10 +66,15 @@ after opening, before CI finished, carrying a red suite.
 [`docs/os/DOCUMENTATION-MAP.md`](docs/os/DOCUMENTATION-MAP.md)** — the root of the repo is code and
 config; **do not add a new `.md` there.**
 
-⚠️ **`main` is currently BLOCKED**: `test-suite.yml` on `main` is pinned `node-version: '20'` and
-three test files import Deno `.ts` modules Node 20 cannot load, so the required check has never
-been green. The fix is `beb3aecd`'s version of that workflow file; land it on its own branch off
-current `main` and every other PR unblocks. Details in the workflow doc §4.
+✅ **The Node-version lockout is RESOLVED (2026-08-27).** `test-suite.yml` was pinned
+`node-version: '20'` while four test files import Deno `.ts` edge modules Node 20 cannot load
+(`ERR_UNKNOWN_FILE_EXTENSION`), so the required check was red from its first run — 7 of 7. Fixed by
+`2883d95`, which pins **Node 24**, the repo's runtime baseline. **The tell was the test COUNT** —
+CI reported 4,568 tests / 868 suites against 4,621 / 883 locally; a failing assertion never changes
+how many tests exist, a module that cannot load does. ⚠️ `package.json` still says
+`"engines": {"node": ">=20.0.0"}`, which is false for the suite (it needs ≥22.18); whether the APP
+runs on 20 is unmeasured and affects Railway, so it was left alone. Details:
+[`docs/os/GITHUB-WORKFLOW.md`](docs/os/GITHUB-WORKFLOW.md) §4.
 
 ## Rules
 
@@ -1271,6 +1276,8 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
       a predicate structurally unable to express the question returns a plausible number. **Any
       audit that buckets on equality must decide what NULL means before it counts anything.**
       Full writeup: `docs/audits/P189_MERGE_DETECTOR_BLIND_SPOT_2026-08-26.md`.
+      **P195 merged this population** (66 entities → 56 survivors, $102.2M) and held the 4 groups
+      whose names carry no distinctive token — see the P195 section below.
   - **⚠️ `&` IN AN OWNER NAME IS USUALLY A MARRIED COUPLE, NOT A FIRM (P158a, caught pre-apply).** Adding
     `&` to `lcc_owner_name_has_org_marker` looks obviously right — no person's name has an ampersand — and
     would have flagged **1,305 entities, retyped 119 people and touched 66 RESOLVED OWNERS**. The population
@@ -2038,6 +2045,70 @@ read 9/9 correct on named rows**. Deliberately NOT extended to `domain_is_core_p
 - **Judge it by `cards_drained`, never `attached`** (`v_lcc_tier0_auto_attach_run_health`); every
   `skipped_*` is a re-discovery tally. Reverse a batch by `batch_tag LIKE 't0auto_%'`.
 
+## P195 — merging the byte-identical owner groups, and the two traps in doing it (2026-08-27)
+
+P189 surfaced 60 byte-identical owner groups (147 entities, $102.4M) and merged nothing. P195 landed
+the cleanup: **66 entities merged into 56 survivors, $102,216,468 of current annual rent consolidated,
+0 live backrefs left on any tombstone, `auto_mergeable` unchanged at 3,053.** NGP Capital 5→1
+($59.8M→$68.3M, 29→38 assets). Machinery: `lcc_p195_merge_byte_identical` (dry-run default) driven
+group by group, gate `lcc_p195_name_has_distinctive_residue`, plan `v_lcc_p195_merge_plan`, ledger
+`lcc_p195_merge_log` + snapshots in `r40_merge_reconcile_backup` (`note='p195:<batch>'`), reversal
+`lcc_p195_unmerge(batch_tag)`. Full writeup:
+`docs/audits/P195_BYTE_IDENTICAL_OWNER_MERGE_2026-08-27.md`.
+
+- **⚠️ A BYTE-IDENTICAL NAME IS NOT AN IDENTITY CLAIM WHEN EVERY TOKEN IS GENERIC — AND THE
+  DETECTOR'S OWN FILTER GUARANTEES THAT POPULATION IS OVER-REPRESENTED.**
+  `v_lcc_merge_candidates_normalizer_blind` selects names where
+  `lcc_normalize_entity_name(name) = ''`, i.e. names that reduce to NOTHING under the generic-CRE
+  stoplist. That set is two different things: acronym-named REAL firms (**"NGP Capital" → `ngp`**,
+  3 chars, under the normalizer's 4-char floor — the P189 blind spot) and pure-generic FRAGMENTS
+  (**"Capital", "Properties", "Partners Group"** → empty), which are failed extractions. Measured:
+  **4 groups / 25 entities carry no distinctive residue** — the three `Capital` rows span dia + gov
+  with three DIFFERENT external identities and 15 relationships (three separate real parties whose
+  captured name got truncated to one word), and 17 of the 18 `Partners Group` rows are empty husks
+  minted in two bursts on 2026-06-24/26. Merging them fabricates a party. **When a detector's filter
+  is "this name reduces to nothing", grade the residue before treating identity as proven.**
+  - The held group worth reading is `capitalgroupproperties`: one member is a gov `true_owner`
+    holding one asset; the other carries a **`costar/company` external_id of `capital properties`** —
+    a different company string. Genuine ambiguity, surfaced not guessed.
+  - `lcc_p195_name_has_distinctive_residue` is NARROW and scoped to this gate (the
+    `lcc_p131_is_document_row_label` precedent) — never reuse it as a general name filter. Its
+    stoplist is pinned token-for-token against `lcc_normalize_entity_name`'s by
+    `test/p195-merge-gate.test.mjs`; if the normalizer gains a word and the gate does not, the gate
+    silently stops describing the population it was measured on.
+- **⚠️ `lcc_merge_entity` DOES NOT SNAPSHOT, AND ITS `owner_contact_pivot` DEDUP IS UNCORRELATED.**
+  It calls `lcc_reconcile_tombstone_backrefs(loser, winner, p_snapshot => **false**)`, so every dedup
+  DELETE it performs (portfolio facts, identities, relationships, watchers, pivot) is
+  **unrecoverable** — `lcc_apply_fuzzy_merges` therefore auto-merges irreversibly today. And the pivot
+  predicate is `exists (select 1 from owner_contact_pivot w where w.entity_id = v_winner)` with **no
+  correlation**: it asks only whether the winner has a pivot *at all*, then deletes the loser's.
+  Live on `bamproperties`: the winner by ownership (1 asset, $517k) had a pivot naming **nobody**;
+  the loser carried the group's **only named contact, "Alex Bias"**. A bare merge deletes it — no
+  error, no ledger, in the exact lane the pass exists to clean. **Any caller that wants reversibility
+  must snapshot BEFORE calling the merge, and must reconcile the pivot fill-blanks first.**
+  `active_source` is carried across VERBATIM, never restamped — the Tier 0 lane reads it with `<>`
+  and `IN`, and a new value there is the P194 trap.
+- **⚠️ A REVERSAL PATH THAT HAS NEVER BEEN RUN IS A CLAIM, NOT A CAPABILITY.** The round-trip gate
+  (real merge → unmerge → compare) failed first time with **`428C9: cannot insert a non-DEFAULT value
+  into column "is_current"`** — `lcc_entity_portfolio_facts.is_current` is `GENERATED ALWAYS`, a
+  footgun already documented in this very file, and a `select *` restore over a snapshotted row
+  shipped past review anyway. Run the round trip, on real data, before trusting the ledger.
+- **Measured nil, with the positive control (P182): ZERO `(source_domain, source_property_id)`
+  collisions between members across all 60 groups**, so the P175a ghost-vs-ENDED conflict never
+  arises here and no portfolio fact was dedup-deleted. The same query shape finds **2,678** such
+  collisions fleet-wide, which is what makes the zero believable. Likewise `portfolio_edges_moved`
+  reads 0 for the whole no-owner slice because the snapshot ledger records **no** portfolio rows on
+  any of those 40 losers — an honest zero, not a broken counter.
+- **Winner rule is ownership-first**, not rent: `owns_assets → current_rent → portfolio_facts →
+  external_ids → relationships → created_at → id`. The entity that actually owns assets is the one
+  every downstream consumer already points at. It deliberately does NOT promote the pivot-bearing
+  member — the fold preserves the contact regardless of who wins.
+- **Class 8 is scheduled, not remembered:** `v_lcc_p195_resurrection_watch` +
+  `lcc_p195_check_resurrection()` on **cron 243 (06:52 UTC)**, after `generate-research-tasks`
+  (06:35) so a group re-minted overnight is caught the same morning. **Read `regrown_groups`, never
+  `open_groups`** — a group that was never merged is not a resurrection.
+
+
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
 Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration
@@ -2232,6 +2303,9 @@ Related invariants from the same round:
     nothing writes that person into `owner_contact_pivot`. Result: **11 owners, $240.5M,
     suppressed AND invisible.** Whenever a surface excludes a population on the grounds that
     it is "already handled", name the thing that handles it and verify that it does.
+- **Byte-identical owner duplicates (P189→P195):** `docs/audits/P189_MERGE_DETECTOR_BLIND_SPOT_2026-08-26.md`
+  (the blind spot) → `docs/audits/P195_BYTE_IDENTICAL_OWNER_MERGE_2026-08-27.md` (the merge that landed
+  it, the generic-name gate, and the unsnapshotted pivot delete inside `lcc_merge_entity`).
 - **Tier 0 owner-contact confirm lane (P186→P188→P194):** `docs/audits/P186_TIER0_VIEW_FIX_AND_BENCH_REVIEW_2026-08-26.md`
   (the bench, its precision curve, and the decision not to build a promoter) →
   `docs/audits/P188_TIER0_CONFIRM_LANE_2026-08-26.md` (the lane that turns it into calls) →
