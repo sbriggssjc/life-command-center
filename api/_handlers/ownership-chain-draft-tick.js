@@ -165,6 +165,90 @@ async function fetchTransitionsFor(domain, propertyIds) {
   return { byProp, errors, truncated };
 }
 
+// ---------------------------------------------------------------------------
+// A4 RE-OPEN PASS — the sensor half of lcc_a4_retire_no_records.
+//
+// A4 retires the `no_records` bucket by stamping `outcome.terminal='true'`,
+// which is the ONLY thing cron 144 treats as terminal. That stamp is exactly
+// what would turn a retire into a delete, so it needs an inverse (P121).
+//
+// ⚠️ THE INVERSE CANNOT LIVE IN SQL, AND THAT WAS MEASURED, NOT ASSUMED.
+// LCC Opps holds no mirror of `gov.ownership_history` — neither
+// `v_ownership_chain_worklist` nor `v_lcc_ownership_chain_completeness`
+// carries a per-property transition count. This tick is the ONLY reader of
+// `v_ownership_transitions_portfolio` in the system, so the eye belongs here
+// and reuses `fetchTransitionsFor` rather than adding a second gov fetcher
+// that can drift from the one the drafts are built on.
+//
+// It runs BEFORE the open-lane read so a property whose records landed is
+// re-queued, re-drafted and (if it now `agrees`) applied by A2 the same night
+// — 06:45 draft → 06:49 apply → 06:51 retire.
+// ---------------------------------------------------------------------------
+async function fetchA4RetiredTasks() {
+  const r = await opsQuery('GET',
+    'research_tasks?select=id,domain,source_record_id'
+    + `&research_type=eq.${LANE_TYPE}&status=eq.skipped`
+    + '&outcome->>reason=eq.a4_no_usable_transition_on_file'
+    + '&order=id.asc&limit=1000', undefined, { countMode: 'none' });
+  return (r.ok && Array.isArray(r.data)) ? r.data : [];
+}
+
+// ⚠️ A RE-OPEN THAT LEAVES THE STALE DRAFT IN PLACE RE-RETIRES THE SAME NIGHT.
+// `fresh` excludes any task whose subject_ref already carries a proposal, and a
+// retired task still carries the `no_records` draft that got it retired. Without
+// this the re-opened task is skipped by the drafter, stays classified
+// `no_records`, and the 06:51 retire closes it again — a silent loop that would
+// read as a working re-open. Superseding the stale proposal is what makes the
+// property genuinely re-enter the lane.
+async function supersedeStaleDrafts(subjectRefs) {
+  let superseded = 0;
+  for (const ref of subjectRefs) {
+    const r = await opsQuery('PATCH',
+      `lcc_clean_assist_proposals?source=eq.${OCD.OCD_SOURCE}`
+      + `&status=eq.proposed&subject_ref=eq.${encodeURIComponent(ref)}`,
+      { status: 'superseded' });
+    if (r.ok) superseded += 1;
+  }
+  return superseded;
+}
+
+async function runA4ReopenPass(apply, errors) {
+  const out = { retired_checked: 0, transitions_landed: 0, reopened: 0, drafts_superseded: 0 };
+  const retired = await fetchA4RetiredTasks();
+  out.retired_checked = retired.length;
+  if (!retired.length) return out;
+
+  const byDomain = new Map();
+  for (const t of retired) {
+    if (!byDomain.has(t.domain)) byDomain.set(t.domain, []);
+    byDomain.get(t.domain).push(String(t.source_record_id));
+  }
+
+  for (const [domain, propertyIds] of byDomain) {
+    const { byProp, errors: fErr } = await fetchTransitionsFor(domain, propertyIds);
+    for (const e of fErr) errors.push(`a4_reopen_${e}`);
+    // A property is re-opened only when the gov view — the same one the drafts
+    // are built from — actually returns a transition for it. "The fetch failed"
+    // must never read as "records landed", so an empty map re-opens nothing.
+    const landed = propertyIds.filter((id) => (byProp.get(id) || []).length > 0);
+    out.transitions_landed += landed.length;
+    if (!landed.length) continue;
+
+    const r = await opsQuery('POST', 'rpc/lcc_a4_reopen_tasks', {
+      p_domain: domain, p_property_ids: landed, p_dry_run: !apply,
+      p_reason: 'transitions_landed',
+    });
+    if (!r.ok) { errors.push(`a4_reopen_rpc_${r.status}`); continue; }
+    const n = Number(r.data?.tasks_reopened ?? r.data?.tasks_to_reopen ?? 0);
+    out.reopened += Number.isFinite(n) ? n : 0;
+    if (apply) {
+      out.drafts_superseded += await supersedeStaleDrafts(
+        landed.map((id) => OCD.ocdSubjectRef(domain, id)));
+    }
+  }
+  return out;
+}
+
 // Current-owner context, so the draft can say whether the chain lands on the owner
 // LCC believes holds the asset today (and flag it when it does not).
 async function fetchChainContext(domain, propertyIds) {
@@ -508,6 +592,9 @@ export async function handleOwnershipChainDraftTick(req, res) {
     : null;
 
   const scanErrors = [];
+  // A4 re-open runs FIRST: a property whose gov records landed must be back in
+  // the lane before this run reads it, or it waits a whole extra night.
+  const a4Reopen = await runA4ReopenPass(isApply, scanErrors);
   const existing = await fetchExistingDrafts();
   const laneScanLimit = Math.max(limit, 600);
   const openRows = await fetchOpenLaneRows(laneScanLimit);
@@ -543,7 +630,7 @@ export async function handleOwnershipChainDraftTick(req, res) {
     const out = {
       ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
       role_labels_enabled: roleLabels, lane: LANE_TYPE, limit,
-      open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+      a4_reopen: a4Reopen, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
       lane_scan_capped: laneScanCapped,
       counts, scan_errors: scanErrors,
       note: 'Annotation-only, NO writes in dry-run. The chain is assembled DETERMINISTICALLY from '
@@ -660,7 +747,7 @@ export async function handleOwnershipChainDraftTick(req, res) {
     await closeRunLog(runLogId, {
       status: 'completed', ok: true,
       finished_at: new Date().toISOString(), duration_ms: Date.now() - startedMs,
-      open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+      a4_reopen: a4Reopen, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
       written_draftable: 0, written_insufficient: 0, failed_writes: 0,
       backlog_remaining: fresh.length, capped: fresh.length > 0,
       budget_stopped: false, lane_scan_capped: laneScanCapped,
@@ -671,14 +758,14 @@ export async function handleOwnershipChainDraftTick(req, res) {
         : {}),
     });
     return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false,
-      lane: LANE_TYPE, open_lane_rows: openRows.length, fresh: fresh.length,
+      lane: LANE_TYPE, a4_reopen: a4Reopen, open_lane_rows: openRows.length, fresh: fresh.length,
       lane_scan_capped: laneScanCapped, counts });
   }
 
   const sourceRunId = 'p131_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)
     + '_' + randomUUID().slice(0, 8);
   const summary = { source_run_id: sourceRunId, lane: LANE_TYPE, enabled: true,
-    role_labels_enabled: roleLabels, open_lane_rows: openRows.length,
+    role_labels_enabled: roleLabels, a4_reopen: a4Reopen, open_lane_rows: openRows.length,
     already_drafted: existing.size, fresh: fresh.length,
     written_draftable: 0, written_insufficient: 0, failed: 0,
     role_labels_applied: 0, role_labels_dropped: 0,
@@ -710,7 +797,7 @@ export async function handleOwnershipChainDraftTick(req, res) {
       status: 'failed', ok: false,
       finished_at: new Date().toISOString(), duration_ms: Date.now() - startedMs,
       source_run_id: sourceRunId,
-      open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+      a4_reopen: a4Reopen, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
       written_draftable: summary.written_draftable,
       written_insufficient: summary.written_insufficient,
       failed_writes: summary.failed,
@@ -746,7 +833,7 @@ export async function handleOwnershipChainDraftTick(req, res) {
     status: 'completed', ok: summary.failed === 0,
     finished_at: new Date().toISOString(), duration_ms: Date.now() - startedMs,
     source_run_id: sourceRunId,
-    open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
+    a4_reopen: a4Reopen, open_lane_rows: openRows.length, already_drafted: existing.size, fresh: fresh.length,
     written_draftable: summary.written_draftable,
     written_insufficient: summary.written_insufficient,
     failed_writes: summary.failed,
