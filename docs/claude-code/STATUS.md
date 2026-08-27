@@ -17,6 +17,53 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 20:05 UTC — N15c COMPLETE: `canonical_name` has ONE writer, live
+
+Full writeup: [`docs/audits/N15c_CANONICAL_NAME_SINGLE_WRITER_2026-08-27.md`](../audits/N15c_CANONICAL_NAME_SINGLE_WRITER_2026-08-27.md).
+**The trigger is applied, the backfill has run, and every gate held.**
+
+**Deploy precondition verified BEFORE applying the trigger, not assumed.** Live `/version` on
+`tranquil-delight` returns **`d8fcfbfef94a`** — the N15c merge commit itself — and `git_pinned` was
+corroborated by reading the SOURCE at that sha: `legacyCanonicalName` + the dual-read
+`canonical_name=in.(current,legacy)` present, the `entities-handler.js` inline copies gone,
+`sync.js`/`domains.js` routed through the shared function. That check is the whole reason the order
+was safe (P131: *check the fix against the deployed sha*).
+
+| gate | result |
+|---|---|
+| **invisible to `ensureEntityLink`'s own lookup** | **10,336 → 537** — and the 537 are *exactly* the held rows |
+| `v_lcc_canonical_name_drift` | only `held_stale_name_repair` = **537**; nothing else |
+| rows rewritten / ledgered | 15,402 / **15,402** (reversible by `batch_tag='n15c_go'`) |
+| **`auto_mergeable`** | **3,040 → 3,040** — the gate that proves the merge detector was untouched |
+| Tier 0 lane | ask **82** / auto **9** — unmoved |
+| rows keyed to the empty string | **114 → 0** (98 now on the `dc:` namespaced fallback) |
+
+**Named rows read correctly, including Scott's decision:** `Rainier Rockford DST Trust` and
+`Rainier Rockford Llc` **both key `rainier rockford`** — a DST and its LLC are one true owner, as
+decided. `671 Poplar LLC` → `671 poplar`; `BALTARA ENTERPRISES, L.P.` → `baltara enterprises l p`.
+
+**⚠️ The writer census was wrong three times running — 7 → 8 → 10**, plus a twelfth normalization
+hiding in a dead defensive ternary in `operations.js`. `api/sync.js` and `api/domains.js` were both
+missed by grep. **That is the argument for fixing it at the DATABASE**: a `BEFORE INSERT OR UPDATE
+OF name` trigger does not care how many writers exist, and it closes the staleness class in the
+same stroke. It returns `NEW` unconditionally (P196) and is `UPDATE OF name`, not a bare `UPDATE`,
+so the 537 held rows stay held.
+
+**A real firm was rescued from the empty key.** 114 entities shared `canonical_name = ''` — among
+them **18 copies of `Partners Group`**, a real firm whose two semantic tokens are *both* stripped by
+the outgoing normalizer, leaving it keyed identically to `--` junk. It now keys `partners group`,
+which also makes it visible to the merge detector for the first time — **that is N10's held
+`partnersgroup` group**, now groupable.
+
+**⏳ The Class 8 check is tomorrow, and it is the one that matters.** A backfill is not a fixed
+producer. Re-run the recurrence query: post-fix mints of disagreeing pairs should read **0** against
+the pre-fix **~4/day** (79 in 21 days — never the burst-blended 1,879/30d, off ~24×).
+
+**👤 Two decisions still Scott's:** the **537 held rows** (`canonical_name` left stale after `name`
+was repaired — recomputing discards a captured string some preserve, e.g. `Scott W. Beynon` still
+keyed `buyer contactsscott w beynon 801 568 1031 p`), and whether `canonical_name` becomes an
+**enforced UNIQUE key** (3,930 groups violate it today).
+
 ## 2026-08-27 19:15 UTC — N15c drafted: the BUILD prompt, and two measurements that changed its shape
 
 **Lane split confirmed with Scott:** this thread continues the **N15b → N15c** line (entity

@@ -1,8 +1,13 @@
 > **📍 CANONICAL REFERENCE: [`docs/architecture/tier0-owner-contact-system.md`](../architecture/tier0-owner-contact-system.md)**
 > (entity identity + merges). **This file is the EVIDENCE for one round; read the canonical page
 > first.** Predecessor: [`N15b_CANONICAL_NAME_AUTHORS_2026-08-27.md`](N15b_CANONICAL_NAME_AUTHORS_2026-08-27.md)
-> (the measurement). ⚠️ **Two of the three objects are applied live; the TRIGGER is deliberately
-> not — see §3.**
+> (the measurement). ✅ **ALL THREE OBJECTS ARE NOW LIVE.** The trigger was applied and the
+> backfill run at **2026-08-27 20:05 UTC** (batch `n15c_go`), after live `/version` was confirmed
+> at `d8fcfbfef94a` — the N15c merge commit — and corroborated by reading the dual-read source at
+> that sha. **15,402 rewritten / 537 held / 0 empty-string keys; invisible 10,336 → 537;
+> `auto_mergeable` 3,040 → 3,040; Tier 0 ask 82 / auto 9 unmoved.** §3's deploy-order warning is
+> kept as the record of why the order mattered. ⏳ **The Class-8 recurrence check is due
+> 2026-08-28** — a backfill is not a fixed producer.
 
 # N15c — `entities.canonical_name` gets one writer
 

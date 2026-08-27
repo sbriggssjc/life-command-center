@@ -133,7 +133,7 @@ own deal history (P177). `auto_mergeable` 3,043 → 3,040, exactly the three gro
 ⚠️ **All nine losers carried $0 current rent** — no rent-ranked surface would ever have shown this;
 it was found by chasing a guard counter that moved by 2.
 
-**👤 Needs Scott (N15c — TWO decisions left; the token rule is settled and built):**
+**👤 Needs Scott (N15c — TWO decisions left; the token rule is settled, built AND LIVE):**
 `entities.canonical_name` now has **one writer**. The adopted rule is the `lcc_owner_domain_core`
 token stoplist **joined with spaces** (never bare-concatenated — that collides `Gate Way` with
 `Gateway`, 115 false collisions measured). Still open: (1) the **537 stale rows** where `name` was
@@ -142,6 +142,9 @@ excluded from the backfill by construction and are the entire residual (10,336 �
 the column becomes an enforced **unique** key (3,930 groups would violate it today).
 ⚠️ **`v_lcc_merge_candidates` does NOT read this column** — the rewrite cannot move `auto_mergeable`,
 and it did not (3,040 → 3,040). Full build: `docs/audits/N15c_CANONICAL_NAME_SINGLE_WRITER_2026-08-27.md`.
+⏳ **N15d — the Class-8 recurrence check is due 2026-08-28** and is the only thing that proves the
+PRODUCER is fixed rather than its output backfilled: new key-disagreement duplicates must read **0**
+against the pre-fix ~4/day.
 
 **🔴 Build:** N14 the 92 orphans blocking parked cards; N10 the 4 held generic-name groups (~$0,
 a name-repair job).
@@ -166,7 +169,7 @@ the domain-keyed fix P189 already rejected at 25%.
 | **P196** | merge made reversible; park reasons |
 | **P197** | the employer resolver; `no_employer_on_file` 68 → 54 |
 | **P198** | the prefix-8 arm is load-bearing (refuted a tightening); co-proposal at 7%; **12 owner merges — 3 approved pairs + N3h's 9, which reunited Gardner's split deal history (270 → 512 relationships)** |
-| **N15b → N15c** | **the producer behind all of the above.** N15b measured; **N15c BUILT it (2026-08-27)** — `lcc_entity_name_tokens` is the one token rule, `lcc_entity_canonical_key` (space join) is the key, `lcc_owner_domain_core` refactored onto it and **proven byte-identical over 103,710 values**. A `BEFORE INSERT OR UPDATE OF name` trigger is the sole writer. ⚠️ **The census was wrong twice — there are TEN writers**, and one more normalization hid in a dead ternary fallback; that is why the fix is at the DB, not in grep. ⚠️ **The TRIGGER is deliberately NOT applied until the JS deploys** (constraint-after-writer-deploy); the JS is dual-read so order is then safe. Invisible entities **10,336 → 537** (the held rows). `auto_mergeable` unmoved at 3,040 |
+| **N15b → N15c** | **the producer behind all of the above.** N15b measured; **N15c BUILT it (2026-08-27)** — `lcc_entity_name_tokens` is the one token rule, `lcc_entity_canonical_key` (space join) is the key, `lcc_owner_domain_core` refactored onto it and **proven byte-identical over 103,710 values**. A `BEFORE INSERT OR UPDATE OF name` trigger is the sole writer. ⚠️ **The census was wrong twice — there are TEN writers**, and one more normalization hid in a dead ternary fallback; that is why the fix is at the DB, not in grep. ✅ **TRIGGER APPLIED + BACKFILL RUN 2026-08-27 20:05 UTC** (batch `n15c_go`), after live `/version` was confirmed at `d8fcfbfef94a` — the N15c merge commit — and the dual-read verified in the source at that sha. 15,402 rewritten, 537 held, empty-string keys 114 → 0. Invisible entities **10,336 → 537** (the held rows). `auto_mergeable` unmoved at 3,040 |
 | **A1–A4b, A2a, A2b** | the ownership-lane arc — sibling workstream, same entity graph: [`ownership-history-lane.md`](ownership-history-lane.md) |
 
 **Design intent:** `account-based-contact-intelligence.md` (who to pursue) ·
