@@ -17,6 +17,46 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 15:10 UTC — P198: the tightening I recommended was measured and REFUTED
+
+Full writeup: [`docs/audits/P198_PREFIX8_ARM_IS_LOAD_BEARING_2026-08-27.md`](../audits/P198_PREFIX8_ARM_IS_LOAD_BEARING_2026-08-27.md).
+Migration `20260827230000_lcc_p198_tier0_coproposed_owner_duplicates.sql`, applied live.
+**Lane unchanged by construction: ask 87 / auto 9 / parked 137 / pairs 696, before and after.**
+
+**Last turn I recommended tightening `ev_company_matches_owner` because two `ask` cards rest on a
+generic word stem (`innovati`, `corporat`). Measured: the prefix-8 arm is the ONLY link evidence
+on 28 of 87 ask cards / $146.9M**, including Easterly at $85.0M, and it is the un-park mechanism
+for **25 of 32 `weak_partial`** cards (P194 un-parks on `n_link_evidence > 0`, and for those 25
+this arm *is* that evidence — the `no link evidence` column reads **0** for that whole band).
+Tightening it would have parked ~$147M of reach to remove five wrong cards worth ~$5.6M.
+**Not shipped. Closed, do not re-raise.**
+
+**P179 Class 2, read backwards.** That rule says measure the throughput of whatever a *promotion*
+would displace. The mirror: **before demoting a rule, measure what depends on it.** A rule's false
+positives are visible on the surface; what it holds up is not.
+
+Read all 44 prefix-8 rows: the top by rent is entirely correct (Easterly, Cambridge, Carnegie,
+Franklin Street, Woodbranch, Westfield, the Briarcliff SPE family). **5 of 30 cards are wrong** —
+a shared given name (Michael Downing ← Michael Development), place words (Westlake ← Westlake
+Farms; Maple Tree ← Mapletree), generic words (Corporate Plaza, Innovation 2100 ← an *operator*).
+Stated residue, each a one-second reject because P188 put the employer and match key on the card.
+
+**Built instead: 3 owner-merge decisions.** Easterly is the #1 *and* #3 card — one firm as two
+entities, both proposing Andrew Pulliam. New read-only view
+`v_lcc_tier0_coproposed_owner_duplicates`. ⚠️ **The broad signal was rejected on the way**:
+co-proposal alone (same person + same domain on two owners) is **95 pairs, 88 of them unrelated
+names — 7% precision, worse than the domain-keyed fix P189 already rejected at 25%.** Narrowed to
+a shared 8-char core opening it is 7 pairs: Easterly ✅, Gardner-Tannenbaum ✅ (spelling variant),
+Cambridge ⚠️ probable, and 4 sibling-SPE pairs that must never merge (UIRC Douglas AZ / Van Horn
+TX are different properties in different states). **No `auto_mergeable` column, deliberately** —
+`lcc_apply_fuzzy_merges` loops on that flag.
+
+**⚠️ Two instrument failures, both caught by implausibility.** `min(a.owner_name)` collapsed both
+sides of each pair to one string, reporting **95 / 95 identical / 0 / 0** — everything in one
+bucket and nothing anywhere else is a bug signal (P182); keyed properly it is 0 / 7 / 88, the
+opposite conclusion. And **`lcc_name_has_spe_marker` is named backwards** — it detects a
+PORTFOLIO marker and returns FALSE for every name containing the literal string "SPE".
+
 ## 2026-08-27 14:30 UTC — DOC CONSOLIDATION: twelve Tier 0 audits now have ONE door
 
 **New canonical page: [`docs/architecture/tier0-owner-contact-system.md`](../architecture/tier0-owner-contact-system.md).**

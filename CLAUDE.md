@@ -2402,6 +2402,46 @@ Every parked Tier 0 card now carries **`park_reason`** plus both compared string
 - **The SQL CASE is the single owner of both classifications** — the handler renders what the server
   decided; there is no JS mirror.
 
+## P198 — ⚠️ BEFORE DEMOTING A RULE, MEASURE WHAT DEPENDS ON IT (2026-08-27)
+
+> 📍 **All Tier 0 work starts at [`docs/architecture/tier0-owner-contact-system.md`](docs/architecture/tier0-owner-contact-system.md)** —
+> one door into twelve rounds (P186–P198), carrying live state, the decisions already made, and
+> the traps already paid for.
+
+Two `ask` cards rested on a generic eight-character word stem (`innovati` → *Innovation 2100 LLC*
+matched to "Innovative Renal Care", a dialysis **operator**; `corporat` → *Corporate Plaza LP*),
+so the prefix-8 arm of `ev_company_matches_owner` was recommended for tightening. **Measured, that
+arm is the ONLY link evidence on 28 of 87 ask cards / $146.9M** — including Easterly at $85.0M,
+the highest-rent card in the system — and it is the **un-park mechanism** for **25 of 32
+`weak_partial`** cards: P194 un-parks on `n_link_evidence > 0`, and that band's `no link evidence`
+count is exactly **0**. Tightening would have parked ~$147M of reach to remove ~$5.6M of wrong.
+Arm precision read on all 44 rows: **25 of 30 cards correct**. **Not shipped; closed.**
+
+- **This is P179 Class 2 read backwards.** That rule says measure the throughput of whatever a
+  *promotion* would displace. A **demotion** displaces something too, and it is harder to see: a
+  rule's false positives are visible on the surface, what it holds up is not. Split the consumer
+  population by *which arm admitted it* before weakening any arm.
+- **A residue is only a defect if it is not individually rejectable.** Each of the five wrong
+  cards is a one-second reject because P188 already put the employer string and the `match_key` on
+  the card. The cheap fix was shipped three rounds ago; the expensive one was never needed.
+- **⚠️ `lcc_name_has_spe_marker` IS NAMED BACKWARDS** — it detects a **PORTFOLIO/sponsor** marker
+  (Properties, Holdings) and returns **FALSE for every name containing the literal string "SPE"**
+  (all three Briarcliff rows, both UIRC rows). It separates the P198 population correctly
+  *because* of that inversion. **Read the function, never the function's name.**
+- **⚠️ `min(a.name)` + `min(b.name)` under ONE `GROUP BY` collapses both sides of a pair to the
+  same string.** The first co-proposal run reported **95 pairs / 95 identical cores / 0 / 0** —
+  everything in one bucket and nothing anywhere else, the Class 11 implausibility signal. Keyed
+  properly it is **0 / 7 / 88**, the opposite conclusion.
+- **Co-proposal is NOT a merge rule — 7% precision, worse than the signal P189 already rejected
+  at 25%.** Two owners proposing the same person on the same domain is 95 pairs, **88 of them
+  unrelated names** (sibling SPEs sharing a sponsor's contact). Narrowed to a shared 8-char core
+  opening it is 7 pairs → `v_lcc_tier0_coproposed_owner_duplicates` (migration `20260827230000`),
+  **read-only, human-confirm, and deliberately carrying NO `auto_mergeable` column** because
+  `lcc_apply_fuzzy_merges` loops on that flag and would merge sibling SPEs into each other.
+  ⚠️ **`UIRC-GSA V Douglas AZ` and `UIRC-GSA V VAN HORN TX` are different properties in different
+  states** — 4 of the 7 rows must never be merged. Full writeup:
+  `docs/audits/P198_PREFIX8_ARM_IS_LOAD_BEARING_2026-08-27.md`; playbook **Class 17**.
+
 ## P197 — the Tier 0 lane read ONE employer source, by ONE key (2026-08-27)
 
 `no_employer_on_file` **67 → 54** cards ($131.2M → $113.6M), parked 142 → 137, `ask` 82 → **87**.
