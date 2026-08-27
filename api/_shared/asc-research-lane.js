@@ -121,6 +121,24 @@ function buildingAddressTokensAgree(left, right) {
   return stripStreetType(a[0]) === stripStreetType(b[0]);
 }
 
+function approvedParentAddressAlias(target, capturedAddressToken) {
+  const aliases = Array.isArray(target.cms_evidence?.approved_parent_address_aliases)
+    ? target.cms_evidence.approved_parent_address_aliases
+    : [];
+  return aliases.find((alias) => {
+    if (alias?.status !== 'approved'
+      || alias?.reason_code !== 'same_physical_building_dedicated_entry'
+      || alias?.address_token !== capturedAddressToken
+      || !clean(alias?.authorized_by)
+      || !/^\d{4}-\d{2}-\d{2}T/.test(clean(alias?.authorized_at))) return false;
+    const citations = Array.isArray(alias.evidence_citations) ? alias.evidence_citations : [];
+    const sources = new Set(citations
+      .filter((citation) => /^https:\/\//i.test(clean(citation?.url)))
+      .map((citation) => clean(citation?.source).toLowerCase()));
+    return sources.has('official_operator') && sources.has('property_manager');
+  }) || null;
+}
+
 export function assertAscResearchImport({ release_id, selection_fingerprint, candidate_pool_fingerprint, candidates } = {}) {
   for (const [name, value] of Object.entries({ release_id, selection_fingerprint, candidate_pool_fingerprint })) {
     if (!SHA256_RE.test(clean(value).toLowerCase())) throw new Error(`${name} must be a lowercase SHA-256 fingerprint`);
@@ -161,14 +179,28 @@ export function buildAscStructuredCapture(target, context = {}) {
   if (addressToken !== target.address_token) {
     const cmsIdentity = target.cms_identity || {};
     const corroboration = corroboratingTenant(target, context);
+    const addressAlias = approvedParentAddressAlias(target, addressToken);
     const parentBuildingMatch = hasAscSublocation(cmsIdentity.address)
       && buildingAddressTokensAgree(
         normalizeAscBuildingAddressToken(cmsIdentity),
         normalizeAscBuildingAddressToken(context),
       )
       && corroboration;
-    if (!parentBuildingMatch) throw new Error('Captured page does not match the active frozen ASC candidate');
-    identityMatch = {
+    const aliasMatch = addressAlias && corroboration;
+    if (!parentBuildingMatch && !aliasMatch) {
+      throw new Error('Captured page does not match the active frozen ASC candidate');
+    }
+    identityMatch = aliasMatch ? {
+      mode: 'evidence_backed_parent_address_alias',
+      alias_reason_code: addressAlias.reason_code,
+      alias_address_token: addressAlias.address_token,
+      corroboration_basis: corroboration.basis,
+      corroborated_name: corroboration.matched_name,
+      cms_address_preserved: clean(cmsIdentity.address),
+      captured_building_address: clean(context.address),
+      facility_name: clean(cmsIdentity.facility_name),
+      second_review_required: true,
+    } : {
       mode: corroboration.basis === 'facility_name'
         ? 'tenant_corroborated_parent_building'
         : 'enrollment_org_corroborated_parent_building',
