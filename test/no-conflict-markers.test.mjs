@@ -10,6 +10,11 @@
  * class in one evening (`docs/os/GITHUB-WORKFLOW.md` §4b); in YAML the same mistake made a
  * workflow unrunnable, in prose it silently voided half a verification document.
  *
+ * ⚠️ IT IS A PATTERN, NOT ONE FILE — this guard's FIRST CI run caught a second, live instance
+ * in `docs/claude-code/STATUS.md`, merged to `main` an hour earlier by PR #1801. That one came
+ * from a **`git stash pop`** (`<<<<<<< Updated upstream` / `>>>>>>> Stashed changes`), not a
+ * merge — so match on the marker CHARACTERS, never on the label text after them.
+ *
  * ⚠️ A bare `=======` is NOT a marker on its own — it is a valid Markdown setext H1 underline.
  * It is reported ONLY when it sits inside an open `<<<<<<<` … `>>>>>>>` span. Same for the
  * diff3 base marker `|||||||`. Weakening the START/END patterns to compensate for a
@@ -166,6 +171,22 @@ test('conflict-marker detector: catches the real 3-marker shape', () => {
   );
 });
 
+test('conflict-marker detector: catches a `git stash pop` conflict, not just a merge', () => {
+  // The live second instance — docs/claude-code/STATUS.md, PR #1801. The label after the
+  // marker characters is NOT `HEAD`/`<sha>`, so nothing may key on the label text.
+  const sample = [
+    `${M_START} Updated upstream`,
+    'upstream entry',
+    M_SEP,
+    'stashed entry',
+    `${M_END} Stashed changes`,
+  ].join('\n');
+  assert.deepEqual(
+    scanTextForConflictMarkers(sample).map((h) => h.line),
+    [1, 3, 5],
+  );
+});
+
 test('conflict-marker detector: catches the diff3 base marker inside a span', () => {
   const sample = [`${M_START} ours`, 'a', `${M_BASE} base`, 'b', M_SEP, 'c', `${M_END} theirs`].join('\n');
   assert.deepEqual(
@@ -216,7 +237,7 @@ test('no committed conflict markers in any tracked text file', () => {
   assert.equal(
     findings.length,
     0,
-    `Committed merge-conflict marker(s) found — a conflict was "resolved" by keeping both sides:\n${report}\n` +
+    `Committed merge-conflict marker(s) found — a merge or \`git stash pop\` was "resolved" by keeping both sides:\n${report}\n` +
       'Resolve the merge properly and re-run. If a file legitimately needs a start-of-line marker, ' +
       'add its path to ALLOWLIST in test/no-conflict-markers.test.mjs — never weaken the pattern.',
   );

@@ -17,7 +17,13 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
-<<<<<<< Updated upstream
+> **⚠️ Reconciliation note (A0, 2026-08-27).** The two entries below were separated by a committed
+> `git stash pop` conflict — literal `<<<<<<< Updated upstream` / `=======` / `>>>>>>> Stashed changes`
+> markers, merged to `main` in PR #1801 and caught minutes later by `test/no-conflict-markers.test.mjs`.
+> **The two sides were not alternatives** — they are two different worklog entries, and this file is
+> newest-first, so both are kept in place (the 03:32 UTC measurement above the 03:10 UTC one). Only the
+> three marker lines were removed; no text was changed.
+
 ## 2026-08-27 (Cowork, automation window) — the merge procedure is now written from failures, not theory
 
 Five PRs went through the new protected-`main` flow in one evening, and **every step of the
@@ -58,7 +64,7 @@ data** rather than adding a view.
 (06:45), 240 (10:18) had not fired. Property-twin's last write was `2026-08-19 05:45:55`, exactly
 cron 220's slot, which **confirms the cron fires and rules out a broken schedule** — consistent
 with the undeployed-fix diagnosis. The 6am-CT scheduled check runs after all four windows.
-=======
+
 ## 2026-08-27 03:10 UTC (Cowork) — two follow-up measurements on P195's open items
 
 ### ⚠️ N11's blast radius is DORMANT, not armed — measured before treating it as an incident
@@ -98,7 +104,6 @@ parks into the `lcc_owner_sponsor_domain` map** where the answer already lives. 
 - **N9v** — auto-attach: **0 writes at 03:10 UTC**, unchanged. Cron 241 fires **06:55 UTC**. Still
   expected; check after 07:00.
 - **N9w** — sidebar: alert still open, no post-reload capture has landed. Still unproven either way.
->>>>>>> Stashed changes
 
 
 ## 2026-08-27 (Cowork) — P195: the byte-identical owner merge landed, and two traps in landing it

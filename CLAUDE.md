@@ -90,6 +90,34 @@ Two durable lessons from the fix, both expanded in
   *"Expected — waiting for status"* that no re-run fixes usually means **an invalid workflow file,
   not a queued run.** In YAML/JSON, ask whether the two sides are alternatives or additions.
 
+- **⚠️ AND THE SAME RESOLUTION COMMITS THE MARKERS THEMSELVES — TWICE IN ONE EVENING, AND
+  NOTHING DETECTED IT (A0, 2026-08-27).** `docs/architecture/panel-redesign-verification.md`
+  carried **148 lines** of literal `<<<<<<< HEAD` / `=======` / `>>>>>>> f59679a2` as FILE
+  CONTENT, on `main`, for **75 days**. **Git does not flag this**: there is no `UU`, because as far
+  as git is concerned the conflict *was* resolved — by committing the markers. Prose has no parser,
+  so nothing else caught it either. In YAML the identical mistake was LOUD (a workflow that could
+  not build a run); in prose it is **completely symptomless** and silently voided half a
+  verification document. Guard: **`test/no-conflict-markers.test.mjs`**.
+  - **It is a pattern, not one file, and the guard's FIRST CI run proved it.** A second live
+    instance was already on `main` — `docs/claude-code/STATUS.md` (PR #1801, ~1 hour earlier) — and
+    it came from a **`git stash pop`**, not a merge: `<<<<<<< Updated upstream` /
+    `>>>>>>> Stashed changes`. **Match on the marker CHARACTERS, never the label text after them**,
+    or the stash flavour walks straight through.
+  - **Both times the two sides were NOT alternatives** — §4.2e vs §4.2f of one verification doc;
+    two different entries of one newest-first worklog. Picking a side would have deleted real
+    content. **Keep both, restore the document's own ordering, change no number, and where the two
+    genuinely disagree (§4.2f is headed 2026-08-15 yet verifies §4.2e, headed 2026-08-16) say so in
+    the file rather than adjudicating it.**
+  - **⚠️ A bare `=======` is a valid Markdown setext H1 underline** — report it (and diff3
+    `|||||||`) **only inside** an open `<<<<<<<`…`>>>>>>>` span. Exclude a legitimate file **by
+    path**; weakening the pattern is how a detector starts returning comfortable zeros (P182).
+  - **⚠️ The guard was born blind to its own population, and that had to be fixed in the same
+    change.** `test-suite.yml` skips the suite when every changed file is documentation — and
+    **both instances are `docs/*.md`**, PR #1801 itself being docs-only. Its docs-only branch now
+    runs `node --test test/no-conflict-markers.test.mjs` standalone (~1 s, no `setup-node`, no
+    `npm ci`). **A guard that cannot see the population it exists for is not a guard** — the same
+    failure mode as a `test/*.test.mjs` tripwire that no merge gate runs.
+
 ## Rules
 
 0. **`LCC_API_KEY` auth is production-ready.** Frontend `auth.js` auto-injects `X-LCC-Key` via a global fetch

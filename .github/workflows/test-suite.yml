@@ -121,6 +121,17 @@ jobs:
           echo "it is NOT implemented with paths-ignore, which would leave a"
           echo "required check permanently 'Expected' and block the merge."
 
+      # ⚠️ ONE GUARD STILL RUNS ON THE DOCS-ONLY PATH, AND IT HAS TO.
+      #   Committed merge-conflict markers land in PROSE — both instances found
+      #   on 2026-08-27 were `docs/*.md`, and the one in `docs/claude-code/STATUS.md`
+      #   arrived through a documentation-only PR (#1801). A guard that cannot see
+      #   the population it exists for is not a guard. This costs ~1 second, needs
+      #   no setup-node and no `npm ci` (node builtins + git only), so it does not
+      #   re-introduce the 3-minute wait this skip was added to remove.
+      - name: Conflict-marker guard (runs even when the suite is skipped)
+        if: steps.scope.outputs.needs_tests != 'true'
+        run: node --test test/no-conflict-markers.test.mjs
+
       - uses: actions/setup-node@v4
         if: steps.scope.outputs.needs_tests == 'true'
         with:

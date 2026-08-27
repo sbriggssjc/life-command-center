@@ -253,6 +253,21 @@ inside** a `<<<<<<<`…`>>>>>>>` span — if a file legitimately needs a start-o
 it **by path** via that test's `ALLOWLIST`; weakening the pattern is how the detector would start
 returning comfortable zeros.
 
+**⚠️ And it is a PATTERN, not one file — the guard's very first CI run caught a second, live
+instance.** `docs/claude-code/STATUS.md` lines 20/61/101 reached `main` in **PR #1801**, roughly an
+hour before the guard existed. That one was a **`git stash pop`** conflict, not a merge —
+`<<<<<<< Updated upstream` / `>>>>>>> Stashed changes` — so **match on the marker CHARACTERS, never
+on the label text after them.** Same resolution as the first: the two sides were two different
+worklog entries, not alternatives, and both were kept.
+
+**⚠️ The documentation-only skip had made this guard blind to exactly the files it exists for.**
+The suite is skipped when every changed file is docs (see below), and **both instances are
+`docs/*.md`** — PR #1801 was itself documentation-only, so the guard would never have run on the PR
+that introduced the second one. The docs-only branch of `test-suite.yml` therefore runs
+`node --test test/no-conflict-markers.test.mjs` on its own: ~1 second, no `setup-node`, no `npm ci`
+(node builtins + git only), so the skip still does what it was added to do. **A guard that cannot
+see the population it exists for is not a guard.**
+
 ### ⚠️ 4c. Verify the branch base actually updated
 
 `git pull --rebase` **fails silently into your next command** when the tree is dirty
