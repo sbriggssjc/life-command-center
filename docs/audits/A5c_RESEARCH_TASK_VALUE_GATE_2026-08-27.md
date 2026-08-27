@@ -254,6 +254,49 @@ select research_type, gate_reason, count(*) from v_next_best_research group by 1
 ⚠️ **A small mint is the gate working.** The failure mode to watch for is the opposite: a mint in
 the thousands means the filter is not in the selection path — check the run's `gate_reasons_seen`.
 
+## 10a. LIVE — deployed, crons re-enabled, first run measured (2026-08-27 20:5x UTC)
+
+Merged as **7de1791**. ⚠️ **The `/version` probe is unreachable from this sandbox (proxy 403 to the
+Railway host), so the deploy was confirmed BEHAVIOURALLY** — `lcc_cron_post` → `?dry_run=1` →
+`net._http_response`, reading for a field that only exists post-A5c. That is the corroboration the
+"merged is not running" doctrine asks for, and it caught the gap live:
+
+| probe | `value_gated` | gov `would_insert` | dia `would_insert` |
+|---|---|---:|---:|
+| before merge (positive control) | **absent** | 1,000 | 1,586 |
+| ~2 min after merge — **deploy had NOT landed** | **absent** | 1,000 | 1,586 |
+| after the deploy | **`true`** | 1,861 | 182 |
+
+**Had the crons been re-enabled at the middle row, cron 34 would have minted the full 2,586-row
+ungated flood** with the gate sitting inert in the DB beside it. The DB half ships instantly and the
+JS does not — the same split that produced the P135/P136 false stalls, here on the other side.
+
+**Crons 34 and 35 re-enabled** (`cron.alter_job(…, active := true)`; verified `active = true`, `35 6
+* * *` and `9-59/30 * * * *`).
+
+**First live run — `limit=300`, the recurring cron's own budget:**
+
+| domain | feed | `admitted_head_exhausted` | `gate_reasons_seen` | **`inserted`** | `closed` |
+|---|---:|---|---|---:|---:|
+| government | 300 | `false` (a floor — 2,332 admitted) | `["admitted"]` | **161** | 0 |
+| dialysis | **198** | **`true`** (the WHOLE admitted population) | `["admitted"]` | **182** | 0 |
+
+**343 minted — hundreds, not thousands.** dia's `feed: 198` matching the SQL-measured admitted
+population exactly, with `admitted_head_exhausted: true`, is the cross-check that the filter is in
+the selection path and not somewhere downstream.
+
+**Two lanes got their first tasks ever:** dia `property_missing_county_record` **109** and gov
+`owner_needs_salesforce` **108** — 9,761 and 13,724 gap rows that no surface had ever shown.
+
+**A5a has not regressed:** `closed: 0` / `would_close: 0` on both domains, and the only
+`gap_resolved` rows in 24h are **10 at 06:00 UTC**, from cron 34's last run *before* A5a deployed.
+Nothing since.
+
+⚠️ **Open counts went UP and that is the fix working** (A5a's own rule). 2,000 → 2,343, converging
+to **≈2,530 admitted + ≈1,844 pre-gate residue** — dia `property_missing_recorded_owner` **174
+exact**, gov `property_missing_recorded_owner` ~860, dia `true_owner_needs_salesforce` ~810. The
+gate bounds NEW emission; the residue is **A5d**, and this run is the measurement that sizes it.
+
 ## 11. The durable lessons
 
 - **A gate belongs in the SELECTION, not after the read.** A JS filter over the fetched head would
