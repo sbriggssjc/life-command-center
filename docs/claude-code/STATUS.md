@@ -17,6 +17,47 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+
+## 2026-08-27 — A3: the ownership `mismatch` lane is a REPRESENTATION question (74 chains → 12 decisions)
+
+Full writeup: [`docs/audits/A3_OWNERSHIP_MISMATCH_SPONSOR_FAMILY_2026-08-27.md`](../audits/A3_OWNERSHIP_MISMATCH_SPONSOR_FAMILY_2026-08-27.md).
+Migration `20260827180000_lcc_a3_ownership_mismatch_sponsor_family.sql`, applied live to LCC Opps.
+**Nothing writes. No confirmation is seeded. `mismatch` is still 74 until Scott confirms.**
+
+**Re-measured the POPULATION first.** The brief said 73; A2 landed in between and drained `agrees`
+380 → 90, so the lane is **74 chains / 46 owners / $403.0M**. Split:
+`sponsor_family_candidate` **32 chains / 12 owners / 12 DECISIONS** (Boyd Watterson 20:1),
+`unexplained` 31 / 27 / $344.6M, `name_variant` 11 / 10. Per-class rent double-counts — three owners
+span two classes, so quote the distinct $403.0M.
+
+**The prescribed key was measured and rejected.** A bare sponsor token is not bounded — `east` names
+**226** live entities, `boyd` **129** (including the surname `Boyd Alexander`) — and
+`lcc_owner_sponsor_domain`'s `sponsor_token` PK cannot carry `madison` (proposed by two owner
+entities) or `egp` (Easterly **and** EastGroup). The confirm registry `lcc_ownership_sponsor_family`
+is therefore keyed **(sponsor entity, token)**, resolved through `lcc_entity_survivor`. This is not
+the second-registry drift: the **detector** is shared — P196's guards are extracted into
+`lcc_name_reads_as_street` / `lcc_name_has_spe_marker` and P196 re-issued to call them (0 of 696
+Tier 0 rows changed).
+
+**P196's SPE-marker arm drops 24 of 27 genuine rows here** (a GSA SPE is named for its city and
+agency, not "Propco") — not applied, predicate not weakened. The other three guards are applied with
+measured cost: street fires 3× changing **0** outcomes, brokerage 0, person costs exactly **2** real
+false negatives (`City of Oakland`, `Glenn Olds` — both `lcc_looks_like_person` false positives,
+named not patched).
+
+**A contact confirm does not settle an ownership fact** (P188 restated): the 8 existing
+`lcc_owner_sponsor_domain` rows resolve **0 of 74**, so inheriting buys nothing and would let a
+~4-of-6 gate decide ownership. It rides the card as `also_confirmed_for_contacts`; nothing inherits.
+
+`sponsor_spe` is a **fifth action, deliberately not `agrees`** — folding it there would hand it to
+A2's write path. Positive control (self-rolling-back): with `boyd` confirmed, mismatch **74 → 54**,
+sponsor_spe **0 → 20**, human_actionable **92 → 72**, and `agrees`/`no_records`/`all_guarded`
+**unmoved**; rolled back with 0 residue. P180 equivalence on the split view: **0 rows differ** both
+directions. `npm test` 4,684 pass / 0 fail. New guard mutation-verified RED on six mutations.
+
+**Residue sized, surface NOT built** (31 chains / 27 owners / $344.6M). Follow-on **A3b**, named not
+built: teach A2's apply path to consume `sponsor_spe`.
+
 ## 2026-08-27 06:00 UTC — P196: the shared merge path is REVERSIBLE (N11 ✅), and parked Tier 0 cards say why (N3e ✅)
 
 Full writeup: [`docs/audits/P196_MERGE_REVERSIBILITY_AND_PARK_REASONS_2026-08-27.md`](../audits/P196_MERGE_REVERSIBILITY_AND_PARK_REASONS_2026-08-27.md).

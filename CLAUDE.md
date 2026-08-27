@@ -1851,6 +1851,75 @@ A3/A4/A4b are untouched and unchanged at 73 / 74 / 18.
   entities — **48** of the 92 open tasks are blocked by that ALONE and need only a P195-style
   merge, after which cron 244 applies them unaided), `repeat_transfer_unrepresentable` 28, `placeholder` 26, `no_entity` 20.
 
+## A3 — the `mismatch` lane is a REPRESENTATION question; 74 chains → 12 decisions (2026-08-27)
+
+The A1 `mismatch` bucket (*the last recorded grantee ≠ the owner we hold*) reads like a
+data-integrity backlog. Measured, **32 of 74 chains are sponsor ↔ SPE** — the deed names the SPE
+holding title, our field names the sponsor, **both correct** — and they collapse into **12
+confirmations, one of which (Boyd Watterson) covers 20 chains.** Migration `20260827180000`;
+writeup `docs/audits/A3_OWNERSHIP_MISMATCH_SPONSOR_FAMILY_2026-08-27.md`. **Nothing writes; no
+confirmation is seeded; `mismatch` is still 74 until Scott confirms.**
+
+| class | chains | owners | decisions |
+|---|---:|---:|---:|
+| `sponsor_family_candidate` | 32 | 12 | **12** |
+| `unexplained` (the real integrity lane) | 31 | 27 | — |
+| `name_variant` | 11 | 10 | — |
+
+**⚠️ Re-measure the POPULATION, not just the blocker.** The brief said 73; A2 landed in between
+and it is **74 / 46 owners / $403.0M**. And **per-class rent double-counts** — three owners span
+two classes, so the class sums ($612.6M) exceed the distinct total ($403.0M).
+
+- **⚠️ THE PRESCRIBED KEY WAS MEASURED AND REJECTED. A BARE SPONSOR TOKEN IS NOT BOUNDED.**
+  The brief said reuse `lcc_owner_sponsor_domain`, keyed on `sponsor_token`. Live entities
+  carrying each proposed token as a standalone word: **`east` 226, `boyd` 129**, `fgf`/`madison`
+  67, `arc` 46 — including surnames (`Boyd Alexander`) and addresses (`100 East PropCo LLC`). In
+  that table a wrong token merely fails to join to a person; here it would assert a false
+  **ownership** fact. Worse, its PK cannot express two cases already in the data: **`madison` is
+  proposed by two owner entities**, and **`egp` names both Easterly Government Properties and
+  EastGroup Properties** (`EGP 116 Suffolk` vs `EGP 85 Charleston`). So the confirm registry
+  `lcc_ownership_sponsor_family` is keyed **(sponsor entity, token)**, resolved through
+  `lcc_entity_survivor`. **This is NOT the second-registry drift** — the *detector* is shared
+  (see the next bullet); the two tables answer different questions at different scopes.
+- **⚠️ A CONTACT CONFIRM DOES NOT SETTLE AN OWNERSHIP FACT (P188, restated).** Letting the 8
+  existing `lcc_owner_sponsor_domain` rows resolve chains for free was tested: **0 of 74**, so it
+  buys nothing — and it would let a gate that reads ~4-of-6 on named rows decide ownership. It
+  rides the card as `also_confirmed_for_contacts`; **nothing inherits.**
+- **⚠️ THE P196 SPE-MARKER GUARD DROPS 24 OF 27 GENUINE ROWS ON THIS POPULATION.**
+  `lcc_tier0_sponsor_brand_token(grantee, owner)` returns non-null for **3 of 74**: a government
+  SPE is named for its city and agency (`BOYD SACRAMENTO GSA, LLC`), not "Propco". A3 does not
+  apply that arm and does **not** weaken the predicate — instead the P196 guards are **extracted
+  into `lcc_name_reads_as_street` / `lcc_name_has_spe_marker` and P196 re-issued to CALL them**
+  (0 of 696 Tier 0 rows change), so both gates share one copy of each regex. **A guard calibrated
+  on one population must be re-graded, not inherited** — the same lesson as A2's `strict_core`.
+- **The other three guards ARE applied and their cost is MEASURED:** street fires 3× and changes
+  **0** outcomes; brokerage 0; **person costs exactly 2 real false negatives** — `City of Oakland`
+  ← `PORT DEPARTMENT OF THE CITY OF OAKLAND` and `Glenn Olds …` ← `U-Land, Glenn Olds, LLC`, both
+  `lcc_looks_like_person` **false positives** (a pre-existing defect, named not patched). Kept per
+  P196's trade: a false negative costs one card, a false positive asserts a stranger's firm over
+  an SPE family.
+- **⚠️ NOT P187's REJECTED ACRONYM ARM.** P187 *inferred* a fact from ONE name (~30–40%, because
+  27.6% of owner names are all-caps). A3 requires the token on **both sides of a deed for the same
+  property** — one grantee per chain, and **32 of 32 read genuine on named rows.**
+- **`sponsor_spe` is a FIFTH action, deliberately not `agrees`.** Folding it into `agrees` would
+  hand it to A2's apply path (cron 244), which **writes** portfolio facts — a materially bigger
+  decision nobody has graded. `agrees`/`no_records`/`all_guarded` must not move; the positive
+  control proves they don't (74→54 mismatch, 0→20 sponsor_spe, 92→72 human_actionable, other three
+  unchanged, rolled back with 0 residue).
+- **`name_variant` (11) stays HUMAN-ACTIONABLE.** It rides `lcc_owner_strict_core`, which A2
+  measured and rejected for WRITES on this exact population (`BAMMF (8) LLC == BAMMF (3) LLC`).
+  Labelling is safe; retiring 11 cards on it is an automated name judgement nobody asked for.
+- **Stated gaps:** `lcc_is_spe_shell_name` detects **4 of 31** residue grantees (the documented
+  place-named-SPE hole — `Lorton GSA LLC`, `BELTSVILLE GSA FDA, LLC`); **confirming `boyd`
+  resolves 20 of Boyd's 24**, the other four carrying no Boyd token; and **two of those four
+  carry the `fgf` token** while `FGF Management LLC` is a separate owner also proposing `fgf` —
+  a Boyd/FGF JV or an attribution question, surfaced not folded.
+- **Verify on the decisions, not the chains.** `select action, count(*) from
+  v_lcc_ownership_history_lane_split group by 1` — `mismatch` falls by the confirmed sponsors'
+  chain count; the other three actions must not move. The residue (31 chains / 27 owners /
+  $344.6M, split `no_shared_brand_token` 25 / `grantee_reads_as_street` 3 /
+  `owner_reads_as_person` 3) is **sized, not surfaced** — building its lane is a separate call.
+
 ## P138 / R8 Stage 1 — the brief's "Analyst's Take", generated ON-BOX (2026-08-26)
 
 The daily brief has rendered a `renderAnalystTake` section since v2 and the column has
