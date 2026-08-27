@@ -10223,14 +10223,15 @@ async function handleDecisionVerdict(req, res) {
         // Build the PATCH body. For LCC-native entities also recompute canonical_name
         // via the house normalizer; a unique-canonical collision -> conflict (below).
         const patchBody = { [target.nameCol]: newName };
-        if (target.canonicalCol && target.domain === 'lcc') {
-          try {
-            const nr = await opsQuery('POST', 'rpc/lcc_normalize_entity_name', { p_name: newName });
-            const canon = (nr.ok && typeof nr.data === 'string') ? nr.data
-              : (nr.ok && Array.isArray(nr.data) && typeof nr.data[0] === 'string') ? nr.data[0] : null;
-            if (canon) patchBody[target.canonicalCol] = canon;
-          } catch (_e) { /* normalizer best-effort — name still writes */ }
-        }
+        // N15c: this used to recompute canonical_name here via
+        // rpc/lcc_normalize_entity_name — the AGGRESSIVE normalizer, which is
+        // documented banned-for-identity (it collides `Century Park Partners`
+        // with `Century Park Properties LLC` and returns NULL for 1,070 live
+        // entities). It was the 8th of ten writers of this column and the only
+        // one using that rule. The BEFORE trigger `trg_lcc_entities_canonical_name`
+        // now derives canonical_name from the new name on this very PATCH, so the
+        // rename below is sufficient and there is exactly one writer.
+        void target.canonicalCol;
         const patchPath = target.table + '?' + target.pkCol + '=eq.' + encodeURIComponent(review.pk_value);
         const pr = target.domain === 'lcc'
           ? await opsQuery('PATCH', patchPath, patchBody)

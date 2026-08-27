@@ -1,7 +1,79 @@
 import { opsQuery, pgFilterVal, insertEntityRelationship } from './ops-db.js';
 import { syncSalesforceForEntity } from './salesforce-sync.js';
 
+/**
+ * N15c — THE token rule for entity name identity.
+ *
+ * ⚠️ This is the JS mirror of SQL `lcc_entity_name_tokens`. The BEFORE trigger
+ * on `entities` writes `lcc_entity_canonical_key(name)`; `ensureEntityLink`
+ * looks the row up by `normalizeCanonicalName(name)`. If the two disagree by a
+ * single character the lookup misses and mints a duplicate — which is exactly
+ * the failure N15b measured (10,336 of 62,368 live entities invisible to this
+ * function). `test/entity-canonical-key.test.mjs` pins them together.
+ *
+ * The rule (Scott, 2026-08-27): strip ONLY pure legal-entity forms; keep every
+ * semantic token (`group`, `partners`, `company`, `capital`, `holdings`,
+ * `properties`, `realty`). A DST, its Trust and its LLC are ONE entity — the
+ * true owner — so `trust|dst|reit` are stripped deliberately.
+ *   ⚠️ Individual investors holding FRACTIONAL positions in a DST/TIC/JV are
+ *   backlog N17 and must NOT be modelled by splitting this key. Fractional
+ *   interest is a relationship, not an identity split.
+ */
+const CANONICAL_LEGAL_FORM_TOKENS = new Set([
+  'llc', 'llp', 'lp', 'inc', 'incorporated', 'corp', 'corporation',
+  'ltd', 'limited', 'trust', 'reit', 'dst', 'lllp', 'lc', 'pllc',
+]);
+
+export function entityNameTokens(name) {
+  const flat = String(name == null ? '' : name)
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (flat === '') return [];
+  const parts = flat.split(' ');
+  const out = [];
+  for (let i = 0; i < parts.length; i++) {
+    const tok = parts[i];
+    if (tok === '') continue;
+    // Leading article only — 'of'/'and' are kept inline, matching the SQL
+    // `not (ord = 1 and tok = 'the')`.
+    if (i === 0 && tok === 'the') continue;
+    if (CANONICAL_LEGAL_FORM_TOKENS.has(tok)) continue;
+    out.push(tok);
+  }
+  return out;
+}
+
+/**
+ * The value of `entities.canonical_name`. Mirrors SQL `lcc_entity_canonical_key`.
+ *
+ * ⚠️ SPACE-joined, never bare-concatenated. The no-separator join used by the
+ * Tier 0 domain comparator yields 115 FEWER distinct keys over the live
+ * organizations and every one of those is a false collision (`Gate Way` ==
+ * `Gateway`, verified on the named row).
+ *
+ * The empty case: 98 live entities are named only with legal forms ("--",
+ * "Llc", "Corporation", "The", "Trust"). An empty key would dedup all of them
+ * into one entity, so they get a `dc:`-namespaced fallback — provably disjoint
+ * from every real key, because a real key is [a-z0-9 ]+ and can never contain a
+ * colon. Same device and prefix as `v_lcc_merge_candidates_normalizer_blind`.
+ * Never returns null or ''.
+ */
 export function normalizeCanonicalName(name) {
+  const toks = entityNameTokens(name);
+  if (toks.length > 0) return toks.join(' ');
+  return 'dc:' + String(name == null ? '' : name).toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+/**
+ * The PRE-N15c key, retained ONLY so `ensureEntityLink` can find rows that have
+ * not been backfilled yet (and the 537 deliberately held back — see N15c §"what
+ * needs Scott"). Read-only: nothing writes this. Delete once the backfill has
+ * run and `v_lcc_canonical_name_drift` reads 0 for a sustained window.
+ */
+export function legacyCanonicalName(name) {
   return String(name || '')
     .trim()
     .toLowerCase()
@@ -1021,11 +1093,28 @@ export async function ensureEntityLink({
   }
 
   if (!resolvedEntity && canonicalName) {
-    let path = `entities?workspace_id=eq.${workspaceId}&canonical_name=eq.${encodeURIComponent(canonicalName)}&select=*&limit=5`;
+    // N15c DUAL-READ. The BEFORE trigger on `entities` writes the N15c key, but
+    // rows minted before it — and the 537 stale rows deliberately held back from
+    // the backfill — still carry the pre-N15c key. Reading BOTH is what makes the
+    // JS deploy and the DB migration safe in EITHER order: a single-key read
+    // would miss every not-yet-backfilled row and mint a duplicate for it, which
+    // is the exact failure this round exists to close.
+    // Remove `legacy` once the backfill has run and the drift view holds at 0.
+    const legacy = legacyCanonicalName(candidateName);
+    const keys = (legacy && legacy !== canonicalName) ? [canonicalName, legacy] : [canonicalName];
+    // `in.(...)` with double-quoted values — a canonical key contains spaces, and
+    // an unquoted PostgREST list would split on a comma inside one.
+    const inList = keys.map(k => '"' + String(k).replace(/(["\\])/g, '\\$1') + '"').join(',');
+    let path = `entities?workspace_id=eq.${workspaceId}`
+      + `&canonical_name=in.(${encodeURIComponent(inList)})&select=*&limit=10`;
     if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
     const match = await opsQuery('GET', path);
     if (match.ok && match.data?.length) {
-      resolvedEntity = match.data.find(e => e.entity_type === entityType) || match.data[0];
+      // Prefer an exact hit on the CURRENT key over a legacy-key hit, and within
+      // each, one whose entity_type agrees. A legacy hit is still a real match —
+      // it is the same party under the outgoing normalization.
+      const rank = (e) => (e.canonical_name === canonicalName ? 0 : 2) + (e.entity_type === entityType ? 0 : 1);
+      resolvedEntity = match.data.slice().sort((a, b) => rank(a) - rank(b))[0];
     }
   }
 

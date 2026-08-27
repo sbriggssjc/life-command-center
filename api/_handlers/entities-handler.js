@@ -25,7 +25,7 @@ import { projectRentAtDate } from '../_shared/rent-projection.js';
 import { deriveStageLine } from '../_shared/deal-stage-line.js';
 import { ensureAssetEntityForProperty } from '../_shared/asset-entity.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from '../_shared/lifecycle.js';
-import { normalizeAddress, stripListingStatusPrefix, canonicalIdentitySystem, CANONICAL_DOMAIN_SYSTEMS, canonicalDomainSourceType, canonicalEntityDomain } from '../_shared/entity-link.js';
+import { normalizeAddress, stripListingStatusPrefix, canonicalIdentitySystem, CANONICAL_DOMAIN_SYSTEMS, canonicalDomainSourceType, canonicalEntityDomain, normalizeCanonicalName } from '../_shared/entity-link.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
 import { processSidebarExtraction, hasSidebarData } from './sidebar-pipeline.js';
 import { domainQuery } from '../_shared/domain-db.js';
@@ -2682,12 +2682,13 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       return res.status(400).json({ error: 'name is required' });
     }
 
-    // Build canonical name for dedup
-    const canonical_name = name.trim().toLowerCase()
-      .replace(/\b(llc|inc|corp|ltd|co|company|group|partners|lp|llp)\b\.?/gi, '')
-      .replace(/[^a-z0-9\s]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
+    // N15c: ONE normalizer. This was an inline COPY of normalizeCanonicalName
+    // that had drifted from it by a single character (`[^a-z0-9\s]` deleted here,
+    // replaced with a space there), so `BALTARA ENTERPRISES, L.P.` keyed
+    // `baltara enterprises lp` on this path and `baltara enterprises l p` on
+    // every other — 2,369 live rows matched one and not the other. Two copies of
+    // one rule is how the drift happened; there is now one function.
+    const canonical_name = normalizeCanonicalName(name);
 
     // Pre-insert dedup check for assets: match on normalized address + city.
     // Exact ilike on raw address misses common abbreviation variants
@@ -2837,11 +2838,8 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
 
     if (name) {
       updates.name = name.trim();
-      updates.canonical_name = name.trim().toLowerCase()
-        .replace(/\b(llc|inc|corp|ltd|co|company|group|partners|lp|llp)\b\.?/gi, '')
-        .replace(/[^a-z0-9\s]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
+      // N15c: second of the two inline copies — see the POST path above.
+      updates.canonical_name = normalizeCanonicalName(name);
     }
     if (entityDomain !== undefined) updates.domain = canonicalEntityDomain(entityDomain);
     if (tags !== undefined) updates.tags = tags;

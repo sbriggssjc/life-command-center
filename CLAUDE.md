@@ -2662,6 +2662,77 @@ group by group, gate `lcc_p195_name_has_distinctive_residue`, plan `v_lcc_p195_m
   `open_groups`** — a group that was never merged is not a resurrection.
 
 
+## N15c — `entities.canonical_name` has ONE writer, and the census was wrong twice (2026-08-27)
+
+Ten code paths wrote `entities.canonical_name` with five different normalizations, so **10,336 of
+62,368 live entities carried a key `ensureEntityLink`'s own lookup could not reproduce from their
+own name** — it missed and minted, ~4 duplicates/day. Now: `lcc_entity_name_tokens` owns the token
+rule, `lcc_entity_canonical_key` (space join) is the value, and a `BEFORE INSERT OR UPDATE OF name`
+trigger is the sole writer. Writeup: `docs/audits/N15c_CANONICAL_NAME_SINGLE_WRITER_2026-08-27.md`.
+
+- **⚠️ GREP CANNOT FIND EVERY WRITER OF A COLUMN, AND THREE PASSES PROVED IT.** N15b's census said
+  seven; the brief added an eighth; the build found **ten** — `api/sync.js` and `api/domains.js` both
+  POST/PATCH `entities` — plus a **twelfth normalization hiding in a dead defensive ternary**
+  (`(typeof normalizeCanonicalName === 'function') ? … : newName.toLowerCase()`). **That is the
+  argument for putting the rule in a trigger rather than in the callers**: a trigger does not care
+  how many writers there are, and it closes the staleness class in the same stroke because it
+  recomputes when a name-repair path rewrites `name`. When a column has "a few" writers, assume you
+  have not found them all.
+- **⚠️ ONE TOKEN LIST, TWO JOIN STYLES — never two token lists.** `lcc_owner_domain_core` ends
+  `string_agg(tok,'')` with **no separator**, which is right for a domain comparator and wrong for a
+  name key: over 43,219 live organizations the no-separator form yields **115 FEWER distinct keys,
+  and every one is a false collision** (`Gate Way` == `Gateway`, verified on the named row). Both
+  functions now read one stoplist and differ only in the join. **Adopting a function's RULE is not
+  adopting the function** — re-grade the join, the separator and the residue on named rows first
+  (the same lesson as A2's `strict_core` and P189's normalizer hazard: the hazard travels with the
+  TECHNIQUE).
+- **⚠️ A REFACTOR OF A LOAD-BEARING FUNCTION NEEDS A BYTE-IDENTICAL PROOF *AND* A POSITIVE CONTROL.**
+  `lcc_owner_domain_core` underwrites P187/P188/P194/P196/P197/P198. It was compared over **103,710
+  values** (every live entity name, every `company_name` in `lcc_sf_list_membership` and
+  `unified_contacts`, plus NULL/empty/`İstanbul`/tabs/apostrophes): **0 mismatches**. That zero was
+  not believed until the same detector was pointed at deliberately-wrong variants and reported
+  ~59,800 (Class 11). Note one mutation — appending `LLC` to every name — correctly reported 0,
+  because appending a stopword *is* a no-op; **a mutation that mutates into a no-op is not a failed
+  control, but you have to notice which kind you wrote.**
+- **⚠️ DEPLOY ORDER IS THE *SECOND* KIND HERE: CONSTRAINT AFTER WRITER DEPLOY.** The trigger writes
+  the new key while the *deployed* `ensureEntityLink` still reads the old one, so applying it (and
+  especially the 15,402-row backfill) before the JS ships would make those rows unfindable at once
+  and turn a ~4/day leak into a spike. The trigger therefore ships as its own migration
+  (`…230200`), **unapplied**, with the inert half (`…230100`: functions, ledger, dry-run backfill,
+  drift view) live. The JS is **dual-read** — `ensureEntityLink` queries the current key AND the
+  legacy key in one PostgREST `in.(…)` — which is what makes the order safe once it is live and what
+  keeps the held-back rows resolving. **A schema change that enforces a writer's output is not
+  "additive" just because it adds an object.**
+- **⚠️ A GUARD THAT MATCHES A SHAPE IS DEFEATED BY A LOCAL VARIABLE.** The inline-copy test first
+  matched `canonical_name: x.trim()`; the mutation that assigned an inline copy to a `const` walked
+  straight through it. Rewritten to **resolve the assigned identifier to its initializer**, it went
+  red — and finding that is what surfaced the 12th normalization. Every one of the 8 tests is
+  mutation-verified. (Same family as the P182 deparse trap and the A1 prose detector: assert on the
+  substance, never the spelling.)
+- **The empty key is namespaced, and fixing it rescued a real firm.** 98 live entities reduce to no
+  tokens (`--` ×89, `Llc`, `Corporation`, `The`, `Trust`); they key `'dc:'||…`, provably disjoint
+  from any real key because a real key is `[a-z0-9 ]+` and can never contain a colon (the P189
+  `v_lcc_merge_candidates_normalizer_blind` precedent). ⚠️ **Today 114 entities share
+  `canonical_name = ''` and one of them is `Partners Group`** — a real firm whose two semantic tokens
+  are both stripped by the outgoing normalizer, keyed identically to `--` junk. The new rule keys it
+  `partners group`.
+- **⚠️ A CONSUMER THAT READS ANOTHER WRITER'S COLUMN CAN BE MADE WORSE BY FIXING THAT COLUMN.**
+  `v_lcc_developer_classification_candidates` joined `e.canonical_name` against
+  `lcc_normalize_entity_name(developer_name)` — the one surface that wants the *aggressive*
+  normalizer. Of 277 candidates it resolved **218** today, **267** once it COMPUTES the normalizer,
+  and **196** if left alone after N15c. Repointing was not optional. ⚠️ **And its own row count is
+  not that measurement** — the view returns 5 rows because 269 candidates sit in
+  `lcc_developer_classification_log`; N15b's "222 of 274" does not reproduce off the view.
+- **Verify by `v_lcc_canonical_name_drift`, and read `drift_class`, never the total.** After the
+  backfill the total holds at the held rows; a **new `backfillable` row means a writer escaped the
+  trigger**. A one-shot backfill of a live producer is Class 8 — the standing view is what says
+  whether the producer is actually fixed.
+- 👤 **Two decisions are Scott's and were deliberately not guessed:** the **537 stale rows**
+  (`canonical_name` left behind after `name` was repaired — recomputing discards a captured string
+  some preserve; they are excluded from the backfill *by construction* and are the entire residual,
+  10,336 → 537), and whether the column becomes an enforced **UNIQUE** key (3,930 groups violate it
+  today).
+
 ## A5 — a truncated feed auto-closed the work it could not see (2026-08-27)
 
 `true_owner_needs_salesforce` read **815 open / 596 lifetime completions / 1 in the last week** and
