@@ -19,6 +19,10 @@
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
 import { OCD_SOURCE, OCD_DECISION_TYPE, ocdSubjectRef } from './_shared/ownership-chain-draft-planner.js';
+import {
+  OWNERSHIP_LANE_ACTIONS, OWNERSHIP_LANE_PENDING_STATES, OWNERSHIP_LANE_ACTIONS_VIEW,
+  OWNERSHIP_LANE_SPLIT_VIEW, isOwnershipLaneBucket, fetchOwnershipLaneTaskIds, reorderByIds,
+} from './_shared/ownership-lane-split.js';
 import { opsQuery, paginationParams, pgFilterVal, requireOps, withErrorHandler, isOpsConfigured } from './_shared/ops-db.js';
 import { getAiConfig } from './_shared/ai.js';
 import {
@@ -151,17 +155,61 @@ export default withErrorHandler(async function handler(req, res) {
     }
 
     case 'research': {
+      // A1: `page`/`per_page` are what the Research page actually sends, and
+      // paginationParams reads only limit/offset — so every page rendered the
+      // same first 50 rows and the response carried no `pagination`, leaving
+      // paginationHTML with nothing to draw. 545 tasks, 50 reachable, no pager.
+      // Resolved here because a lane_action chip that reaches 50 of 73 is the
+      // same badge-that-lies failure the chip exists to fix.
+      const rPage = Math.max(parseInt(req.query.page, 10) || 1, 1);
+      const rPer = Math.min(Math.max(parseInt(req.query.per_page, 10) || parseInt(req.query.limit, 10) || 50, 1), 200);
+      const rOffset = req.query.offset != null
+        ? Math.max(parseInt(req.query.offset, 10) || 0, 0)
+        : (rPage - 1) * rPer;
+
+      // A1: filter to ONE action of the ownership lane, server-side off the
+      // split view, so a chip pages through its whole bucket.
+      const laneAction = String(req.query.lane_action || '').trim();
+      let laneIds = null;
+      let laneCount = null;
+      if (laneAction) {
+        if (!isOwnershipLaneBucket(laneAction)) {
+          return res.status(400).json({
+            error: `lane_action must be one of: ${[...OWNERSHIP_LANE_ACTIONS, ...OWNERSHIP_LANE_PENDING_STATES].join(', ')}`
+          });
+        }
+        const sel = await fetchOwnershipLaneTaskIds(opsQuery, {
+          bucket: laneAction, status: req.query.status, limit: rPer, offset: rOffset,
+        });
+        if (!sel.ok) return res.status(sel.status).json({ error: sel.error });
+        laneIds = sel.ids;
+        laneCount = sel.count;
+        if (!laneIds.length) {
+          return res.status(200).json({
+            items: [], count: laneCount, view: 'research', lane_action: laneAction,
+            pagination: researchPagination(rPage, rPer, laneCount),
+          });
+        }
+      }
+
       let path = `research_tasks?workspace_id=eq.${workspaceId}&select=*,entities(name),assignee:users!research_tasks_assigned_to_fkey(display_name),creator:users!research_tasks_created_by_fkey(display_name)`;
       if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
       if (req.query.assigned_to) path += `&assigned_to=eq.${pgFilterVal(req.query.assigned_to)}`;
       if (req.query.research_type) path += `&research_type=eq.${pgFilterVal(req.query.research_type)}`;
       if (req.query.status === 'active') path += `&status=in.(queued,in_progress)`;
       else if (req.query.status) path += `&status=eq.${pgFilterVal(req.query.status)}`;
-      path += paginationParams({ ...req.query, order: req.query.order || 'priority.asc,created_at.asc' });
+      if (laneIds) {
+        // Already paged by the view; hydrate exactly this page's ids.
+        path += `&id=in.(${laneIds.map(pgFilterVal).join(',')})&limit=${laneIds.length}`;
+      } else {
+        path += `&limit=${rPer}&offset=${rOffset}&order=${/^[a-zA-Z0-9_.,]+$/.test(req.query.order || '') ? req.query.order : 'priority.asc,created_at.asc'}`;
+      }
 
-      const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
+      const result = await opsQuery('GET', path, undefined, { countMode: laneIds ? 'none' : 'exact' });
       if (!result.ok) {
-        return res.status(result.status || 500).json({ error: 'Failed to fetch research tasks' });
+        // Pass the DB's own message through — v1 used to swallow it, which is
+        // exactly how the P132 two-embeds outage stayed undiagnosed.
+        return res.status(result.status || 500).json({ error: result.data?.message || 'Failed to fetch research tasks' });
       }
       const rows = Array.isArray(result.data) ? result.data : [];
       const items = rows.map(r => ({
@@ -170,8 +218,24 @@ export default withErrorHandler(async function handler(req, res) {
         assignee_name: r.assignee?.display_name || null,
         creator_name: r.creator?.display_name || null
       }));
-      const withDrafts = await attachOwnershipChainDrafts(items);
-      return res.status(200).json({ items: withDrafts, count: result.count, view: 'research' });
+      const ordered = laneIds ? reorderByIds(items, laneIds) : items;
+      const withDrafts = await attachOwnershipChainDrafts(ordered);
+      const total = laneIds ? laneCount : (result.count ?? withDrafts.length);
+      return res.status(200).json({
+        items: withDrafts, count: total, view: 'research',
+        lane_action: laneAction || null,
+        pagination: researchPagination(rPage, rPer, total),
+      });
+    }
+
+    // A1: per-action counts for the ownership-lane chips. Read from the rollup
+    // view so a chip shows the WHOLE-lane universe, not the page.
+    case 'ownership_lane_actions': {
+      const result = await opsQuery('GET', `${OWNERSHIP_LANE_ACTIONS_VIEW}?select=*`, undefined, { countMode: 'none' });
+      if (!result.ok) {
+        return res.status(result.status || 500).json({ error: result.data?.message || 'Failed to fetch ownership lane actions' });
+      }
+      return res.status(200).json({ items: result.data || [], view: 'ownership_lane_actions' });
     }
 
     // P180: per-lane summary for the Research lane picker. Five+ lanes with very
@@ -257,7 +321,7 @@ export default withErrorHandler(async function handler(req, res) {
 
     default:
       return res.status(400).json({
-        error: 'Invalid view. Must be one of: my_work, team, inbox, sync_exceptions, research, entity_timeline, counts, data_quality'
+        error: 'Invalid view. Must be one of: my_work, team, inbox, sync_exceptions, research, research_lanes, ownership_lane_actions, entity_timeline, counts, data_quality'
       });
   }
 });
@@ -418,6 +482,15 @@ async function v2GetInbox(req, user, workspaceId) {
 // re-derived — a second copy of that shape is the normaliser drift this repo
 // keeps getting bitten by.
 // ---------------------------------------------------------------------------
+// A1: the v1 research view had no pagination block, so paginationHTML never
+// rendered a pager. Same shape as v2PaginationMeta; kept separate because v1
+// counts with countMode 'exact' rather than 'estimated'.
+function researchPagination(page, perPage, total) {
+  const t = Number(total) || 0;
+  const pages = Math.max(Math.ceil(t / perPage), 1);
+  return { page, per_page: perPage, total: t, total_pages: pages, has_prev: page > 1, has_next: page < pages };
+}
+
 async function attachOwnershipChainDrafts(items) {
   const targets = (items || []).filter(
     (t) => t && t.research_type === OCD_DECISION_TYPE && t.source_record_id && t.domain
@@ -435,10 +508,29 @@ async function attachOwnershipChainDrafts(items) {
     if (!r.ok || !Array.isArray(r.data)) return items;
     const by = new Map();
     for (const row of r.data) if (!by.has(row.subject_ref)) by.set(row.subject_ref, row); // desc => first is latest
+    // A1: carry the lane ACTION down with the draft so the card can label
+    // itself. Read from the split view — the SQL `action` CASE is the single
+    // owner of this classification and the client must never re-derive it
+    // from the payload (or, worse, from the reason prose).
+    const byTask = new Map();
+    try {
+      const taskIds = [...new Set(targets.map((t) => t.id).filter(Boolean))].slice(0, 200);
+      if (taskIds.length) {
+        const lr = await opsQuery('GET',
+          `${OWNERSHIP_LANE_SPLIT_VIEW}?select=research_task_id,action,split_state,human_actionable`
+          + `&research_task_id=in.(${taskIds.map(pgFilterVal).join(',')})`,
+          undefined, { countMode: 'none' });
+        if (lr.ok && Array.isArray(lr.data)) for (const row of lr.data) byTask.set(String(row.research_task_id), row);
+      }
+    } catch (_e) { /* best-effort: an unlabelled card still renders */ }
+
     return items.map((t) => {
       if (!t || t.research_type !== OCD_DECISION_TYPE || !t.source_record_id || !t.domain) return t;
       const d = by.get(ocdSubjectRef(t.domain, t.source_record_id));
-      if (!d) return t;
+      const lane = byTask.get(String(t.id)) || null;
+      if (!d) {
+        return lane ? { ...t, lane_action: lane.action, lane_split_state: lane.split_state, lane_human_actionable: !!lane.human_actionable } : t;
+      }
       const link = (d.proposed_link && typeof d.proposed_link === 'object') ? d.proposed_link : {};
       return {
         ...t,
@@ -453,7 +545,12 @@ async function attachOwnershipChainDrafts(items) {
           terminates_at_current_owner: link.terminates_at_current_owner,
           current_owner_name: link.current_owner_name || null,
           drafted_at: d.updated_at || null,
+          lane_action: lane ? lane.action : null,
+          lane_split_state: lane ? lane.split_state : null,
         },
+        lane_action: lane ? lane.action : null,
+        lane_split_state: lane ? lane.split_state : null,
+        lane_human_actionable: lane ? !!lane.human_actionable : null,
       };
     });
   } catch (_e) {
@@ -466,6 +563,28 @@ async function v2GetResearch(req, user, workspaceId) {
   const { status, domain, research_type } = req.query;
   const order = v2SortParam(req.query, 'priority.asc,created_at.asc');
 
+  // A1: the ownership-lane action filter, resolved through the SAME shared
+  // module the v1 branch uses. Without this, flipping `queue_v2_enabled` would
+  // silently drop the filter and serve the WHOLE lane under a chip reading
+  // "mismatch 73" — a filter that stops filtering without erroring is the
+  // failure-looks-like-success shape, and V2_MAP rewrites this route the
+  // moment the flag turns on.
+  const laneAction = String(req.query.lane_action || '').trim();
+  let laneIds = null;
+  let laneCount = null;
+  if (laneAction) {
+    if (!isOwnershipLaneBucket(laneAction)) {
+      return { view: 'research', items: [], error: `lane_action must be one of: ${[...OWNERSHIP_LANE_ACTIONS, ...OWNERSHIP_LANE_PENDING_STATES].join(', ')}`, pagination: v2PaginationMeta(page, perPage, 0) };
+    }
+    const sel = await fetchOwnershipLaneTaskIds(opsQuery, { bucket: laneAction, status, limit: perPage, offset });
+    if (!sel.ok) return { view: 'research', items: [], error: sel.error, pagination: v2PaginationMeta(page, perPage, 0) };
+    laneIds = sel.ids;
+    laneCount = sel.count;
+    if (!laneIds.length) {
+      return { view: 'research', items: [], lane_action: laneAction, pagination: v2PaginationMeta(page, perPage, laneCount) };
+    }
+  }
+
   let path = `research_tasks?workspace_id=eq.${workspaceId}&select=*,entities(name),assignee:users!research_tasks_assigned_to_fkey(display_name),creator:users!research_tasks_created_by_fkey(display_name)`;
   if (status) {
     if (status === 'active') path += `&status=in.(queued,in_progress)`;
@@ -473,9 +592,10 @@ async function v2GetResearch(req, user, workspaceId) {
   }
   if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
   if (research_type) path += `&research_type=eq.${pgFilterVal(research_type)}`;
-  path += `&limit=${perPage}&offset=${offset}&order=${order}`;
+  if (laneIds) path += `&id=in.(${laneIds.map(pgFilterVal).join(',')})&limit=${laneIds.length}`;
+  else path += `&limit=${perPage}&offset=${offset}&order=${order}`;
 
-  const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
+  const result = await opsQuery('GET', path, undefined, { countMode: laneIds ? 'none' : 'estimated' });
   if (!result.ok) {
     return { view: 'research', items: [], error: result.data?.message || 'Failed to fetch research tasks', pagination: v2PaginationMeta(page, perPage, 0) };
   }
@@ -486,8 +606,12 @@ async function v2GetResearch(req, user, workspaceId) {
     assignee_name: r.assignee?.display_name || null,
     creator_name: r.creator?.display_name || null
   }));
-  const withDrafts = await attachOwnershipChainDrafts(items);
-  return { view: 'research', items: withDrafts, pagination: v2PaginationMeta(page, perPage, result.count || 0) };
+  const ordered = laneIds ? reorderByIds(items, laneIds) : items;
+  const withDrafts = await attachOwnershipChainDrafts(ordered);
+  return {
+    view: 'research', items: withDrafts, lane_action: laneAction || null,
+    pagination: v2PaginationMeta(page, perPage, laneIds ? laneCount : (result.count || 0)),
+  };
 }
 
 // ---- V2 WORK COUNTS ----

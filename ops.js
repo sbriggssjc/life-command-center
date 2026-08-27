@@ -92,6 +92,9 @@ let opsEntityFilter = 'all';      // all | person | organization | asset (server
 let opsEntitySearch = '';         // backend name search term (B6, 2026-06-06)
 let opsResearchFilter = 'active'; // active | completed | all
 let opsResearchTypeFilter = '';   // '' | news_alert_development_followup
+// A1: which of the four ownership-lane actions is selected ('' = all four).
+let opsResearchLaneAction = '';  // '' | mismatch | all_guarded | agrees | no_records | awaiting_draft | unrecognised_payload
+let opsResearchLaneActionCounts = [];
 let opsEntitiesPage = 1;
 let opsResearchPage = 1;
 let opsInboxSelected = new Set();
@@ -5490,12 +5493,18 @@ function researchLanePickerHTML(lanes) {
     const t = String(l.research_type || '');
     const active = opsResearchTypeFilter === t;
     const label = t.replace(/_/g, ' ');
+    // A1: where a lane has been SPLIT, the badge counts the questions a human
+    // must answer — not the raw open count. NULL means "not split", and the
+    // open count is then the only number we have; it is never treated as 0,
+    // and never as "all of them are actionable".
+    const actionable = (l.human_actionable_tasks == null) ? null : Number(l.human_actionable_tasks);
     return `<button class="q-action${active ? ' primary' : ''}"
       onclick="setResearchLane(decodeURIComponent('${encodeURIComponent(t)}'))"
-      title="${esc(label)} — ${esc(String(l.open_tasks))} open, ${esc(String(l.ever_completed))} completed, ${esc(String(l.ever_skipped))} auto-retired${l.answerable ? '' : ' — NO capture path yet'}"
+      title="${esc(label)} — ${actionable == null ? '' : esc(String(actionable)) + ' need a human of '}${esc(String(l.open_tasks))} open, ${esc(String(l.ever_completed))} completed, ${esc(String(l.ever_skipped))} auto-retired${l.answerable ? '' : ' — NO capture path yet'}"
       style="margin:0 6px 6px 0">
       ${esc(label)}
-      <span style="opacity:.75">&nbsp;${esc(String(l.open_tasks))}</span>
+      <span style="opacity:.75">&nbsp;${esc(String(actionable == null ? l.open_tasks : actionable))}</span>
+      ${actionable == null ? '' : `<span style="opacity:.5;font-size:11px">&nbsp;of ${esc(String(l.open_tasks))}</span>`}
       <span style="opacity:.75">&nbsp;&middot;&nbsp;${money(l.total_annual_rent)}</span>
       ${l.answerable ? '' : '<span title="no way to record an answer yet" style="opacity:.6">&nbsp;&#9888;</span>'}
     </button>`;
@@ -5510,10 +5519,86 @@ function researchLanePickerHTML(lanes) {
   </div>`;
 }
 
+// ─── A1 — the ownership lane is FOUR jobs, so it gets four chips ─────────────
+// `establish_ownership_history` sat at 545 open / 0 completions for 68 days.
+// Not for want of answers — 545 of 545 carry a finished, record-cited draft —
+// but because one undifferentiated list mixed *confirm what you already
+// believe* (380) with *your ownership record is contradicted* (73) with *this
+// cannot be answered* (74) with *we distrust every record on file* (18). An
+// operator facing that mixture learns to skip all of it.
+//
+// Same chip shape as the owner_reconcile / P139 provenance seeder chips. The
+// difference that matters: this filter is SERVER-side, so a chip reading 73
+// pages through all 73 — a client-side filter over the visible page would
+// report a reach it does not have (the P139 "6 of 65" fix).
+const RESEARCH_ACTION_META = {
+  mismatch:    { label: 'Contradicted', hint: 'Last recorded grantee is not the owner on file — a data-integrity call.' },
+  all_guarded: { label: 'All records rejected', hint: 'Transfers exist, but every one failed a guard. Needs adjudication.' },
+  agrees:      { label: 'Confirms owner on file', hint: 'The chain ends at the owner we already hold — a confirmation, not a question.' },
+  no_records:  { label: 'Nothing on file', hint: 'No recorded transfers at all — unanswerable from what we hold.' },
+  awaiting_draft:       { label: 'Not yet drafted', hint: 'Seeded but the drafter has not run — NOT the same as "nothing on file".' },
+  unrecognised_payload: { label: 'Unrecognised draft', hint: 'The drafter emitted a reason this split does not know. Surfaced, never bucketed.' },
+};
+const RESEARCH_HUMAN_ACTIONS = ['mismatch', 'all_guarded'];
+
+function researchActionChipsHTML(rows) {
+  if (!Array.isArray(rows) || !rows.length) return '';
+  const order = ['mismatch', 'all_guarded', 'agrees', 'no_records', 'awaiting_draft', 'unrecognised_payload'];
+  const by = {};
+  rows.forEach(function (r) { if (r && r.bucket) by[String(r.bucket)] = r; });
+  const known = order.filter(function (k) { return by[k]; });
+  // A bucket the split emits that this list does not know about must still be
+  // visible — silently dropping it is how a new state becomes invisible.
+  Object.keys(by).forEach(function (k) { if (known.indexOf(k) === -1) known.push(k); });
+  if (!known.length) return '';
+
+  const humanTotal = known.reduce(function (n, k) {
+    return n + (RESEARCH_HUMAN_ACTIONS.indexOf(k) >= 0 ? (Number(by[k].open_tasks) || 0) : 0);
+  }, 0);
+  const grandTotal = known.reduce(function (n, k) { return n + (Number(by[k].open_tasks) || 0); }, 0);
+
+  let html = '<div class="pq-chips" id="researchActionChips" style="margin:6px 0">';
+  html += '<div style="font-size:11px;color:var(--text2);margin-bottom:4px">'
+    + 'This lane is four different jobs. <b>' + esc(String(humanTotal)) + '</b> of '
+    + esc(String(grandTotal)) + ' need a human; the rest are a confirmation or unanswerable.'
+    + '</div>';
+  html += '<button class="pq-chip' + (opsResearchLaneAction ? '' : ' active')
+    + '" onclick="setResearchLaneAction(\'\')">All four <b>' + esc(String(grandTotal)) + '</b></button>';
+  known.forEach(function (k) {
+    const r = by[k];
+    const meta = RESEARCH_ACTION_META[k] || { label: k.replace(/_/g, ' '), hint: '' };
+    const isHuman = RESEARCH_HUMAN_ACTIONS.indexOf(k) >= 0;
+    const owners = Number(r.distinct_owners) || 0;
+    html += '<button class="pq-chip' + (opsResearchLaneAction === k ? ' active' : '')
+      + '" data-lane-action="' + esc(k) + '"'
+      + ' title="' + esc(meta.hint) + ' \u2014 ' + esc(String(owners)) + ' owner' + (owners === 1 ? '' : 's')
+      + (isHuman ? '' : ' \u2014 no human decision needed here') + '"'
+      + ' onclick="setResearchLaneAction(\'' + esc(k) + '\')">'
+      + (isHuman ? '' : '<span style="opacity:.55">\u25CB </span>')
+      + esc(meta.label) + ' <b>' + esc(String(Number(r.open_tasks) || 0)) + '</b></button>';
+  });
+  html += '</div>';
+  return html;
+}
+
+// Server-side filter, so this pages through the whole action.
+function setResearchLaneAction(action) {
+  opsResearchLaneAction = String(action || '');
+  opsResearchPage = 1;
+  renderResearchPage(1);
+}
+window.setResearchLaneAction = setResearchLaneAction;
+window.researchActionChipsHTML = researchActionChipsHTML;
+
 // Selecting a lane resets to page 1 — staying on page N of a different lane is
 // how an operator lands on an empty list and concludes the queue is empty.
 function setResearchLane(type) {
-  opsResearchTypeFilter = String(type || '');
+  const next = String(type || '');
+  // Switching lanes drops the action filter: an action only means something
+  // inside the ownership lane, and carrying it across would silently return
+  // nothing on a lane that has no such bucket.
+  if (next !== opsResearchTypeFilter) opsResearchLaneAction = '';
+  opsResearchTypeFilter = next;
   opsResearchPage = 1;
   renderResearchPage(1);
 }
@@ -5540,15 +5625,23 @@ async function renderResearchPage(page = opsResearchPage) {
     : opsResearchFilter === 'completed' ? 'completed'
     : '';
   const typeParam = opsResearchTypeFilter ? `&research_type=${encodeURIComponent(opsResearchTypeFilter)}` : '';
+  // A1: the action filter only applies inside the ownership lane.
+  const inOwnershipLane = opsResearchTypeFilter === 'establish_ownership_history';
+  const actionParam = (inOwnershipLane && opsResearchLaneAction)
+    ? `&lane_action=${encodeURIComponent(opsResearchLaneAction)}` : '';
   // P180: fetch the lane summary ALONGSIDE the tasks. allSettled, not all — a
   // failed picker must never strand the queue itself (the Overview-tile lesson).
-  const [resS, lanesS] = await Promise.allSettled([
-    opsApi(`/api/queue?view=research&page=${opsResearchPage}&per_page=25${statusParam ? `&status=${statusParam}` : ''}${typeParam}`),
-    opsApi('/api/queue?view=research_lanes')
+  // A1 adds the per-action rollup on the same terms.
+  const [resS, lanesS, actionsS] = await Promise.allSettled([
+    opsApi(`/api/queue?view=research&page=${opsResearchPage}&per_page=25${statusParam ? `&status=${statusParam}` : ''}${typeParam}${actionParam}`),
+    opsApi('/api/queue?view=research_lanes'),
+    inOwnershipLane ? opsApi('/api/queue?view=ownership_lane_actions') : Promise.resolve(null)
   ]);
   const res = resS.status === 'fulfilled' ? resS.value : { ok: false, status: 0, data: null };
   const lanes = (lanesS.status === 'fulfilled' && lanesS.value && lanesS.value.ok)
     ? (lanesS.value.data?.items || []) : [];
+  opsResearchLaneActionCounts = (actionsS.status === 'fulfilled' && actionsS.value && actionsS.value.ok)
+    ? (actionsS.value.data?.items || []) : [];
   if (!res.ok) {
     el.innerHTML = opsErrorState(res, 'renderResearchPage()', 'Could not load research tasks');
     perf.end();
@@ -5559,8 +5652,9 @@ async function renderResearchPage(page = opsResearchPage) {
 
   let html = '';
   html += researchLanePickerHTML(lanes);
+  if (inOwnershipLane) html += researchActionChipsHTML(opsResearchLaneActionCounts);
   html += `<div class="ops-header">
-    <h2>Research <span style="font-size:13px;color:var(--text2);font-weight:400">${opsResearchData.length} tasks</span></h2>
+    <h2>Research <span style="font-size:13px;color:var(--text2);font-weight:400">${opsResearchData.length}${res.data?.count != null ? ` of ${Number(res.data.count).toLocaleString()}` : ''} tasks${opsResearchLaneAction ? ` &middot; ${esc((RESEARCH_ACTION_META[opsResearchLaneAction] || {}).label || opsResearchLaneAction)}` : ''}</span></h2>
     ${opsResearchTypeFilter === 'news_alert_development_followup' ? `<div class="ops-controls"><button class="q-action" onclick="openNewsAlertResearchQueue()">\u2190 Back to News Alert Follow-up</button><button class="q-action" onclick="renderNewsAlertLane('open');navTo('pageReviewConsole')">News Alert Review</button></div>` : ''}
   </div>`;
 
@@ -5569,7 +5663,8 @@ async function renderResearchPage(page = opsResearchPage) {
   html += `<button class="ops-filter ${opsResearchFilter === 'completed' ? 'active' : ''}" onclick="opsResearchFilter='completed';opsResearchPage=1;renderResearchPage()">Completed</button>`;
   html += `<button class="ops-filter ${opsResearchFilter === 'all' ? 'active' : ''}" onclick="opsResearchFilter='all';opsResearchPage=1;renderResearchPage()">All</button>`;
   html += `<button class="ops-filter ${opsResearchTypeFilter === 'news_alert_development_followup' ? 'active' : ''}" onclick="opsResearchTypeFilter=opsResearchTypeFilter==='news_alert_development_followup'?'':'news_alert_development_followup';opsResearchPage=1;renderResearchPage()">News Alert Follow-up</button>`;
-  if (opsResearchTypeFilter) html += `<button class="ops-filter" onclick="opsResearchTypeFilter='';opsResearchPage=1;renderResearchPage()">Clear type</button>`;
+  if (opsResearchTypeFilter) html += `<button class="ops-filter" onclick="setResearchLane('')">Clear type</button>`;
+  if (opsResearchLaneAction) html += `<button class="ops-filter" onclick="setResearchLaneAction('')">Clear action</button>`;
   html += '</div>';
 
   const filtered = opsResearchFilter === 'all' ? opsResearchData
@@ -5665,12 +5760,23 @@ async function renderResearchPage(page = opsResearchPage) {
 // default) the card is byte-identical to today's.
 function chainDraftHTML(item) {
   const d = item && item.chain_draft;
-  if (!d) return '';
+  // A1: the action badge is rendered from the action the SERVER supplied
+  // (v_lcc_ownership_history_lane_split.action). RESEARCH_ACTION_META is a
+  // display map — a label for a decision already made — never a second
+  // classifier. Deriving the action here from draftable/terminates_at would be
+  // the JS-copy-of-a-SQL-rule drift this repo keeps paying for.
+  const laneAction = item && item.lane_action;
+  const meta = laneAction ? (RESEARCH_ACTION_META[laneAction] || null) : null;
+  const actionBadge = meta
+    ? '<div class="chain-action-badge" title="' + esc(meta.hint) + '">'
+      + (item.lane_human_actionable ? '\u25CF ' : '\u25CB ') + esc(meta.label) + '</div>'
+    : '';
+  if (!d) return actionBadge;
   if (!d.draftable) {
     // Honest, and deliberately not silent: "we looked and there is nothing on
     // file" is a different fact from "nobody has looked yet", and conflating them
     // is what let this lane sit at 0 completions.
-    return '<div class="chain-draft chain-draft-none">'
+    return actionBadge + '<div class="chain-draft chain-draft-none">'
       + '<div class="chain-draft-head">No chain on file</div>'
       + '<div class="chain-draft-why">' + esc(d.reason || '') + '</div></div>';
   }
@@ -5691,7 +5797,7 @@ function chainDraftHTML(item) {
     ? '<div class="chain-warn">Last recorded grantee is not the owner on file ('
       + esc(d.current_owner_name) + ') \u2014 confirm which is right.</div>'
     : '';
-  return '<div class="chain-draft">'
+  return actionBadge + '<div class="chain-draft">'
     + '<div class="chain-draft-head">Drafted chain of title'
     + (conf ? ' <span class="chain-conf">' + esc(conf) + ' confidence</span>' : '') + '</div>'
     + rows + mismatch

@@ -1515,6 +1515,64 @@ about what can honestly be drafted.
   lane and the research lane) drain independently — 27 U3 cards decided did NOT move
   `establish_ownership_history` off 0.
 
+## A1 — one lane, FOUR jobs: split it before automating any of them (2026-08-27)
+
+`establish_ownership_history` sat at **545 open / 0 completions for 68 days** while **545 of 545**
+carried a finished, record-cited P131 draft. It was never short of answers — it presented four
+structurally different jobs as one "go research this" queue, and an operator facing *confirm what
+you already believe* mixed with *your ownership record is contradicted* mixed with *this cannot be
+answered* learns to skip all of it. Split by `v_lcc_ownership_history_lane_split` (+ the chip
+rollup `v_lcc_ownership_history_lane_actions`), migration `20260827090000`. Full writeup:
+`docs/audits/A1_OWNERSHIP_LANE_SPLIT_2026-08-27.md`.
+
+| action | tasks | owners | links | rent | consumer |
+|---|---:|---:|---:|---:|---|
+| `agrees` | 380 | 360 | 450 | $654.9M | A2 applies — a confirmation, not a question |
+| `mismatch` | 73 | **45** | 120 | $401.2M | A3 routes — a data-integrity alert |
+| `no_records` | 74 | 62 | 0 | $278.5M | A4 retires — unanswerable |
+| `all_guarded` | 18 | 18 | 0 | $33.5M | A4b adjudicates — transfers EXIST, all guard-rejected |
+
+- **⚠️ THE PROSE DETECTOR AGREES WITH THE BOOLEAN AND IS STILL WRONG TO BUILD ON.**
+  `reason ilike '%does not match the current owner%'` and
+  `(proposed_link->>'terminates_at_current_owner')::boolean is false` both return **73** with **0
+  disagreements** — so a test comparing their OUTPUT passes over the broken implementation. It is
+  wrong structurally: a text detector over prose the drafter generates (P182), and **blind to the
+  74/18 split**, which exists only in `insufficient_reason`. **Guard the SHAPE, not the score** —
+  `test/ownership-lane-split.test.mjs` asserts the classifier names the boolean fields and asserts
+  it contains no `reason ilike`, and was mutation-verified red on each.
+- **The SQL `action` CASE is the SINGLE owner.** `api/_shared/ownership-lane-split.js` carries the
+  vocabulary and the query shape only; the card's badge is rendered from the action the SERVER
+  supplied. A JS mirror of a SQL classifier is the normaliser drift this file warns about a dozen
+  times (`lcc_normalize_entity_name`, the P134 re-derived GROUP BY that returned 150 members for a
+  2-member group).
+- **LEFT JOIN, and name the unclassified states.** A task the drafter has not reached is
+  `split_state='awaiting_draft'`, NOT `no_records`. It is 0 today and a non-zero window is NORMAL —
+  the seeder runs 06:35, the drafter 06:45. A payload yielding none of the four is
+  `unrecognised_payload`, kept distinct so a new `insufficient_reason` surfaces instead of being
+  absorbed into a bucket it does not belong to.
+- **`human_actionable` is mismatch + all_guarded only — the badge reads 91, not 545.** And
+  `v_lcc_research_lane_summary.human_actionable_tasks` is **NULL for every unsplit lane**: not 0,
+  and not `open_tasks`. Claiming a lane is fully actionable because nobody measured it is the
+  unearned-positive default (P124's `else` branch) wearing a badge.
+- **⚠️ A FILTER IMPLEMENTED IN ONE BRANCH SILENTLY STOPS FILTERING IN THE OTHER.** `V2_MAP`
+  (`ops.js`) rewrites `/api/queue?view=research` to the v2 handler the moment `queue_v2_enabled`
+  flips. `lane_action` in v1 alone would have served the whole 545-row lane under a chip reading
+  "mismatch 73", with no error. **Whenever you add a query param to a v1 queue view, add it to v2 in
+  the same change** — and pin the call sites, because nothing errors when one goes missing.
+- **⚠️ THE RESEARCH PAGE COULD ONLY EVER REACH 50 OF 545 ROWS, and no pager was drawn.**
+  `renderResearchPage` sends `page`/`per_page`; v1's `paginationParams` reads only `limit`/`offset`,
+  so every page returned the same first 50 — and the response carried no `pagination` block, so
+  `paginationHTML` rendered nothing. Fixed here because a chip filtering to 73 that shows 50 with no
+  "next" is the P139 "6 of 65" reach failure. Note `opsApi` keys pagination on
+  `path.split('&')[0]`, which is exactly the key `paginationHTML` reads — returning the block was
+  the whole fix. **Chips filter SERVER-side** for the same reason.
+- **Value is per OWNER and the inflation is UNEVEN** — `mismatch` is 73 tasks over **45** owners
+  (1.6×), `agrees` 380 over 360 (1.06×). One blended ratio for the lane would overstate A3's target
+  by more than half.
+- **⚠️ THE SPLIT IS NOT THE VERIFICATION.** This lane has still **never completed a task**, and a
+  split alone cannot change that — A2/A3/A4/A4b are what move it. Verify on
+  `research_tasks … status='completed'`, never on the view existing or the chips rendering.
+
 ## P138 / R8 Stage 1 — the brief's "Analyst's Take", generated ON-BOX (2026-08-26)
 
 The daily brief has rendered a `renderAnalystTake` section since v2 and the column has
