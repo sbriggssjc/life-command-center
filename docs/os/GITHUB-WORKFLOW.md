@@ -192,6 +192,18 @@ ADDITIONS.** Two competing values for one key are alternatives — pick one. Onl
 the right move was closing the PR and deleting the branch. **A branch whose purpose has been
 served elsewhere is finished, not broken.**
 
+**The worst case is the one with no symptom at all, and it was live on `main` for 75 days.**
+`docs/architecture/panel-redesign-verification.md` carried the conflict **markers themselves** as
+file content — 148 lines of them, committed by `5bbe8c0f`. **Git does not flag this**: there is no
+`UU`, because as far as git is concerned the conflict *was* resolved. Prose has no parser, so
+nothing else caught it either. In YAML the same mistake made a workflow unrunnable and was
+therefore loud; in prose it silently voided half a verification document. **Guard, shipped
+2026-08-27:** `test/no-conflict-markers.test.mjs` scans every tracked text file and fails naming
+file and line. ⚠️ A bare `=======` is a valid Markdown setext underline, so it is reported **only
+inside** a `<<<<<<<`…`>>>>>>>` span — if a file legitimately needs a start-of-line marker, exclude
+it **by path** via that test's `ALLOWLIST`; weakening the pattern is how the detector would start
+returning comfortable zeros.
+
 ### ⚠️ 4c. Verify the branch base actually updated
 
 `git pull --rebase` **fails silently into your next command** when the tree is dirty
