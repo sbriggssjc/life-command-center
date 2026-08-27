@@ -717,6 +717,38 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 (Cowork) — A5a drafted: fix the producer before repairing anything it broke
+
+`prompts/A5a-truncated-feed-auto-close-2026-08-27.md`. Three-part fix — compare against the
+**returned** row count (not the requested limit), **page the feed at exactly 1,000** (a larger
+stride silently skips rows), and add a **stable tiebreak** to `order=priority.desc`, since the gap
+arm is a hard-coded `20 AS priority` and **6,324 rows tie at exactly 20**, making the "top 1,000"
+arbitrary and paging non-deterministic.
+
+**Four things the prompt insists on, each from a documented failure here:**
+
+- **Fail CLOSED on ambiguity.** If the feed cannot be exhausted, skip the auto-close entirely and
+  say so. A false closure silently asserts a gap was resolved; an open task merely waits.
+- **Do NOT raise `limit`.** The cap is server-side — a bigger number changes nothing and re-creates
+  the same lie (`CAND_LIMIT = 1200` is the documented precedent).
+- **Do NOT re-open the ~5,377 falsely-closed tasks here.** That is a data repair with its own blast
+  radius, and **repairing before the producer is correct just refills a broken window.** Filed as
+  **A5b-repair**, sized not built, Scott's call.
+- **Establish the fleet-wide blast radius first** — this generator serves multiple dia+gov lanes.
+  Enumerate which it auto-closes, and check which open counts sit at a suspicious constant
+  (**1,000, or `1000 − n`** — that is the signature, and it is cheap to check).
+
+**⚠️ And the verification is inverted, which is why it is spelled out explicitly:** the success
+signal is that false closures **stop**, which looks like nothing happening. **A rising open count is
+the fix working** — real gaps that were being silently closed now stay visible. The number that must
+fall is `gap_resolved`-per-day; the number that must *move* is the pinned constant.
+
+One more consequence flagged in the prompt: **5,509 gaps have never had a task**, so a corrected
+producer could mint them all at once — a flood into surfaces nobody can work. It must cap or
+value-gate the first run and state which, because A5c exists precisely because **84% of that
+population owns zero properties**.
+
+
 ## 2026-08-27 (Cowork) — ⛔ A5 refuted BOTH of my re-audit's headline calls. The metric was manufactured.
 
 **The lane never stalled, because it was never work** — and the same bug invalidates the lane I told
