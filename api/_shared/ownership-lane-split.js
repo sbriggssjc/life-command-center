@@ -9,6 +9,14 @@
 //   no_records   74  unanswerable from what we hold             (A4 retires)
 //   all_guarded  18  transfers EXIST, all guard-rejected        (A4b adjudicates)
 //
+// A3 (2026-08-27) added a FIFTH action, `sponsor_spe`, and re-measured the lane:
+// A2 had already drained `agrees` 380 -> 90, so `mismatch` is 74, not 73.
+//
+//   sponsor_spe   0  the deed records an SPE of a sponsor a human has CONFIRMED
+//                    we hold -- a representation difference, not a data error
+//
+// It is 0 until a human confirms a sponsor family. Read the A3 section below.
+//
 // ⚠️ THE CLASSIFIER LIVES IN SQL AND ONLY IN SQL.
 // `v_lcc_ownership_history_lane_split.action` is the single owner of this
 // decision. This module carries the vocabulary and the query shape, never a
@@ -29,9 +37,27 @@ export const OWNERSHIP_LANE_TYPE = 'establish_ownership_history';
 export const OWNERSHIP_LANE_SPLIT_VIEW = 'v_lcc_ownership_history_lane_split';
 export const OWNERSHIP_LANE_ACTIONS_VIEW = 'v_lcc_ownership_history_lane_actions';
 
-// The four actions. Order is presentation order: human work first.
+// The five actions. Order is presentation order: human work first.
+//
+// ⚠️ A3 — `sponsor_spe` IS NOT `agrees`, DELIBERATELY. Folding a confirmed sponsor chain into
+// `agrees` would hand it to A2's apply path (cron 244), which WRITES portfolio facts. "These
+// names describe one family" and "write this chain into the ownership record" are different
+// decisions, and only the first has been graded. A2 is untouched and `agrees` must not move.
+// Extending A2 to consume `sponsor_spe` is A3b -- named, sized, not built.
 export const OWNERSHIP_LANE_ACTIONS = Object.freeze([
-  'mismatch', 'all_guarded', 'agrees', 'no_records',
+  'mismatch', 'all_guarded', 'sponsor_spe', 'agrees', 'no_records',
+]);
+
+// A3: the three-way sub-classification of a `mismatch` chain. Vocabulary only — the SQL
+// function `lcc_ownership_mismatch_class` is the single owner of the decision, exactly as
+// `action` is owned by the view. Nothing here re-derives a class.
+//
+// ⚠️ `name_variant` IS NOT AN ACTION AND STAYS HUMAN-ACTIONABLE. It is detected with
+// `lcc_owner_strict_core`, which A2 measured and REJECTED for writes on this very population
+// (it equates `BAMMF (8) LLC` with `BAMMF (3) LLC`). Labelling a card with it is safe;
+// retiring 11 cards on it would be an automated name judgement nobody asked for.
+export const OWNERSHIP_MISMATCH_CLASSES = Object.freeze([
+  'sponsor_family_candidate', 'name_variant', 'unexplained',
 ]);
 
 // Buckets that are NOT an action — the row is unclassified and says why.
@@ -49,6 +75,8 @@ export const OWNERSHIP_LANE_PENDING_STATES = Object.freeze([
 // A4 retires) is the badge-that-is-noise failure. Mirrors the view's
 // `human_actionable` column — the view remains the authority; this is used only
 // to label a chip.
+// `sponsor_spe` is NOT here: a confirmed sponsor family has been answered, so the chain is no
+// longer a question for a human. The view's `human_actionable` column remains the authority.
 export const OWNERSHIP_LANE_HUMAN_ACTIONS = Object.freeze(['mismatch', 'all_guarded']);
 
 export function isOwnershipLaneAction(v) {

@@ -5536,6 +5536,9 @@ const RESEARCH_ACTION_META = {
   all_guarded: { label: 'All records rejected', hint: 'Transfers exist, but every one failed a guard. Needs adjudication.' },
   agrees:      { label: 'Confirms owner on file', hint: 'The chain ends at the owner we already hold — a confirmation, not a question.' },
   no_records:  { label: 'Nothing on file', hint: 'No recorded transfers at all — unanswerable from what we hold.' },
+  // A3: the deed records an SPE of a sponsor a human has confirmed we hold. A representation
+  // difference, not a data error — and NOT `agrees`, which would hand it to A2's write path.
+  sponsor_spe: { label: 'Sponsor SPE (confirmed)', hint: 'The deed names an SPE of a sponsor family a human confirmed — a representation difference, not a data error.' },
   awaiting_draft:       { label: 'Not yet drafted', hint: 'Seeded but the drafter has not run — NOT the same as "nothing on file".' },
   unrecognised_payload: { label: 'Unrecognised draft', hint: 'The drafter emitted a reason this split does not know. Surfaced, never bucketed.' },
 };
@@ -5543,7 +5546,7 @@ const RESEARCH_HUMAN_ACTIONS = ['mismatch', 'all_guarded'];
 
 function researchActionChipsHTML(rows) {
   if (!Array.isArray(rows) || !rows.length) return '';
-  const order = ['mismatch', 'all_guarded', 'agrees', 'no_records', 'awaiting_draft', 'unrecognised_payload'];
+  const order = ['mismatch', 'all_guarded', 'sponsor_spe', 'agrees', 'no_records', 'awaiting_draft', 'unrecognised_payload'];
   const by = {};
   rows.forEach(function (r) { if (r && r.bucket) by[String(r.bucket)] = r; });
   const known = order.filter(function (k) { return by[k]; });
