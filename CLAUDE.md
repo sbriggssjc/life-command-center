@@ -2900,6 +2900,105 @@ the rules: `api/_shared/nba-feed-sweep.js`; guard `test/nba-feed-truncation-guar
   re-openable. Recommended: re-label the false closures out of the throughput metric, then let the
   corrected producer re-mint what ranks. Do not re-open before A5c makes the lane finite.
 
+## A5c — the producer had no value gate: 71,448 → 2,530 admitted (2026-08-27)
+
+A5a fixed the auto-close and thereby showed what a CORRECT producer emits — `would_insert`
+**2,586** on one run, cron 35 every 30 minutes, into a pool where 69,448 of 71,448 gaps had
+never had a task. The gate now lives in each domain's `v_next_best_research`
+(`gate_pass`/`gate_reason`/`gate_value`; migrations
+`supabase/migrations/{dialysis,government}/20260908120000_*_a5c_research_task_value_gate.sql`)
+and the generator's ranked mint head filters on it **server-side**. Crons 34/35 re-enabled.
+Writeup: `docs/audits/A5c_RESEARCH_TASK_VALUE_GATE_2026-08-27.md`.
+
+| domain | pool | admitted | dominant exclusion |
+|---|---:|---:|---|
+| gov | 41,805 | **2,332** | `lane_no_consumer` 16,873 · `value_unknown` 8,551 · `owns_no_property` 7,690 |
+| dia | 29,643 | **198** | `lane_no_consumer` 7,204 · `value_unknown` 11,936 · `owns_no_property` 5,184 |
+
+- **⚠️ THE SAME FILTER ON TWO READS OF ONE VIEW IS A CORRECTNESS BUG. The membership probe is
+  deliberately UNGATED.** The mint head asks *is this worth working*; the probe asks *does the
+  gap still exist*. A probe that read the gated view would find every gated-out subject ABSENT
+  and `planAutoClose` would close it `gap_resolved` — the exact A5a defect, wearing the fix's
+  clothes and looking like the gate tidying up. **Deciding not to work a gap is not the gap
+  resolving.** `nbaFeedGateFilter('probe')` returns null and nothing may ask otherwise; guard
+  `test/nba-feed-value-gate.test.mjs` (10 tests, all 9 mutations RED). ⚠️ It strips comments
+  before matching, because the file's own prose explaining the asymmetry made two assertions
+  pass over a **deleted** assignment — the A1 prose-detector defect inside a test.
+- **The gate is in the SELECTION, never a surface filter.** A JS filter after the read leaves the
+  head full of rows nobody can work while the valuable tail below never gets reached, and the
+  badge still lies.
+- **⚠️ EVERY LANE THIS PRODUCER FEEDS HAS ZERO REAL COMPLETIONS — and `establish_ownership_history`
+  IS NOT ONE OF THEM.** It and `trace_ownership_to_developer` (314 + 52 real completions, 352 of
+  them in 30 days) come from **`v_lcc_ownership_chain_completeness`**, a different generator, so
+  this gate cannot starve them. All **5,763** completions `v_next_best_research` has ever recorded
+  are the A5a auto-close. Read `outcome NOT ILIKE '%gap_resolved%'` before ranking any lane.
+- **Operators: RECORDED FACTS ONLY (P113), and the flag alone is not enough.**
+  `is_operator_not_owner` catches 25 owners / 4,343 properties; adding `owner_type='operator'` and
+  `owner_role='operator'` takes it to **36 / 4,479**. The extra 11 are Kaiser Permanente, Mayo
+  Clinic Dialysis, Atlantis Healthcare Group, Wake Forest University… — real operators the boolean
+  has never been set on. **That is a gap in the FLAG (backlog A5f), not a licence to add a regex**:
+  the name-based `is_known_operator()` was measured and is worse both ways (it misses
+  `U.S. Renal Care` on the period). **gov gets no operator arm at all** — its tenant is a federal
+  agency and `true_owner_is_operator` is constant false there; a predicate that can never fire is
+  noise, not safety.
+- **Placeholders REUSE `<dom>_is_strong_junk_owner_name`** (which already catches Unknown / N/A /
+  Various / Undisclosed / TBD / None) plus a NARROW anchored extension for the three it misses —
+  `Independent` (754 properties), `Other` (110), `State Owned` (20), which
+  `lcc_is_placeholder_owner_name` also misses. Blast radius measured over every live owner name on
+  both domains **before** shipping: **7 rows, all genuine placeholders, 0 real firms.** Exact match
+  never `contains` (P158a); scoped to this gate, never exported to the shared guards.
+- **⚠️ VALUE IS THE CANONICAL RENT, AND UNKNOWN IS GATED.** dia reads
+  `v_property_attributes_portfolio.annual_rent` (`proj.rent_now`) — the figure LCC already consumes
+  as truth — **not** `properties.last_known_rent`/`rent_imputed`, which would admit more rows and be
+  a SECOND definition of value that drifts from the panel's. A null rent is `value_unknown` and is
+  **gated** (P161 measured this trade). It is the largest single exclusion at **20,487 rows**, and
+  it is a COVERAGE problem, not a value one — dia prices only 4,154 of 11,796 properties (35%).
+  Backlog **A5e**. Loosening the floor there would let a coverage gap masquerade as a judgement.
+- **The floor is the EXISTING knob** — `{dia,gov}_research_gate_value_floor()` = **$500k**, the same
+  number as the gov asset-mint floor, `CADENCE_SIGNAL_MIN_VALUE` and P161's weak-role floor. No
+  per-lane floor was invented because no measurement justified one; the same floor admitting 5.6% of
+  gov and 0.7% of dia is the two portfolios being different sizes.
+- **`owner_needs_sos` (24,077 rows) emits NOTHING — `lane_no_consumer`, recorded per row.** SOS-direct
+  is blocked at the bot-wall (government-lease `CLAUDE.md` §25). The gate does not change its
+  reachability; it makes its zero an explicit decision instead of an accident of where the priority
+  window fell. `gate_value` is still computed, so re-admitting it is one predicate. Backlog **A5g**.
+- **⚠️ Value is per OWNER.** gov `owner_needs_salesforce` is 1,675 rows over **1,674 distinct
+  owners / $4.01B** and **dominates the admitted population — 66% of everything the fleet will
+  mint, and the lane's first-ever emission.** dia `true_owner_needs_salesforce` is **27 owners /
+  $21.7M**. ⚠️ **A5's "963 real prospectable owners" is NOT the admitted count** — that was a
+  decidability figure with no value floor; both are correct about different questions.
+- **The gov SF lane's gap was suspected stale and REFUTED, not assumed.** gov `unified_contacts` is
+  the pre-cutover snapshot (30,714 rows, 5 in 7 days), so "no `sf_account_id`" could have been a
+  stale verdict. 40 of 40 sampled admitted subjects exist on the LIVE hub and **0** carry one.
+  (Also re-measures this file's own claim that the gov copy is frozen at 2026-08-17: it is
+  2026-08-26 / 213 rows in 30 days — a trickle, not frozen.)
+- **The existing 2,000 open tasks below the gate STAY OPEN and are NOT retired here** — the probe is
+  ungated so none is falsely closed, and **at least 1,306 of them are below the gate** (dia
+  `property_missing_recorded_owner` measured exactly: **11 of 185 admitted**). Retiring them is a
+  bulk state change with its own reversibility and a distinct outcome value; bundling it is how a
+  repair becomes indistinguishable from the producer (P176). Backlog **A5d**.
+- **Read `admitted_head_exhausted`** — `true` means `feed` IS the whole admitted population, `false`
+  means it is a FLOOR. And **`gate_reasons_seen` must contain only `admitted`**; anything else means
+  the filter did not take. **The dia research badge now counts gated rows** (198, not the raw 29,643
+  pool) — `count=exact`, because the planner's estimate over the gated view is off ~58×.
+- **LIVE 2026-08-27 (merge `7de1791`), crons 34/35 re-enabled, first run `inserted` gov 161 + dia
+  182 = 343 — hundreds, not thousands.** dia's `feed: 198` with `admitted_head_exhausted: true`
+  matches the SQL-measured admitted population exactly — the cross-check that the filter is in the
+  SELECTION. Two lanes minted their first tasks ever (dia `property_missing_county_record` 109, gov
+  `owner_needs_salesforce` 108). `closed: 0`; the only `gap_resolved` rows in 24h are 10 from cron
+  34's 06:00 run *before* A5a deployed. ⚠️ Open counts went **up** (2,000 → 2,343, converging to
+  ≈2,530 admitted + ≈1,844 pre-gate residue) — that is the fix working (A5a).
+- **⚠️ THE `/version` PROBE IS UNREACHABLE FROM THE SANDBOX (proxy 403), SO THE DEPLOY WAS CONFIRMED
+  BEHAVIOURALLY — and that check earned its keep.** `lcc_cron_post` → `?dry_run=1` →
+  `net._http_response`, reading for `value_gated`, a field that only exists post-A5c. **Two minutes
+  after the merge it was still ABSENT and `would_insert` still read the ungated 2,586** — had the
+  crons been re-enabled on the strength of "it merged", cron 34 would have minted the entire flood
+  with the gate sitting inert in the DB beside it. The DB half ships instantly; the JS does not.
+- **Performance measured both directions:** the gov ranked head got **FASTER** (1,149 → 591 ms — the
+  constant-false SOS arm is pruned and the sort set drops 41,805 → 2,332), and the probe is
+  unchanged (44 → 51 ms) because the gate's LATERAL aggregates report `never executed` under its id
+  predicate. dia head 684 ms, probe 33 ms.
+
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
 Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration
