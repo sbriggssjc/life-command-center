@@ -424,3 +424,52 @@ test('captured pending ASC targets keep their normal completion control after a 
   assert.match(sidepanel, /Complete property capture/);
   assert.match(sidepanel, /missing\.disabled\s*=\s*true/);
 });
+
+test('single-tenant organization family corroborates an exact parent building with a preserved CMS typo', () => {
+  const target = {
+    candidate_fingerprint: 'a'.repeat(64),
+    address_token: '30 TUSCAN BLFD FL 3|SALEM|NH|03079',
+    cms_identity: {
+      address: '30 Tuscan BLFD Fl 3',
+      city: 'Salem',
+      state: 'NH',
+      zip: '03079',
+      facility_name: 'MASS General Brigham Amsurg Inc',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['MASS GENERAL BRIGHAM AMSURG, INC.'],
+    },
+  };
+  const context = {
+    source: 'costar',
+    address: '30 Tuscan Blvd',
+    city: 'Salem',
+    state: 'NH',
+    zip: '03079',
+    tenancy_type: 'Single',
+    primary_tenant: 'Mass General Brigham Healthcare Center',
+    square_footage: 70000,
+  };
+  const result = buildAscStructuredCapture(target, context);
+  assert.equal(result.identity_match.mode, 'single_tenant_organization_family_parent_building');
+  assert.equal(result.identity_match.organization_family, 'MASS GENERAL BRIGHAM');
+  assert.equal(result.identity_match.second_review_required, true);
+  assert.equal(result.identity_match.cms_sublocation_preserved, '30 Tuscan BLFD Fl 3');
+
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenancy_type: 'Multi' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, {
+      ...context,
+      primary_tenant: 'Mass General Healthcare Center',
+    }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, address: '32 Tuscan Blvd' }),
+    /does not match/,
+  );
+});
