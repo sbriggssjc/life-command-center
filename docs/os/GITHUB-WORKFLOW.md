@@ -110,6 +110,104 @@ Budget for it: roughly three minutes per re-run, and if `main` moves again durin
 may do it twice. **Merging the moment the first green appears is how PR #1793 shipped a red
 suite** — the checks were still running.
 
+## 2b. ⚠️ `git stash pop` after a long gap WILL conflict — and `git add -A` commits the markers
+
+**This happened on 2026-08-27 and reached `main`.** `docs/claude-code/STATUS.md` was merged
+carrying `<<<<<<< Updated upstream` / `=======` / `>>>>>>> Stashed changes`.
+
+The sequence that produced it is the one in §2, and it is a **correct** sequence — with one missing
+step:
+
+```powershell
+git stash -u          # park local edits
+git checkout main
+git pull --rebase     # ← local main was 10 commits BEHIND
+git checkout -b <branch>
+git stash pop         # ← conflicted, silently, in the working tree
+git add -A            # ← staged the conflict markers
+git commit            # ← and committed them
+```
+
+**Two things make this near-certain rather than unlucky:**
+
+1. **The longer you were behind, the worse it is.** `STATUS.md` is the most-written file in the
+   repo — Cowork and Claude Code both append to it every session. Ten commits of drift means a
+   collision on that file is the expected outcome, not the exception.
+2. **`git add -A` is the amplifier.** It stages everything including a half-merged file. `git
+   commit` does not refuse conflict markers, and neither did any check.
+
+**THE MISSING STEP — do this after every `stash pop`:**
+
+```powershell
+git stash pop
+git status                       # "Unmerged paths" means STOP and resolve
+git diff --check                 # flags whitespace AND leftover conflict markers
+git grep -nE '^(<<<<<<< |>>>>>>> |=======$)'   # belt and braces; expect NO output
+```
+
+**Resolving a chronological log like `STATUS.md`: keep BOTH sides.** The entries are *additions*,
+not alternatives — order them newest-first and delete only the three marker lines.
+
+**⚠️ But do not generalise "keep both" into a rule.** CLAUDE.md records the opposite case: a
+conflict resolution that kept both sides of a `setup-node` step produced **two `node-version` keys
+in one mapping**, which was structurally invalid, and GitHub could not build a run from the file —
+so the required check reported *nothing* and no re-run fixed it. **Ask whether the two sides are
+alternatives or additions.** Prose in a log: additions. A key in a mapping: alternatives.
+
+*(A guard test — `test/no-conflict-markers.test.mjs` — is on `claude/conflict-marker-guard-sxcpoy`
+along with the repair for `docs/architecture/panel-redesign-verification.md`, which carries the
+same damage from an earlier merge. **That branch must land AFTER this repair, or its new guard goes
+red on `STATUS.md`.**)*
+
+## 3a. Documentation-only PRs skip the suite (2026-08-27)
+
+Scott: *"only require tests when a substantive change that requires a test gets pushed or merged.
+It's not worth the wait for minor or documentation changes."*
+
+`npm test` now decides internally whether the suite is warranted. A PR whose changed files are
+**all** documentation reports green in ~15 seconds instead of ~3 minutes.
+
+**⚠️ It is deliberately NOT implemented with `paths-ignore`, and that distinction is the whole
+point.** A **required** status check that never runs is not "skipped" — GitHub reports it as
+**Expected** forever and the PR becomes unmergeable. Adding `paths-ignore` to a required check is
+the most common way to deadlock a protected branch, and it would have re-created the exact
+rejection this file was written for. **The job always runs and always reports; only the work inside
+it is conditional.**
+
+| | |
+|---|---|
+| skipped | every changed file matches `docs/`, `*.md`, `LICENSE`, `.github/ISSUE_TEMPLATE/` |
+| **runs** | **anything else — the direction is fail-safe.** An unrecognised path runs the suite |
+| **runs** | **`.sql` migrations** — several guards assert on SQL/source *content*, so a migration genuinely can turn a test red |
+| **runs** | **every push to `main`**, regardless of content — it is the base every branch is cut from |
+
+## 3b. ⚠️ `npm test` is NOT a reliable pre-push gate on Windows
+
+**Measured 2026-08-27.** Four test files fail on Scott's Windows machine and **pass on Linux —
+59 tests, 0 failures** — including in CI, which is `ubuntu-latest`:
+
+`lease-ocr-backfill` · `sf-deal-promotion` · `sf-file-collector` · `sf-file-discovery`
+
+The cause is platform-native path separators. `scripts/lease-ocr-backfill.mjs:144` ends
+`return join(libraryRoot, ...rel.split('/'))`, and `path.join` emits `\` on Windows:
+
+```
+actual:   '\Users\scott\Team Briggs - Documents\PROPERTIES\x.pdf'
+expected: '/Users/scott/Team Briggs - Documents/PROPERTIES/x.pdf'
+```
+
+**The code is correct and the test is over-specified.** `localPathFor` builds a path for the local
+filesystem; a backslash on Windows *is* the right answer. The test asserts a POSIX string literal
+against a platform-native operation.
+
+**Consequences, both worth internalising:**
+
+1. **§3's advice "run `npm test` locally before you push" does not hold on Windows** — you will see
+   red that CI will not. Treat a local failure in one of those four files as environmental until
+   proven otherwise, and **check the file name against the list above before debugging.**
+2. **The fix is in the tests, not the code:** assert against `path.join(...)` (or normalise
+   separators before comparing) so the expectation is platform-native too. Backlog **N12**.
+
 ## 4. The Node-version lockout — RESOLVED 2026-08-27
 
 > **Re-measured and rewritten. The section that stood here described a lockout that has since been

@@ -59,6 +59,47 @@ cron 220's slot, which **confirms the cron fires and rules out a broken schedule
 with the undeployed-fix diagnosis. The 6am-CT scheduled check runs after all four windows.
 
 
+## 2026-08-27 03:10 UTC (Cowork) — two follow-up measurements on P195's open items
+
+### ⚠️ N11's blast radius is DORMANT, not armed — measured before treating it as an incident
+The P195 entry below is right that `lcc_apply_fuzzy_merges` would auto-merge **3,053 groups with no
+undo**. Measured what would fire it: **nothing does.** `cron.job` scan for `fuzzy|apply_fuzzy|
+merge_entity` → **zero rows**; the only repo reference outside migrations is a *comment* in
+`api/_shared/cre-registry.js`. So N11 is a **loaded gun, not a firing one** — the same disposition
+CLAUDE.md gives `lcc_sync_property_owner_to_portfolio`. **Fix it before anything wires it up; do not
+escalate it as live risk.** Reading "3,053 irreversible merges" without checking for a caller would
+have produced exactly the wrong urgency.
+
+### ⚠️ N3e RE-MEASURED — the parked cards are mostly parked CORRECTLY, and my first number was the instrument
+I measured the 143 parked candidates as **"100% missing an employer"** — reading the JSON key
+`contact_company`. **The key is `company`.** Corrected: **107 of 143 (74.8%) DO carry an employer.**
+Class 11 again, and it was caught only because that answer contradicted a direct join to
+`unified_contacts` (98 of 131 people had a company there). **Two measurements disagreeing is the
+signal — check the key names before believing either.**
+
+So these owners are not parked for want of data. They are parked because **the employer on file does
+not match the owner**, which is the gate working as designed. Reading named rows, the *wrong* parks
+fall into exactly two recognisable shapes:
+
+| shape | example |
+|---|---|
+| **sponsor / SPE** — the P190/P193 relationship again | `OXFORD BIT GALLERY PLACE PROPERTY OWNER, LLC` ← Stephen Nicotra @ **Oxford Development Company**; `Salus Gov't Properties` ← **Salus Healthcare Real Estate Group LLC** |
+| **junk-formatted company name defeating a string test** | `Savlan Cc Property LLC` ← Zusha Tenenbaum @ **"WWW Savlancapital COM"** |
+
+Correct parks read plainly: `FORT WORTH TX I MG` ← Windsor Place Realty; `Ngp Vii Dayton Oh` ←
+Dayton Street Partners (matched on the token `dayton`); the JP Morgan CMBS trust ← M.R. Champa LLC.
+
+**Revised fix — and it is NOT the one N3e implies.** Do not widen the un-park (that restores the
+Gary George noise). Instead: **show the park reason on the card**, and **route the sponsor-shaped
+parks into the `lcc_owner_sponsor_domain` map** where the answer already lives. The population is
+**75 owners / $98M**.
+
+### Verification items still pending, both on schedule
+- **N9v** — auto-attach: **0 writes at 03:10 UTC**, unchanged. Cron 241 fires **06:55 UTC**. Still
+  expected; check after 07:00.
+- **N9w** — sidebar: alert still open, no post-reload capture has landed. Still unproven either way.
+
+
 ## 2026-08-27 (Cowork) — P195: the byte-identical owner merge landed, and two traps in landing it
 
 **66 entities merged into 56 survivors; $102,216,468 of current annual rent consolidated; 0 live
