@@ -109,9 +109,15 @@ reached a terminal good disposition. 92 stay open.
 **`ambiguous_entity` is LCC holding duplicates, not two different companies.** The set is
 dominated by case-variant pairs — `Duke Realty Limited Partnership` /
 `DUKE REALTY LIMITED PARTNERSHIP`, `Gate Properties LP` / `GATE PROPERTIES LP` — the exact
-population P189/P195 work on. **48 of the 92 still-open tasks are blocked by ambiguity alone** ($210.6M), so
-merging those pairs unblocks them and the next nightly run applies them with no further work. A2
-never picks a winner: a byte-identical name is a merge question, not a licence (P195).
+population P189/P195 work on. **48 of the 92 still-open tasks are blocked by ambiguity alone** (~~$210.6M~~ — **corrected
+2026-08-27 by A2a: $72.0M, aggregated per OWNER**; the per-task sum is $76.7M and the per-link sum
+$83.2M, and none of the three reproduces $210.6M, so that figure was simply wrong), so merging those
+pairs unblocks them and the next nightly run applies them with no further work. A2 never picks a
+winner: a byte-identical name is a merge question, not a licence (P195). **A2a did this: 26 of the 43
+groups merged, 17 held with reasons named, 26 tasks drained. See
+`docs/audits/A2a_AMBIGUOUS_ENTITY_MERGE_2026-08-27.md` — and note it found that merging a
+case-variant pair can EXPOSE a `repeat_transfer_unrepresentable` the duplicate entity was
+masking (2 tasks moved rather than drained).**
 
 `v_lcc_ownership_chain_apply_blocked` carries the rival entity names for ambiguity and the
 alternate dates for a repeat pair, so each follow-up is one query away.
@@ -222,7 +228,7 @@ select cron.unschedule('lcc-a2-ownership-chain-apply');
 
 ## What this does NOT claim
 
-- **92 `agrees` tasks are still open** and 128 links unapplied — and, since the apply is
+- **92 `agrees` tasks are still open** and 128 links unapplied *(A2a took this to 64 open / 98 links on 2026-08-27)* — and, since the apply is
   all-or-nothing, **none of them has a partial chain**: each is intact and re-appliable the night
   after its blocker clears. 41 of those tasks need nothing but
   a duplicate-entity merge; 20 links need a party LCC does not hold; 28 need the drafter's dedup
