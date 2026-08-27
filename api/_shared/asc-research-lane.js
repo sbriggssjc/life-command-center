@@ -166,6 +166,21 @@ function buildingAddressTokensAgree(left, right) {
   return stripStreetType(a[0]) === stripStreetType(b[0]);
 }
 
+function terminalTownshipMunicipalityAlias(left, right) {
+  if (!left || !right) return null;
+  const frozen = left.split('|');
+  const captured = right.split('|');
+  if (frozen.length !== 4 || captured.length !== 4
+    || frozen[0] !== captured[0]
+    || frozen[2] !== captured[2]
+    || frozen[3] !== captured[3]) return null;
+  const stripTerminalTownship = (city) => city.replace(/\s+TOWNSHIP$/, '');
+  if (frozen[1] === captured[1]
+    || stripTerminalTownship(frozen[1]) !== stripTerminalTownship(captured[1])
+    || (!/\sTOWNSHIP$/.test(frozen[1]) && !/\sTOWNSHIP$/.test(captured[1]))) return null;
+  return { frozen_city: frozen[1], captured_city: captured[1] };
+}
+
 function capturedRangeContainsFrozenEndpoint(frozenAddressToken, capturedAddressToken) {
   if (!frozenAddressToken || !capturedAddressToken) return null;
   const frozen = frozenAddressToken.split('|');
@@ -241,7 +256,8 @@ export function buildAscStructuredCapture(target, context = {}) {
   let identityMatch = { mode: 'exact_address_token' };
   if (addressToken !== target.address_token) {
     const cmsIdentity = target.cms_identity || {};
-    const corroboration = corroboratingTenant(target, context)
+    const exactTenantCorroboration = corroboratingTenant(target, context);
+    const corroboration = exactTenantCorroboration
       || singleTenantOrganizationFamilyCorroboration(target, context);
     const addressAlias = approvedParentAddressAlias(target, addressToken);
     const parentBuildingMatch = hasAscSublocation(cmsIdentity.address)
@@ -253,10 +269,22 @@ export function buildAscStructuredCapture(target, context = {}) {
     const aliasMatch = addressAlias && corroboration;
     const rangeEndpoint = capturedRangeContainsFrozenEndpoint(target.address_token, addressToken);
     const rangeEndpointMatch = rangeEndpoint && corroboration;
-    if (!parentBuildingMatch && !aliasMatch && !rangeEndpointMatch) {
+    const municipalityAlias = terminalTownshipMunicipalityAlias(target.address_token, addressToken);
+    const municipalityAliasMatch = municipalityAlias && exactTenantCorroboration;
+    if (!parentBuildingMatch && !aliasMatch && !rangeEndpointMatch && !municipalityAliasMatch) {
       throw new Error('Captured page does not match the active frozen ASC candidate');
     }
-    identityMatch = rangeEndpointMatch ? {
+    identityMatch = municipalityAliasMatch ? {
+      mode: 'tenant_corroborated_municipality_alias',
+      cms_city_preserved: clean(cmsIdentity.city),
+      captured_city: clean(context.city),
+      frozen_city_token: municipalityAlias.frozen_city,
+      captured_city_token: municipalityAlias.captured_city,
+      corroboration_basis: exactTenantCorroboration.basis,
+      corroborated_name: exactTenantCorroboration.matched_name,
+      facility_name: clean(cmsIdentity.facility_name),
+      second_review_required: true,
+    } : rangeEndpointMatch ? {
       mode: 'tenant_corroborated_range_endpoint',
       frozen_street_number: rangeEndpoint.frozen_number,
       captured_range_start: rangeEndpoint.range_start,
