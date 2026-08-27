@@ -421,54 +421,18 @@ dry-run rather than being tacked onto a perf pass I have already been wrong abou
 ANALYZE are correct and durable but did not move the endpoint they were aimed at. `bd_worklist` and
 `priority-queue` are still open, and now precisely diagnosed.
 
-<<<<<<< HEAD
-### 4.2f BROWSER VERIFICATION of Prompt 115 — the DB win DID translate (2026-08-15)
+> **⚠️ Reconciliation note (A0, 2026-08-27) — this region was a committed merge conflict.**
+> Lines 424–571 of this file carried literal `<<<<<<< HEAD` / `=======` / `>>>>>>> f59679a2` markers,
+> introduced by `5bbe8c0f` and unnoticed for **75 days**. Git never flagged it (there was no `UU` —
+> the conflict *was* resolved, by committing the markers) and prose has no parser, so nothing else
+> did either. **The two sides were not alternatives:** one held §4.2f (the browser verification), the
+> other held §4.2d's supersession note plus §4.2e (the view rewrite). **Both are kept, verbatim, in
+> the document's own lettering order (4.2e → 4.2f).** Nothing was dropped and no measurement was
+> changed. ⚠️ **One genuine conflict is left standing rather than adjudicated:** §4.2f is headed
+> **2026-08-15**, yet it verifies §4.2e (headed **2026-08-16**) and its table reports *Post-115*
+> numbers — so one of those two dates is wrong and this file cannot say which. The guard that would
+> have caught the markers on the day they landed is now `test/no-conflict-markers.test.mjs`.
 
-Prompt 115 could not reach Railway from its sandbox and asked that its **51.9× be treated as a DB result
-until confirmed in a browser**. Confirmed here, driven directly in Scott's browser. No redeploy was needed —
-the view is read per request.
-
-| Endpoint | Original | Pre-115 warm | Post-115 **cold** | Post-115 **warm** | |
-|---|---|---|---|---|---|
-| `bd_worklist&limit=5` | 8,192 ms | 8,171 ms | 8,178 ms | **2,485 ms** | **3.3×** ✔ |
-| `decisions?summary=1` | 16,199 ms | 10,100 ms | 13,030 ms | **8,620 ms** | **−47%** ✔ |
-| `priority-queue?limit=5` | — | 5,776 ms | 5,492 ms | 5,314 ms | ~flat |
-| wall-clock to last API | — | 13,925 ms | 17,517 ms | **12,664 ms** | |
-| API calls > 1 s | — | 5 | 5 | **4** | |
-
-#### ⚠️ A second measurement-condition error, nearly repeated
-
-The **first** post-115 load showed `bd_worklist` at **8,178 ms** and I began writing it up as *"P115 didn't
-translate."* That was a **cold** call — cold PostgREST connections, cold plan cache. The very next warm load
-was **2,485 ms**.
-
-This is the same class of mistake as §4.2d (measuring `LIMIT 5` instead of the handler's `LIMIT 150`): both
-times the *number* was real and the *condition* was wrong. **Rule now standing: label every timing
-cold/warm, and never conclude from a single sample.** Added to `CLAUDE.md` alongside the query-shape footgun
-that Prompt 115 recorded.
-
-#### Where the remaining `bd_worklist` time actually is
-
-`getBdWorklist` fires six sources in one `Promise.all`; the `?type=` filter isolates each. Measured warm,
-in-browser, twice each:
-
-| `type=` | ms | source |
-|---|---|---|
-| `suspected_sale` | **1,847** | **gov, cross-region** ← the floor |
-| `ownership_chain` | 674 | LCC |
-| `contact_writeback` | 600 | LCC — **the view P115 rewrote** |
-| `owner_source_conflict` | 504 | gov + dia |
-| `loan_maturity` | 249 | gov + dia |
-| *(all — what the app calls)* | **1,870** | ≈ the slowest, as expected for a parallel fan-out |
-
-**The LCC view is no longer the bottleneck** — 600 ms of a 1,870 ms call. The floor is now
-`v_suspected_sale` on gov (us-west-2), i.e. cross-region transport plus that view's own cost. Any further
-work on this endpoint should start there, **not** in LCC.
-
-Prompt 115's other honest finding stands: **`/api/priority-queue` is not the same bug.** Its DB side is
-249 ms (items, all 37 columns) + 132 ms (band counts) in parallel — a ~250 ms floor against a 5,314 ms
-measurement. The residual is handler + cross-region transport, and there is no SQL fix to make there.
-=======
 > **Superseded by §4.2e (2026-08-16).** `bd_worklist` is fixed at the DB layer (30,610 ms → 590 ms, three
 > correlated subplans removed, 0-row equivalence diff); `priority-queue` was profiled and is **not** a SQL
 > problem at all. The endpoint-level browser re-measure is still outstanding — see §4.2e.
@@ -555,6 +519,9 @@ the view itself from 5,785 ms to ~1,140 ms and it is now a fifth of that again.
 
 #### ⚠️ NOT re-measured in the browser — this needs Scott
 
+> **Answered by §4.2f below** (kept in the same merge) — the browser re-measure was run and
+> the DB win did translate: `bd_worklist` warm 8,171 ms → 2,485 ms.
+
 The one deliverable I could not complete. This sandbox's network policy denies the Railway host at the proxy
 (`403 to CONNECT tranquil-delight-production-633f.up.railway.app:443`), so neither curl nor the bundled
 Chromium can reach the live endpoint. **The DB number has already proved misleading on this endpoint once, so
@@ -568,7 +535,53 @@ copy(JSON.stringify(performance.getEntriesByType('resource')
 ```
 
 No deploy is required first — the migration is already live, so a hard reload measures the fixed view.
->>>>>>> f59679a2f9f3948223f894218dec8309f15402c9
+
+### 4.2f BROWSER VERIFICATION of Prompt 115 — the DB win DID translate (2026-08-15)
+
+Prompt 115 could not reach Railway from its sandbox and asked that its **51.9× be treated as a DB result
+until confirmed in a browser**. Confirmed here, driven directly in Scott's browser. No redeploy was needed —
+the view is read per request.
+
+| Endpoint | Original | Pre-115 warm | Post-115 **cold** | Post-115 **warm** | |
+|---|---|---|---|---|---|
+| `bd_worklist&limit=5` | 8,192 ms | 8,171 ms | 8,178 ms | **2,485 ms** | **3.3×** ✔ |
+| `decisions?summary=1` | 16,199 ms | 10,100 ms | 13,030 ms | **8,620 ms** | **−47%** ✔ |
+| `priority-queue?limit=5` | — | 5,776 ms | 5,492 ms | 5,314 ms | ~flat |
+| wall-clock to last API | — | 13,925 ms | 17,517 ms | **12,664 ms** | |
+| API calls > 1 s | — | 5 | 5 | **4** | |
+
+#### ⚠️ A second measurement-condition error, nearly repeated
+
+The **first** post-115 load showed `bd_worklist` at **8,178 ms** and I began writing it up as *"P115 didn't
+translate."* That was a **cold** call — cold PostgREST connections, cold plan cache. The very next warm load
+was **2,485 ms**.
+
+This is the same class of mistake as §4.2d (measuring `LIMIT 5` instead of the handler's `LIMIT 150`): both
+times the *number* was real and the *condition* was wrong. **Rule now standing: label every timing
+cold/warm, and never conclude from a single sample.** Added to `CLAUDE.md` alongside the query-shape footgun
+that Prompt 115 recorded.
+
+#### Where the remaining `bd_worklist` time actually is
+
+`getBdWorklist` fires six sources in one `Promise.all`; the `?type=` filter isolates each. Measured warm,
+in-browser, twice each:
+
+| `type=` | ms | source |
+|---|---|---|
+| `suspected_sale` | **1,847** | **gov, cross-region** ← the floor |
+| `ownership_chain` | 674 | LCC |
+| `contact_writeback` | 600 | LCC — **the view P115 rewrote** |
+| `owner_source_conflict` | 504 | gov + dia |
+| `loan_maturity` | 249 | gov + dia |
+| *(all — what the app calls)* | **1,870** | ≈ the slowest, as expected for a parallel fan-out |
+
+**The LCC view is no longer the bottleneck** — 600 ms of a 1,870 ms call. The floor is now
+`v_suspected_sale` on gov (us-west-2), i.e. cross-region transport plus that view's own cost. Any further
+work on this endpoint should start there, **not** in LCC.
+
+Prompt 115's other honest finding stands: **`/api/priority-queue` is not the same bug.** Its DB side is
+249 ms (items, all 37 columns) + 132 ms (band counts) in parallel — a ~250 ms floor against a 5,314 ms
+measurement. The residual is handler + cross-region transport, and there is no SQL fix to make there.
 
 ### 4.2g UI-4 — the hand-off silently did not render (found 2026-08-16, FIXED)
 
