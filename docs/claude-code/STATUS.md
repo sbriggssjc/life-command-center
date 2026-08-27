@@ -403,6 +403,56 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 14:00 UTC (Cowork) — V8 confirms APPLIED + A2a landed. Lane: 314 done / 156 open.
+
+### V8 — six sponsors confirmed, and the lane moved exactly as predicted
+
+Inserted the six clean rows (`boyd`, `highwoods`, `rxr`, `arc`, `east`, `sunflower`) into
+`lcc_ownership_sponsor_family` on Scott's authority, with before/after captured:
+
+| action | before | after |
+|---|---:|---:|
+| `mismatch` | 74 | **49** |
+| `sponsor_spe` | 0 | **25** |
+| `agrees` | 64 | 64 *(unmoved ✓)* |
+| `all_guarded` | 18 | 18 *(unmoved ✓)* |
+
+**Perfect conservation — 25 chains moved from `mismatch` to `sponsor_spe`, nothing else shifted**,
+which is the invariant the review sheet specified. *(Predicted 24, actual 25 — the population moves
+as A2a drains, so the estimate was stale rather than wrong.)*
+**Reversal:** `delete from lcc_ownership_sponsor_family where confirmed_at::date = current_date;`
+
+**Deliberately NOT confirmed, per the evidence check:** `commonwealth` (15 unrelated parties incl.
+government bodies), `fgf` (**90 SPEs** — Scott's own note says they are Boyd subsidiaries, so
+confirming to FGF Management could misattribute a Boyd program at scale), `madison` ×2 (duplicate
+entities), `carrington` / `sequoia` (Scott's call, name-derived evidence only).
+
+### A2a — merged the duplicate entities; lane 288 → 314
+
+**Completed ever 288 → 314**, open 182 → **156**, last completion 13:51.
+`ambiguous_entity` fell from ~50 blocked tasks to **18**.
+
+**Three things it did right that are worth keeping:**
+1. **Proved the round trip on the highest-stakes group first** — the only one where the destructive
+   pivot dedup-delete fires: **153 rows before, 153 after, 0 lost, 0 new, 0 content differences.**
+   Exactly the check the prompt demanded, because P195's and P196's reversals each failed their
+   first live attempt.
+2. **Stopped when the dry run disagreed with its own prediction** (26, not the 28 predicted) and
+   found out why *before* applying.
+3. **Verified `auto_mergeable` moved for the right reason** — the 12 groups that left are exactly
+   the ones A2a resolved, with **0 auto-mergeable groups still holding any A2a winner or loser**.
+   That is the difference between a counter moving and a counter moving *correctly*.
+
+It also triggered cron 244's own apply function rather than waiting for 06:49, and said so — the
+prompt asked for exactly that disclosure.
+
+**Blocked residue now:** `ambiguous_entity` 18 · `no_entity` 18 · `placeholder` 15 ·
+`repeat_transfer_unrepresentable` 14.
+
+**Lane arc so far: 545 open / 0 completed for 69 days → 314 completed / 156 open**, with every
+remaining item named and routed rather than pooled.
+
+
 ## 2026-08-27 (Cowork) — V8 reviewed: Scott's evidence condition was tested, and it changes 4 of 12
 
 Scott answered all 12 sponsor proposals, approving three **conditionally**: *"so long as there is

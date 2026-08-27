@@ -81,12 +81,25 @@ four real actions; A2 applies `agrees`; A4 retires the unanswerable; A3 turns th
 sponsor decisions. **Completed ever: 0 → 288. Open: 545 → 182.** **+304 historical ownership facts**
 (12,724 → 13,028), 280 owners, **$579.9M**. Nightly on **crons 244/245**, reversible by batch tag.
 
-**Current split:** `agrees` 90 · `mismatch` 74 · `all_guarded` 18 · **`no_records` 0** (all 74
-retired). Residue is named, not buried: **A2a** 48 tasks blocked by duplicate entities (now
-unblocked — 196 Unit 1 made `lcc_merge_entity` reversible), **A2b** 28 repeat-transfer links,
-**A4b** a P138 guard misfiring on street-numbered SPEs (**10 of 18 recoverable**, defect wider than
-this lane), and **A3-residue** 31 chains / $344.6M with no sponsor family.
-⏳ **`mismatch` will not move until Scott confirms the 12 sponsor families** — see backlog **V8**.
+**Measured 2026-08-27 14:00 UTC — completed 314 / open 156.** Split: `agrees` 64 · `mismatch` 49 ·
+**`sponsor_spe` 25** · `all_guarded` 18 · **`no_records` 0** (all 74 retired).
+
+**Six sponsor families confirmed** (`boyd`, `highwoods`, `rxr`, `arc`, `east`, `sunflower`) —
+mismatch 74 → 49 with `agrees`/`all_guarded` unmoved. **Held deliberately:** `fgf` (90 SPEs;
+Scott's note says they are Boyd subsidiaries — confirming to FGF Management could misattribute at
+scale), `commonwealth` (15 unrelated parties incl. government bodies), `madison` ×2 (duplicate
+entities), `carrington` / `sequoia` (name-derived evidence only).
+→ `docs/audits/V8_SPONSOR_FAMILY_REVIEW_2026-08-27.md`
+
+**Remaining residue is named and routed, not pooled:** blocked `ambiguous_entity` 18 ·
+`no_entity` 18 · `placeholder` 15 · `repeat_transfer_unrepresentable` 14 (**A2b**); plus **A4b**, a
+P138 guard misfiring on street-numbered SPEs (**10 of 18 recoverable, defect wider than this
+lane**), and **A3-residue** ~31 chains with no sponsor family.
+
+⚠️ **New model gap this surfaced: JV / fund ownership is MULTI-PARTY and the chain is
+single-valued today** — `Boyd Watterson JV UBP` resolves to Boyd alone and its partner is
+invisible. Also **leasehold is a real ownership interest**, not a weaker one (ground lease splits
+fee from leasehold). → backlog **P1c / J1–J4**
 → `docs/audits/A1_OWNERSHIP_LANE_SPLIT_2026-08-27.md`, `DATA_PROCESS_AUTOMATION_AUDIT_2026-08-26.md`
 
 ### The shared entity-merge path is REVERSIBLE (2026-08-27, P196 / N11)
