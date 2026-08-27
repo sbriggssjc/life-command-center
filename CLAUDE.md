@@ -213,18 +213,29 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
   ⚠️ **"CI keeps the hard fail" is only true of the checks CI actually runs — and it does NOT
   run the test suite.** See the next bullet before relying on any guard in `test/`.
 
-- **⚠️ NO WORKFLOW RUNS `npm test` ON A PULL REQUEST — THE 4,551-TEST SUITE NEVER EXECUTES IN CI
-  (measured 2026-08-26, Prompt 139).** `.github/workflows/boot-check.yml` is the **only** check
-  that runs on a PR, and it runs `npm run check:boot` — a `node --check` sweep plus a `server.js`
-  import. The other five workflows (`address-normalize-drift`, `cron-heartbeat`, `daily-db-checks`,
-  `field-source-priority-schema`, `supabase-advisor`) are scheduled or ops checks, not PR gates.
-  **This is why PR #1786 merged green carrying a red suite and duplicated `<script>` tags.**
-  - **Every "guard" this file cites is therefore a guard only if a human runs `npm test` locally.**
-    The dozens of `test/*.test.mjs` tripwires documented throughout this file — the duplicate-
-    definition pin, the load-order guard, the subroute dispatch check, the research-embed
-    invariant — are real and they are green, but **nothing enforces them at merge time.** Do not
-    write "guarded by `test/x.test.mjs`" as though it were a merge gate; it is a regression
-    detector for whoever remembers to run it.
+- **⚠️ THE SUITE NOW RUNS ON EVERY PR — BUT IT IS NOT A MERGE GATE, AND IT SHIPPED RED.**
+  ~~NO WORKFLOW RUNS `npm test` ON A PULL REQUEST~~ was true when measured (2026-08-26, Prompt 139)
+  and is **stale as of 2026-08-27**: `.github/workflows/test-suite.yml` shipped (backlog N9) and a
+  PR now shows **two** checks, *"npm test"* and *"App boots"*. Historical record, because it
+  explains a real incident: `boot-check.yml` used to be the only PR check (a `node --check` sweep
+  plus a `server.js` import), the other five workflows being scheduled/ops checks rather than PR
+  gates — **which is why PR #1786 merged green carrying a red suite and duplicated `<script>` tags.**
+  - **⚠️ AND THE NEW WORKFLOW WAS RED ON EVERY RUN FROM THE MOMENT IT SHIPPED — INCLUDING TWICE
+    ON `main`.** It pinned `node-version: '20'`, copied from `boot-check.yml`, but three test files
+    import Deno edge-function modules directly (`test/sf-deal-promotion.test.mjs`,
+    `test/sf-file-collector.test.mjs`, `test/sf-file-discovery.test.mjs` →
+    `supabase/functions/**/*.ts`). **Node 20 cannot load a `.ts` file** and throws
+    `ERR_UNKNOWN_FILE_EXTENSION` before any test body runs; Node 22.18+ strips types by default, so
+    they pass. Fixed to `'22'`. `boot-check.yml` stays on 20 **correctly** — it never imports a
+    `.ts` module, which is exactly why copying its Node pin was the wrong default.
+    **The durable lesson: a check that is red on every single run, base branch included, is not a
+    gate — it is a badge everyone learns to merge past**, which is the failure N9 existed to close.
+    A new CI job is not shipped until it has been green once on `main`.
+  - **⚠️ A RED CHECK STILL MERGES until *"npm test"* is a REQUIRED status check** — PR #1793 merged
+    58 seconds after it was opened, with the suite still running. So a `test/*.test.mjs` tripwire is
+    now *visible* at merge time but still not *enforcing*. Write "guarded by `test/x.test.mjs`" only
+    with that caveat. The required-check toggle is an operator step (repo Settings → Branches) and
+    nothing in this repo can flip it.
   - **It is the exact mirror of the 2026-07-20 incident `boot-check.yml`'s own header describes** —
     there the suite stayed green while the app crash-looped, because tests import modules and
     nothing imported the app. The gap nobody closed is the other direction: CI imports the app and
