@@ -143,6 +143,49 @@ test('shared-address parent buildings require explicit ASC tenant corroboration'
   );
 });
 
+test('parent buildings allow a missing street suffix only with corroborated enrollment organization tenancy', () => {
+  const target = {
+    candidate_fingerprint: sha('a'),
+    address_token: '100 W CENTRAL|TESTVILLE|KS|67000',
+    cms_identity: {
+      facility_name: 'Synthetic Surgery Center',
+      address: '100 West Central, Suite One',
+      city: 'Testville', state: 'KS', zip: '67000',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Family Physicians, P.A.'],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/enrollment-org-campus',
+    address: '100 W Central Ave', city: 'Testville', state: 'KS', zip: '67000',
+    square_footage: '50,000',
+    tenant_name: 'Synthetic Family Physicians, P.A.',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.identity_match.mode, 'enrollment_org_corroborated_parent_building');
+  assert.equal(built.identity_match.corroboration_basis, 'cms_enrollment_organization');
+
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: { ...target.cms_evidence, enrollment_corroborated: false },
+    }, context),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenant_name: 'Unrelated Medical Group' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, address: '102 W Central Ave' }),
+    /does not match/,
+  );
+});
+
 test('migration is private, RLS-protected, exact-50, and hard-blocks prohibited writes', async () => {
   const sql = await readFile(new URL('../supabase/migrations/20261001120000_lcc_asc_research_swim_lane.sql', import.meta.url), 'utf8');
   for (const table of ['runs', 'candidates', 'captures', 'evidence', 'reviews']) {

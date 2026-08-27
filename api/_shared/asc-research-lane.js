@@ -96,12 +96,29 @@ function contextTenantNames(context) {
   return names.map(normalizeFacilityName).filter(Boolean);
 }
 
-function hasCorroboratingTenant(facilityName, context) {
-  const facility = normalizeFacilityName(facilityName);
-  if (!facility) return false;
-  return contextTenantNames(context).some((tenant) =>
-    tenant === facility || facility.startsWith(`${tenant} AT `),
-  );
+function corroboratingTenant(target, context) {
+  const facility = normalizeFacilityName(target.cms_identity?.facility_name);
+  const tenants = contextTenantNames(context);
+  if (facility) {
+    const tenant = tenants.find((name) => name === facility || facility.startsWith(`${name} AT `));
+    if (tenant) return { basis: 'facility_name', matched_name: tenant };
+  }
+  const evidence = target.cms_evidence || {};
+  if (evidence.enrollment_corroborated !== true) return null;
+  const organizations = (Array.isArray(evidence.enrollment_org_names) ? evidence.enrollment_org_names : [])
+    .map(normalizeFacilityName).filter(Boolean);
+  const organization = organizations.find((name) => tenants.includes(name));
+  return organization ? { basis: 'cms_enrollment_organization', matched_name: organization } : null;
+}
+
+function buildingAddressTokensAgree(left, right) {
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const a = left.split('|');
+  const b = right.split('|');
+  if (a.length !== 4 || b.length !== 4 || a.slice(1).join('|') !== b.slice(1).join('|')) return false;
+  const stripStreetType = (street) => street.replace(/\s+(?:ST|AVE|BLVD|RD|DR|LN|HWY)$/, '');
+  return stripStreetType(a[0]) === stripStreetType(b[0]);
 }
 
 export function assertAscResearchImport({ release_id, selection_fingerprint, candidate_pool_fingerprint, candidates } = {}) {
@@ -143,12 +160,20 @@ export function buildAscStructuredCapture(target, context = {}) {
   let identityMatch = { mode: 'exact_address_token' };
   if (addressToken !== target.address_token) {
     const cmsIdentity = target.cms_identity || {};
+    const corroboration = corroboratingTenant(target, context);
     const parentBuildingMatch = hasAscSublocation(cmsIdentity.address)
-      && normalizeAscBuildingAddressToken(cmsIdentity) === normalizeAscBuildingAddressToken(context)
-      && hasCorroboratingTenant(cmsIdentity.facility_name, context);
+      && buildingAddressTokensAgree(
+        normalizeAscBuildingAddressToken(cmsIdentity),
+        normalizeAscBuildingAddressToken(context),
+      )
+      && corroboration;
     if (!parentBuildingMatch) throw new Error('Captured page does not match the active frozen ASC candidate');
     identityMatch = {
-      mode: 'tenant_corroborated_parent_building',
+      mode: corroboration.basis === 'facility_name'
+        ? 'tenant_corroborated_parent_building'
+        : 'enrollment_org_corroborated_parent_building',
+      corroboration_basis: corroboration.basis,
+      corroborated_name: corroboration.matched_name,
       cms_sublocation_preserved: clean(cmsIdentity.address),
       captured_building_address: clean(context.address),
       facility_name: clean(cmsIdentity.facility_name),

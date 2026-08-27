@@ -42,7 +42,7 @@ export async function handleAscResearchTarget(req, res) {
   if (!run) return res.status(200).json({ ok: true, target: null, reason: 'no_active_run' });
   const rows = await opsQuery('GET',
     `healthcare_research_candidates?run_id=eq.${pgFilterVal(run.run_id)}` +
-    '&status=eq.pending&select=candidate_fingerprint,sample_ordinal,sampling_cell,cms_identity,address_token' +
+    '&status=eq.pending&select=candidate_fingerprint,sample_ordinal,sampling_cell,cms_identity,cms_evidence,address_token' +
     '&order=sample_ordinal.asc&limit=1', null, { countMode: 'none' });
   if (!rows.ok) return fail(res, rows.status || 500, 'asc_research_target_failed', rows.data);
   const candidate = rows.data?.[0];
@@ -81,7 +81,7 @@ export async function handleAscResearchCapture(req, res) {
   const targetRows = await opsQuery('GET',
     `healthcare_research_candidates?run_id=eq.${pgFilterVal(target.run_id)}` +
     `&candidate_fingerprint=eq.${pgFilterVal(target.candidate_fingerprint)}` +
-    '&select=run_id,candidate_fingerprint,cms_identity,address_token,status&limit=1', null, { countMode: 'none' });
+    '&select=run_id,candidate_fingerprint,cms_identity,cms_evidence,address_token,status&limit=1', null, { countMode: 'none' });
   const storedTarget = targetRows.ok ? targetRows.data?.[0] : null;
   if (!storedTarget) return fail(res, 404, 'frozen_target_not_found');
   let built;
