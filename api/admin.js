@@ -8688,7 +8688,8 @@ async function fetchFederatedSource(type, cap, opts) {
   if (type === 'tier0_owner_contact') {
     const r = await opsQuery('GET', 'v_lcc_tier0_owner_contact_lane_open?select=owner_id,owner_name,'
       + 'owner_rent,domain,n_candidates,n_eligible,n_excluded,n_link_evidence,n_person_evidence,'
-      + 'n_already_linked,match_arms,match_keys,people,owner_workspace_id,owner_domain_cards,rank_value'
+      + 'n_already_linked,match_arms,match_keys,people,owner_workspace_id,owner_domain_cards,rank_value,'
+      + 'employer_sources'
       + '&order=rank_value.desc.nullslast,owner_name,domain&limit=1000');
     const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
     const cards = rows.map((row) => buildTier0Card(row))

@@ -292,6 +292,14 @@ export function buildTier0Card(row) {
     evidence_headline: eligible.some((p) => p.link_evidence.length)
       ? 'A candidate’s stated employer matches this owner.'
       : 'No candidate’s employer is on file as this owner — the match is the email domain alone.',
+    // P197 — WHERE the employer on this card came from. `contact_company` used to
+    // have exactly one possible origin (a unified_contacts row matched on email), so
+    // provenance was implicit. It now resolves through lcc_tier0_employer_on_file:
+    // hub_email > hub_entity_id > sf_campaign > entity_capture, the last two only
+    // when the person's own email domain corroborates the string. A card decided off
+    // a Salesforce label is a weaker claim than one decided off the hub, and the
+    // operator has to be able to see which they are looking at.
+    employer_sources: Array.isArray(r.employer_sources) ? r.employer_sources : [],
     people: eligible,
     excluded_people: excluded,
     rank_value: Number(r.rank_value ?? r.owner_rent) || 0,

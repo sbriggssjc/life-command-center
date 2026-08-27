@@ -17,7 +17,6 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
-
 ## 2026-08-27 — A3: the ownership `mismatch` lane is a REPRESENTATION question (74 chains → 12 decisions)
 
 Full writeup: [`docs/audits/A3_OWNERSHIP_MISMATCH_SPONSOR_FAMILY_2026-08-27.md`](../audits/A3_OWNERSHIP_MISMATCH_SPONSOR_FAMILY_2026-08-27.md).
@@ -57,6 +56,75 @@ directions. `npm test` 4,684 pass / 0 fail. New guard mutation-verified RED on s
 
 **Residue sized, surface NOT built** (31 chains / 27 owners / $344.6M). Follow-on **A3b**, named not
 built: teach A2's apply path to consume `sponsor_spe`.
+
+## 2026-08-27 13:00 UTC — P197: the Tier 0 lane read ONE employer source, by ONE key
+
+Full writeup: [`docs/audits/P197_TIER0_EMPLOYER_RESOLVER_2026-08-27.md`](../audits/P197_TIER0_EMPLOYER_RESOLVER_2026-08-27.md).
+Migration `20260827170000_lcc_p197_tier0_employer_resolver.sql`, applied live to LCC Opps.
+
+**`no_employer_on_file` 67 → 54 cards** ($131.2M → $113.6M); parked 142 → 137; `ask` 82 → **87**
+(+$7.6M). `auto` unchanged at 9 — **the same 9 cards**, 0 lost / 0 gained. Card universe 233 → 233,
+0 in / 0 out. **Nothing was minted** — no `unified_contacts` row, no pivot write, no entity touched.
+
+### The prompt's premise was half right, and the wrong half is the finding
+
+P197 framed the parked pile as *"a missing hub row"* and prescribed reconciling 92 people into
+`unified_contacts`. Measured, the blocking population is **73 eligible people** and only **4** lack a
+hub row that exists. For the rest the employer is already on file somewhere the lane cannot read:
+**20** in `lcc_sf_list_membership.company_name` (6,781 such rows — the lane has never read one),
+**20** on `entities.metadata->>'company'`, **56** genuinely nowhere. So the defect is that the lane
+resolves "employer on file" from ONE table by ONE key. Shipped `lcc_tier0_employer_on_file` —
+one ranked resolver, `hub_email > hub_entity_id > sf_campaign > entity_capture` — instead of a
+reconciler. Minting hub rows would have fixed 4 of 73.
+
+### ⚠️ The obvious version is destructive, and it was measured on named rows before being rejected
+
+"Copy whatever company we hold onto the card" manufactures employers. Neither non-hub source is an
+employer register: over the parked population they carry **city/zip strings** (`Southbury, CT 06488`,
+`Hollywood, FL 33021`), the **person's own name** (`Steve Blumer`), a P188-named junk label
+(`Inco Commercial`, on two people sharing ONE mailbox) and stale firms (`Pop Local` for someone
+@edwardsrealtyco.com, `The Carpet Shop` @corporaterealty1.com, `Community Trust Bk` proposed against
+a **health-centre** owner). `contact_company` feeds `ev_company_matches_owner` — the only signal that
+attests the LINK — so an invented employer colliding with an owner name manufactures exactly the
+claim P188 established these signals cannot make. **The gate is email-domain corroboration**; the hub
+tiers stay ungated because the hub IS the system of record. Probed on 8 named rows with stated
+expected answers (4 resolve, 4 reject): **8 of 8 correct** — the positive control that makes the
+zeros believable (P182).
+
+### ⚠️ The 5,440 orphan count is 247 too high, and the producer is Salesforce, not the sidebar
+
+**247 of those person entities DO have a hub row** — linked by `entity_id`, which the email-keyed
+detector structurally cannot see. True count **5,193**. The producer is **live**: 542 in 30 days, 94
+in 7, one the day of the audit — and it is Salesforce (`metadata->'salesforce'` on 3,994;
+`external_identities` `salesforce/Contact` 4,032 vs `costar/contact` 1,767), not the hypothesised
+CoStar sidebar. Duplicate risk on any future reconcile was checked rather than assumed: of 3,874
+orphans carrying an SF contact id, **exactly 1** already has a hub row under it.
+
+### The general rule was sized, not chosen
+
+Gate populations over the 5,193, quoted before choosing: **SF campaign 1,475** (the only
+discriminating gate) · correspondence **33** · has an edge 4,903 (94%) · person-shaped 5,131 (99%).
+**No hub rows minted** — 1,475 rows into the surface Scott works is a decision with a blast radius,
+and it would not have cleared the Tier 0 blockage anyway (a hub row with no `company_name` answers
+nothing the lane asks). Filed as backlog **N14** for Scott.
+
+### Left honestly
+
+54 cards / $113.6M still park as `no_employer_on_file` **and that is correct** — a genuine
+acquisition gap, not plumbing. Of the 13 that moved, **5 became `ask`** and **8 became
+`employer_on_file_differs`** (honest rejects — progress over a non-judgement, but not a call;
+reported separately). ⚠️ **Two of the 5 new `ask` cards rest on a generic word stem** —
+`ev_company_matches_owner`'s shared-8-char arm fires on `innovati` (*Innovation 2100 LLC* ←
+"Innovative Renal Care", a dialysis **operator**) and `corporat`. Pre-existing property of that
+comparator, now exercised more often; stated rather than papered over, and the card shows the
+employer, its source and the match key so a wrong one is a one-second reject.
+
+**Proven, not asserted:** `auto` is the same 9 cards; `match_strength`/`n_eligible` changed on 0 of
+233; and the view got **faster** — 793.9 ms → 553.6 ms, buffers 32,841 → 22,820, because the plan
+was pushing the old hub join down to all 7,890 people and the resolver is bounded to the ~600 matched
+pairs. Guard `test/tier0-employer-resolver.test.mjs` (7 tests, **all 7 mutation-verified RED**).
+Suite 4,673 pass / 0 fail.
+
 
 ## 2026-08-27 06:00 UTC — P196: the shared merge path is REVERSIBLE (N11 ✅), and parked Tier 0 cards say why (N3e ✅)
 
