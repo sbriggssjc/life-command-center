@@ -177,6 +177,63 @@ export function planMintHead(rows = [], mintLimit) {
   return rows.slice(0, n);
 }
 
+// ── A5c: THE VALUE GATE, AND WHY IT TOUCHES ONLY ONE OF THE TWO READS ────────
+//
+// A5a split this generator's work into two budgets: the CLOSE needs
+// completeness (a chunked membership probe over every open subject), the MINT
+// needs prioritisation (the top `limit` feed rows). A5c adds the third fact —
+// the mint set also needs to be WORTH MINTING.
+//
+// Measured 2026-08-27, a correct producer emits `would_insert` 2,586 on one
+// `limit=2000` run and cron 35 fires every 30 minutes, into a pool of 71,448
+// gap rows of which 5,239 dia owners hold ZERO properties and operators plus
+// literal placeholders carry 5,364 of 6,442 properties (the P113
+// tenant-in-the-owner-slot trap at scale). Emitting the pool so an operator can
+// find the few that matter is the badge-that-is-noise failure.
+//
+// THE GATE LIVES IN THE DOMAIN VIEW, not here. `v_next_best_research` on gov and
+// dia carries `gate_pass` / `gate_reason` / `gate_value`, computed from each
+// arm's own recorded facts (see the two A5c migrations). The mint read filters
+// on it SERVER-SIDE, so the ranked head is drawn from the admitted population.
+// A JS-side filter applied after the read would be a surface filter: it would
+// still pay to mint, the head would fill with rows nobody can work, and the
+// badge would still lie.
+//
+// ⚠️ AND THE PROBE MUST NOT USE IT — THIS IS THE ONE RULE TO GET RIGHT.
+// The probe answers "does this gap still exist", NOT "is it worth working". A
+// probe that filtered on `gate_pass` would find every gated-out subject absent
+// from the feed and `planAutoClose` would close it as `gap_resolved` — a second
+// false claim of exactly the kind A5a removed, and worse than the first because
+// it would look like the gate "cleaning up". The 2,000 open tasks that sit
+// below the gate must stay open and visible; retiring them is a separate,
+// reversible decision with its own outcome value (backlog A5d), never a
+// side-effect of a filter.
+//
+// `test/nba-feed-value-gate.test.mjs` pins the asymmetry in both directions.
+
+/**
+ * The PostgREST filter that restricts a read to the value-gated population.
+ * Passed through the data-query edge function's `filter` param, which forwards
+ * `<col>=<op>.<val>` pairs verbatim.
+ */
+export const NBA_MINT_GATE_FILTER = 'gate_pass=is.true';
+
+/**
+ * Which of the generator's two feed reads may apply the value gate.
+ *
+ * 'mint'  → yes. The ranked head is the emission decision.
+ * 'probe' → NEVER. See the block comment above: gating the membership probe
+ *           converts "we chose not to work this" into "the gap resolved".
+ */
+export function feedReadUsesValueGate(purpose) {
+  return purpose === 'mint';
+}
+
+/** The `filter` value for a feed read, or null when the read must stay ungated. */
+export function nbaFeedGateFilter(purpose) {
+  return feedReadUsesValueGate(purpose) ? NBA_MINT_GATE_FILTER : null;
+}
+
 /** Pages needed to fetch the ranked mint head, given the response cap. */
 export function mintHeadPageCount(mintLimit, pageSize = FEED_PAGE_SIZE) {
   const n = Math.max(0, Number(mintLimit) || 0);

@@ -29,6 +29,7 @@ import {
   FEED_PAGE_SIZE, NBA_FEED_ORDER, PROBE_CHUNK_SIZE,
   feedKeyOf, openTaskKeyOf, planAutoClose, planMintHead, mintHeadPageCount,
   chunkProbeIds, probeIdIsSafe, probeChunkIsTrustworthy,
+  nbaFeedGateFilter,
 } from './_shared/nba-feed-sweep.js';
 import { invokeExtractionAI } from './_shared/ai.js';
 import {
@@ -1069,7 +1070,13 @@ async function handleReviewCounts(req, res) {
     opsLane('data_conflicts',    'v_field_provenance_conflict_classified?conflict_class=eq.cross_source'),
     opsLane('stale_identities',  'v_stale_identities'),
     opsLane('unlinked_entities', 'v_unlinked_entities'),
-    withLaneTimeout(domCount('dia', 'v_next_best_research', 'estimated')),
+    // A5c: the badge counts ACTIONABLE work, not raw output. Ungated this read
+    // returns 29,643 — the whole dia gap pool, 84% of whose owners hold no
+    // property and most of the rest operators or placeholders. A badge that big
+    // and that wrong is the surface people learn to ignore (doctrine rule 5).
+    // `count=exact` because the planner's estimate over the gated view is off by
+    // ~58x (11,569 vs 198); measured 644 ms, inside the 3,500 ms lane timeout.
+    withLaneTimeout(domCount('dia', 'v_next_best_research?gate_pass=is.true', 'exact')),
     withLaneTimeout(domCount('gov', 'ownership_research_queue', 'estimated')),
     withLaneTimeout(domCount('dia', 'llc_research_queue?status=eq.queued')),
     withLaneTimeout(domCount('gov', 'llc_research_queue?status=eq.queued')),
@@ -18704,11 +18711,21 @@ async function fetchNbaFeed(source, limit, req, offset = 0) {
   const url = new URL(DATA_QUERY_EDGE_URL);
   url.searchParams.set('_source', source);
   url.searchParams.set('table', 'v_next_best_research');
-  url.searchParams.set('select', 'research_type,entity_kind,entity_id,label,priority,instructions,domain');
+  url.searchParams.set('select',
+    'research_type,entity_kind,entity_id,label,priority,instructions,domain,gate_reason,gate_value');
   // A TOTAL order — `priority` alone ties across tens of thousands of rows
   // because every gap arm hard-codes it, so an untied sort makes both the
   // window and the paging non-deterministic (pages can drop or repeat rows).
   url.searchParams.set('order', NBA_FEED_ORDER);
+  // ── A5c: the VALUE GATE, applied SERVER-SIDE and ONLY to this read.
+  // This is the mint budget, so the ranked head must be drawn from the
+  // ADMITTED population — a JS filter after the read would leave the head full
+  // of rows nobody can work. The membership probe below builds its own URL and
+  // never calls this function, so the close decision still sees the whole feed:
+  // deciding not to work a gap is not the gap resolving. See the block comment
+  // in nba-feed-sweep.js.
+  const gateFilter = nbaFeedGateFilter('mint');
+  if (gateFilter) url.searchParams.set('filter', gateFilter);
   url.searchParams.set('limit', String(limit));
   if (offset > 0) url.searchParams.set('offset', String(offset));
   url.searchParams.set('count', 'false');
@@ -18722,20 +18739,27 @@ async function fetchNbaFeed(source, limit, req, offset = 0) {
   return Array.isArray(body.data) ? body.data : [];
 }
 
-// The RANKED MINT HEAD: the top `mintLimit` feed rows, read at exactly the
-// server's page cap (a larger stride silently skips rows). Nothing here decides
-// the auto-close — that is settled by probeNbaFeedMembership below.
+// The RANKED MINT HEAD: the top `mintLimit` VALUE-GATED feed rows, read at
+// exactly the server's page cap (a larger stride silently skips rows). Nothing
+// here decides the auto-close — that is settled by probeNbaFeedMembership
+// below, which reads the feed UNGATED on purpose.
+//
+// `exhausted` is the honest-count half: when the head came back short of what
+// was asked for, `rows.length` IS the whole admitted population for this
+// domain; when it filled, it is a FLOOR. Reporting one as the other is the
+// badge-that-lies failure this round exists to fix.
 async function fetchNbaMintHead(source, mintLimit, req) {
   const rows = [];
   const pages = mintHeadPageCount(mintLimit, FEED_PAGE_SIZE);
+  let exhausted = false;
   for (let i = 0; i < pages; i += 1) {
     const want = Math.min(FEED_PAGE_SIZE, mintLimit - rows.length);
     if (want <= 0) break;
     const page = await fetchNbaFeed(source, want, req, rows.length);
     rows.push(...page);
-    if (page.length < want) break;   // RETURNED count, never the requested one
+    if (page.length < want) { exhausted = true; break; }   // RETURNED count, never the requested one
   }
-  return rows;
+  return { rows, exhausted };
 }
 
 // Ask the feed, directly, which of these open-task subjects are STILL a gap.
@@ -18828,6 +18852,12 @@ async function handleGenerateResearchTasks(req, res) {
     const domain = source === 'dia' ? 'dialysis' : 'government';
     const summary = {
       feed: 0, mint_head: 0,
+      // A5c honest counts. `value_gated` says the head was drawn from the
+      // admitted population; `admitted_head_exhausted` says whether `feed` is
+      // the WHOLE admitted population (true) or only a floor (false, the head
+      // filled at `limit`). `gate_reasons_seen` should only ever contain
+      // 'admitted' — anything else means a gated row reached the mint set.
+      value_gated: false, admitted_head_exhausted: false, gate_reasons_seen: [],
       inserted: 0, would_insert: 0, refreshed: 0, would_refresh: 0,
       closed: 0, would_close: 0,
       membership_complete: false, membership_chunks: 0, subjects_probed: 0,
@@ -18835,9 +18865,15 @@ async function handleGenerateResearchTasks(req, res) {
       skipped_ignored: 0, deduped: 0, errors: [],
     };
     try {
-      // Read only the RANKED HEAD — this is the mint budget, never the close set.
-      const feed = await fetchNbaMintHead(source, limit, req);
+      // Read only the RANKED, VALUE-GATED HEAD — this is the mint budget, never
+      // the close set. The gate lives in the domain view (`gate_pass`), so this
+      // head is drawn from the admitted population rather than filtered after
+      // the fact; see nba-feed-sweep.js for why the probe must NOT share it.
+      const head = await fetchNbaMintHead(source, limit, req);
+      const feed = head.rows;
       summary.feed = feed.length;
+      summary.value_gated = true;
+      summary.admitted_head_exhausted = head.exhausted;
 
       const ignoreRes = await opsQuery('GET',
         `ignored_recommendation_contacts?select=entity_id&domain=eq.${encodeURIComponent(domain)}`);
@@ -18870,6 +18906,10 @@ async function handleGenerateResearchTasks(req, res) {
       // two-budgets note on the generator header.
       const mintRows = planMintHead(feed, limit);
       summary.mint_head = mintRows.length;
+      // A leak check, not decoration: the server applied the gate, so every row
+      // here must read 'admitted'. Anything else means the filter did not take
+      // (a renamed column, an unfiltered fallback) and the flood is back.
+      summary.gate_reasons_seen = [...new Set(mintRows.map(r => r.gate_reason || 'unknown'))];
 
       for (const row of mintRows) {
         const entityId = row.entity_id == null ? null : String(row.entity_id);
