@@ -106,6 +106,25 @@ link is a hypothesis and still needs testing on the 46.** · **E5** re-test whet
 `owner_contact_manual`'s egress block is still true or now a dated blocker · **E6** size the CM
 book-copy saving in hours before building the top-ranked new automation (N4).
 
+## P1c — Multi-party ownership: JV, fund and partnership structures (Scott, 2026-08-27)
+
+**New requirement, raised while reviewing V8.** Scott: *"I think we connect JV LLC or SPEs like we
+do recorded owner to LLC/SPE to true owner, but link to **multiple true owners** for each true owner
+in the JV. Partnerships are going to be a good example of this down the road. We will have
+investors that own assets outright, in JV and maybe in a fund like a DST or something similar."*
+
+**This is a data-model change, not a lane fix**, and it is the first requirement in this arc that
+the current model cannot express. Today the chain is single-valued: `recorded owner → SPE → ONE
+true owner`. A joint venture has **two or more principals behind one SPE**, each of whom we
+prospect independently.
+
+| # | Item | State | Notes |
+|---|---|---|---|
+| **J1** | **Design the multi-owner ownership edge** — one SPE resolving to **N** true owners, each with a role (JV partner, GP/LP, DST beneficiary, sole owner) and ideally a share. Must not break the existing single-owner path, which is nearly all of the data. | 🟢 👤 | `entity_relationships` may already carry the shape; **check before adding a table** |
+| **J2** | **`Boyd Watterson JV UBP` is the live worked example** — Scott approved it into the Boyd family, and it is a JV, so today it resolves to Boyd alone and the second partner (`UBP`?) is invisible. **Use it as the design's test case.** | 🟢 | V8 row 1 |
+| **J3** | **Leasehold vs fee is a REAL ownership split, not a weaker claim.** Scott: a `Lessee` SPE holds the **leasehold** (improvements) under a ground lease while another party holds the **fee** (dirt); the leasehold SPE is the landlord counterparty to the tenant. `Cr Sunflower Lessee LLC` is the live example. **The model should distinguish fee / leasehold / both**, or a ground-leased asset silently reads as one owner when it has two. | 🟢 | V8 row 3 |
+| **J4** | **Downstream consequence — prospecting.** If an asset has two JV principals, both belong in the pursuit surfaces, and neither should be suppressed because the other is recorded. Check what `v_lcc_owner_contact_worklist` and the Tier 0 lane do with a multi-owner asset **before** J1 ships. | 🔴 | own item |
+
 ## P2 — Local-model gaps still open (R5–R9)
 
 | # | Item | State | Source |
