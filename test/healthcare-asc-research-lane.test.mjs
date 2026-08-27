@@ -396,3 +396,17 @@ test('dual-source missingness advances without fabricating a capture and remains
   assert.match(sidepanel, /window\.confirm\(/);
   assert.match(sidepanel, /source_dispositions:\s*\{\s*costar:\s*'not_found',\s*rca:\s*'not_found'\s*\}/s);
 });
+
+test('dual-source missingness upsert uses the named primary key to avoid output-column ambiguity', async () => {
+  const sql = await readFile(
+    new URL('../supabase/migrations/20261002090100_lcc_asc_missingness_conflict_target.sql', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    sql,
+    /on\s+conflict\s+on\s+constraint\s+healthcare_research_reviews_pkey\s+do\s+update/is,
+  );
+  assert.doesNotMatch(sql, /on\s+conflict\s*\(\s*run_id\s*,\s*candidate_fingerprint\s*\)/i);
+  assert.match(sql, /security\s+invoker/i);
+  assert.doesNotMatch(sql, /delete\s+from/i);
+});
