@@ -794,6 +794,56 @@ highest-value lane** (Class 11's blind detector, prompt 189).
 
 ---
 
+## Class 15 — a DESTRUCTIVE step buried inside a shared helper, with an UNCORRELATED predicate and no snapshot
+
+**The shape.** A caller reaches for the house helper precisely because it is the safe, blessed path
+("`lcc_merge_entity` is the ONLY path — never move backrefs by hand"). Inside it, a dedup step
+DELETEs rows on the losing side. Two things make that step invisible:
+
+1. **The predicate is uncorrelated.** It asks whether the winner has *any* row in the table, not
+   whether it has the *conflicting* row. So it deletes rows that would not have collided.
+2. **The snapshot flag is off.** The helper takes a `p_snapshot boolean` and its own callers pass
+   `false`, so the deletion leaves no ledger and the operation is irreversible — while every doc
+   about the helper describes it as the careful path.
+
+Nothing errors. The merge reports success and moves the counts you expected.
+
+**The detector.** For every shared mutation helper you are about to call in bulk:
+
+```sql
+-- 1. does it DELETE anything, and is that DELETE's EXISTS correlated?
+select pg_get_functiondef(oid) from pg_proc where proname = '<helper>';
+--    read every `delete ... where exists (...)`: does the subquery join on the KEY,
+--    or only on the winner's identity? The second form is the bug.
+
+-- 2. does it snapshot? grep the call for p_snapshot / a backup insert.
+
+-- 3. how many rows would this bulk run actually destroy, and are they empty?
+with m as (select unnest(member_entity_ids) eid from <your population>)
+select <group>, count(*) from m join <the table> t on t.entity_id = m.eid
+group by 1 having count(*) > 1;
+```
+
+**First run (P195, 2026-08-27).** `lcc_merge_entity` deletes the loser's `owner_contact_pivot`
+whenever the winner has one — uncorrelated — and calls the reconcile with `p_snapshot => false`.
+Across the 60 groups the third query returned **2** collisions. One was harmless (both sides named
+Fran Cowan). The other, `bamproperties`: the winner by ownership held a pivot naming **nobody**
+(`enrichment_action = 'manual_research'`), the loser held the group's **only named contact, "Alex
+Bias"**. A bare merge deletes it, silently, in the lane the pass existed to clean. Same shape in the
+same function for portfolio facts, identities, relationships and watchers — those happened to have
+**zero** collisions in this population, which is luck, not safety. `lcc_apply_fuzzy_merges` loops
+this helper over 3,053 groups with no undo.
+
+**The repair is two moves, and both are needed.** Snapshot the losing side yourself *before* calling
+the helper (P195 writes into the house `r40_merge_reconcile_backup` tagged `p195:<batch>` rather than
+minting a second ledger), and **reconcile the field the delete would destroy, fill-blanks, first** —
+so the deletion becomes a genuine no-op rather than a loss.
+
+**And prove the reversal by running it.** P195's round trip (real merge → unmerge → compare) failed
+first time on `428C9: cannot insert a non-DEFAULT value into column "is_current"` — a `GENERATED
+ALWAYS` column, a footgun already written down in `CLAUDE.md`, restored with a bare `select *`. A
+reversal path that has never been executed is a claim, not a capability.
+
 ## Class 13 — a MATCHING RULE whose eligibility test silently excludes the highest-value population
 
 **Symptom:** a matcher runs fast, returns thousands of rows, and reads as a rich, healthy bench.

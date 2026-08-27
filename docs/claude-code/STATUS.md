@@ -17,6 +17,55 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 (Cowork) — P195: the byte-identical owner merge landed, and two traps in landing it
+
+**66 entities merged into 56 survivors; $102,216,468 of current annual rent consolidated; 0 live
+backrefs left on any tombstone; `auto_mergeable` unchanged at 3,053.** NGP Capital 5→1
+($59.8M→$68.3M, **29→38 assets**), AVG Partners 4→1, GI Partners 3→1, JLB Capital 3→1, WMC 2→1,
+NGP Group 3→1. Blind byte-identical groups **60 → 4**. Full writeup:
+[`docs/audits/P195_BYTE_IDENTICAL_OWNER_MERGE_2026-08-27.md`](../audits/P195_BYTE_IDENTICAL_OWNER_MERGE_2026-08-27.md).
+
+**⚠️ The prompt's premise was wrong for 4 of the 60 groups, and structurally so.**
+`v_lcc_merge_candidates_normalizer_blind` selects names that reduce to NOTHING under the generic-CRE
+stoplist — which is *both* acronym-named real firms ("NGP Capital" → `ngp`, under the normalizer's
+4-char floor) *and* pure-generic fragments ("Capital", "Properties", "Partners Group"), which are
+failed extractions. The three `Capital` rows span dia + gov with three DIFFERENT external identities;
+17 of the 18 `Partners Group` rows are empty husks minted in two bursts on 2026-06-24/26. Merging
+them fabricates a party. `lcc_p195_name_has_distinctive_residue` holds them (**4 groups / 25 entities
+/ $158,846**, backlog **N10**). The held group worth reading is `capitalgroupproperties`: one member
+carries a `costar/company` external_id of **`capital properties`** — a different company string.
+
+**⚠️ `lcc_merge_entity` would have destroyed a live contact, silently.** It calls the reconcile with
+`p_snapshot => false` (so every dedup DELETE is unrecoverable — `lcc_apply_fuzzy_merges` auto-merges
+3,053 groups with no undo) and its `owner_contact_pivot` dedup `EXISTS` is **uncorrelated**: it asks
+only whether the winner has a pivot at all. On `bamproperties` the winner held a pivot naming
+**nobody** and the loser held the group's **only named contact, "Alex Bias"**. The driver now
+snapshots the losing side and folds the pivot **fill-blanks** before merging; Alex Bias survives with
+a `p195_merge_fold` provenance entry. Fixing the shared path is backlog **N11**; new playbook
+**Class 15**.
+
+**Round trip proven, and it caught a real bug.** Real merge → `lcc_p195_unmerge` → compare on
+`dandmholdings`: zero residue. It failed first time on `428C9 is_current is GENERATED ALWAYS` — a
+footgun already in `CLAUDE.md`, shipped past review in a `select *` restore. A reversal path that has
+never been run is a claim, not a capability.
+
+**Measured nil, with a positive control:** zero `(source_domain, source_property_id)` collisions
+between members across all 60 groups, so the P175a ghost-vs-ENDED conflict never arose — against
+**2,678** such collisions fleet-wide, which is what makes the zero believable.
+
+**Class 8 scheduled, not remembered:** `v_lcc_p195_resurrection_watch` + `lcc_p195_check_resurrection()`
+on **cron 243 (06:52 UTC)**, opening a deduped `p195_duplicate_owner_resurrection` alert when a
+cleaned group re-accumulates. First run: `open_groups 0, regrown 0`. Read `regrown_groups`, never
+`open_groups`.
+
+**Still open, unchanged:** N3e (95 parked Tier 0 cards, $118M — do NOT widen the un-park), the
+fcp/tmg sponsor entries pending Scott, N3c (bank/trustee scope rule), and the operator steps (reload
+the unpacked extension, add `npm test` to branch protection, read `GET /api/tier0-auto-attach-tick`
+to decide `TIER0_AUTO_ATTACH`). N3b is closed by this pass; N3a now covers only the
+wording-difference half (Easterly ×2), whose obvious fix P189 already measured and rejected at 25%
+precision.
+
+
 ## 2026-08-26 (Cowork) — P194: the Tier 0 auto-attach sweep, and what a "living loop" actually needs
 
 Prompt 192 asked for four things. **One was built as specified; two came back different from the
