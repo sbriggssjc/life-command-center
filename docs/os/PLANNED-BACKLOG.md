@@ -83,6 +83,31 @@ confirmed**. This repo's own rule is that a fix is not fixed until the populatio
 | N6 | **R4 (remaining half) — going-cold detection + suggested-touch prose.** `NEXT_STEP_AI` is on; the missing half is Ollama reading the deal thread and drafting *who's quiet, why, suggested touch* into the cadence engine. | 🟢 | `LOCAL-MODEL-GAP-AUDIT.md` R4; leverage map §4.5 |
 | N7 | **R2 (re-classified) — OM-economics write-back + owner-edge creation.** Measured as category (a): the LLM already ran (3,955 staged items carry `asking_price`/`cap_rate`, `lcc_property_attributes` exists). What is missing is the **deterministic** write-back and the asset→owner edge from the extracted owner. Unblocks offer-context, cadence and dossiers. **Moved OUT of the local-model track into engine connectivity — still high value.** | 🟢 | `LOCAL-MODEL-GAP-AUDIT.md` R2 (re-measured 2026-08-24) |
 
+## P1a — ⭐ THE TOP PRIORITY: a correct producer is now feeding lanes with ZERO consumers
+
+**Measured 2026-08-27 21:40.** A5a made the research-task producer correct (no more false
+auto-closes); A5c made it selective (pool **71,448 → 2,530 admitted**, 3.5%). **Neither gave it a
+consumer**, and the Consumption-Layer doctrine is explicit: *no new producer ships without a named
+consumer.*
+
+| lane | open | **real completions ever** |
+|---|---:|---:|
+| `property_missing_recorded_owner` | 1,289 | **0** |
+| `true_owner_needs_salesforce` | 837 | **0** |
+| `owner_contact_manual` | 311 | **0** (egress-blocked — a constraint, not a gap) |
+| `owner_needs_salesforce` (gov) | 108 → **1,675 admitted** | **0** |
+| `property_missing_county_record` | 109 | **0** |
+| **`establish_ownership_history`** | 156 | **314** ← only lanes with consumers |
+| `trace_ownership_to_developer` | 152 | **52** |
+
+*(real = `outcome NOT ILIKE '%gap_resolved%'` — the auto-close is not throughput.)*
+
+| # | Item | State | Notes |
+|---|---|---|---|
+| **C1** | ⭐ **Build a consumer for `owner_needs_salesforce` (gov) — or retire the lane.** **1,675 admitted rows, $4.01B, 66% of everything the fleet will mint**, first-ever emission, **zero consumers.** Apply the P131 lens *before* building: A5 measured the dia sibling as **(a) + (c) with (b) empty** — ~293 resolve **ID-to-ID** via `external_identities` (deterministic plumbing, no model), the rest are **not on-box at all** (a CRM task, not an automation one). **The honest deliverable may be "automate the 293, retire or route the rest."** | 🟢 | the A2 pattern applied one lane over |
+| **C2** | **Then the same question for `property_missing_recorded_owner` (1,289) and `true_owner_needs_salesforce` (837).** Both are large, both have **0 real completions**, and both were previously mis-ranked as healthy by the auto-close artifact. | 🔴 | |
+| **C3** | ⚠️ **Do not mint further into a lane with no consumer.** The gate is working; the constraint now is downstream. If C1 concludes a lane cannot be consumed, **retire it** (A4's precedent: 74 retired with a re-open predicate) rather than leaving it minting. | 🔴 | doctrine |
+
 ## P1b — Consumption-layer repairs (data-process audit, 2026-08-26) — **owned by the automation chat**
 
 Source: `docs/audits/DATA_PROCESS_AUTOMATION_AUDIT_2026-08-26.md`. **~3,000 research tasks and 419

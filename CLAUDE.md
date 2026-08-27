@@ -2748,6 +2748,122 @@ trigger is the sole writer. Writeup: `docs/audits/N15c_CANONICAL_NAME_SINGLE_WRI
   can.)
 - 👤 **One decision remains Scott's:** whether the column becomes an enforced **UNIQUE** key
   (3,930 groups violated it before the backfill).
+- 👤 **Two decisions were left to Scott. ⚠️ BOTH LINES BELOW ARE NOW SUPERSEDED — see the N15d/N15e
+  section that follows.** (1) The **537 stale rows** were **recomputed 2026-08-27 (batch `n15e_go`),
+  drift 537 → 0**; the "recomputing discards a captured string some preserve" concern measured at
+  **73 of 537, and the ledger preserves all of them**. (2) The UNIQUE-key question is still Scott's,
+  but **"3,930 groups violate it today" is a PRE-N15c figure — it is 6,608 now**, because collapsing
+  keys is exactly what creates collisions.
+
+## N15d + N15e — the producer proof, and the 537 recomputed (2026-08-27)
+
+`v_lcc_canonical_name_drift` **537 → 0**: every one of 62,368 live entities now keys to
+`lcc_entity_canonical_key(name)`. `auto_mergeable` 3,040 → 3,040, Tier 0 82/9/137 unmoved,
+`lcc_owner_domain_core` byte-identical. Migration `20260827240000`, batch `n15e_go`, reversible.
+Writeup: `docs/audits/N15d_N15e_PRODUCER_VERIFY_AND_HELD_RECOMPUTE_2026-08-27.md`.
+
+- **⚠️ THE CLASS-8 WALL-CLOCK CHECK COULD NOT BE RUN, AND "0" WOULD HAVE BEEN A LIE OF OMISSION.**
+  The trigger landed 20:03–20:05 UTC; the check ran at 20:26. **Elapsed window 21 minutes, entities
+  created in it ZERO.** At a pre-fix ~4/day (one per six hours) a detector over an empty population
+  returns 0 regardless of what the producer does — the *detector cannot fail*, so its zero is not
+  evidence (Class 11). **Still due 2026-08-28**, and even a full day at ~4/day is weak (daily counts
+  range 0–8). The general rule: **before quoting a recurrence zero, state the elapsed window AND the
+  population that passed through it** — "no new bad rows" and "no new rows at all" read identically.
+- **⚠️ N15b's recurrence query is NOT PUBLISHED — a prompt saying "re-run it" cannot be taken
+  literally.** Three reconstructions were built and run against pre-backfill values rebuilt as
+  `coalesce(ledger.old_canonical_name, e.canonical_name)` — **which is the only reason a baseline is
+  reproducible at all after a backfill has rewritten 15,402 rows.** All three reproduce the burst
+  (1,760–1,789 vs 1,789) and the most-recent date (2026-08-26) **exactly**, and put the trickle at
+  **70–94 against the quoted 79**. Adopted: *E was minted because an OLDER sibling sharing its key
+  was invisible* — the actual mint mechanism. **Quote the band, never the 79 as if reproduced.**
+- **⚠️ EXERCISING EVERY WRITER PATH BEATS WAITING FOR ONE TO LEAK.** In a self-rolling-back
+  transaction: verbatim INSERT, `ON CONFLICT (id) DO UPDATE` (the P196 hazard), aggressive-normalizer
+  INSERT and `UPDATE OF name` **all landed on the trigger's key**; a `canonical_name`-only UPDATE
+  bypassed it *by design* and drove drift **537 → 538**, which is the Class 11 positive control
+  proving the detector can fire. That is stronger evidence about the producer than a day of wall
+  clock, and it is available immediately.
+- **⚠️ A LATENT BYPASS EXISTS AND IT IS INVISIBLE UNTIL IT FIRES.** `api/operations.js:4666`
+  (`merge_duplicate_entities`) PATCHes `canonical_name: '[MERGED] …'` **without `name`**, so the
+  `UPDATE OF name` trigger never fires — and it stamps `metadata.merged_into`, **not the
+  `merged_into_entity_id` column**, so the row would stay in the live population and in the drift
+  view forever. **Measured `canonical_name LIKE '[MERGED]%'` = 0 rows** — never fired. Filed as
+  **N15f**, not patched. **A `BEFORE UPDATE OF <col>` trigger is only as complete as the set of
+  writers that touch that column** — enumerate the writers that touch the DERIVED column directly.
+- **⚠️ THE "RECOMPUTING DISCARDS CAPTURED TEXT" PREMISE IS 14%, AND THE LEDGER COVERS IT.** Of the
+  537, **463 (86%) had a stale key holding LESS** alphanumeric content than the recomputed one; 73
+  held more, 57 held >10 chars more. The backfill writes the ledger **before** the UPDATE, so those
+  strings move to `lcc_n15c_canonical_backfill_log.old_canonical_name`. **A dedup key is not an
+  archive.** Round trip run on 50 real rows and rolled back — reversal restored them byte-identically
+  (P195: a reversal never RUN is a claim).
+- **ONE BACKFILL FUNCTION.** `lcc_n15c_backfill_canonical_names` gained `p_include_held boolean
+  DEFAULT false`. ⚠️ **Adding a parameter creates an OVERLOAD** and, with defaults on both, every
+  1–3-arg call becomes *"function is not unique"* — so the old signature is **DROPPED** first. The
+  default gate still plans **0** rows, so N15c's behaviour is unchanged.
+- **⚠️ THE COLLISIONS ARE THE BENEFIT, AND THE PRE-APPLY COUNT COULD NOT SEE HALF OF THEM.**
+  Predicted 39 (held vs a pre-existing live entity — confirmed exactly); actual **47 entities / 73
+  pairs**, because after the recompute the held rows also collide with **each other** (14 pair rows).
+  **A prediction made against the un-mutated population misses within-batch effects.** They are
+  byte-identical names the stale key was hiding (`1121 California Avenue LLC` ↔ itself,
+  `National Government Properties` ×3). `v_lcc_n15e_canonical_collision_candidates` is
+  **read-only, human-confirm, and deliberately carries NO `auto_mergeable` column** (P198 —
+  `lcc_apply_fuzzy_merges` loops on that flag). **9 pairs are cross-`entity_type`** (`David Siegel`,
+  `Dennis Needleman`, `Alexandria`, `Societe Generale` each exist as both person and organization) —
+  a shared key is correct, reading it as identity is the person/org conflation `sf-account-link.js`
+  exists to prevent. `American Realty Capital` ↔ `American Realty Capital Trust` is Scott's adopted
+  trust rule **working**, not a defect.
+- **⚠️ 👤 THE UNIQUE-KEY DECISION'S INPUT MOVED, AND THE BRIEFED FIGURE WAS STALE.** "3,930 groups
+  violate it" is **pre-N15c**; collapsing keys is precisely what creates collisions.
+  **3,930 → 6,584 (after N15c) → 6,608 (after N15e)** — 68% above the number the question was framed
+  against. Whether `canonical_name` becomes an enforced UNIQUE key is **still Scott's**, and the
+  honest input is 6,608.
+
+## N18 — a column compared to ITSELF returns a plausible, wrong number (2026-08-27)
+
+`v_lcc_developer_classification_candidates.attributed_rent` correlated on
+**`pof.source_property_id = pof.source_property_id`**, so the scalar subquery degenerated to a
+`One-Time Filter` and returned `props × domain_max_current_rent`. Fixed live + committed
+(`20260827250000`); guard `test/sql-self-comparison-guard.test.mjs` (5 mutations RED). Distinct
+values **1 → 5**, execution **1,602 ms → 128 ms**, buffers **2,102,242 → 3,904**, equivalence diff
+**0 rows both directions** on every other column. Writeup:
+`docs/audits/N18_ATTRIBUTED_RENT_SELF_COMPARISON_2026-08-27.md`.
+
+- **⚠️ THE VALUE WAS THE DOMAIN-WIDE *MAX*, NOT THE SUM — N15c §6 and the N18 brief both said sum,
+  and both were wrong.** The gov-wide sum is **$3.52B**; $34,920,891.77 is the gov-wide
+  `max(annual_rent)`. And **"one distinct value" was a property of the surviving 6-row slice, not an
+  invariant** — all six carry `props = 1`. Across all 277 candidates the broken expression takes
+  **11 distinct values, max $279,367,134.16** (8 × the domain max). The Class 11 signal was real;
+  the explanation attached to it was not. **Re-derive the mechanism before quoting a magnitude.**
+- **⚠️ IT WAS A LIVE-ONLY DEFECT — THE REPO NEVER CARRIED IT.** The newest committed body
+  (`20260609170000`) is correct; the live view had *both* the typo and N15c's uncommitted repoint.
+  This is the gov **"running but not merged"** class and the mirror of "merged is not running".
+  A rebuild from the repo would have silently reverted the repoint (**267 → 196** resolved). So the
+  migration restates the **WHOLE view** — P194 again: *a second copy that is correct beats no copy
+  at all.* **After hand-applying any view change live, commit the whole body the same day.**
+- **⚠️ THE RANKING WAS NOT WRONG, IT WAS ARBITRARY.** Both sort keys were constant
+  (`attributed_rent` tied, `props` all 1), so `order=attributed_rent.desc,props.desc` returned
+  whatever the plan emitted while the handler called itself "value-prioritized". Corrected, **every
+  position moves except rank 4** (Heritage 5→1 at $2.23M; Curtis 2→5 at $431k, overstated 80.9×).
+  **A tie across every sort key is an unordered list wearing a rank.**
+- **Impact bounded honestly:** `attributed_rent` is **never persisted** (the classification log has
+  no such column), **no value gate reads it**, and at 6 rows against `limit=25` every candidate was
+  drained anyway — the cost was sequence and the operator-facing number, not coverage.
+- **⚠️ THE CORRECTNESS FIX WAS THE PERFORMANCE FIX, AND THE SUBPLAN IS NOT "GONE" — IT IS NOW
+  INDEX-SATISFIABLE.** It still runs at `loops=385`; that is correct for a per-property lookup
+  (**P118 corollary 2**: a genuine per-row lookup is exactly when an index IS the fix). The
+  pathology was that a self-equality constrains nothing, so each probe scanned all 3,183 current
+  facts. Not hoisted — 5 ms is not worth widening the change. Dominant remaining cost is now
+  `lcc_match_buyer_parent_by_name` at `loops=277` (~98 ms of 128 ms): surfaced, not fixed.
+- **⚠️ A SOURCE DETECTOR MUST STRIP COMMENTS, OR IT REPORTS THE BUG IT JUST REMOVED.** The
+  migration's header quotes the broken predicate three times while explaining the fix. This is
+  **A5c inverted** (there, prose made assertions pass over deleted code). And with the population at
+  **zero across every migration**, the guard carries a positive control — while still not firing on
+  a real self-JOIN (`a.parent_id = b.id`) or a shared prefix (`a.x = ab.x`).
+- **⚠️ Row count is 6 because 266 of 277 candidate groups are already in the log** — small by
+  construction, not a small population. **N15b's "222 of 274" does not reproduce off this view**;
+  never quote the two interchangeably.
+- 👤 **Ungraded:** the corrected top-10 has never been seen by an operator, and the handler's own
+  header gates cron registration on Scott blessing that list — which until now was ordered by a
+  constant.
 
 ## A5 — a truncated feed auto-closed the work it could not see (2026-08-27)
 

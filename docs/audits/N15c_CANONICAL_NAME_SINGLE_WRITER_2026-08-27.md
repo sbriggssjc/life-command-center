@@ -7,7 +7,12 @@
 > that sha. **15,402 rewritten / 537 held / 0 empty-string keys; invisible 10,336 → 537;
 > `auto_mergeable` 3,040 → 3,040; Tier 0 ask 82 / auto 9 unmoved.** §3's deploy-order warning is
 > kept as the record of why the order mattered. ⏳ **The Class-8 recurrence check is due
-> 2026-08-28** — a backfill is not a fixed producer.
+> 2026-08-28** — a backfill is not a fixed producer. **➡️ FOLLOW-UP LANDED:
+> [`N15d_N15e_PRODUCER_VERIFY_AND_HELD_RECOMPUTE_2026-08-27.md`](N15d_N15e_PRODUCER_VERIFY_AND_HELD_RECOMPUTE_2026-08-27.md)**
+> — every writer path was exercised and overridden, the 537 held rows were recomputed (drift 537 →
+> 0), and §7's UNIQUE-key figure of 3,930 is superseded by **6,608**. ⚠️ The wall-clock arm of the
+> Class-8 check is STILL outstanding: it was attempted 21 minutes after the trigger landed, over a
+> population of ZERO new entities, so its "0" is not evidence.
 
 # N15c — `entities.canonical_name` gets one writer
 
