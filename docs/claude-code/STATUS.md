@@ -55,6 +55,40 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 11:15 UTC (Cowork) — V1 ✅, V2 ✅, V7 ❌ root-caused; and a merge resurrected 31 archived files
+
+**All three post-deploy verifications are now answered.**
+
+- **V1 ✅ property-twin is writing again — 200 → 240**, last write **05:46:33**, inside cron 220's
+  window. P135's paging fix works; the stall was the deploy cutoff exactly as diagnosed. Watch it
+  keeps climbing toward the ~1,095 pending — a second plateau would mean a fixed window again.
+- **V2 ✅** (confirmed 05:10) — 60 negative markers; the proposal count staying at 4 is correct.
+- **V7 ❌ ROOT-CAUSED, and it is a config gap rather than a code defect.** Cron 240 fired at
+  **10:18:00** and returned **HTTP 400**:
+  `{"ok":false,"error":"Could not resolve workspace. Set X-LCC-Workspace or LCC_DEFAULT_WORKSPACE_ID."}`
+  Today's snapshot row exists (10:00:16) with `analyst_take` **NULL**. **This settles V7's open
+  question: the 2026-08-26 774-char take was a manual one-shot** (`generated_at` 20:51), never the
+  pipeline. **Fix: set `LCC_DEFAULT_WORKSPACE_ID` on Railway, or send `X-LCC-Workspace` from job
+  240.** ⚠️ **Two further faults in the same chain, not to be conflated with it:**
+  `/api/daily-briefing` → **401 Unauthorized**, and `briefing-intel-snapshot` still warns
+  *"Anthropic API 400: credit balance too low"* — the cloud-billing issue the on-box take exists to
+  route around.
+
+**⚠️ A merge resurrected all 31 archived worklogs.** They are tracked on `main` **at the root AND
+in `docs/history/worklogs/`** — every file twice. Cause: the archive commit recorded them as
+delete-at-root + create-in-history rather than renames, so a branch based on an older commit still
+carrying the root copies re-added them on merge, silently and with no conflict. **Verified all 31
+byte-identical to their archived copies before removing the root duplicates** — nothing lost.
+
+**The durable lesson: a file MOVE is not conflict-safe across parallel branches.** Git resolved
+"you deleted it / they still have it" by keeping the file, which is the safe default for content
+and the wrong one for a move. **After archiving files, check the root again once other branches
+merge** — and prefer landing a move when no long-lived parallel branch predates it.
+
+**Still open in the automation window:** A4/A4b queued; A2a blocked on prompt 196 Unit 1; A3 needs
+its own hypothesis test.
+
+
 ## 2026-08-27 05:10 UTC (Cowork) — V2 was never stalled. The verification was measuring the wrong output.
 
 **`reachability_harvest_target_marker`: 60 markers, all written this morning, last at 04:40:19** —
