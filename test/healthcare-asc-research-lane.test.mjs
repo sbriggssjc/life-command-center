@@ -289,6 +289,52 @@ test('evidence-backed aliases allow only terminal legal-entity suffix difference
   );
 });
 
+test('building ranges match only a frozen endpoint with exact location and tenant corroboration', () => {
+  const target = {
+    candidate_fingerprint: sha('9'),
+    address_token: '120 RESEARCH DR NW|TESTVILLE|OH|44000',
+    cms_identity: {
+      facility_name: 'Synthetic Gastroenterology Center Inc',
+      address: '120 Research Drive NW', city: 'Testville', state: 'OH', zip: '44000',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Gastroenterology Center LLC'],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/research-range',
+    address: '100-120 Research Dr NW', city: 'Testville', state: 'OH', zip: '44000',
+    square_footage: '25,000', tenant_name: 'Synthetic Gastroenterology Center',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'tenant_corroborated_range_endpoint');
+  assert.equal(built.identity_match.frozen_street_number, 120);
+  assert.equal(built.identity_match.captured_range_start, 100);
+  assert.equal(built.identity_match.captured_range_end, 120);
+  assert.equal(built.identity_match.second_review_required, true);
+
+  assert.throws(
+    () => buildAscStructuredCapture({ ...target, address_token: '110 RESEARCH DR NW|TESTVILLE|OH|44000' }, context),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, address: '100-120 Other Dr NW' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, zip: '44001' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenant_name: 'Synthetic Gastroenterology Center East' }),
+    /does not match/,
+  );
+});
+
 test('migration is private, RLS-protected, exact-50, and hard-blocks prohibited writes', async () => {
   const sql = await readFile(new URL('../supabase/migrations/20261001120000_lcc_asc_research_swim_lane.sql', import.meta.url), 'utf8');
   for (const table of ['runs', 'candidates', 'captures', 'evidence', 'reviews']) {
