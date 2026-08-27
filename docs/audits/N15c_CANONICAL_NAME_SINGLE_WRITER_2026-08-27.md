@@ -243,3 +243,50 @@ assigned identifier** to its initializer. Rewriting it is what surfaced the 12th
 `operations.js`.
 
 Full suite: **4,755 pass / 0 fail / 6 skipped.**
+
+
+---
+
+## 10. Live outcome — applied 2026-08-27 (added after the fact)
+
+PR #1850 merged as `d8fcfbf` at 19:54 UTC. The trigger and the backfill were applied the same
+evening. Measured at 20:57 UTC:
+
+| gate | result |
+|---|---|
+| `v_lcc_canonical_name_drift` | **0 rows** — every live entity's key equals `lcc_entity_canonical_key(name)` |
+| positive control on that zero | wrong-key comparison returns rows (capped at 5,000); the zero is real, not a broken detector |
+| `auto_mergeable` | **3,040** — unmoved, as predicted |
+| `v_field_provenance_unranked` | **33** — unmoved |
+| Tier 0 open cards | **91** — unmoved |
+| live entities | **62,368** — unchanged |
+| entities minted since the backfill | **0** |
+
+**Two batches, not one.** `n15c_go` (20:03) rewrote the 15,402 attributable rows — the intended
+backfill. **`n15e_go` (20:38) rewrote the 537 rows this round had deliberately held**, which the
+gated function cannot produce (it filters on `lcc_n15c_canonical_is_attributable`), so it was a
+deliberate operator decision. It is fully ledgered and reversible by batch tag.
+
+⚠️ **The §7 caution about "discarding a captured string" was right in principle and mostly wrong in
+substance.** Read on named rows, the held keys were dominated by junk rather than provenance: a whole
+CoStar listing blob (`9647 Ridgeview St` keyed
+`davita dialysis tulsa ok 9647 ridgeview st 5500 sf office building … 780 cap rate`), brokerage
+pollution the P116 note describes (`… by colliers`, `… by cushman wakefield`), and raw unnormalized
+strings stored verbatim (`State of Oklahoma | OKC Innovation Center - Oklahoma City - OK`) that could
+never have matched anything. **Decision 1 of §7 is therefore closed.** Note one consequence of the
+adopted rule worth knowing: `BREIT via Blackstone Real Estate Income Trust I` keys
+`breit via blackstone real estate income i`, because `trust` is a stripped legal form.
+
+### ⚠️ Drift = 0 proves the BACKFILL, not the producer
+
+**Zero entities have been minted since 18:00 UTC**, so no real ingestion has exercised the trigger
+and the dual-read together. That is the Class 8 distinction this round exists to respect: a one-shot
+backfill and a fixed producer look identical until the producer runs. **The check that matters is
+still ahead** — a NEW `backfillable` row appearing in `v_lcc_canonical_name_drift` after the next
+sync or capture means a writer escaped the trigger.
+
+⚠️ **Also unconfirmed: whether the Railway redeploy carrying `d8fcfbf` had landed before the 20:03
+backfill.** This sandbox cannot reach the Railway host (`http=000`; `api.github.com` returns 200, so
+it is the egress policy, not the app). If the JS was not yet live, the dual-read was not live either
+and the next mint against a backfilled name would create a duplicate. Nothing has minted, so no harm
+has occurred — but confirm `/version` carries `d8fcfbf` before ingestion resumes.

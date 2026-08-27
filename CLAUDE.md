@@ -2727,11 +2727,27 @@ trigger is the sole writer. Writeup: `docs/audits/N15c_CANONICAL_NAME_SINGLE_WRI
   backfill the total holds at the held rows; a **new `backfillable` row means a writer escaped the
   trigger**. A one-shot backfill of a live producer is Class 8 — the standing view is what says
   whether the producer is actually fixed.
-- 👤 **Two decisions are Scott's and were deliberately not guessed:** the **537 stale rows**
-  (`canonical_name` left behind after `name` was repaired — recomputing discards a captured string
-  some preserve; they are excluded from the backfill *by construction* and are the entire residual,
-  10,336 → 537), and whether the column becomes an enforced **UNIQUE** key (3,930 groups violate it
-  today).
+- ✅ **APPLIED 2026-08-27 (PR #1850, `d8fcfbf`).** Trigger + backfill landed 20:03–20:38 UTC;
+  `v_lcc_canonical_name_drift` is **0 rows** (positive-controlled), `auto_mergeable` 3,040,
+  unranked 33, Tier 0 91 — all unmoved. **Two batches**: `n15c_go` = the 15,402 attributable rows;
+  **`n15e_go` = the 537 held rows**, an operator decision the gated function cannot produce (it
+  filters on `lcc_n15c_canonical_is_attributable`). Reversible by batch tag.
+  ⚠️ **The "recomputing discards a captured string" caution was right in principle and mostly wrong
+  in substance** — read on named rows the held keys were a CoStar listing blob
+  (`davita dialysis tulsa ok 9647 ridgeview st … 780 cap rate` on an entity named `9647 Ridgeview
+  St`), `by colliers`/`by cushman wakefield` brokerage pollution, and raw unnormalized strings that
+  could never match. **Grade a held population on named rows before treating it as precious.**
+- **⚠️ DRIFT = 0 PROVES THE BACKFILL, NOT THE PRODUCER — and this is the Class 8 distinction
+  itself.** **Zero entities have been minted since 18:00 UTC**, so no real ingestion has yet
+  exercised the trigger and the JS dual-read together. A one-shot backfill and a fixed producer are
+  indistinguishable until the producer runs. The check that matters is a **NEW `backfillable` row**
+  in `v_lcc_canonical_name_drift` after the next sync — that, not the zero, is what says a writer
+  escaped the trigger. (Still unconfirmed at the time of writing: whether the Railway redeploy
+  carrying `d8fcfbf` preceded the 20:03 backfill. The sandbox cannot reach the Railway host —
+  `http=000` while `api.github.com` returns 200 — so `/version` must be checked from somewhere that
+  can.)
+- 👤 **One decision remains Scott's:** whether the column becomes an enforced **UNIQUE** key
+  (3,930 groups violated it before the backfill).
 
 ## A5 — a truncated feed auto-closed the work it could not see (2026-08-27)
 
