@@ -160,6 +160,50 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 (Cowork) — A3 measured before building it: the 73 "mismatches" are mostly sponsor↔SPE
+
+**The A3 backlog row said "route the 73 to a data-integrity lane, both readings on the card."
+Measured, that would have been the wrong build** — and the measurement was one query.
+
+`action='mismatch'` means the chain's last recorded grantee ≠ the owner we hold, which reads as
+*"our ownership record is contradicted."* The dominant pattern is **sponsor ↔ SPE**: the deed
+records the **special-purpose entity holding title**, our field records the **sponsor**.
+**Both are correct. It is a representation question, not a data error.**
+
+| current owner on file | chains | example last-recorded grantees |
+|---|---:|---|
+| **Boyd Watterson Asset Management** | **24** (33%) | `BELTSVILLE GSA FDA, LLC`, `Boyd Bethesda III GSA, LLC` |
+| Easterly Government Properties | 3 | `EGP 116 Suffolk LLC` |
+| FGF Management | 2 | `GERMANTOWN MD I FGF, LLC`, `TYSONS CORNER VA III FGF, LLC` |
+| Brookfield Asset Management | 2 | `1301 FANNIN OWNER LP`, `BOF DPC Denver West Park 54 LLC` |
+| Blackstone | 1 | `BRE 1200 Wall Street Owner LLC` |
+| Brent Waldman | 1 | `Waldman, Brent` — **name order, not a party difference** |
+
+**So the build is ~4–8 SPONSOR decisions covering ~31+ chains** — reusing `lcc_owner_sponsor_domain`
+(P190) and P193's inheritance — **not 73 cards.** Asking the Boyd Watterson question 24 times is
+the badge-that-is-noise failure. The genuine integrity residue (`DEAMO LLC.` ← `LuLu Hsu`, and
+grantees belonging to no family) is **~20–30**, and should be sized before a surface is built.
+
+**⚠️ Two hypotheses tested and REFUTED — recorded so nobody re-walks them:**
+1. **The `gsa_lease_diff` flicker does not explain these.** It predicted SPE↔parent *name
+   similarity* on gsa-sourced chains; measured the **opposite** — only **7 of 47** gsa chains share
+   an 8-char prefix with the current owner, against **21 of 27** non-gsa chains.
+2. **No overlap with A2b** (46 vs 12 properties, zero shared).
+
+**Guards carried into the prompt, each from a prior measured failure:** a lexical sponsor detector
+is ~25% precise without P196's three guards (reuse `lcc_tier0_sponsor_brand_token`, do not write a
+second); `lcc_is_spe_shell_name` **under-detects place-named SPEs** and `BELTSVILLE GSA FDA, LLC`
+is exactly that shape; and **`Boyd Watterson Global` vs `…Asset Management` may be fund vs manager**
+— human-confirm per sponsor, never auto-accept a shared token.
+
+**✅ A2a is now UNBLOCKED** — prompt 196 Unit 1 landed. `lcc_unmerge_entity`,
+`lcc_merge_snapshot_loser` and `lcc_merge_fold_pivot` are all live on LCC Opps, so the merge path
+snapshots, folds the pivot, and reverses. A2a needs no new code: merge the pairs and cron 244
+applies those chains the same night.
+
+**Queue in this window: A3 (drafted), A4/A4b (drafted), A2a (now unblocked).**
+
+
 ## 2026-08-27 11:15 UTC (Cowork) — V1 ✅, V2 ✅, V7 ❌ root-caused; and a merge resurrected 31 archived files
 
 **All three post-deploy verifications are now answered.**
