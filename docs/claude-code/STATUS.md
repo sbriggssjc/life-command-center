@@ -17,6 +17,42 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 22:10 UTC — N15d still vacuous; the N15e collision set is the actionable output
+
+### ⏳ N15d re-checked and it is STILL not readable — 2.08 hours, ZERO entities created
+
+Measured 22:09 UTC: **0 entities created since the trigger went live at 20:05**, so the detector
+still has an empty population and would return 0 regardless of what the producer does. **Not run,
+not claimed.** The wall-clock arm remains due 2026-08-28, and this second empty read is itself
+evidence the ~4/day rate is bursty rather than steady — a full day is the minimum honest window.
+
+### ⭐ The 47 entities / 73 pairs N15e surfaced are a real, value-ranked decision set
+
+`v_lcc_n15e_canonical_collision_candidates`, split:
+
+| slice | pairs | note |
+|---|---:|---|
+| byte-identical **and** same `entity_type` | **46** (43 unordered) | the safe population |
+| …of those, carrying **rent** | **6** | **$8.13M** combined |
+| …no rent but real deal history (>5 edges) | **13** | |
+| …husks (≤5 edges, no rent) | **24** | batch-able |
+| **cross-`entity_type`** | **9** | ⚠️ **never merge** — person↔organization |
+
+**Head of the list is the Gardner shape again: `National Government Properties` — 2 assets,
+$4.25M rent, and 354 relationships across the pair.** A firm in the core government market whose
+deal history is split, invisible until the key collapsed. Then `Montecito Medical` ($1.62M, and it
+appears in two pairs so it may be a 3+ member group), `American Realty Capital` (×2),
+`1121 California Avenue LLC`, `DP Brighton LLC`, `The Fischbach Company LLC`.
+
+**695 relationships sit across the 43 pairs.** This is the same class as N3h — duplicates carrying
+transaction history that the survivor under-reports (P177) — and it is the direct product of N15c
++ N15e collapsing the key. **Nothing merged; awaiting Scott.**
+
+⚠️ **The 9 cross-type pairs are excluded by construction, not by judgement.** `David Siegel`,
+`Dennis Needleman`, `Constance Cincotta` and `Alexandria` each exist as both a person and an
+organization. A shared canonical key is correct there; treating it as identity is the person/org
+conflation `sf-account-link.js` exists to prevent.
+
 ## 2026-08-27 20:45 UTC — N15e and N18 both landed; and BOTH corrected numbers I had briefed
 
 Audits: [`N15d_N15e_PRODUCER_VERIFY_AND_HELD_RECOMPUTE_2026-08-27.md`](../audits/N15d_N15e_PRODUCER_VERIFY_AND_HELD_RECOMPUTE_2026-08-27.md)
