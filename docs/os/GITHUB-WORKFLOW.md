@@ -30,13 +30,22 @@ cd $env:USERPROFILE\life-command-center
 # 0. Never leave a lock behind (the sandbox cannot delete it; only Windows can)
 Remove-Item .git\index.lock -ErrorAction SilentlyContinue
 
-# 0b. ⚠️ CLEAR THE TREE FIRST. In this repo a dirty tree is the NORMAL state, not an
-#     exception — Cowork writes edits into the working tree continuously, so there are
-#     almost always uncommitted changes when you start. Both `git checkout main` and
-#     `git pull --rebase` REFUSE to run against one, and PowerShell keeps going to the
-#     next command anyway, so you end up branching off a stale base without noticing.
-#     This has caused three separate stale-base branches. Commit or stash, then verify:
-git status                        # must be "nothing to commit, working tree clean"
+# 0b. ⚠️ KNOW WHAT YOUR DIRTY FILES ARE. In this repo a dirty tree is the NORMAL state —
+#     Cowork writes edits into the working tree continuously, so there are almost always
+#     uncommitted changes. Dirtiness itself is fine and usually IS the work you are about
+#     to commit.
+#
+#     The danger is narrower: `git checkout main` and `git pull --rebase` REFUSE to run
+#     against a dirty tree, PowerShell carries on to the next command regardless, and you
+#     branch off a STALE BASE with nothing announcing it. Three branches were cut that way
+#     in one evening; one cost a full merge-resolution cycle across two files.
+#
+#     So the rule is conditional, not absolute:
+#       - Already ON main and up to date?  A dirty tree is FINE — those edits ride onto
+#         your new branch, which is normally exactly what you want.
+#       - Need to SWITCH or PULL?          Commit or stash FIRST, then confirm the switch
+#         and the pull actually succeeded (§4c) before branching.
+git status                        # read it; do not skip past it
 
 # 1. Start from current main, on a NAMED branch — never on main itself
 git checkout main
@@ -197,7 +206,13 @@ branch that conflicted on two files and cost a full merge-resolution cycle.
 continuously, so **a dirty tree is this repo's normal state**, not an occasional slip. A procedure
 that assumes a clean tree will fail most of the time it is run.
 
-**The rule: clear the tree BEFORE switching, and verify twice —**
+**⚠️ But do not over-correct into "the tree must always be clean."** That rule would be violated
+almost every time it is read — Cowork edits the tree continuously — and **a rule you have to break
+daily stops being a rule.** Dirty is fine when you are *already on* an up-to-date `main`: those
+edits ride onto the new branch, which is usually the intent. The failure needs **a switch or a
+pull that silently refused**.
+
+**The rule: if you must SWITCH or PULL, clear the tree first — then verify twice —**
 
 ```powershell
 git status                 # (1) before switching: "working tree clean"
