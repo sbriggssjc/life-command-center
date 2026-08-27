@@ -234,6 +234,7 @@ from lcc_clean_assist_proposals group by source`:
 | Invariants, footguns, doctrines | `CLAUDE.md` (LCC) · `Dialysis/CLAUDE.md` · `government-lease/CLAUDE.md` |
 | API/routing reference | `.github/AI_INSTRUCTIONS.md` |
 | Repeatable defect detectors | `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md` |
+| **Tier 0 owner-contact: person↔owner matching, the confirm lane, the sponsor map, owner merges** | `docs/architecture/tier0-owner-contact-system.md` — **one door into twelve rounds (P186–P197)**; live state, decisions already made, traps already paid for |
 | **Where operator time actually goes** (lane-by-lane throughput) | `docs/audits/DATA_PROCESS_AUTOMATION_AUDIT_2026-08-26.md` |
 | Intake channel provenance (grade by channel, never fleet-wide) | `docs/audits/W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md` |
 | Wave rollout ledger | `ROLLOUT_STATUS.md` |

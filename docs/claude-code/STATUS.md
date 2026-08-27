@@ -17,6 +17,28 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 14:30 UTC — DOC CONSOLIDATION: twelve Tier 0 audits now have ONE door
+
+**New canonical page: [`docs/architecture/tier0-owner-contact-system.md`](../architecture/tier0-owner-contact-system.md).**
+Anything about matching a person to an owner, the Decision Center Tier 0 lane, the sponsor map, or
+owner-entity merges starts there. It carries live state (measured 2026-08-27 14:26 UTC), the objects
+that exist, **seven decisions already made that must not be re-litigated**, **ten traps already paid
+for**, and open items split three ways — ⏳ pending a dated verification · 👤 needs Scott · 🔴 build.
+
+**The per-round audits are unchanged and they stay** — they are the evidence, and a claim in the
+canonical page is only as good as the round that measured it. All seven Tier 0 audit files
+(P186/P188/P189/P194/P195/P196/P197) now open with a banner pointing at the canonical page, so a
+future chat reads ~4 KB to decide which ~118 KB it actually needs.
+
+**Why this was worth a turn.** The arc spans twelve documents and the same four mistakes were
+available to make in each of them — the sorted-token core, evidence that attests the person rather
+than the link, a gate that re-creates the join it filters, and dormancy measured on the wrapper. Two
+of those were in fact made twice. A trap list is only a guard if it is on the path someone walks.
+
+**Housekeeping in the same pass:** prompt 197 and its response filed to `done/`; the response folder
+is empty of live items. ⚠️ The sandbox cannot delete on the mounted drive — the two originals are
+removed by a `Remove-Item` line in the PowerShell, not by Cowork.
+
 ## 2026-08-27 — A3: the ownership `mismatch` lane is a REPRESENTATION question (74 chains → 12 decisions)
 
 Full writeup: [`docs/audits/A3_OWNERSHIP_MISMATCH_SPONSOR_FAMILY_2026-08-27.md`](../audits/A3_OWNERSHIP_MISMATCH_SPONSOR_FAMILY_2026-08-27.md).

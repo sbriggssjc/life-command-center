@@ -1,3 +1,5 @@
+> **📍 CANONICAL REFERENCE: [`docs/architecture/tier0-owner-contact-system.md`](../architecture/tier0-owner-contact-system.md)** — live state, the objects, the decisions already made, and the traps paid for. **This file is the EVIDENCE for one round; read the canonical page first to find out whether you need this one.**
+
 # P196 — making the shared merge path reversible (N11), and saying why a Tier 0 card is parked (N3e)
 
 Two units. The first is safety debt P195 created and worked around; the second is the correction of

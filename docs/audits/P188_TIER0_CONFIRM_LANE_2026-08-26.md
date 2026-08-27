@@ -1,3 +1,5 @@
+> **📍 CANONICAL REFERENCE: [`docs/architecture/tier0-owner-contact-system.md`](../architecture/tier0-owner-contact-system.md)** — live state, the objects, the decisions already made, and the traps paid for. **This file is the EVIDENCE for one round; read the canonical page first to find out whether you need this one.**
+
 # P188 — the Tier 0 confirm lane: the bench becomes calls
 
 > **Status:** BUILT and live in the data layer. The views + the ledger table are applied to LCC Opps

@@ -45,6 +45,10 @@ confirmed**. This repo's own rule is that a fix is not fixed until the populatio
 
 ## P1 — In flight / next up
 
+> 📍 **Every Tier 0 row below (N3\*, N10, N11, N14, N15) is summarised, with its live numbers and the
+> traps behind it, in [`docs/architecture/tier0-owner-contact-system.md`](../architecture/tier0-owner-contact-system.md).**
+> Read that first; open the per-round audit only for the evidence.
+
 | # | Item | State | Source |
 |---|---|---|---|
 | ~~N1~~ | ~~**Prompt 139 — interleave the clean-assist provenance lane.**~~ **SHIPPED 2026-08-26** (PR #1787 for the load-order follow-up; the P139 work itself was already on main). `interleaveByKind`, the band collapse, the seeder chips with honest `6 of 65` counts. CLAUDE.md carries the P139 section. | ✅ | `prompts/done/139-*.md` |

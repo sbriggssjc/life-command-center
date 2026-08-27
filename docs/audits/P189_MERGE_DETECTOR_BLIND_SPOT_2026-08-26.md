@@ -1,3 +1,5 @@
+> **📍 CANONICAL REFERENCE: [`docs/architecture/tier0-owner-contact-system.md`](../architecture/tier0-owner-contact-system.md)** — live state, the objects, the decisions already made, and the traps paid for. **This file is the EVIDENCE for one round; read the canonical page first to find out whether you need this one.**
+
 # P189 — the duplicate-entity detector that could not see 1,089 organisations
 
 **Date:** 2026-08-26 · **Project:** LCC Opps (`xengecqvemvfknjvbvrq`) · **Status:** step 2 shipped, live

@@ -1,3 +1,5 @@
+> **📍 CANONICAL REFERENCE: [`docs/architecture/tier0-owner-contact-system.md`](../architecture/tier0-owner-contact-system.md)** — live state, the objects, the decisions already made, and the traps paid for. **This file is the EVIDENCE for one round; read the canonical page first to find out whether you need this one.**
+
 # P186 — Tier 0 promoter, steps 1 and 2: the view is fixed, and the bench needs your call
 
 > **Status:** step 1 (performance) DONE and verified. Step 2 (bench review) is **this document —
