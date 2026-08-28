@@ -115,4 +115,4 @@ adapters can't be developed or live-verified here. Build them from a
 workstation/residential context (or a proper data pipeline for the FL mirror).
 Until then the queue persists harmlessly (worker no-ops on `adapter_pending`);
 OpenCorporates remains the flagged fallback; `/api/sos-writeback` covers manual
-sidebar capture. See `docs/ownership_sales_remediation/2026-05-29_c7_status.md`.
+sidebar capture. See `docs/history/worklogs/ownership_sales_remediation/2026-05-29_c7_status.md`.

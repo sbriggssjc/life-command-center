@@ -1,3 +1,20 @@
+> # ⚠️ ARCHIVED 2026-05-21 SPEC — BUILT, THEN TWICE CORRECTED. DO NOT RUN ITS SNIPPETS.
+>
+> **🚨 Its `cron.schedule(...)` snippets pass `'vercel'` as the `lcc_cron_post` target.** Vercel was
+> retired **2026-07-20** — **and the deployment STILL ANSWERS and still holds a live service key**
+> (P194). Running these verbatim **re-creates a foreign writer**. Cron 48 `lcc-sf-link-tick` is a
+> live example of one left pointing there.
+>
+> **🚨 Its step-3 auto-close is the A5a defect.** `feed.length < limit` against PostgREST's
+> **1,000-row response cap** falsely closed **5,763 tasks**, and this spec's own acceptance criterion
+> (*"task count ≈ open gaps"*) is exactly what that bug satisfied.
+> Fixed: `docs/audits/A5a_AUTOCLOSE_TRUNCATION_FIX_2026-08-27.md`.
+>
+> **🚨 It has no value gate.** Added by **A5c** (pool 71,448 → 2,530 admitted):
+> `docs/audits/A5c_RESEARCH_TASK_VALUE_GATE_2026-08-27.md`.
+>
+> Kept as the historical record of the original design. **Current state: those two audits.**
+
 # Build Spec — Next-Best-Action Research-Task Generator (the keystone)
 
 **Date:** 2026-05-21
