@@ -108,3 +108,32 @@ entire **unexecuted Supabase 3→1 consolidation plan** that had no backlog row 
 **Relocated rather than archived** (still-live reference): `docs/architecture/ownership-data-provenance.md`,
 `docs/architecture/lease-data-provenance.md`, `docs/architecture/supabase-consolidation-plan.md`,
 and the comps-definition audit + its three companions → `docs/audits/`.
+
+## Infra / hosting / monitoring cluster — archived 2026-08-28 (cleanup pass 2)
+
+Fifteen root `.md` files read in full, then dispositioned. **Root `.md` count 50 → 35.**
+**23 open items were extracted to `docs/os/PLANNED-BACKLOG.md` §P14c (I1–I23) BEFORE any move.**
+
+**RELOCATED (still-live reference, not history):** `docs/architecture/infrastructure-topology.md` ·
+`docs/architecture/hosting-cost-strategy.md` · `docs/architecture/supabase-consolidation-phase0-inventory.md` ·
+`docs/setup/RUNBOOK_lcc_deployment.md` · `docs/setup/DEPLOYMENT_SIGNOFF_TEMPLATE.md`.
+
+**ARCHIVED with mandatory-read banners** — every one of these misleads within a paragraph:
+`ROLLOUT_2026-03.md` (**AD6 locks in Vercel**; names 8 `api/*.js` files that no longer exist) ·
+`ROLLOUT_STATUS_waves_2026-08.md` (**renamed to end a name collision** — the live one is
+`docs/audits/ROLLOUT_STATUS.md`; this root copy had zero inbound references) ·
+`RENDER_MIGRATION_PLAN.md` · `VERIFICATION-SUMMARY-v14.md` (**implies LCC can write to Salesforce; it
+cannot**) · `GAPS_AND_FINDINGS_REGISTER_2026-05.md` · `worklogs/AUDIT_PROGRESS_2026-05.md` ·
+`worklogs/HEALTH_ALERTS_TRIAGE_2026-06-01.md` (**reads as "alerting is healthy"; it was not**) ·
+`worklogs/PIPELINE_CONTROL_ANALYSIS_2026-04-01.md` ·
+`worklogs/GOOGLE_ALERT_LEAD_INGEST_INVESTIGATION_2026-08-10.md` ·
+`worklogs/RAILWAY_HEALTHCHECK_INVESTIGATION_2026-08-10.md` (clean, no banner needed).
+
+⚠️ **Two obsolete WORKFLOW workarounds are bannered off** — `AUDIT_PROGRESS` and
+`GAPS_AND_FINDINGS_REGISTER` both prescribe writing files via `bash python open('w')` because
+*"sandbox writes are invisible to Windows git"*. That was a 2026-05 mount artifact. **Adopting it
+today would silently slow every session down.**
+
+⚠️ **`I3` is the cautionary tale of this pass.** The Supavisor pooler move was filed **only as a
+pointer from `PLANNED-BACKLOG.md` into `GAPS_AND_FINDINGS_REGISTER.md` P-1** — it had no row of its
+own. **A pointer into a file you are about to archive is not a filing.** Repointed in the same change.

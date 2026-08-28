@@ -594,6 +594,23 @@ A live green sync is not evidence that the signal survives.
 
 ## Class 11 — a DETECTOR that cannot fire
 
+> ⚠️ **NEW INSTANCE, and it cost two rounds (B6 → B6b, 2026-08-28): a `jsonb` column holding a
+> JSON *string* rather than a JSON *object*.** `gsa_lease_events.changed_fields` is a jsonb
+> **string**, so **`changed_fields ? 'key'` is structurally unable to match** and returns a clean,
+> plausible **0**. B6 read that zero and wrote up *"this input carries no lessor signal"*; B6b's
+> first probe read it again and agreed. **The truth is 16,907 rows carry one** (16,492 usable,
+> newest 2026-08-05), and a whole producer was written off on the strength of it.
+> **Correct probe: `(changed_fields #>> '{}')::jsonb ? 'key'`.**
+>
+> **Before trusting a zero from ANY containment/key operator, check the stored TYPE**
+> (`jsonb_typeof(col)`): `'string'` means the JSON is nested one level deeper than the operator
+> assumes. Same family as `pg_views.definition` being deparsed (below), `reloptions` storing
+> `security_invoker=on` not `true`, and `IS NOT DISTINCT FROM` treating NULL–NULL as equal —
+> **a predicate that cannot express the question answers confidently anyway.**
+> **And the meta-lesson repeats: an implausibly clean zero is a bug signal, not a finding.**
+
+
+
 **Symptom:** an audit query returns empty, and empty reads as *clean*. The detector is
 subtly unable to match anything, so it certifies health forever — the playbook's own
 failure mode (*a surface that answers confidently instead of erroring*) turned on the

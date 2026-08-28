@@ -1,3 +1,14 @@
+> # ⚠️ ARCHIVED — May-2026 audit sprint tracker. HISTORICAL RECORD.
+> **🚨 Its "Sprint preflight" environment finding is OBSOLETE and will slow you down.** *"Sandbox
+> writes are invisible to Windows git"* was a 2026-05 virtiofs/mount artifact; the apply-script
+> workflow it prescribes is no longer needed. **Do not adopt it.**
+> **🚨 Its allowlist description is wrong** — QA-01/QA-02 name `vercel.json` rewrites and
+> `api/_shared/allowlist.js`; the live gate is the `data-query` edge function's `GOV_READ_TABLES` /
+> `DIA_READ_TABLES` Sets. Vercel was retired 2026-07-20.
+> **Open items were extracted to `docs/os/PLANNED-BACKLOG.md` §P14c — I2, I11, I12, I13, I15, I17.**
+> ⚠️ **I2 is the one that matters: QA-33 records that dia parallel pagination was never reverted or
+> probed, while the identical gov change was a 194-second regression.**
+
 # LCC Holistic Audit — Progress Tracker
 
 **Source doc:** `LCC_Holistic_Audit_2026-05-17.docx` (63 findings, 24 pages)

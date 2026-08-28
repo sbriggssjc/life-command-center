@@ -464,6 +464,38 @@ reconciled with that doc's 37/17); the **624-row `llc_research_queue` count and 
 "FL Sunbiz bulk-data mirror FIRST" build order** (→ **A5g**); and the **30,711-row
 `sf_link_research_queue`** which **C1c must account for** when it retires that lane.
 
+### P14c — recovered from the ROOT infra/hosting/monitoring cluster (15 files, 2026-08-28)
+
+**All 15 read in full before any move. 23 more items were recorded nowhere.** Several are 👤 owner
+actions that have been silently pending for months.
+
+| # | Item | State | Notes |
+|---|---|---|---|
+| ⭐ **I1** | 🔒 **ROTATE THE PA WEBHOOK SECRET.** `X-PA-Webhook-Secret` was committed **inline in a Power Automate export**; rotation was never confirmed. Covers the Google-Alert / RCM / LoopNet shared secret. 👤 **Scott — security, do this first.** | 🔴 | GOOGLE_ALERT |
+| ⭐ **I2** | **dia parallel pagination was never reverted or probed — its gov twin was a 194-SECOND regression.** QA-27 reverted gov; QA-33 records *"dia NOT reverted yet — need to probe dia separately"* and nobody did. **Highest-risk single line in the archived sprint tracker.** | 🔴 | AUDIT_PROGRESS QA-33 |
+| **I3** | **Supavisor pooler move — point app + edge at txn-mode port 6543.** ⚠️ **Was filed ONLY as a pointer into a file being archived** (`PLANNED-BACKLOG:490` → `GAPS…P-1`); it has never had a row of its own. `supavisor\|6543` appears in 3 files repo-wide, none a tracker. 👤 Scott. | 🔴 | GAPS P-1 |
+| **I4** | 👤 **Disable the half-built `SF -> LCC: Daily Bulk File Backfill` PA flow** — it fails daily ~11:26 UTC. "Turn it off" was recorded 2026-06-01 and never confirmed. | 🔴 | HEALTH_ALERTS #3 |
+| **I5** | **The PA fault branch posts only the run header, so `error_detail` is EMPTY and every flow failure is undiagnosable.** POST the failed-action error body into `lcc_record_flow_failure`. | 🔴 | HEALTH_ALERTS #3 |
+| **I6** | **News-alert BD promotion bridge — the lane's missing consumer.** Review verdict → property/entity/contact resolve → `bd_opportunities`/domain lead → Outlook draft → SF/task logging. The guided screen is still static. **Class 2.** | 🔴 | GOOGLE_ALERT |
+| **I7** | **The documented pending-move pull-queue is not implemented** (`/api/webhooks/processing-complete` is POST-only), so **PA must keep doing the move** — *"do not remove the PA move step yet"*. Live architectural debt with a load-bearing workaround. | 🔴 | GOOGLE_ALERT |
+| **I8** | 👤 **R1 Phase 0's two BLOCKING owner actions:** the **PG15 → PG17 sandbox restore test**, and the **audit of PA flows for direct Supabase URLs**. R1 says its Phase 0 is stale; it does not enumerate these. | 🔴 | PHASE_0 |
+| **I9** | **gov Pipeline Control panel — 6 of 7 findings still true in today's code** (`gov.js:7415–7530`): no retry for a failed run · no refresh/last-updated · untruncated `error_summary` · hardcoded `limit:50` · "Recent Runs" shows 20 of 50 unlabelled · ⚠️ **the banner still says "runs are triggered via CLI — contact your administrator", which is FALSE** (they run on Railway crons). *(Issue #1 `govWriteService undefined` is RESOLVED — defined at `gov.js:149`.)* | 🔴 | PIPELINE_CONTROL |
+| **I10** | **`llc_research_queue` terminal-status DRIFT — two writers, two vocabularies.** `llc-research-tick`/`sos-writeback` write `'done'`; `resolve-llc-research` writes `'completed'`. **A two-vocabularies-one-column defect** — the I2/D2 family. | 🔴 | GAPS §E |
+| **I11** | **`pushProvenance` gating sweep — ~30 remaining call sites.** | 🔴 | AUDIT_PROGRESS |
+| **I12** | **`client_errors` consumption sweep — ~50 ad-hoc `console.warn + showToast` → `lccReportError`.** | 🔴 | AUDIT_PROGRESS |
+| **I13** | **`ingest_write_failures` has NO operator surface** — a detector with no reader (**Class 2**). | 🔴 | AUDIT_PROGRESS |
+| **I14** | **W10.3 Part C — a bounded/resumable PA `Get email (V3) by message-id` backfill for the ~23K preview-era `email_bodies` rows.** Directly feeds the draft-assist voice corpus (P124/P125). | 🔴 | root ROLLOUT_STATUS |
+| **I15** | **Per-tab value-sort / completeness-chip adoption on 6 named tabs** (Sales, Listings, Portfolio, Prospects, Ops/CMS, Loans) — **blocked on `v_sales_comps` gaining completeness columns first.** | 🔴 | AUDIT_PROGRESS |
+| **I16** | 👤 **Render Starter migration — keep as a triggered contingency or formally RETIRE it.** Four named triggers, none fired; the team never grew, which is *why*. Includes deleting the dormant `life-command-center` Railway service. **An undecided contingency is why four root files name four different hosting targets.** | 🔴 | RENDER/LONG_TERM |
+| **I17** | **dia NULL-owner enrichment — 13,131 properties.** Related to but not the same as A5g/K10. | 🔴 | AUDIT_PROGRESS |
+| **I18** | **Residual DQ register:** DQ-6 facility-name-as-address (~466) · DQ-8 lease anomalies (1 dia inverted, 11 gov multi-active) · **O-8 `normalized_address` is EMPTY everywhere, which is the fuel R3 needs** — R3 does not cite it. | 🔴 | GAPS |
+| **I19** | 👤 **Production support ownership is literally `TBD`** for **Power Automate flows** and **edge functions** in the deployment runbook. Also absorbs ROLLOUT's unchecked *"document PA flow ownership"* and *"baseline performance metrics"*. | 🔴 | RUNBOOK, ROLLOUT |
+| **I21** | **Extend SF sync filtering beyond Scott's OwnerId** — named teammates Kelly Largent, Nathanael Berwaldt, Sarah Martin. **The only place this scoping requirement is recorded.** | 🔴 | VERIFICATION-SUMMARY |
+| **I23** | **The deployment sign-off checklist is invoked by NO process** — not by `GITHUB-WORKFLOW.md`, not by `npm run verify:deploy`. **Adopt it into the merge/deploy gate or retire it** (Class 2, applied to our own process). | 🔴 | SIGNOFF_TEMPLATE |
+
+**Folded rather than duplicated:** the env-var shape decision (3 `OPS/GOV/DIA` pairs vs one) → **R1**;
+ROLLOUT's Phase-0 unchecked boxes → **I19**.
+
 ### P14b — recovered from the ROOT ownership/sales/provenance cluster (15 files, archived 2026-08-28)
 
 **Fifteen `.md` files sat at the repo root** against the doc map's own *"root is code and config"*
@@ -487,8 +519,7 @@ rule. All fifteen were read before being moved. **Fourteen more items were recor
 | **R14** | **`6120 S Yale Ave Ste 300` — 8 property_ids across two normalizations, one real building.** Small, named, never adjudicated; the twin lane should re-surface it. | 🔴 | DQ7 worklist |
 
 **Filed elsewhere, flagged so they are not re-derived:** SAM feed-widening → `docs/audits/ROLLOUT_STATUS.md`
-W1.4 + `OWNERSHIP_RESEARCH_FREE_FIRST_PLAN.md`; **Supavisor pooler move → `GAPS_AND_FINDINGS_REGISTER.md`
-P-1 (👤 Scott)**.
+W1.4 + `OWNERSHIP_RESEARCH_FREE_FIRST_PLAN.md`; **Supavisor pooler move → now its OWN backlog row `I3`** (it was filed only as a pointer into `GAPS_AND_FINDINGS_REGISTER.md` P-1, since archived — a pointer into an archive is not a filing).
 
 ## P11 — New verticals & long-horizon specs (design-only, nothing authorized)
 

@@ -5,11 +5,11 @@ records, and fix lists** that were moved out of the repo root during the
 2026-07 root cleanup. They are historical artifacts — retained for provenance
 and reference, **not** living documentation. Living/reference docs (setup
 guides, specs, plans, strategies, blueprints, policies, and the canon such as
-`CLAUDE.md`, `AGENTS.md`, `LCC-OS.md`, `INFRASTRUCTURE.md`, `RUNBOOK.md`,
+`CLAUDE.md`, `AGENTS.md`, `LCC-OS.md`,
 `ROLLOUT.md`) stay at the repo root or under `docs/`.
 
 > Note: some archived docs contain in-prose cross-references to files that
-> remain at the repo root (e.g. `../../GAPS_AND_FINDINGS_REGISTER.md`). Those
+> remain at the repo root. ⚠️ **UPDATED 2026-08-28:** `INFRASTRUCTURE.md`, `RUNBOOK.md` and `GAPS_AND_FINDINGS_REGISTER.md` are **no longer at the root** — see the infra/hosting/monitoring cluster entry below. Those
 > historical mentions were left as-authored and are not clickable links.
 
 Grouped by topic (document type), each sorted by date.

@@ -1,3 +1,13 @@
+> # ⚠️ ARCHIVED — 2026-06-01 health-alert triage. HISTORICAL RECORD.
+> **🚨 DO NOT READ THIS AS "THE ALERTING LAYER IS HEALTHY."** Superseded twice: **P119** found 3,960
+> `mailbox_mirror_parked` alerts = **99.3% of the open-alert surface**, and on **2026-08-28** the
+> cross-DB feed-freshness monitor was found **dead since 2026-07-26 with zero alerts open**
+> (invariant **I11**) alongside `v_pipeline_task_health` being **blind to SKIPPED steps** (**B6a**).
+> ⚠️ **It contradicts itself:** §2 calls the pg_net attribution fix *"not yet implemented"*; §6 says
+> **FIXED**. **§6 is right.**
+> **Open items → §P14c: I4** (the Daily Bulk File Backfill flow, still running a half-built loop) and
+> **I5** (the empty `error_detail` that makes every flow failure undiagnosable).
+
 # Health Alerts Triage — 2026-06-01
 
 Triage of the LCC / Government health alerts surfaced in the Teams "Alerts"
