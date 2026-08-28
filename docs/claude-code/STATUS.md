@@ -16,6 +16,27 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-28 — Cross-lane property identity contract and build queue documented (design only)
+
+**DOCUMENTATION ONLY — nothing activated, migrated, promoted, or written to live systems.** Canonical design:
+[`docs/architecture/property-identity-and-address-resolution.md`](../architecture/property-identity-and-address-resolution.md).
+Backlog: **PI1–PI8** in `docs/os/PLANNED-BACKLOG.md` P10a. The ASC integration contract now names
+the shared dependency without authorizing extraction or adoption.
+
+The restricted frozen ASC sample established that repeated capture failures are a platform class, not just
+bad strings: suite/floor versus parent building, shared campuses, suffix/directional/locality/range variants,
+compound street spacing, historical frozen-token drift, explicit tenant corroboration, valid source
+missingness, stale sidebar candidate state, and ambiguous database-function output. The new contract turns
+those aggregate lessons into a versioned match hierarchy, structured decision object, rule lifecycle,
+de-identified golden corpus, sidebar diagnostics, shadow evaluation, governed alias-ledger design, and
+aggregate quality measures.
+
+**Boundaries preserved:** no private candidate rows, source payloads, run IDs, or licensed evidence entered
+Git; no full-universe ingestion, canonical promotion, Salesforce write, outreach, opportunity creation,
+unattended licensed-source scraping, evidence deletion, or IDTF activation. An on-box model is advisory only
+and can never decide or write identity. **Next gate:** finish the frozen 50-property sample, review its
+aggregate outcomes, then separately decide whether PI2/PI3 (corpus + pure matcher) should begin.
+
 
 
 ## 2026-08-28 — B6b: the GSA landlord-change detector restarted (gov)
