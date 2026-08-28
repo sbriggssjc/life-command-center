@@ -130,6 +130,52 @@ a name heuristic). ⚠️ **B6's G3 row is REFUTED**: `gsa_lease_events` does ca
 rows) — B6's zero came from `changed_fields ? 'key'` against a jsonb **string**. Also filed:
 **B6b-june** (2026-06-01 is a merged snapshot of two source files, 7,919 leases vs a 7,348–7,495 norm).
 
+## 2026-08-28 — C2h: the "silent feeder" was answering a different question. It is the sponsor↔SPE gap.
+
+Evidence: [`C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT_2026-08-28.md`](../audits/C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT_2026-08-28.md);
+canonical **§4n**. Diagnosis only — nothing written.
+
+**C2g called these 79 "the genuine feeder defect." They are not a defect.** **All 79 properties are
+resolved.** The feeder resolved the **SPE that holds title** — the correct recorded owner — while
+the Salesforce person works for the **sponsor**. Both sides are right.
+
+| SF person's employer *(a gov `true_owner`)* | LCC resolved owner *(title holder)* |
+|---|---|
+| **Avery Capital** | **AC** ORLANDO SPV LLC |
+| **Ball Ventures** | **BV**GC PARCEL C, LLC |
+| **Browman Development Co.** | **BDC** Livermore L.P. |
+| **Carmel Partners** | **CP** VI Van Gordon, LLC |
+
+**The SPE initials are the sponsor's initials.** Split: **69 sponsor↔SPE · 8 true duplicates · 2
+probable.** Guards explained almost nothing — brokerage 2, placeholder 0, not-prospected 0.
+
+### ⚠️ One column turned the diagnosis around, and the lesson generalises
+
+`prop_resolved_to_someone` equalled `props_with_asset` on **all 79**. C2g's framing —
+*"everything the feeder needs is present and it produced nothing"* — was wrong because it never
+asked whether the property had resolved **to someone else**. **When a producer looks silent, check
+whether it answered a DIFFERENT question before calling it silent.** That is a new variant of the
+family this arc keeps meeting, and the fourth time a "silent producer" turned out to be working.
+
+⚠️ Also: `lcc_looks_like_person` returned true for **40 of 79** and was used for nothing — it
+carries the documented `CITY OF SALEM` / `BROOME COUNTY` false positive (A3/P196).
+
+### The recommendation is to build NOTHING new
+
+Two sponsor surfaces already exist and are **human-confirm by design** —
+`lcc_owner_sponsor_domain` (P190) and `lcc_ownership_sponsor_family` (A3) — because A3 measured a
+lexical sponsor detector at **~25% precision** raw and P196 at 4-of-6 even with three guards.
+**A third detector is the normaliser drift this repo has paid for repeatedly.** Feed the 69 in as
+candidates (**C2i**); they arrive with stronger evidence than either surface normally has, since the
+sponsor is independently attested as a gov `true_owner` *and* carries Salesforce people.
+
+### Real residue found while reading (C2j)
+
+**`Casa De Chupita` → `Undisclosed` at confidence 0.57 — a placeholder won a resolution**, and
+`lcc_is_placeholder_owner_name` does not list `Undisclosed`. **`Chiapelone Trust` → `BGC-Havasu
+Project LLC by Newmark Knight Frank`** — brokerage pollution inside a resolved owner name (P116).
+Two more at confidence 1.00 are unexplained and want individual reading.
+
 ## 2026-08-28 — C2b + C2g: the SF bridge self-healed, and both hypotheses for the residue were wrong
 
 Evidence: [`C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md`](../audits/C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md)
