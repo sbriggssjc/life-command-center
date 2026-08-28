@@ -17,6 +17,46 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-27 22:25 UTC — N19 executed: 14 groups merged, and Montecito Medical came into view
+
+Scott approved the 19 signal-bearing pairs. **⚠️ They were not 19 pairs — they were 14 GROUPS**, and
+merging pairwise would have been wrong: `National Government Properties` had an entity that is a
+*loser* in one pair and a *winner* in two others, and `American Realty Capital`'s single loser
+mapped to **three different winners**. Resolved to one winner per `(canonical key, entity_type)`
+group by P195's ownership-first rule, then merged every other member in. **22 losers, all
+reversible.**
+
+| | before | after |
+|---|---:|---:|
+| live entities | 62,368 | **62,346** (−22) |
+| `lcc_entity_merge_log` | 44 | **66** (+22) |
+| **National Government Properties — relationships** | 349 | **358**; 2 assets, $4,246,846 |
+| **American Realty Capital — relationships** | 87 | **95** |
+| collision pairs remaining | 73 | **45** (the 24 husks + 9 cross-type) |
+| `canonical_name` drift | 0 | **0** |
+| Tier 0 ask / auto | 82 / 9 | **82 / 9** |
+
+### ⚠️ Two gated counters moved, and both are the merge WORKING
+
+- **Parked 137 → 141.** All four new cards are **Montecito Medical**. Before the merge its
+  **$1.62M of rent sat on a different entity from the one carrying its domain candidates**, so the
+  candidate-bearing entity was below the $500k floor and produced no cards at all. Consolidated, one
+  entity now carries both and enters the Tier 0 population with 4 domain cards (2
+  `employer_on_file_differs`, 2 `no_employer_on_file`). **An owner that was invisible because its
+  value and its people lived on separate rows** — precisely the class this arc exists to fix.
+- **`auto_mergeable` 3,040 → 3,038.** Verified: **0 of tonight's 14 winners still heads an
+  auto-mergeable group**, and **0 winners were themselves merged away** — the −2 is exactly the two
+  groups this pass resolved.
+
+**Held deliberately: the 24 husk pairs** ($0 rent, ≤5 edges) and the **9 cross-`entity_type` pairs**
+(`David Siegel`, `Dennis Needleman`, `Constance Cincotta`, `Alexandria` each exist as both a person
+and an organization — a shared key is correct, identity is not).
+
+⚠️ **Two naming oddities surfaced and are NOT merge questions:** `Constance Cincotta` is typed
+**organization** while also existing as a person, and `Alexandria` is typed **person** though it
+reads as a city. The org↔org and person↔person merges are still correct — these are data-quality
+items for the junk/naming lane, recorded so they are not mistaken for merge errors.
+
 ## 2026-08-27 22:10 UTC — N15d still vacuous; the N15e collision set is the actionable output
 
 ### ⏳ N15d re-checked and it is STILL not readable — 2.08 hours, ZERO entities created

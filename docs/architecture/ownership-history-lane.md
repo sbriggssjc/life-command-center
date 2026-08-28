@@ -5,7 +5,7 @@
 > The dated audits under `docs/audits/` are the **evidence trail** — go there for *why*, come here
 > for *what is true now*.
 >
-> **Last measured: 2026-08-27 17:15 UTC.** Re-measure before quoting any number.
+> **Last measured: 2026-08-28 07:25 UTC.** Re-measure before quoting any number.
 >
 > 🔗 **Sibling subsystem, same entity graph:**
 > [`tier0-owner-contact-system.md`](tier0-owner-contact-system.md) — matching a PERSON to an owner
@@ -46,32 +46,47 @@ distrust every record we have* — which trains an operator to skip all of it.
 has not reached is *not* `no_records`, and a payload matching nothing must surface rather than be
 absorbed into a bucket it does not belong to.
 
-## 3. Current state (2026-08-27 17:15 UTC)
+## 3. Current state (2026-08-28 07:25 UTC)
 
-**Completed ever 314 · open 156 · skipped 1,766.** From 0 completions in 69 days.
+**Completed ever 336 · open 131 · skipped 1,769.** From 0 completions in 69 days.
 
-| action | tasks | was (14:00) |
+| action | tasks | was (08-27 17:15) |
 |---|---:|---:|
-| `agrees` | 64 | 64 |
-| `mismatch` | 49 | 49 |
+| `agrees` | 51 | 64 |
+| `mismatch` | 48 | 49 |
 | `sponsor_spe` | 25 | 25 |
-| `all_guarded` | **7** | 18 |
-| `awaiting_draft` | **11** | 0 |
+| `all_guarded` | **7** | 7 |
+| `awaiting_draft` | **0** | 11 |
 | `no_records` | 0 (all 74 retired) | 0 |
 
-⚠️ **The 11 in `awaiting_draft` are the A4b recovery mid-flight, not a defect.** A4b corrected the
-gov guard; the drafts built from the old one were superseded so the 06:45 drafter re-drafts them and
-cron 244 applies at 06:49. Run against the **real planner**, they classify **9 `agrees` + 2
-`mismatch`** (`5379` Brookfield/BSREP II, `6992` TFO REVA — both sponsor↔SPE shaped, so A3 territory).
-`awaiting_draft` returning to 0 is the completion signal; **verify on `facts_inserted` /
-`tasks_completed`, never on the predicate.**
+⚠️ **`agrees` FALLING is the applier working, not a regression.** A2 completes an `agrees` task, and
+a completed task leaves the open lane — so the bucket drains downward. Read the run, not the badge:
+cron 244's 06:49 run (`a2-chain-20260828064900`) **considered 73** — i.e. A4b's +9 did land — and
+wrote **`facts_inserted` 23 / `tasks_completed` 22**. Ledger 1:1 with the run's own counters
+(23 `fact_inserted` rows over 22 properties). Arithmetic reconciles exactly:
+`agrees` 64 **+9** (A4b re-draft) **−22** (applied) = 51; `mismatch` 49 **+2** (A4b: `5379`, `6992`)
+**−3** (R60 Sweep A at 05:10 skipped `1223`/`14324`/`75` as `chain_gap_resolved_or_changed`,
+unrelated to A4b) = 48. **`sponsor_spe` unmoved at 25**, as required — A3 territory.
 
-**+304 historical ownership facts** written to `lcc_entity_portfolio_facts` (12,724 → 13,028),
-280 owners, **$579.9M**. **Badge reads human-actionable, not raw open.**
+**A4b landed and is verified on named rows.** `awaiting_draft` 11 → 0; the 7 remaining `all_guarded`
+are exactly the 7 predicted (`786` `1429` `7527` `7966` `9995` `13080` `14058`). **No phantom prior
+owner was written**: property `1429` (Camarillo) has **0** rows in the apply ledger, held by the
+widened street-token name-variant guard, and the 7 same-party renames that guard also catches
+(`1525` `2967` `6858` `6917` `6937` `7111` `7153`) have **0** ledger rows between them, ever.
 
-**Blocked `agrees` residue** (`v_lcc_ownership_chain_apply_blocked`):
-`ambiguous_entity` 18 · `no_entity` 18 · `placeholder` 15 · `repeat_transfer_unrepresentable` **14 → 0
-once the drafter re-runs (A2b)**.
+⚠️ **8 of the 9 recovered `agrees` applied; `1284` did not, and the reason is NOT A4b.**
+`GUR NORDHOFF, LLC → 19851-53 NORDHOFF LLC` now drafts correctly and classifies `agrees` — then A2
+blocks it one step later as **`ambiguous_entity`** (the grantor resolves to more than one LCC
+entity). That is the pre-existing duplicate-entity class **A2a** owns. A guard fix can only carry a
+chain as far as the next blocker; expect a repair to move rows *between* blocked reasons, not only
+out of them.
+
+**357 historical ownership facts** written by A2 across 347 owners
+(`lcc_entity_portfolio_facts` now 13,077). **Badge reads human-actionable, not raw open.**
+
+**Blocked `agrees` residue** (`v_lcc_ownership_chain_apply_blocked`, links / properties):
+`placeholder` 26 / 15 · `ambiguous_entity` 21 / 19 · `no_entity` 20 / 18.
+`repeat_transfer_unrepresentable` is now **0** — A2b's drafter-side collapse worked.
 
 **A2b collapsed one conveyance recorded on several dates** — 14 tasks / 14 properties / **32 links →
 15**, 18 folded away, 12 distinct owners, **$26.2M** (per OWNER; the per-link sum reads $88.5M, a 3.4×
@@ -156,6 +171,7 @@ variant A4b now catches). **There is no further recoverable population here.**
 | ~~**A2b**~~ | ✅ **DONE** — `repeat_transfer_unrepresentable` collapsed in the drafter, 32 links → 15, all 14 unblocked. See §4 invariant 12 and the audit. | — |
 | **A2b-res** | ⚠️ **A4b's 3 `all_guarded` self-transitions (`786` RGR, `7527` EPA, `14058` MAOB) were NOT A2b's population and are still open.** They are punctuation-variant **self**-transitions, correctly guarded — a different defect from a repeated conveyance, and the earlier note that they "are the same flicker" was wrong on both counts. | 3 |
 | **A4b-res** | `is_name_variant` still misses **spaced-letter legal forms and TIC** (`1201 CORBIN, L. L. C.`, `1325 J STREET L P`, `321 E 2nd St TIC`) — measured at **18 address-arm names**, sized deliberately and NOT folded into A4b, whose blast radius was graded on a different rule. | ~18 names |
+| **A4b→A2a** | `1284` (`GUR NORDHOFF, LLC`) is the one recovered `agrees` A2 could not apply — blocked `ambiguous_entity`, i.e. an A2a-class duplicate entity, not a guard defect. It applies unaided once merged. | 1 task |
 | **V8a** | Settle **Boyd ↔ FGF** before confirming `fgf` — 90 SPEs ride on it. | 👤 |
 | **V8c** | Merge the Madison duplicates, then one clean confirm. | 2 |
 | **A3-residue** | ~31 chains with no sponsor family — the genuine integrity lane. **Sized, surface deliberately not built.** | ~31 |
