@@ -1,3 +1,13 @@
+> # ⚠️ ARCHIVED — the 2026-03 rebuild tracker. **THE MOST COMPREHENSIVELY STALE FILE IN THE REPO.**
+> **🚨 AD6 is a "locked architecture decision" reading *"Keep Vercel as hosting and serverless
+> function platform."* Vercel was retired 2026-07-20.**
+> **🚨 Its File Inventory names eight `api/*.js` files that DO NOT EXIST** (`gov-query`, `dia-query`,
+> `queue-v2`, `workspaces`, `flags`, `bridge`, `inbox`, `entities`) — consolidated into `admin.js` /
+> `entity-hub.js` / `operations.js` / `queue.js`. LOC counts off by multiples; it says two Supabase
+> projects, there are **three**.
+> Superseded by `CURRENT-STATE.md` + `PLANNED-BACKLOG.md` + `docs/audits/ROLLOUT_STATUS.md`.
+> **Kept for AD1–AD7 provenance only.** Open items → §P14c **I19**.
+
 # Life Command Center — Rebuild Rollout Tracker
 
 > **Purpose**: Track progress across all phases of the LCC rebuild from operator dashboard to shared team operational platform.

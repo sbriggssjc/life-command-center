@@ -1,3 +1,11 @@
+> # ⚠️ ARCHIVED — a CONTINGENCY never executed. Render was never adopted.
+> **🚨 *"`server.js` lives on a non-default branch"* is FALSE since 2026-07-20** — `server.js` on
+> `main` is the sole `/api/*` router. Node `>=20` is also false for the test suite (needs ≥22.18).
+> Its env list and PA routes predate `LCC_API_KEY` enforcement and the standalone MCP service, and it
+> is silent on the **retired Vercel deployment that still answers**.
+> **Keep as a triggered contingency or formally retire → backlog I16 (👤 Scott).** An undecided
+> contingency is why four root files named four different hosting targets.
+
 # Render Migration Plan — LCC Express Server
 
 > **Status (2026-05-10): trigger-based, not urgent.** The team subscribed

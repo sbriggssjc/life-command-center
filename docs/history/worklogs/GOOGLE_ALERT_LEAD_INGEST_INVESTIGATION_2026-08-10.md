@@ -1,3 +1,10 @@
+> # ⚠️ ARCHIVED — 2026-08-10 investigation + same-day build log.
+> **🚨 Finding 4 is REFUTED LATER IN THIS SAME FILE.** It reports *"grep found no app reader"* — the
+> build log below it adds the reader. **A reader who stops at §Findings is wrong within a paragraph.**
+> **Open items → §P14c: I1** (🔒 the PA webhook secret was committed inline; rotation never
+> confirmed), **I6** (the BD promotion bridge — this lane's missing consumer), **I7** (the pull-queue
+> is unimplemented, so the PA move step is load-bearing — do not remove it).
+
 # Google Alert Lead Ingest Investigation - 2026-08-10
 
 ## Objective

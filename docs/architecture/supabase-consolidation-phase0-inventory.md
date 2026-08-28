@@ -1,6 +1,6 @@
 # Supabase Consolidation — Phase 0 Inventory
 
-> Phase 0 of the migration plan in `SUPABASE_CONSOLIDATION_PLAN.md`.
+> Phase 0 of the migration plan in `docs/architecture/supabase-consolidation-plan.md`.
 > Status: **in progress**. Some inventory items I can complete from
 > the repo (committed below); two items require user actions in
 > external dashboards (flagged at the bottom).
@@ -23,7 +23,7 @@
 All three remaining items are no-code; they're administrative checks
 in external systems plus one explicit go/no-go decision.
 
-## 1. Verified Supabase project state (cross-ref `SUPABASE_CONSOLIDATION_PLAN.md`)
+## 1. Verified Supabase project state (cross-ref `docs/architecture/supabase-consolidation-plan.md`)
 
 | Project | Ref | Region | Postgres | Org |
 |---|---|---|---|---|
