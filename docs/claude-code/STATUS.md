@@ -307,6 +307,42 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-28 — B6b drafted, and re-measuring found the raw feed is stale too
+
+**Prompt: `prompts/B6b-restart-gsa-landlord-change-detector-2026-08-28.md`.** B6a + B6a-follow-up
+unblocked it — a restarted producer can now be told whether it stays up, which was the whole point
+of doing them first.
+
+**⚠️ Protocol step ① earned its keep before the prompt was even written.** B6's finding was *the
+derived layer has no scheduled caller* — true, and incomplete. Measured today:
+
+| object | newest | |
+|---|---|---|
+| `gsa_lease_change_facts` | **2026-02-01** | the derived layer, ~7 months dead |
+| **`gsa_snapshots`** | **2026-07-01** | **the RAW feed, ~58 days old** |
+| undiffed snapshots | 4 — `2026-03/05/06/07-01` | `2026-04` genuinely absent upstream |
+| `prospect_leads` (`ownership_change`) | 2026-03-31 | **7,729 leads, 2,041 historically WORKED** |
+
+**Restarting only the diff would eat the four backlog months, report success, and stop again at
+2026-07 with nothing for August** — while the `feed_stale` alert stays open and everyone believes it
+is fixed. **That is the B6a lesson repeating one layer up: follow the signal all the way to the
+source.** The prompt therefore requires the raw feed to be diagnosed *first*.
+
+⚠️ **And it explicitly warns against the opposite error:** GSA publishes monthly on a lag, so **a
+feed early in its cycle and a dead feed look identical from `max(snapshot_date)`** — the same
+wrong-SLA-vs-dead-feed ambiguity flagged for dia `medicare_clinics`. Establish the expected cadence
+before calling it broken.
+
+**Why this restart is unusual:** the lead lane it revives has **2,041 historically worked leads** —
+a measured consumption record, not a speculative producer. Most restarts cannot say that.
+
+**Carried into the prompt as hard rules:** deflate `landlord_change_flag` before quoting it (38,213
+→ **1,338 / 1,202 properties**, 28.6×, of which **46.7% is pure name re-spelling** because the flag
+is raw string inequality); this producer writes **text parties**, which is the exact shape that
+**nulled 7,567 rows** through the propagation trigger before B5 fixed it; register the new step in
+B6a's registry with declared skips, or it restarts into the blindness B6a just fixed; and **the
+acceptance test is the alert auto-resolving, not a green run log.**
+
 ## 2026-08-28 — ✅ B6a-follow-up SHIPPED: the monitor is alive, and its first honest run names the backlog. Plus: the build-turn protocol is now the definition of done.
 
 **Verified live by Cowork (the response transcript ended mid-work, so this is measured, not read):**
