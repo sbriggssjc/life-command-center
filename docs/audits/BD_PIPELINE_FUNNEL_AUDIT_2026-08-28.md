@@ -89,7 +89,15 @@ arc.
 
 *"A connected history of ownership of all of our target markets all the way back to the developer."*
 
-**Today: 149 of 13,835 live gov properties (1.1%) have two or more historical owner links.** The
+> ✅ **UPDATED 2026-08-28 after B1.** gov properties with **any** ownership history
+> **1,272 → 2,173**; with a **chain (2+ historical links) 149 → 177**; the lane's completions
+> **336 → 1,237** — and the operator's `human_actionable` badge did **not** move off **55**.
+> ⚠️ **`any_history` moved 7× harder than `chain_2plus`, and that is the population, not a
+> shortfall** — only 210 of the 1,501 below-floor properties carry ≥2 guard-passing transitions.
+> **The binding constraint on chain DEPTH is now the A2-blocked residue** (`ambiguous_entity`
+> 126 links / 123 properties, the A2a merge class), not the value floor.
+
+**As measured: 149 of 13,835 live gov properties (1.1%) have two or more historical owner links.** The
 machinery to change that is **built, proven and running** — A1 split the lane, A2 applies chains
 nightly, A3/A4/A4b route the residue, and it produced **314 completions and 304 facts in one day**
 after 69 days at zero.
@@ -99,8 +107,10 @@ value floor that predates the automation.
 
 ## 4. Recommendation
 
-1. **Split the floor by consumer** (see Lock 1) — automated path low/none, human path $500k.
-   **Then re-open the 1,548.** They were skipped by a rule that no longer describes the cost.
+1. ✅ **DONE (B1, 2026-08-28)** — floor split by consumer; 1,414 re-opened, reversibly.
+   ⚠️ **The next constraint is NOT another floor:** it is the A2-blocked residue
+   (`ambiguous_entity` 126 links / 123 properties — the A2a duplicate-entity merge, which applies
+   unaided once done). `trace_ownership_to_developer` (983) and dia (516) remain gated, deliberately.
 2. **Then measure the linkage gap (Lock 2)** — ~3,468 properties. Ask *why* the owner never became
    an entity before building anything; the gov `owner_needs_salesforce` lane just taught us that a
    zero can be a key-space artifact rather than a coverage fact.
