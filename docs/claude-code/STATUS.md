@@ -17,6 +17,66 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-28 — B6a-follow-up SHIPPED: the monitor went quiet at the moment it went blind
+
+**LCC Opps LIVE + one dia grant.** Writeup:
+`docs/audits/B6a_FOLLOWUP_FRESHNESS_MONITOR_2026-08-28.md`. Contract **I11** (now ✅ detector live),
+playbook **Class 21**. **gov NOT touched.** Visibility only — the four producers are still dead (B6b).
+
+- **Acceptance met, and it is a state delta, not a status.** `feeds_evaluated` **2 → 25**,
+  `feeds_excluded_stale_mirror` **18 → 0**, mirror `synced_at` **33d (gov) / 30d (dia) stale → today**.
+  **6 `feed_stale` alerts opened — all four B6a producers among them** (170/170/150/144d), plus dia
+  `medicare_clinics` 64d and gov `sam_lease_opportunities` 32d. Re-run is idempotent (`new_alerts 0`).
+- **⚠️ THE TRANSPORT WAS TWO UNRELATED CAUSES THREE DAYS APART, NOT ONE.** All 18 feeds froze in the
+  same week, which reads like one bug in the shared pull. **gov** = a **marginal cold-cache statement
+  timeout** — `500`/`57014` against `anon`'s **3 s** budget; warm the sweep is **231 ms**, but cold it
+  measured **2,601 ms across just its top 8 feeds** and the 05:30 cron is the first touch of the day by
+  construction. **Positive control: the identical request, same key — `500` cold at 17:41, `200` with
+  all 18 feeds warm at 17:44.** **dia** = a **hard revoked `anon` EXECUTE** (`401`/`42501`). Fixing
+  either alone leaves the other silent. **A `500` from a marginal cost is not a break — try it twice.**
+- **⚠️ AND THE BRIEF'S OWN PREMISE WAS PARTLY REFUTED.** §2c said *"do not touch gov, its view is
+  correct."* Its view **is** correct **and was not servable to the caller that reads it** — a different
+  property, and the one that failed. gov is still untouched (mitigated LCC-side by a bounded retry),
+  but *"the view is correct"* was not grounds to stop looking.
+- **The exclusion was KEPT — deleting it is the wrong fix and worse than the bug** (the check would
+  then alert on ages it explicitly cannot vouch for). What changed is that the excluded set became its
+  own deduped, auto-resolving **`feed_mirror_stale`**, and `feeds_evaluated` /
+  `feeds_excluded_stale_mirror` are now separate honest counts. **Both halves are pinned**, because
+  each is a plausible "fix" for the other.
+- **Three further silent paths closed alongside `(0,0)`:** a `RAISE NOTICE`-and-continue on a missing
+  vault secret; a **`200` carrying an empty array** (the P157 shape — a status-code check passes while
+  nothing arrives, so read the body); and a **`lost` class** — `net._http_response` prunes at **~6 h**
+  while the inflight row lingered **24 h**, so a response arriving after finalize ran could **never** be
+  consumed. *Ask what happens to a request that is neither answered nor answerable.*
+- **The dia GRANT could not ship alone.** dia's registry ACL was `anon=arwdDxt`; `anon` EXECUTE on a
+  **SECURITY DEFINER** function over a registry `anon` can write lets any anon caller repoint a feed at
+  an arbitrary table — **the hole B6a closed on gov, still open on dia.** Both halves or neither.
+- **⚠️ §2e sweep: this was the only one of ten `lcc_check_*` with the shape**, and
+  `lcc_check_bd_sync_freshness` **already does it right** — it is the precedent this fix reuses rather
+  than a new alert system. `lcc_check_cron_health` is the nearest neighbour and is covered by a
+  *separate* sibling, so retiring that sibling would open the shape. Named, not fixed.
+- **⚠️ Two self-inflicted traps worth carrying.** (1) `CREATE OR REPLACE` does not replace a function
+  of different arity — all three signatures changed, and missing the `DROP` on
+  `lcc_check_feed_freshness()` alone would have made cron 193 ambiguous (**42725**) and taken the hourly
+  tick's **other three checks** down with it: a monitoring fix that silences monitoring. (2) plpgsql
+  resolves an identifier to a **DECLAREd variable before a SQL alias**, so aliasing
+  `net._http_response` as `r` beside `DECLARE r record` **plans fine and dies only when executed**
+  (`55000`). Found by *running the function*; then the regexp fix **over-reached into the `FOR r IN`
+  loop** and was caught by listing every affected line rather than trusting the substitution.
+- **⚠️ Four of fifteen mutations left the test GREEN and had to be tightened** — `'lost'` also appears
+  in a `FILTER`, the return columns are also *assigned* in the body, the watermark table is also named
+  in an `ON CONFLICT` qualifier, and the mirror predicate also lives in the blind-spot scan. **A
+  body-wide `includes()` is a weak assertion wherever the token recurs.** 17 tests, **15 mutations RED**.
+- **⚠️ NOT fixed, read before quoting the monitor as healthy.** gov's timeout is **mitigated, not
+  cured** — the first attempt each morning will still usually fail and the margin shrinks with every
+  feed registered; watch `lcc_feed_freshness_sync_status.last_attempt_no` and raise **that**, never the
+  retry cap (**B6a-follow-up-b**). The four producers remain dead (**B6b**, now unblocked — its premise
+  was being able to tell whether a restart holds). And **B6a's `record_skip` has STILL not been
+  exercised by a real run**: gov `run_log` carries **0 rows with `skip_reason` ever and 0 rows of any
+  kind since B6a shipped** (newest 2026-08-27 18:52), so the RED producers prove the **registry** rows,
+  not the emission fix. Until a run passes through, *no bad rows* and *no rows at all* read identically.
+
+
 ## 2026-08-28 — B6a SHIPPED: a skipped step emits nothing, and the health view was built on emitted rows
 
 **gov DB LIVE + committed.** Writeup:

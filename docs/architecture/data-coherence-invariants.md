@@ -163,10 +163,12 @@ conclusion in this very arc.
 
 ### I11 — A monitor must alert on its own blindness. An exclusion of stale inputs IS a silent failure.
 
-**Added 2026-08-28 from B6a's follow-on finding, and independently verified.** This is the sharpest
-instance of the class in the whole campaign, because **every layer reported success.**
+**Added 2026-08-28 from B6a's follow-on finding, and independently verified. ✅ CLOSED THE SAME DAY
+— see `docs/audits/B6a_FOLLOWUP_FRESHNESS_MONITOR_2026-08-28.md`; the account below is the
+violation as found, kept because the mechanism is the lesson.** This is the sharpest instance of the
+class in the whole campaign, because **every layer reported success.**
 
-The cross-DB freshness monitor has **evaluated nothing since 2026-07-26**:
+The cross-DB freshness monitor had **evaluated nothing since 2026-07-26**:
 
 1. gov's own `v_feed_freshness` is **correct** and says `sam_lease_opportunities` is 32 days stale.
 2. LCC crons **140/141** fire daily and record `succeeded` — but `lcc_domain_feed_freshness.synced_at`
@@ -189,6 +191,29 @@ alerts stopped when the monitoring stopped, and the surface has read healthy for
 > that has never been seen going red on its own blindness is a claim, not a monitor.
 > **Corollary:** a fail-soft that swallows a non-200 must **count and surface** it. `(0,0)` may
 > never mean both *nothing to do* and *everything failed*.
+
+**Closed 2026-08-28.** The exclusion was **kept** — deleting it is the wrong fix and worse than the
+bug, because the check would then alert on ages it cannot vouch for — and the excluded set became
+its own deduped, auto-resolving `feed_mirror_stale` alert. `feeds_evaluated` and
+`feeds_excluded_stale_mirror` are reported separately. Seen going red on the live month-old mirror
+and green again after recovery.
+
+Four things the fix turned up that the invariant should carry:
+
+* **The transport was TWO unrelated causes** three days apart — gov a *marginal* cold-cache
+  statement timeout (`500`/`57014`; warm 231 ms against a 3 s anon budget, so the same request
+  returned `200` three minutes later), dia a *hard* revoked `anon` EXECUTE (`401`/`42501`). Fixing
+  either alone would have left the other silent. **Do not stop at the first cause when several
+  inputs fail in the same week.**
+* **A retry must be bounded and must alert when exhausted**, or it becomes a new way to stay quiet.
+* **`(0,0)` had a third and fourth silent sibling**: a `RAISE NOTICE`-and-continue on a missing
+  secret, and a `200` carrying an **empty array** (the P157 shape — a status-code check passes while
+  nothing arrives). **Read the body, not the code.**
+* ⚠️ **A response store with a shorter retention than its own inflight table loses work
+  permanently.** `net._http_response` is pruned to ~6 h while the inflight row lingered 24 h, so a
+  response arriving after the finalize pass could never be consumed by the next day's. That needed
+  its own outcome class (`lost`) — *ask what happens to a request that is neither answered nor
+  answerable.*
 
 ### I10 — A one-shot backfill is not a producer
 
@@ -226,7 +251,7 @@ Supabase project"; it is a new set of connections that must be asserted on day o
 | I2 | provenance `group by` split by domain | ⚠️ **manual** — run in B5/B6; **no standing view** |
 | I3 | link-column type check against target PK | ❌ **none** |
 | I4 | expected-vs-observed run health | ✅ **B6a, 2026-08-28** — skips emit; `is_overdue` vs the step's own p90 cadence; the four dead producers registered and RED. ⚠️ The **cross-DB mirror** that carries this to an alert has been silent since 2026-07-26 (**B6a-follow-up**) |
-| **I11** | a check that alerts on its own blindness | ❌ **VIOLATED, LIVE AND VERIFIED** — the cross-DB freshness monitor has evaluated **zero** feeds for **33 days** (gov) / **30** (dia) and **0 alerts are open**; `feed_stale` last fired **2026-07-24**, two days before the sync died → **B6a-follow-up** |
+| **I11** | a check that alerts on its own blindness | ✅ **DETECTOR LIVE 2026-08-28 (B6a-follow-up)** — `lcc_check_feed_freshness` keeps the 3-day mirror exclusion and now opens a deduped, auto-resolving **`feed_mirror_stale`** over the set it refuses to evaluate; `lcc_finalize_feed_freshness` counts/records/retries non-200 into `lcc_feed_freshness_sync_status`. `feeds_evaluated` **2 → 25**, excluded **18 → 0**, **6 `feed_stale` opened** (B6a's four among them). Positive-controlled in **both** directions on the live month-old mirror. ⚠️ gov's cold-cache timeout is **mitigated (retry), not cured** — B6a-follow-up-b |
 | I6 | divergence consumer | ⚠️ `parcel_owner_xref.diverges` has none → **B6d** |
 | I1 | producer/consumer registry | ❌ **none** — this is the biggest hole |
 | I8 | fill-forward trigger audit | ❌ **none** — one instance fixed (B5), others unaudited |
