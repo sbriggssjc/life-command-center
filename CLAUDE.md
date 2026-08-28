@@ -3312,7 +3312,7 @@ gov asset coverage **24.7% → 39.2%** (3,425 → 5,425 anchors of 13,837 non-ar
 `lcc_property_owner` **4,065 → 6,065 rows / 2,768 → 3,743 owners**. **2,000 minted, 2,000 carry
 evidence AND a resolved owner, 0 evidence-less, 0 orphans.** Plan
 `v_lcc_c2e_asset_mint_plan` (migration `20260828140000`), batch `c2e_gov_eligible_t1_20260828`,
-reversible by tag. **Tranche two (4,811 props) NOT run.** Writeup:
+reversible by tag. ~~**Tranche two (4,811 props) NOT run.**~~ ⚠️ **T2a IS NOW RUN — see the C2e-T2a section below; 2,241 props / 2,054 owners remain and only T2b is outstanding.** Writeup:
 `docs/audits/C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md`; canonical
 `docs/architecture/connectivity-and-open-threads.md` §4i.
 
@@ -3368,6 +3368,56 @@ reversible by tag. **Tranche two (4,811 props) NOT run.** Writeup:
   still 0**, detector positive-controlled at 64,356.
 - **dia untouched, deliberately** — 84% of its un-minted owner slots hold an OPERATOR (P113).
 
+
+## C2e-T2a — tranche two step one: the prediction missed by 2, and the 2 were the finding (2026-08-28)
+
+gov asset coverage **39.2% → 57.8%** (5,425 → 7,995 anchors of 13,837 non-archived);
+`lcc_property_owner` **6,065 → 8,636 rows / 3,743 → 5,992 owners**. **2,570 minted, 2,570 resolved
+an owner, 0 evidence-less, 0 orphans.** Batch `c2e_gov_eligible_t2a_20260828`, reversible by tag.
+**T2b (2,241 props / 2,054 owners) NOT run — Scott's call.** Writeup:
+`docs/audits/C2e_T2a_TRANCHE_TWO_STEP_ONE_MINT_2026-08-28.md`; canonical
+`docs/architecture/connectivity-and-open-threads.md` §4k.
+
+- **⚠️ PREDICT A CANONICAL-KEY EFFECT WITH THE KEY THE *WRITER* PERSISTS, NOT THE ONE THE CALLING
+  FUNCTION PASSES.** `v_duplicate_candidates` moved **+46** against a predicted **+44**, and the
+  2-row gap was a real mechanism, not slop: `lcc_mint_gov_asset_entities` passes
+  `lcc_normalize_entity_name(name)` as `canonical_name`, and the **N15c `BEFORE INSERT` trigger
+  overwrites it** with `lcc_entity_canonical_key(name)` — all 2,570 rows carry the trigger's key and
+  only **2,497 (97.2%)** equal the function's argument. Re-run with the persisted key: **12 + 34 =
+  46**, exact. This is the trigger working (N15c made it the single writer); what it leaves behind is
+  **an argument inside the mint function that reads like the answer and is dead code**. Where a
+  `BEFORE` trigger owns a derived column, the caller's value is a suggestion — same family as the
+  P157 `reloptions` and P182 deparse traps: *the stored value is not the value you wrote.* Cleanup
+  filed **N15g**.
+- **⚠️ A PREDICTION THAT MATCHES IS WORTH MORE THAN A NUMBER THAT MOVES "ABOUT RIGHT" — and the
+  discipline only pays if you chase the residual.** +46 against +44 is a 4% error that would have
+  been trivially shruggable, and shrugging it would have left the trigger/argument split
+  undiscovered.
+- **⚠️ TIER 0 MOVED +4 AGAINST A PREDICTED ~+20, AND THAT IS A POPULATION SIGNAL, NOT A MISS.**
+  Tier 0 needs a person we already hold whose email domain matches the owner; only **7.0%** of these
+  owners carry a second identity against tranche one's 12.9%. **Resolving an owner makes "who do we
+  call there" ASKABLE; it does not manufacture a bench.** Safety is exact and narrow: **`auto` held
+  at 9 with ZERO cards on any owner T2a made resolvable** — the only band that can trigger an
+  unattended write. `ask` +1 / `parked` +3 are *precisely* the 1 and 3 cards on T2a owners.
+- **⚠️ "UNCHANGED" NEEDS A TIMESTAMP *AND* AN ATTRIBUTION (§4i.5, applied).** Merge candidates
+  5,194 → 5,194, `auto_mergeable` 3,006 → 3,006, normalizer-blind 64 → 64, drift 0 → 0 — and
+  **`lcc_entity_merge_log` recorded 0 merges in the window** (newest nine hours prior), so the zero
+  is genuinely this batch's rather than a quiet coincidence between two threads.
+- **`evidence_written 2578` against a `+2,571` ROW DELTA — a write counter is not a row counter.**
+  The 7-row difference is idempotent re-writes, and it matches the 7 candidates still reading
+  `eligible`, **all of which are brokerages** (`Stan Johnson Co` ×4, `SVN®`, `NAI Pfefferle`,
+  `Bradford Allen Realty Services`). `lcc_reconcile_property_owner` filters brokerages *inside* its
+  scoring CTE, so they clear the candidate view and score zero forever — **the sixth guard working,
+  not a backlog.**
+- **The evidence drive is not optional and cron 225 cannot do it** — capped at 400/run, it would
+  have left 2,570 entities matching the retire predicate for most of a week. Driven explicitly at
+  `limit 3000` in the same pass. ⚠️ The function takes **no domain argument**, so **1 dia property
+  resolved** (work cron 225 would have done that night). **No dia asset was minted.**
+- **👤 T2b: safe to run, low-value to run — sized live, not extrapolated.** Predicted **+26**
+  duplicate groups (1.16%) — **LOWER than T2a's actual 1.79%** — against contactability collapsing
+  **21.3% → 17.2% → 3.7%**. The graph cost is now measured across 4,570 mints and is not the issue;
+  the owner cliff arrived exactly where C2a said. The decision is purely whether *"resolve all
+  ownership, rank later"* applies to a population ~96% un-contactable. **No default was taken.**
 
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
