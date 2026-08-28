@@ -1,6 +1,8 @@
 # Canon Index & Invariants
 
-**CANON_VERSION: 1.5.0** — 2026-08-20. (1.5.0: Global invariant 6 states WHO we prospect — the ultimate
+**CANON_VERSION: 1.6.0** — 2026-08-28. (1.6.0: new block `deliverable-presentation` — branded output is
+styled by an element's ROLE, never its content; full spec in `../BRANDED-DELIVERABLE-PRESENTATION-STANDARD.md`.
+1.5.0: Global invariant 6 states WHO we prospect — the ultimate
 individual in control; agents of the LLC/SPE are prospectable, prior listing/procuring brokers are not,
 public entities are never prospected. 1.4.3: comps block compressed — every rule retained, denser phrasing — to bring the rendered Copilot instructions under Copilot Studio's 20,000-char limit. 1.4.2: logging-and-touchpoints gains the W7.3 deal-spine capture
 actions `log_call_note` + `tag_comm_to_deal` via dispatchCopilotAction — pick-list on ambiguity, never guess.) Bump this on any rule change; record it in the changelog below and
@@ -31,6 +33,7 @@ run `../SURFACE-SYNC-PROTOCOL.md`.
 | `offer-submission` (block) | Inbound LOI → seller submission: assemble context, draft (BCC Sarah), file-back, generic-SF log. Full workflow: `skills/offer-submission-SKILL.md` |
 | `writing-voice.md` | How written deliverables sound and are formatted |
 | `bov.md` | BOV / valuation-memo / pro-forma generation and the lease-terms-first rule |
+| `deliverable-presentation.md` | How branded output LOOKS — Excel/Word/PDF/OM/email layout, geometry, number formats, source conventions. Full spec: `../BRANDED-DELIVERABLE-PRESENTATION-STANDARD.md` |
 | `intake-triage.md` | Staged intake triage + classification taxonomy |
 | `personal.md` | Personal-life domains and how they bind to the same OS |
 
@@ -56,6 +59,20 @@ Canon: v<X.Y.Z>
 ```
 
 ## Changelog
+- **1.6.0** (2026-08-28) — **New block `deliverable-presentation.md`: branded output is styled by an
+  element's ROLE, never by its content.** Row heights, column widths, banding rectangles, footnote spans,
+  number formats and label vocabulary come from named registries shared across every tab and every format,
+  so the same role renders identically everywhere. Corollary that changes behaviour: **when content does not
+  fit its role, the content is wrong** — shorten the label, do not grow the row. Also binding: one period /
+  one number with **seller actuals outranking our estimate** and `Conflict` / `Not on file` rather than an
+  average or a guess (§13); show only periods that have data (§14); Expense History · Budget · Pro Forma
+  Economics are one mirrored family (§15); a variance inside a named tolerance band reads as the band's
+  phrase plus the figure (§17). Full numbered spec + traceability from Scott's SSA — Savannah, GA review
+  rounds: `../BRANDED-DELIVERABLE-PRESENTATION-STANDARD.md`. Excel enforcement point:
+  `bov-generator/bov_constants.py` (`ROW_H`, `COL_W`, `footnote()`, `stack()`, `band()`, `total_row()`,
+  `prose()`). **Not yet enforced by a validator** — `validate_presentation.py` and the retrofit of the
+  existing `bov_tabs_*.py` / `mob_tab_*.py` modules onto the helpers are open items (spec §21), so today
+  this is a written standard plus helpers, not a merge gate.
 - **1.5.0** (2026-08-20) — **Global invariant 6 now states WHO we prospect**, in Scott's words: the target is
   the *ultimate individual in control of the decision* for the asset we are pursuing or the buyer we are
   taking an offering to. **Agents of the LLC/SPE ARE prospectable** (the managing member / asset manager who
