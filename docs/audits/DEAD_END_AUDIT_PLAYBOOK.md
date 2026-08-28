@@ -1550,6 +1550,23 @@ Ordered by expected yield, not by ease:
 
 ## Class 21 — a SKIPPED step emits nothing, and a health surface built on emitted rows cannot see it
 
+> ✅ **FIXED for gov (B6a, 2026-08-28)** — producer registry + declared skips; the four dead
+> producers read **RED** (170/170/150/144d vs a 45-day SLA); detector **seen red on a deliberate
+> silence and green after**.
+> ⚠️ **But the RED rows prove the REGISTRY, not the emission fix** — `record_skip` has not yet been
+> exercised by a real run (daily `0 8 * * *`, weekly `0 6 * * 1`). Until one passes through, *no bad
+> rows* and *no rows at all* still read identically **for the emission half**. Class 8 in miniature,
+> inside the fix for Class 21.
+>
+> 🚨 **AND THE CLASS HAS A SECOND STOREY, FOUND IMMEDIATELY ABOVE THIS ONE.** The alert chain that
+> carries gov's verdict to a human **has evaluated nothing since 2026-07-26** and **0 alerts are
+> open**: a fail-soft swallows non-200s and returns `(0,0)` (identical to *nothing to do*), and the
+> consumer **excludes mirror rows it considers stale** — so **when the sync stops, the check stops
+> checking and reports nothing wrong.** Verified: gov 33d / 13 feeds, dia 30d / 5; `feed_stale` last
+> fired **two days before the sync died**. **Fixing a producer's visibility buys nothing while the
+> transport to the alert is silently dead** — always follow the signal all the way to the human.
+> Contract invariant **I11**; backlog **B6a-follow-up**.
+
 **Detector.** Enumerate the steps an orchestrator **declares** and anti-join against the steps that
 **logged an outcome**. A step present in code and absent from the log is the finding. Equivalently:
 for any guarded call site (`if <precondition>: run_task(...)`), ask **what the surface shows when the
