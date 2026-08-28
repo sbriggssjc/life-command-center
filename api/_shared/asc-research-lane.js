@@ -121,6 +121,16 @@ function corroboratingTenant(target, context) {
   return organization ? { basis: 'cms_enrollment_organization', matched_name: organization } : null;
 }
 
+function exactFacilityCorroboration(target, context) {
+  const facility = normalizeTenantIdentityName(target.cms_identity?.facility_name);
+  if (!facility) return null;
+  if (normalizeTenantIdentityName(context.building_name) === facility) {
+    return { basis: 'building_name', matched_name: facility };
+  }
+  const tenant = contextTenantNames(context).find((name) => name === facility);
+  return tenant ? { basis: 'facility_name', matched_name: tenant } : null;
+}
+
 const GENERIC_ORG_FAMILY_TOKENS = new Set([
   'THE', 'CENTER', 'CENTRE', 'SURGERY', 'SURGICAL', 'MEDICAL', 'HEALTH',
   'HEALTHCARE', 'CARE', 'CLINIC', 'HOSPITAL', 'GROUP', 'ASSOCIATES',
@@ -206,6 +216,33 @@ function capturedDirectionalStreetTypeExtension(frozenAddressToken, capturedAddr
   if ((!addedDirectional && !addedStreetType)
     || comparison.join(' ') !== frozenStreet.join(' ')) return null;
   return { added_directional: addedDirectional, added_street_type: addedStreetType };
+}
+
+function compoundStreetTokenSplit(frozenAddressToken, capturedAddressToken) {
+  if (!frozenAddressToken || !capturedAddressToken) return null;
+  const frozen = frozenAddressToken.split('|');
+  const captured = capturedAddressToken.split('|');
+  if (frozen.length !== 4 || captured.length !== 4
+    || frozen.slice(1).join('|') !== captured.slice(1).join('|')) return null;
+  const frozenStreet = frozen[0].split(' ');
+  const capturedStreet = captured[0].split(' ');
+  if (capturedStreet.length !== frozenStreet.length + 1
+    || frozenStreet[0] !== capturedStreet[0]
+    || frozenStreet.at(-1) !== capturedStreet.at(-1)) return null;
+  for (let index = 1; index < frozenStreet.length - 1; index += 1) {
+    if (capturedStreet[index] + capturedStreet[index + 1] !== frozenStreet[index]) continue;
+    const collapsed = [
+      ...capturedStreet.slice(0, index),
+      frozenStreet[index],
+      ...capturedStreet.slice(index + 2),
+    ];
+    if (collapsed.join(' ') !== frozenStreet.join(' ')) continue;
+    return {
+      compound_token: frozenStreet[index],
+      captured_parts: [capturedStreet[index], capturedStreet[index + 1]],
+    };
+  }
+  return null;
 }
 
 function capturedRangeContainsFrozenEndpoint(frozenAddressToken, capturedAddressToken) {
@@ -328,11 +365,24 @@ export function buildAscStructuredCapture(target, context = {}) {
       && hasAscSublocation(cmsIdentity.address)
       && directionalStreetTypeExtension
       && exactTenantCorroboration;
+    const compoundStreetSplit = compoundStreetTokenSplit(frozenComparisonToken, addressToken);
+    const facilityCorroboration = exactFacilityCorroboration(target, context);
+    const compoundStreetSplitMatch = compoundStreetSplit && facilityCorroboration;
     if (!parentBuildingMatch && !aliasMatch && !rangeEndpointMatch
-      && !municipalityAliasMatch && !directionalStreetTypeMatch) {
+      && !municipalityAliasMatch && !directionalStreetTypeMatch
+      && !compoundStreetSplitMatch) {
       throw new Error('Captured page does not match the active frozen ASC candidate');
     }
-    identityMatch = directionalStreetTypeMatch ? {
+    identityMatch = compoundStreetSplitMatch ? {
+      mode: 'facility_corroborated_compound_street_split',
+      frozen_compound_token: compoundStreetSplit.compound_token,
+      captured_street_parts: compoundStreetSplit.captured_parts,
+      corroboration_basis: facilityCorroboration.basis,
+      corroborated_name: facilityCorroboration.matched_name,
+      cms_address_preserved: clean(cmsIdentity.address),
+      captured_building_address: clean(context.address),
+      second_review_required: true,
+    } : directionalStreetTypeMatch ? {
       mode: 'tenant_corroborated_directional_street_type_extension',
       added_directional: directionalStreetTypeExtension.added_directional,
       added_street_type: directionalStreetTypeExtension.added_street_type,
