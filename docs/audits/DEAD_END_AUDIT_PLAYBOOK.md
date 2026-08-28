@@ -981,6 +981,59 @@ count is a constant.
 
 ---
 
+## Class 20 — a SOURCE one domain consumes and a sibling domain never wired up
+
+**Found:** 2026-08-28 (B4 → B5). **First run: gov had never consumed its own `sales_transactions`
+as ownership history — 9,514 named sellers across 4,697 dated properties, 1.8% consumed, ~3,080
+net-new rows / 2,114 properties — while dia derives 2,207 of its 2,757 historical facts from
+exactly that source.**
+
+**Symptom.** A metric is materially better in one domain than another and everyone has a story for
+why ("dia has better data", "gov's tenant is a federal agency"). The stories are plausible,
+untested, and expensive: they lead to *acquire more data* rather than *wire up what we hold*.
+
+**⚠️ The trap that makes this class invisible.** A missing feeder produces **no error, no zero row,
+and no queue**. There is nothing to audit — the absence has no representation anywhere. Every
+detector in this playbook looks at rows that EXIST; this class is about rows that were never
+created because nobody asked the source for them. **It is the mirror of Class 2 (a producer with no
+consumer): here there is a consumer with an unconnected producer.**
+
+**The detector — group the OUTPUT by its provenance column, split by domain.**
+
+```sql
+-- what actually produces this fact, and does every domain have the same producers?
+select source_domain,
+       split_part(coalesce(ownership_source,'(null)'),':',1) as src_bucket,
+       count(*) filter (where ownership_end_date is not null) as historical,
+       count(distinct source_property_id)                    as props
+from lcc_entity_portfolio_facts
+group by 1,2 order by 1, historical desc;
+```
+
+**A bucket present for one domain and absent for another IS the finding.** One query; it does not
+need a hypothesis first. Then size the unconsumed source and **anti-join it against what the
+consumer already records** — the net-new count, not the raw count, is the number worth quoting.
+
+**⚠️ "The source is exhausted" is a claim about EVERY table that could carry the fact.** This was
+found immediately after concluding the opposite: `deed_records` (876 of 5,804 with a grantor) and
+`property_documents` (325 deed docs) were measured, found thin, and written up as *"this is now an
+external acquisition problem."* **Both numbers were right and the conclusion was wrong** — the
+tables *named after* the answer were not the tables holding it. **Acquisition is the most expensive
+conclusion available and therefore earns the highest burden of proof: enumerate every table that
+could carry the fact before reaching it.**
+
+**⚠️ Do not date a feeder off `updated_at` on an upserted table.** `lcc_entity_portfolio_facts` has
+**no creation timestamp**, and the nightly `lcc_finalize_entity_portfolios` re-upsert touches
+**11,828 of 14,076 rows every day** — so every source reads "written today." Find the producer in
+CODE. **If it turns out to be a one-shot, the sibling domain has a Class 8 problem of its own.**
+
+**Repair shape.** Feed the EXISTING consumer (a new evidence source into the same apply path),
+never a second writer; inherit the guards rather than re-inventing them; and report the **coverage
+delta and the depth delta separately** — they move by very different multiples.
+
+**Where else to point it:** any fact with a provenance/source column and more than one domain —
+owner contacts, listing events, rent, cap rates, documents, broker relationships.
+
 ## Class 17 — a RULE proposed for removal because its false positives are the only part you can see
 
 **Symptom:** a matching or admission rule produces a handful of obviously-wrong outputs. They are

@@ -17,6 +17,68 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-28 — B1a merged and refuted its own premise; then MY "we must acquire deeds" conclusion was refuted one query later. gov has never consumed its own sales table.
+
+Evidence: [`B1a_AMBIGUOUS_ENTITY_MERGE_2026-08-28.md`](../audits/B1a_AMBIGUOUS_ENTITY_MERGE_2026-08-28.md);
+audit **§3b/§3c** in [`BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md`](../audits/BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md);
+canonical [`ownership-history-lane.md`](../architecture/ownership-history-lane.md) §3a.
+
+**B1a shipped and moved the wrong number.** 59 groups / 63 losers merged, `ambiguous_entity`
+**126 → 57** links, **+65 completions / +66 facts** (lane **1,237 → 1,302**, `any_history`
+2,173 → **2,238**). But `chain_2plus` moved **by one** — **64 of the 65 completed tasks carried
+exactly ONE link.** **Duplicates constrained chain EXISTENCE, never DEPTH.** The entire remaining
+A2-blocked residue is worth **12** `chain_2plus` properties, 8 of them permanently blocked by
+design (the placeholder is the GRANTOR). **That closes the lane as a depth source.**
+
+**Then I got the follow-up wrong, in the most expensive direction available.** Measuring gov's
+deed layer — **876 grantor-bearing deed records of 5,804; 325 deed documents of 13,835
+properties** — I concluded depth was now an **external acquisition** problem (K10 / county
+fetchers) and wrote it into the audit as §3b. **It survived one more query.**
+
+**B4 was the thread, and one `group by` answered it.** Grouping
+`lcc_entity_portfolio_facts` by `ownership_source` shows dia's depth comes from
+**`sales_transactions_seller_exit` — 2,207 of its 2,757 historical facts** — a feeder that closes
+the SELLER's ownership interval when a sale is recorded. **gov has no such feeder.** gov
+`sales_transactions`: **14,645 rows / 5,321 properties / 1970→2026, 9,514 with a named seller,
+4,697 properties with a dated seller** — and `ownership_history` has consumed
+**`data_source='sales_transaction'` = 169 rows, 1.8%.** Anti-joined on (property, normalized
+prior-owner, exact date): **3,080 net-new rows across 2,114 properties**, against gov's current
+**178** chained and **2,238** with any history.
+
+**Filed as ⭐ B5** (B4 closed as answered; B1b re-scoped to coverage; deed acquisition **deferred,
+not refuted** — it is the right answer for the tail B5 cannot reach). ⚠️ **3,080 is a CEILING** —
+ID-to-ID resolution takes a share, the exact-date key inflates it via the A2b
+one-conveyance-several-dates class, `gsa_lease_diff` already covers 3,704 properties, and a
+seller-exit only deepens a chain where the buyer is known too. ⚠️ **The `developer` column is not
+the path** — 32 rows / 30 properties.
+
+**The durable lesson, and it is mine to own:** *"the source is exhausted"* is a claim about
+**every table that could carry the fact**, not the tables named after it. I measured
+`deed_records` and `property_documents`, found them thin, and recommended acquisition — the most
+expensive conclusion available — while a source holding **30× more** sat one join away. It is the
+A5 rule (*grep for who already writes the gap*) and the A2 rule (*check whether an existing
+producer already minted the parties*) arriving as a **recommendation** instead of a code review,
+where nothing catches it. **Acquisition earns the highest burden of proof.**
+
+**Also durable:** when one domain out-performs another on a metric, **group that metric by its
+provenance column before theorising.** The funnel audit could not see this at all; one
+`group by ownership_source` produced it immediately.
+
+**Scott generalised it correctly and it is a CLASS, not an incident.** Two more unconsumed gov
+sources inside ten minutes: **`gsa_lease_change_facts`** — 336,303 rows, `landlord_change_flag` on
+**38,213 across 8,845 leases**, **38,055 with both old and new lessor names**, spanning
+**2013-02 → 2026-02**, against `ownership_history`'s 6,648 `gsa_lease_diff` rows; and
+**`property_sale_events`** — **5,208 rows carrying `ownership_history_id` AND
+`sales_transaction_id`, both populated on ZERO rows.** The comps↔ownership join table is modelled
+and was never wired. ⚠️ 38,213 is a RAW signal — P138 flicker, A2b per-lease fan-out (the table is
+keyed on `lease_number`), and name variants all inflate it.
+
+Filed as **playbook Class 20** (*a source one domain consumes and a sibling never wired up*) and
+**backlog B6** — the systematic sweep across GSA lease inventory, SAM.gov, public records, sales and
+dia, covering **both** stores (comps + ownership history), with corroboration/contradiction routed
+to a review lane on the **existing** authority ladder and a next-action for every detected change.
+**B6 is audit + design; it builds nothing.**
+
 ## 2026-08-28 — C2e tranche one MINTED. The noise cost the floor existed to prevent is mostly not real.
 
 Evidence: [`C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md`](../audits/C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md);

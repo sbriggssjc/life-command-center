@@ -57,6 +57,36 @@ Government `scknotsqkcheojiaewwh`.
 
 ---
 
+## ⭐ The live thread if you are the DATA-PROCESS window (2026-08-28)
+
+**The ownership-history lane is BUILT, WORKING and CLOSED as a source of chain depth.**
+A1→B1a: completions **0 → 1,302**, gov `any_history` **1,272 → 2,238**, facts **12,724 → 14,076**,
+`human_actionable` **flat at 55** throughout. **`chain_2plus` is 178** and B1a proved the remaining
+blocked residue is worth **12 more** — 99 of 132 open tasks carry ONE link. **Do not go looking for
+another blocker in this lane.**
+
+**The live finding is Class 20 — sources we hold that nothing consumes.** gov has **never**
+consumed its own `sales_transactions` as ownership history (**9,514 named sellers, 1.8% consumed,
+3,080 net-new rows / 2,114 properties**) while dia derives **2,207 of its 2,757** historical facts
+from exactly that source. Two more: **`gsa_lease_change_facts`** (336,303 rows; landlord change on
+**38,213 / 8,845 leases**, 2013→2026) and **`property_sale_events`** (**5,208 rows whose
+`ownership_history_id` and `sales_transaction_id` are populated on ZERO rows**).
+
+- **In flight:** **B5** — give gov the seller-exit feeder (`prompts/B5-*.md`).
+- **Next:** **B6** — the systematic owner/lessee-change signal sweep (`prompts/B6-*.md`), audit +
+  design, builds nothing.
+- **Read:** `docs/architecture/ownership-history-lane.md` §3a ·
+  `docs/audits/BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md` §3b/§3c ·
+  `docs/architecture/connectivity-and-open-threads.md` §4j · playbook **Class 20**.
+
+⚠️ **Two traps already paid for on this thread — do not repeat them.**
+**(1)** *"We must acquire the data"* was written into the audit as §3b on the strength of gov's thin
+deed layer (876 grantor-bearing records of 5,804), and refuted one query later. **Acquisition is the
+most expensive conclusion available; enumerate every table that could carry the fact first.**
+**(2)** `lcc_entity_portfolio_facts` has **no creation timestamp** and the nightly re-upsert touches
+**11,828 of 14,076 rows daily**, so **every source reads "written today."** Never date a feeder off
+`updated_at` on an upserted table.
+
 ## Where things actually stand (measured 2026-08-26 evening)
 
 **Scott is actively working the Tier 0 owner-contact lane** — 27 confirms logged today, lane

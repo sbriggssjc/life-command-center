@@ -102,6 +102,29 @@ P113), unknown rent gated (P161). First live run minted **343**, `closed: 0`.
 consumption. → backlog **P1a / C1–C3**
 → `docs/audits/A5_TRUE_OWNER_SALESFORCE_STALL_2026-08-27.md`, `A5c_RESEARCH_TASK_VALUE_GATE_2026-08-27.md`
 
+### Ownership-history lane — ✅ WORKING, and now CLOSED as a source of chain DEPTH (2026-08-28)
+
+> **LATEST — read this before the 2026-08-27 block below, which it supersedes on the numbers.**
+> **B1** split the $500k floor by consumer (automated path vs human surface) and **B1a** merged the
+> duplicate entities blocking A2. Live: **completed 314 → 1,302 · open 156 → 579 · gov
+> `any_history` 1,272 → 2,238 · `lcc_entity_portfolio_facts` 12,724 → 14,076** — with
+> **`human_actionable` flat at 55 throughout** (89% of the newly-drafted population routes to
+> automation, which is the design).
+>
+> ⚠️ **B1a REFUTED its own premise and that closes the lane as a DEPTH source.** `chain_2plus`
+> moved **177 → 178** because **64 of B1a's 65 completions carried exactly ONE link**. Duplicates
+> constrained chain **EXISTENCE**, never depth. The entire remaining blocked residue is worth **12**
+> `chain_2plus` properties (8 permanently blocked by design — the placeholder is the GRANTOR), and
+> **99 of 132 remaining open tasks carry one link.** **Stop looking for the next blocker here.**
+>
+> ⚠️ **AND THE FOLLOW-UP CONCLUSION ("we must acquire deeds") WAS WRONG — see `4j` below / audit
+> §3c.** gov has **never consumed its own `sales_transactions`** as ownership history (9,514 named
+> sellers, **1.8% consumed**, 3,080 net-new rows / 2,114 properties) while dia derives 2,207 of its
+> 2,757 historical facts from exactly that source. → **B5 (in flight)**, plus **B6** (the systematic
+> sweep) and playbook **Class 20**. Deed acquisition is **deferred, not refuted**.
+> → `docs/architecture/ownership-history-lane.md` §3a · `BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md`
+> §3b/§3c · `connectivity-and-open-threads.md` §4j
+
 ### Ownership-history lane — the first dead research lane with a working consumer (2026-08-27)
 `establish_ownership_history` produced **545 items and consumed none for 69 days**. A1 split it into
 four real actions; A2 applies `agrees`; A4 retires the unanswerable; A3 turns the mismatches into
