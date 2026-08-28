@@ -195,6 +195,16 @@ Two more implementation traps, both live:
 - **An UNASSIGNED plpgsql `record` cannot be dereferenced at all** (55000), not even inside
   `coalesce()`. Using a record for the timeline result crashed the moment
   `p_rebuild_timeline=false`. Scalars.
+- **⚠️ AND THE DROP SILENTLY DID NOT HAPPEN — A DDL BATCH THAT ENDS IN A RUNTIME ERROR ROLLS THE
+  DDL BACK WITH IT.** The `drop function … (boolean, int)` shipped in the same batch as a `select`
+  that then failed 55000 on the unassigned record, so the whole transaction rolled back; the
+  follow-up used `create or replace` alone and **the 2-arg signature survived**. Verified after the
+  fact by a live signature census: two `gov_gsa_change_layer_tick` overloads, and a positive control
+  confirmed a 2-arg call was genuinely ambiguous. Dropped; one signature remains and a 2-arg call now
+  resolves. **A migration is not applied because the statement you cared about succeeded — census the
+  live objects afterwards.** (The same census produced a FALSE positive on the timeline rebuild,
+  which matched `cross join lateral` **inside its own warning comment** — N18/A5c: a source detector
+  must strip comments, including when the source is `pg_get_functiondef`.)
 - The timeline rebuild must **not** be written as `cross join lateral gov_gsa_change_panel(d)` —
   160 function scans over 1.28M rows measured **19.3s on its own**. A plain `UNION ALL` with the
   fallback restricted to a precomputed lines-only date list is two sequential scans.
