@@ -890,3 +890,62 @@ implemented.** They are separate objects that happen to share a value:
 one number.** They are not. Changing one does **not** move the others, and nobody should assume it
 did. **Before touching any "$500k floor", say WHICH of the five you mean.** Fixing the CLAUDE.md
 sentence is backlog **C2d**.
+
+
+---
+
+## 4h. ⚠️ SCOTT'S FLOOR DECISION (2026-08-28) — the gate is on RENT, and it was mis-framed
+
+**Scott: *"Is that gate a minimum on value or gross rents? My inclination is to have no minimum
+floor… Sometimes that could be someone that owns 20-30 properties with rents below $250k. Bigger
+deals doesn't always mean better… Our sweet spot tends to be single-tenant deals from $2M to $20M,
+through volume with repeat seller clients."***
+
+### The two facts that reframe it
+
+1. **The gate is GROSS ANNUAL RENT, not deal value.** At a ~7% cap, the $2M–$20M sweet spot is
+   **$140k–$1.4M of rent**. **The $500k rent floor ≈ $7.1M of value — it excludes roughly the bottom
+   two-thirds of the stated sweet spot.** A floor calibrated for *"is this worth an entity"* was
+   never calibrated for *"is this our kind of deal."*
+2. **There is no `--min-rent` inside the mint.** `lcc_mint_gov_asset_entities(p_rows jsonb, p_batch
+   text, p_dry_run boolean)` takes a **row list**; the floor is a caller-side convention in the
+   feeder script, not a database constraint. It is far easier to change than "a floor in the mint"
+   suggests — and the row-list shape is what makes eligible-set minting possible.
+
+### ⚠️ The portfolio-owner argument was MEASURED and does not hold in gov
+
+Aggregating rent to the owner instead of the property adds very little (gov, non-archived, owners
+with a `true_owner_id`):
+
+| | owners |
+|---|---:|
+| total | 7,196 |
+| reached by the $500k **per-property** floor | 1,729 |
+| reached by a $250k per-property floor | 2,959 |
+| **missed by $500k but PORTFOLIO clears $500k** | **129** |
+| missed by $250k but portfolio clears $250k | 93 |
+| owners with **20+ properties** | 16 |
+| …with **all** properties under $250k | **0** |
+
+**The owner described — 20–30 properties all under $250k — does not exist in the gov data.** The
+per-owner view is worth 93–129 owners, not thousands. *That mechanism is not the argument; the
+rent-vs-value mis-calibration is.*
+
+### The resolution: the floor decides what to MINT, not who to PURSUE
+
+Resolving ownership broadly is cheap and reversible. Deciding who to call is `v_priority_queue`'s
+job and it already ranks on owner-level value, contactability and signal. **Mint broadly, rank
+narrowly.**
+
+**DECISION — no rent floor, but eligible-set only.** Mint every gov property whose owner **resolves
+on the same pass** (~6,811 of 10,415), and skip the ~3,600 that would resolve nothing and match the
+documented retire predicate on day one. This is *"no minimum on value"* in the sense Scott means,
+while still honouring *"evidence justifies the entity, never the reverse."*
+
+⚠️ **The one real cost, and C2a could not measure it** (there was nothing minted to measure on):
+~6,811 new asset entities is **+11% on a 62,368-entity graph**, landing on
+`v_lcc_merge_candidates`, search and every count surface. **Measure it on the first tranche before
+running the second** — that is the gate's actual purpose, and it has never been quantified.
+
+⚠️ **dia is unaffected and must not be swept in.** No floor helps it: **84% of its un-minted owner
+slots hold an OPERATOR** (P113) and 73% of the would-resolve population has no rent on file.

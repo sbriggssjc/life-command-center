@@ -17,6 +17,49 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-28 04:30 UTC — Scott's floor decision: NO rent floor, eligible-set only. And my framing was wrong twice.
+
+Recorded as canonical **§4h**. Scott: *"My inclination is to have no minimum floor… we want to
+resolve all ownership and pursue the relative next most valuable contact based on all
+considerations… our sweet spot tends to be single-tenant deals from $2M to $20M, through volume with
+repeat seller clients."*
+
+### ⚠️ Two facts I had not established before recommending $250k
+
+1. **The gate is on GROSS ANNUAL RENT, not deal value.** At a ~7% cap the $2M–$20M sweet spot is
+   **$140k–$1.4M of rent** — so the **$500k floor sits at ≈$7.1M of value and excludes the bottom
+   two-thirds of the target range.** A floor calibrated for *"is this worth an entity"* was never
+   calibrated for *"is this our kind of deal."* **I recommended $250k without ever converting rent
+   to value against the business model.**
+2. **There is no `--min-rent` inside the mint.** `lcc_mint_gov_asset_entities(p_rows jsonb, p_batch
+   text, p_dry_run boolean)` takes a **row list**; the floor is a caller-side convention in the
+   feeder script, not a database constraint. Both C2a and I described it as a floor *in the mint*.
+
+### ⚠️ And Scott's own example was measured and does NOT hold
+
+*"Someone that owns 20-30 properties with rents below $250k."* Measured on gov (non-archived, with a
+`true_owner_id`): of **16 owners with 20+ properties, ZERO have all properties under $250k.**
+Per-owner aggregation adds only **129 owners** over the $500k per-property floor (93 at $250k), out
+of 7,196. **The portfolio mechanism is not the argument — the rent-vs-value mis-calibration is.**
+Both halves reported; the conclusion survives on the stronger half.
+
+### The resolution
+
+**The floor decides what to MINT, not who to PURSUE.** Resolving ownership broadly is cheap and
+reversible; ranking who to call is `v_priority_queue`'s job, and it already weighs owner-level value,
+contactability and signal. **Mint broadly, rank narrowly** — which is exactly what Scott asked for.
+
+**DECISION: no rent floor, eligible-set only** — mint the ~**6,811 of 10,415** gov properties whose
+owner resolves on the same pass; skip the ~3,600 that would resolve nothing and match the retire
+predicate on day one. Backlog **C2e**.
+
+⚠️ **The one real cost is unmeasured and must be measured on the first tranche:** ~6,811 entities is
+**+11% on a 62,368-entity graph**, landing on `v_lcc_merge_candidates`, search and every count
+surface. **That is the gate's entire purpose and has never been quantified** — C2a had nothing
+minted to measure it on. Stage the mint; gate tranche two on tranche one's measured noise.
+
+⚠️ **gov only. Do not sweep dia in** — 84% of its un-minted owner slots hold an OPERATOR (P113).
+
 ## 2026-08-28 04:00 UTC — C2a landed; and the "$500k floor" turns out to be FIVE knobs, not one
 
 Evidence: [`docs/audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md`](../audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md).
