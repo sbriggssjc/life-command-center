@@ -12,6 +12,61 @@ The pick-up-quickly handoff for future chats. Covers where each ingestion/reconc
 what's live vs connector-gated, and every open gap through the **email / phone / Salesforce** routes.
 Cross-references the per-topic design docs in `docs/architecture/`.
 
+
+---
+
+## 0. 📇 THE TOPIC INDEX — every document on the ownership→contact chain, and what it is for
+
+**This file is the LIVING DOCUMENT for the chain.** Current state is §4e–§4h; everything else on the
+topic is listed here with its scope and status so no one has to guess which of ~20 files to open.
+**Nothing below is deleted — an audit is evidence for a date, and dated evidence stays.**
+
+### The three canonical pages (read these; they are maintained)
+
+| page | owns |
+|---|---|
+| **this file** | the **chain end to end** — property → owner → contact → cadence, current state, and the open threads |
+| [`tier0-owner-contact-system.md`](tier0-owner-contact-system.md) | **person ↔ owner** matching: the Tier 0 lane, sponsor map, owner-entity merges (P186–P198) |
+| [`ownership-history-lane.md`](ownership-history-lane.md) | **ownership history/depth**: `establish_ownership_history`, the five lane actions (A1–A4b, B1) |
+
+### ⚠️ Naming traps — two documents do NOT do what their titles suggest
+
+| file | ⚠️ what it actually covers |
+|---|---|
+| `owner-reconciliation-engine.md` | **The POINT PERSON** — which Northmarq broker works the deal (`lcc_entity_owner_override.owner_user_id`). **It does NOT resolve the property owner.** `property-owner-subsystem.md` documents that exact confusion as the finding that reframed P0.2 |
+| `sf-owner-capture.md` | Also **point person**, sourced from the Salesforce Task assignee — not property ownership |
+
+**The property owner lives in `lcc_property_owner`**; the point person lives in
+`lcc_entity_owner_override`. Different tables, different questions, and
+`touchpoint_cadence.owner_user_id` FKs a *third* user table — resolve through
+`lcc_cadence_point_person()`, never re-derive it.
+
+### Supporting design docs — current, narrower scope
+
+| file | scope |
+|---|---|
+| `property-owner-subsystem.md` | how the property owner is resolved (evidence → `lcc_reconcile_property_owner`) |
+| `property-owner-source-authority-and-doctrine.md` | the source-authority ladder for owner fields |
+| `account-based-contact-intelligence.md` | **who to call at a repeat buyer** — the acquisitions-vs-disposition doctrine |
+| `contact-reconciliation-outbound.md` | pushing the contact record back out (Outlook/SF) |
+| `contact-owner-sidebar-design.md` · `property-owner-panel-redesign-2026-08.md` · `property-tab-ux-review.md` | the UI surfaces that render all of it |
+| `touchpoint_cadence_spec.md` (2026-04-13) | the original cadence design. ⚠️ **Read BREAK-2's overturn box below before treating any "no consumer" language as current** |
+
+### Evidence trail — dated audits, newest first
+
+**Chain/connectivity:** `C2a_ASSET_MINT_RENT_FLOOR_CURVE` · `C2_CONNECTIVITY_STALL_MAP`
+(⚠️ carries a supersession banner — three of its numbers moved) · `BD_PIPELINE_FUNNEL_AUDIT` ·
+`C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE`.
+**Person↔owner (Tier 0):** P186 · P188 · P194 · P195 · P197 → indexed inside `tier0-owner-contact-system.md`.
+**Ownership history:** A1 · A2 · A3 · A4 · A4b · A5 · B1 → indexed inside `ownership-history-lane.md`.
+**Older, still-valid-for-their-date:** `W3.3_owner_merge_audit` (2026-07-30) ·
+`W9_1_contact_acquisition_dryrun` · `W9_2_reachability_harvest_dryrun` ·
+`W9_6_comms_owner_attribution_dryrun` · `OWNERSHIP_RESEARCH_FREE_FIRST_PLAN`.
+
+**Rule for this topic:** *a dated audit is evidence, not state.* If a number here disagrees with an
+audit, **this file wins and the audit gets a supersession banner in the same change** — the way
+`C2_CONNECTIVITY_STALL_MAP` now carries one.
+
 ---
 
 ## 1. Route-by-route connectivity status

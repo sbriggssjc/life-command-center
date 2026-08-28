@@ -8,6 +8,10 @@
 > **Nothing here replaces the per-round audits — they are the evidence and they stay.** This page
 > tells you which one to open. Last measured **2026-08-27 22:25 UTC**.
 >
+> 📇 **Topic index for the whole ownership→contact chain (~20 files, and two that are named
+> misleadingly): [`connectivity-and-open-threads.md`](connectivity-and-open-threads.md) §0.**
+> That page is the LIVING DOC for the chain end to end; this one owns its slice.
+>
 > 🔗 **Sibling subsystem, same entity graph:**
 > [`ownership-history-lane.md`](ownership-history-lane.md) — the `establish_ownership_history`
 > lane (A1–A4b). **The two share `lcc_merge_entity`, `lcc_owner_sponsor_domain` and the owner
