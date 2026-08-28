@@ -475,6 +475,38 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-28 — B6c drafted, and re-measuring turned "fix the bigint" into "does this table have a future?"
+
+**Prompt: `prompts/B6c-property-sale-events-decide-before-fixing-2026-08-28.md`.** It also carries
+the **D2** sweep, since this is D2's known instance.
+
+**The type defect is confirmed exactly** — `sales_transaction_id` and `ownership_history_id` are
+**`bigint` against `uuid` PKs**, no FKs, **both populated on 0 of 5,208 rows**. And the positive
+control is stronger than reported: **dia's identical table has `integer` PKs and links 2,432 of
+2,730 rows (89%)** on the sales side. The design works; gov's instance is structurally impossible.
+
+**⚠️ But protocol step ① found three things the type defect was hiding, and they change the job:**
+
+1. **56% of the table — 2,919 rows — is `ownership_change_stub*`, the RETIRED CIRCULAR mechanism.**
+   It is minted *from* ownership history, so linking it back is a loop. **B6 raised this class
+   against B5, where it measured 2 of 2,776 and was correctly dismissed. Here it is the majority.**
+   *The same objection can be noise in one population and decisive in another — re-measure it per
+   population rather than inheriting the verdict.*
+2. **`buyer_id` and `seller_id` are `uuid` and populated on ZERO rows too.** It is not just the two
+   link columns — **every id column in this table is empty.** It holds text names only.
+3. **The producer is dead** — newest row 2026-04-06, which is exactly the 144-day `feed_stale` alert.
+
+⚠️ **And the strongest argument against a naive fix comes from the positive control itself:** on
+dia, where the link CAN be populated, `ownership_history_id` is set on **52 of 2,730 (1.9%)**. The
+sales side works at 89%; **the ownership side is barely used even where it is possible.** So *"fix
+the type and the join lights up"* is not supported by the one working instance.
+
+**The prompt therefore asks the consumer question first** — grep for readers, ask whether this is a
+**third representation of a relationship `ownership_history` and `sales_transactions` already
+model**, and decide. **Retiring the table is an explicitly acceptable outcome** (A5, C1, A3, P196,
+P198 all ended in *do not build*). What is not acceptable is fixing the types without knowing
+whether anything will read them — that is Class 2 with a migration attached.
+
 ## 2026-08-28 — 🗄️ CLEANUP PASS 2: infra / hosting / monitoring. 23 more items filed nowhere, and a live contradiction between two canonical pages.
 
 **Root `.md` 50 → 35** (70 → 35 across both passes). Fifteen files read in full before any move.
