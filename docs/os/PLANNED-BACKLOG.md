@@ -566,6 +566,27 @@ rule. All fifteen were read before being moved. **Fourteen more items were recor
 **Filed elsewhere, flagged so they are not re-derived:** SAM feed-widening → `docs/audits/ROLLOUT_STATUS.md`
 W1.4 + `OWNERSHIP_RESEARCH_FREE_FIRST_PLAN.md`; **Supavisor pooler move → now its OWN backlog row `I3`** (it was filed only as a pointer into `GAPS_AND_FINDINGS_REGISTER.md` P-1, since archived — a pointer into an archive is not a filing).
 
+## P10a — Cross-lane property identity and address resolution (designed, not built)
+
+The restricted ASC sample exposed a platform class: property identity cannot be maintained as an expanding
+set of lane-local string replacements. Canonical contract:
+[`property-identity-and-address-resolution.md`](../architecture/property-identity-and-address-resolution.md).
+All rows are aggregate-only and preserve the current fail-closed research boundary.
+
+| # | Item | State | Source |
+|---|---|---|---|
+| PI1 | **Inventory and version the existing ASC identity rules.** Name each transformation, evidence burden, reason code, collision guard, second-review requirement, and owner. Preserve historical frozen-token compatibility as an explicit rule, not an implicit re-normalization. | 🟢 | property identity contract §5–7; restricted ASC observations 2026-08-28 |
+| PI2 | **Build a de-identified golden mismatch corpus with adversarial negative controls.** Cover suites/floors, parent buildings, same-address campuses, ranges, directionals, suffixes, municipality aliases, compound streets, postal variants, historical tokens, and confusable facility names. No private rows or licensed payloads in Git. | 🟢 | property identity contract §7 |
+| PI3 | **Extract a lane-neutral pure matcher and structured decision object.** The component must be deterministic, versioned, write-free, and fail closed; existing ASC outcomes replay unchanged except separately approved corrections. | 🟢 | property identity contract §4–6 |
+| PI4 | **Add sidebar identity diagnostics and explicit candidate refresh/advance state.** Show the active frozen candidate, component verdicts, corroboration, rule version, second-review flag, failure class, and one safe next action. Eliminate stale-candidate ambiguity without retargeting on page navigation. | 🟢 | property identity contract §8 |
+| PI5 | **Run read-only shadow evaluation across approved current and future lanes.** Report changed decisions, collisions, and review load before any lane adopts a shared rule. No canonical writes or scope expansion. | 🟢 | property identity contract §7, §11 |
+| PI6 | **Design a governed property-alias ledger.** Every alias needs citations, scope, authorization, timestamps, reason, review/expiry behavior, replay, and rollback. This requires a separate schema/security decision before migration or use. | 🔴 👤 | property identity contract §5, §11 |
+| PI7 | **Emit aggregate identity-quality metrics.** Measure match modes, missingness, disagreements, collisions, second-review agreement, stale-state errors, technical failures, and research time without exposing row-level or licensed data. | 🟢 | property identity contract §10 |
+| PI8 | **Optional on-box discrepancy-note assistant.** After PI3 emits structured decisions, an on-box model may suggest reason codes or draft reviewer notes. It is advisory only and may never match, alias, approve, or write. | ⚪ | property identity contract §9 |
+
+**Gate:** complete and aggregate-review the frozen 50-property ASC sample before Phase B/PI2–PI3 begins.
+Activation in any lane remains a separate decision.
+
 ## P11 — New verticals & long-horizon specs (design-only, nothing authorized)
 
 Kept verbatim in place; listed so they are not mistaken for abandoned. **Every one of these carries an
@@ -574,7 +595,7 @@ part of the design, not an oversight.
 
 | Cluster | Docs |
 |---|---|
-| **Healthcare / ASC / IDTF lane** | `HEALTHCARE-REAL-ESTATE-AND-ECONOMICS-BUSINESS-PLAN-v0.1`, `HEALTHCARE-ASC-FIRST-STAGING-RUNBOOK-v0.1`, `HEALTHCARE-ASC-IDTF-{ECONOMICS-AND-SAMPLING,LCC-INTEGRATION-CONTRACT,PRIVATE-RUN-AUTHORIZATION,SOURCE-MANIFEST-CONTRACTS}-v0.1`, `HEALTHCARE-SWIM-LANE-EVALUATION-MATRIX-v0.1`, `OUTPATIENT-HEALTHCARE-LANE-PACK-SPEC-v0.1` |
+| **Healthcare / ASC / IDTF lane** | `HEALTHCARE-REAL-ESTATE-AND-ECONOMICS-BUSINESS-PLAN-v0.1`, `HEALTHCARE-ASC-FIRST-STAGING-RUNBOOK-v0.1`, `HEALTHCARE-ASC-IDTF-{ECONOMICS-AND-SAMPLING,LCC-INTEGRATION-CONTRACT,PRIVATE-RUN-AUTHORIZATION,SOURCE-MANIFEST-CONTRACTS}-v0.1`, `HEALTHCARE-SWIM-LANE-EVALUATION-MATRIX-v0.1`, `OUTPATIENT-HEALTHCARE-LANE-PACK-SPEC-v0.1`, `property-identity-and-address-resolution.md` |
 | **Oncology / infusion lane** | `ONCOLOGY-INFUSION-{IMPLEMENTATION-READINESS-PACKAGE,NPPES-SOURCE-ADAPTER-SPEC,PHASE-A-BUILD-PLAN,PILOT-COHORT-SPEC,PRIVATE-VERIFICATION-SAMPLE,STAGING-AND-INGESTION-CONTRACT}-v0.1`, ADR-005. ⚠️ `READ-ONLY-PROFILE-RESULT-2026-08-11` records the **existing-source sufficiency gate FAILED** — read it before reviving. |
 | **Identity** | `ADR-004-CANONICAL-PERSON-IDENTITY.md` — *proposed for approval; migration not started.* |
 | **Sizing docs (measured, nothing built)** | `supersession-tie-lane-2026-08.md` (changes what "owner" means for ~63 assets), `gov-asset-identity-coverage-2026-08.md`, `dia-ownership-master-bridge-2026-08.md`, `sf-note-records-ownership-bridge-2026-08.md` (**read §11 first — Scott's validation reframed what the dataset IS**) |

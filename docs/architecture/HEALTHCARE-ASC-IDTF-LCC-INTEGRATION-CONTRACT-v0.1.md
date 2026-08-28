@@ -83,3 +83,16 @@ Before code or DDL:
 4. define field-source priority rows for every curated projection;
 5. prove dry-run, replay, rollback, and no-duplicate behavior using synthetic assets and organizations; and
 6. verify any future API route is mounted in `server.js` and returns JSON through Railway.
+
+## 7. Shared property-identity dependency
+
+The restricted ASC sample is producing reusable evidence about suites and floors, parent-building matches,
+shared campuses, formatting equivalences, historical frozen tokens, and stale research-control state. Those
+lessons are governed by the lane-neutral
+[`Property Identity and Address Resolution Contract v0.1`](property-identity-and-address-resolution.md).
+
+ASC-specific match rules remain a proving ground, not a second canonical resolver. A research capture may use
+only the narrow, fixture-backed rules authorized for the frozen run, must preserve source disagreement, and
+must require second review where the shared contract says so. No ASC result may directly promote a property,
+create a cross-lane alias, or change Salesforce. Extraction into a shared matcher requires the contract's
+golden-corpus and read-only shadow gates plus a separate activation decision.
