@@ -14,8 +14,15 @@ Canonical subsystem doc: [`docs/architecture/ownership-history-lane.md`](../arch
 **1,548 of 1,766 skips** in `establish_ownership_history` were `below_value_floor` at $500,000 —
 five times the 314 the lane had completed. The floor (R60, `20260622120000`) was **correct when
 set**: the lane was a human research queue whose instruction reads *"pull the county deed history
-via the county-recorder portal"*, and $500k is a deliberately shared knob (the gov asset-mint
-floor, `CADENCE_SIGNAL_MIN_VALUE`, P161's weak-role floor).
+via the county-recorder portal"*, and $500k is the value this repo has settled on for a value gate.
+
+⚠️ **It is NOT "one knob", and B1 adds another object holding it.** C2a (PR #1876, merged the same
+day) measured that **five independent objects** carry the literal 500000 — CLAUDE.md's own "one
+number, not three" is refuted, and C2d is filed to reconcile them. B1 makes it **six**:
+`lcc_chain_human_value_floor()`. That is deliberate and is the direction C2d wants — a *named*
+per-gate knob beats a bare literal repeated in a predicate — but it must be counted, not
+glossed. **B1 changes only this lane's research gate; it does not touch the asset-mint floor
+C2a is re-grading, `CADENCE_SIGNAL_MIN_VALUE`, or P161's weak-role floor.**
 
 **What changed is the consumer, not the judgement.** Since A2 (2026-08-27, cron 244) the `agrees`
 bucket is applied automatically from a deterministic, record-cited P131 draft, and A4 (cron 245)

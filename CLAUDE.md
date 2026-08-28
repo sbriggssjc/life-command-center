@@ -3148,7 +3148,11 @@ with an active Ollama pre-rank (cron 213) and **59 human verdicts recorded**. It
 `establish_ownership_history` carried **1,548 `below_value_floor` skips at $500k — five times the
 314 the lane had ever completed.** The floor (R60) was **correct when set**: the lane was a human
 research queue whose instruction says *"pull the county deed history via the county-recorder
-portal"*. **What changed is the CONSUMER, not the judgement** — since A2 (cron 244) the `agrees`
+portal"*. ⚠️ **And $500k is NOT "one knob" — C2a measured five independent objects carrying that
+literal the same day, refuting this file's own "one number, not three"; B1 makes it six
+(`lcc_chain_human_value_floor()`), which is C2d's preferred direction (a NAMED per-gate knob over a
+repeated literal) but must be counted, not glossed. B1 touches only this lane's research gate.**
+**What changed is the CONSUMER, not the judgement** — since A2 (cron 244) the `agrees`
 bucket is applied automatically from a deterministic, record-cited draft and A4 (cron 245)
 auto-retires `no_records`. Migration `20260828120000`; writeup
 `docs/audits/B1_CHAIN_VALUE_FLOOR_SPLIT_2026-08-28.md`. Result: lane completions **336 → 1,237**,
