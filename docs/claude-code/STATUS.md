@@ -248,15 +248,46 @@ folder, logs *"Task completed"*, and emits **no run row at all**, so it has no r
 **Class 21** and **B6a**, and it is why nobody saw the other three for five months.
 Ranked gaps **B6a–B6g**; two of seven end in *"don't build."*
 
-**🚨 DEPLOY STATE, 2026-08-28 evening: `b5_redraft` is ABSENT from the live tick response.** The
-probe (`GET /api/ownership-chain-draft-tick` on `tranquil-delight-production-633f`) returned no
-match, which **on its face** means the Railway build predates B5 and tonight's 06:45/06:49 crons
-will convert **52** of 579 tasks rather than 579. ⚠️ **An empty grep is exactly the zero this repo
-distrusts** — it is equally consistent with the request never reaching the handler. **Re-probe with
-a positive control (`a2b_redraft`, shipped pre-B5) and the HTTP status before acting**: `a2b_redraft`
-present + `b5_redraft` absent ⇒ genuinely stale; neither present ⇒ the probe measured nothing.
-**The gov-side gain (+2,776 rows) is banked either way; only the LCC-side conversion is at risk,
-and it is recoverable on any later night once deployed.**
+**🚨 DEPLOY STATE, 2026-08-28 evening — UNKNOWN, and the first probe was worthless.**
+`GET /api/ownership-chain-draft-tick` returned **`HTTP 401 {"error":"Authentication required…"}`**,
+so grepping its body for `b5_redraft` found nothing **because the body was an auth error**, not
+because the field is missing. **I read that empty grep as "the deploy is stale" and said so.**
+
+- ⚠️ **This is the P182 class committed by the detector's own author, twice in two turns** — first
+  reading "all written today" off an upserted `updated_at`, then reading a 401 body as a missing
+  field. **A text-matching probe must carry a positive control IN THE SAME COMMAND** (here:
+  `a2b_redraft`, which shipped pre-B5) **and must print its HTTP status.** A probe that cannot
+  distinguish *absent field* from *never reached the handler* is not a probe.
+- ⚠️ **`LCC_API_KEY` auth is ENFORCED on `/api/*` in production.** Any future behavioural deploy
+  probe must either send `X-LCC-Key` or use an unauthenticated endpoint. **Use `/version` + the
+  documented `git merge-base --is-ancestor <fix-sha> <deployed-sha>` check** — that is the repo's
+  own doctrine for exactly this question and it does not depend on parsing a handler response.
+- ✅ **ANSWERED — DEPLOYED.** Live `/version` = **`e3a0407d25bc`** (`git_pinned: true`), and
+  `git merge-base --is-ancestor 385023cf… e3a0407d` returns **0** — `runB5RedraftPass` (commit
+  **`385023cf`**) IS in the deployed build. **Tonight's 06:45 drafter → 06:49 apply runs with it.**
+  **The check that worked took two commands and parsed nothing** — that is the standing answer to
+  "is my fix running", not a handler probe.
+
+**📋 BASELINE FOR TOMORROW'S VERIFICATION (measured 2026-08-28, post-B5, pre-conversion).** B5's
+gov-side write is banked; **none of it has reached LCC yet.** Assert on the DELTA against these:
+
+| metric | baseline |
+|---|---:|
+| `lcc_entity_portfolio_facts` | **14,076** |
+| lane `completed` / `open` | **1,302 / 579** |
+| gov `chain_2plus` | **178** |
+| gov `any_history` | **2,238** |
+| `human_actionable` (must stay ~flat) | **55** |
+| gov `ownership_history` (source, already banked) | **18,953** |
+| transitions view | **12,371 rows / 5,555 properties** |
+
+**Read `b5_redraft`, `written_draftable`, `facts_inserted` and `tasks_completed`. Do NOT read
+`already_drafted` or `links_already_present`** — both are re-discovery tallies that read exactly
+like throughput (P159a). ⚠️ **Expect coverage (`any_history`) to move much harder than depth
+(`chain_2plus`)** — B1 moved them +901 vs +28, and the source is mostly one transition per
+property. **A big `any_history` gain with a small `chain_2plus` gain is the expected shape, not a
+shortfall.** ⚠️ **`backlog_remaining: 0` is scoped to the scan window** — the lane advances only as
+A2 *completes* tasks, so this is a draft→apply cycle over several nights, not one pass.
 
 **Next prompt drafted: `B6a`** — fix the health view's blindness to SKIPPED steps **before**
 restarting the four dead producers (B6b). Restarting first leaves you unable to tell whether they
