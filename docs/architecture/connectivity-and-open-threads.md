@@ -1511,3 +1511,50 @@ individuals — set against Scott's own *resolve all ownership, rank later*, wit
 
 ⚠️ **Whatever is decided, drive `lcc_ingest_domain_owner_evidence` in the same pass** — cron 225 caps
 at 400/run.
+
+
+---
+
+## 4l. C2b — the Salesforce bridge SELF-HEALED, and the residue is not an owner problem
+
+Evidence: [`C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md`](../audits/C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md).
+Measurement only — nothing written.
+
+**No bridge code was written and the bridge doubled.** SF-linked people reaching a resolved property
+owner: **669 (6.8%) → 1,486 (15.2%), +817**, purely because T1 + T2a built the far bank. **C2's
+diagnosis and remedy are both confirmed** — hop 3 was the binding constraint.
+
+### ⚠️ The residue is 91.5% NOT-AN-OWNER, and that is correct
+
+Of the 7,646 SF people still unconnected, across **6,816 distinct orgs**:
+
+| | |
+|---|---:|
+| orgs carrying a `dia\|gov` `true_owner` identity | **489 (7.2%)** |
+| people at those orgs | **652 (8.5%)** |
+| **people at orgs that are NOT domain owners** | **6,994 (91.5%)** |
+
+They are brokers, vendors, tenants, lenders and counsel, edged to their employer by the `works_at`
+Salesforce-account edge. **Their employers do not own our properties. No minting or reconcile will
+connect them, and none should.**
+
+⚠️ **This retires the framing that opened the topic.** *"8–10k Salesforce opportunities not yet
+connected"* is, measured, **~652 people at 489 owner-orgs.** The rest are correctly unconnected.
+
+### ⚠️ It also settles T2b independently: minting it would connect **74 orgs**
+
+Only **74 of the 489** unresolved owner-orgs appear in `v_lcc_c2e_asset_mint_plan` — **3.6%** of
+T2b's 2,054 owners. Combined with T2a's finding that contactability collapses to **3.7%** in that
+band, **the case for T2b is weak on two independently measured axes.** It remains *safe* (the graph
+cost is settled across 4,570 minted entities), so it can be revisited if the ranked queue runs dry.
+**Recommendation: do not run T2b now.**
+
+### The actionable slice, and the next question
+
+**489 orgs / 652 people**: companies that **are** domain property owners, **have** Salesforce people
+attached, and whose properties are **not** resolved to them. ⚠️ **415 of the 489 are NOT reachable
+by minting** — they are anchored and unresolved for some other reason. **That is the next thing to
+size, and it is deliberately undiagnosed here.** Candidates in order: the `lcc_reconcile_property_owner`
+0.55 confidence gate (the documented 876-asset supersession class); a dia **operator** in the owner
+slot (P113); or an org anchored in one domain with properties in the other. **Do not assume — this
+arc has three instrument errors on record from assuming.**
