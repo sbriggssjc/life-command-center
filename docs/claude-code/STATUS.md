@@ -17,6 +17,35 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-28 04:50 UTC — C2e drafted (the mint); and C2's own audit was carrying three dead claims
+
+**C2e prompt drafted** → `prompts/C2e-no-floor-eligible-set-asset-mint-2026-08-28.md`. It implements
+Scott's decision: **drop the rent predicate, keep the evidence predicate.** Mint only gov properties
+whose owner **resolves on the same pass** (C2a: ~6,811 of 10,415), staged — **tranche one only
+(~top 2,000 by owner portfolio rent), then measure the noise, then recommend tranche two and stop.**
+
+**The noise measurement is the point of staging, and it has never been done.** C2a could not measure
+it because nothing had been minted. The prompt requires a before/after table on
+`v_lcc_merge_candidates` **and `auto_mergeable`**, the normalizer-blind population, canonical-name
+drift, the Tier 0 lane, and the duplicate surfaces — with the instruction that **an unexplained
+`auto_mergeable` move is a stop, not a footnote** (it has held at 3,040 through N15c, N15e, N19 and
+P198, every movement explained group by group).
+
+### ⚠️ Consolidation: the C2 audit was still asserting three things later rounds overturned
+
+A future chat reading `C2_CONNECTIVITY_STALL_MAP` cold would have inherited all three. Now
+banner-corrected at the top of that file:
+
+| C2 said | truth |
+|---|---|
+| 32,289 properties · 5,144 anchors · **16%** | **25,633 · 5,096 · 19.9%** — the 32,289 included 6,657 archived gov shells; the 5,144 counted 49 identities pointing at deleted properties |
+| *"`lcc_mint_gov_asset_entities` **refuses to run without `--min-rent`**"* | **False** — it takes a row list; the floor was a caller-side convention in the feeder script |
+| *"**Do not simply drop the floor**"* | **The floor is dropped** (Scott 2026-08-28) — it gates on *rent*, and $500k ≈ $7.1M of value, excluding two-thirds of the $2M–$20M sweet spot |
+
+**§1's chain shape, §2's Salesforce finding and §4's corrections still stand** — it is the
+denominator and the floor conclusion that moved. That distinction is stated on the banner so the
+whole file is not discarded.
+
 ## 2026-08-28 04:30 UTC — Scott's floor decision: NO rent floor, eligible-set only. And my framing was wrong twice.
 
 Recorded as canonical **§4h**. Scott: *"My inclination is to have no minimum floor… we want to

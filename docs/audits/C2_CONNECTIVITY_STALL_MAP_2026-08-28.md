@@ -3,6 +3,17 @@
 > BREAK-2's verdict** (the cadence layer is not being retired — Scott 2026-08-27) and added a
 > **denominator warning to BREAK-3** (its 49.2% is *of assets*; the property-denominator figure is
 > 13%). Both corrections are in that page.
+>
+> ## ⚠️ THREE NUMBERS/CLAIMS IN THIS FILE ARE SUPERSEDED — read this before quoting anything below
+>
+> | this file says | corrected by | truth |
+> |---|---|---|
+> | **32,289 properties · 5,144 anchors · 16%** | C2a | **25,633 · 5,096 · 19.9%.** The 32,289 included **6,657 ARCHIVED gov shells** that every feeder filters by design (2 of 6,657 carry a `true_owner_id`); the 5,144 counted 49 identities pointing at deleted properties |
+> | *"`lcc_mint_gov_asset_entities` **refuses to run without `--min-rent`**"* (§3) | C2e prep | **False.** Its signature is `(p_rows jsonb, p_batch text, p_dry_run boolean)` — it takes a **row list**. The floor was a **caller-side convention** in the feeder script, never in the mint |
+> | *"**Do not simply drop the floor**… the measured question is at what rent floor…"* (§3) | Scott 2026-08-28 | **The floor is DROPPED.** The gate is on **gross annual rent, not value** — at ~7% cap the $2M–$20M sweet spot is $140k–$1.4M of rent, so $500k sat at ≈$7.1M and excluded two-thirds of the target range. **Decision: no rent floor, eligible-set only** (canonical §4h) |
+>
+> **§1's chain shape, §2's Salesforce finding and §4's corrections all still stand.** It is the
+> asset-coverage denominator and the floor conclusion that moved.
 
 # C2 — the connectivity stall map: where the chain actually breaks
 
