@@ -280,8 +280,30 @@ export function buildAscStructuredCapture(target, context = {}) {
   if (!ALLOWED_SOURCES.has(source)) throw new Error('ASC capture source must be CoStar, RCA, public records, or Salesforce');
   const addressToken = normalizeAscAddressToken(context);
   if (!addressToken) throw new Error('Captured page requires an address and state');
+  // Frozen rows predate later deterministic normalizer additions. Recompute a
+  // comparison token from the immutable CMS identity so those additions can
+  // apply without rewriting the stored frozen token or weakening location
+  // matching. The original token remains the capture's database binding.
+  const storedTokenParts = clean(target.address_token).split('|');
+  const normalizedStoredToken = storedTokenParts.length === 4
+    ? normalizeAscAddressToken({
+      address: storedTokenParts[0], city: storedTokenParts[1],
+      state: storedTokenParts[2], zip: storedTokenParts[3],
+    })
+    : null;
+  const normalizedCmsToken = normalizeAscAddressToken(target.cms_identity);
+  const frozenComparisonToken = normalizedStoredToken
+    && normalizedStoredToken === normalizedCmsToken
+    ? normalizedCmsToken
+    : target.address_token;
   let identityMatch = { mode: 'exact_address_token' };
-  if (addressToken !== target.address_token) {
+  if (addressToken === frozenComparisonToken && frozenComparisonToken !== target.address_token) {
+    identityMatch = {
+      mode: 'normalized_frozen_identity_address',
+      frozen_address_token_preserved: target.address_token,
+      normalized_comparison_token: frozenComparisonToken,
+    };
+  } else if (addressToken !== frozenComparisonToken) {
     const cmsIdentity = target.cms_identity || {};
     const exactTenantCorroboration = corroboratingTenant(target, context);
     const corroboration = exactTenantCorroboration
@@ -294,12 +316,12 @@ export function buildAscStructuredCapture(target, context = {}) {
       )
       && corroboration;
     const aliasMatch = addressAlias && corroboration;
-    const rangeEndpoint = capturedRangeContainsFrozenEndpoint(target.address_token, addressToken);
+    const rangeEndpoint = capturedRangeContainsFrozenEndpoint(frozenComparisonToken, addressToken);
     const rangeEndpointMatch = rangeEndpoint && corroboration;
-    const municipalityAlias = terminalTownshipMunicipalityAlias(target.address_token, addressToken);
+    const municipalityAlias = terminalTownshipMunicipalityAlias(frozenComparisonToken, addressToken);
     const municipalityAliasMatch = municipalityAlias && exactTenantCorroboration;
     const directionalStreetTypeExtension = capturedDirectionalStreetTypeExtension(
-      target.address_token,
+      frozenComparisonToken,
       addressToken,
     );
     const directionalStreetTypeMatch = !parentBuildingMatch
