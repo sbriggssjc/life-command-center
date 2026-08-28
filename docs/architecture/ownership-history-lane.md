@@ -7,6 +7,10 @@
 >
 > **Last measured: 2026-08-28 12:35 UTC.** Re-measure before quoting any number.
 >
+> 📇 **Topic index for the whole ownership→contact chain (~20 files, and two that are named
+> misleadingly): [`connectivity-and-open-threads.md`](connectivity-and-open-threads.md) §0.**
+> That page is the LIVING DOC for the chain end to end; this one owns its slice.
+>
 > 🔗 **Sibling subsystem, same entity graph:**
 > [`tier0-owner-contact-system.md`](tier0-owner-contact-system.md) — matching a PERSON to an owner
 > (the Decision Center Tier 0 lane, the sponsor map, owner-entity merges). **The two share
