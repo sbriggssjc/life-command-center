@@ -3330,6 +3330,17 @@ Related invariants from the same round:
     nothing writes that person into `owner_contact_pivot`. Result: **11 owners, $240.5M,
     suppressed AND invisible.** Whenever a surface excludes a population on the grounds that
     it is "already handled", name the thing that handles it and verify that it does.
+- **Asset-mint rent-floor curve (C2a):** `docs/audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md` —
+  ⚠️ **a resolve rate that holds flat can still be the wrong thing to measure.** gov's technical
+  resolve rate does NOT degrade down the rent curve (68.5% → 58.5%), and that flatness survived a
+  mutation control returning **0 in every band across 6,688 rows**. What collapses is the OWNER:
+  already-contactable **21.8% → 6.8% → 1.6%**, and the named bottom-band rows are cities, counties,
+  state DOTs, FedEx and private individuals rather than landlords. **The per-property vs per-owner
+  defence was tested and refuted** — 19 of 1,549 owners at $100–250k reach $500k across their whole
+  portfolio. ⚠️ Also: the **20% (not 16%)** asset-coverage correction (6,657 archived gov shells in
+  the denominator), and **mint the eligible set, not the band** — the mint RPC takes its own row
+  list, so every minted entity can carry evidence on the same pass instead of matching the retire
+  predicate on day one.
 - **Salesforce lanes — consumer or retire (C1):**
   `docs/audits/C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE_2026-08-27.md` — why a lane with 0 completions did NOT
   need a consumer built (one already existed on another surface), the lane-predicate-vs-writer column split,

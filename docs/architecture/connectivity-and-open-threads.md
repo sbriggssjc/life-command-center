@@ -788,3 +788,45 @@ evidence-less assets re-creates the noise the gate prevents. Backlog **C2a** is 
 (resolve-rate by rent band); **C2b** is the SF bridge; **C2c** is what C2 did *not* measure
 (dia ownership depth, the developer/investor/buyer split, Outlook/WebEx per contact — **WebEx is not
 in the schema at all** — and broker assignment).
+
+### 4e-i. C2a measured the floor curve (2026-08-28) — the rate holds, the OWNERS do not
+
+Full evidence: [`docs/audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md`](../audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md).
+**Measurement only — nothing minted, no floor changed.**
+
+⚠️ **Denominator correction to §4e above: the gate is 20%, not 16%.** `32,289 properties` includes
+**6,657 ARCHIVED gov shells** that both gov portfolio views filter out by design (and that are
+genuinely empty — 2 carry a `true_owner_id`). Non-archived: gov **3,422 / 13,837 = 24.7%**,
+dia **1,674 / 11,796 = 14.2%**, fleet **5,096 / 25,633 = 19.9%**.
+
+**gov: the technical resolve rate does NOT degrade** — 68.5% / 69.0% / 75.9% / 69.0% / 58.5% / 48.9%
+across ≥$500k → unknown. That flatness was treated as an instrument fault until controlled three
+ways: a **mutation control** (same query, identity join on `recorded_owner_id`) returns **0 in every
+band across 6,688 rows**; dia's identical query shape **does** degrade (18.5% → 1.6%); and the
+rejecting arms fire. The rate is real.
+
+**What collapses is the owner.** Net-new owners already carrying an active contact:
+**18.3% / 21.8% / 15.6% / 6.8% / 1.6% / 3.2%**. Known beyond the gov feed: 9.7% → 1.3%. And the
+named rows turn over completely — the top band is LCOR, Centerpoint, Durst, USAA Real Estate; the
+bottom band is **CITY OF SALEM, COUNTY OF DAWSON, Transportation Hawaii Department Of, FedEx, Bank
+of Colorado** and private individuals. ⚠️ **The "small per property, big per owner" defence was
+tested and refuted**: of the 1,549 owners unlocked at $100–250k, **19** reach $500k of gov rent
+across their whole portfolio.
+
+👤 **Recommended to Scott: $250k now (+1,282 properties, +884 resolving, +701 owners, 153 already
+contactable), re-measure, $100k as the hard floor, never below.** And ⚠️ **mint the ELIGIBLE SET,
+not the band** — `lcc_mint_gov_asset_entities` takes its own row list, so a $250k run can be 2,102
+properties that all carry evidence on the same pass instead of 3,061 of which 959 match the retire
+predicate on day one.
+
+**dia: the floor is the wrong knob and no floor helps.** 6,780 of its 10,122 no-asset properties
+(**84% of those carrying an owner**) point at an `is_operator_not_owner` row (P113); only **188 of
+11,796** dia properties are priced ≥$500k at all; and dia prices only 35% of its properties, so
+**75% of dia's would-resolve population sits in `rent unknown`** — a coverage gap wearing a value
+judgement (A5c). dia's lever is the operator flag and rent coverage, not a rent floor.
+
+⚠️ **Two instrument facts worth carrying forward:** `lcc_property_owner_facts` reproduces gov's own
+rent histogram **exactly** but **over-reports dia by 5,519 rows** (twin-merged properties; the apply
+page upserts and never deletes) — a mirror validated on one domain is not validated on the other.
+And the largest gov residue is not a guard: **3,363 properties (54% of non-resolvers) simply have no
+`true_owner_id` in the gov database**, which no floor touches.
