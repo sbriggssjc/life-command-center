@@ -17,6 +17,67 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-28 — B6a SHIPPED: a skipped step emits nothing, and the health view was built on emitted rows
+
+**gov DB LIVE + committed.** Writeup:
+`docs/audits/B6a_SKIPPED_STEP_HEALTH_BLINDNESS_2026-08-28.md`. Playbook **Class 21**, contract **I4**,
+gov `CLAUDE.md` §16. **No producer was restarted — B6b owns that; only visibility moved.**
+
+- **Acceptance met.** The four producers dead since March–April 2026 now read **RED**:
+  `gsa_lease_change_facts` 170d · `gsa_lease_timeline` 170d · `prospect_leads.ownership_change` 150d ·
+  `property_sale_events` 144d, against a 45-day SLA. Feeds 14 → 18, stale 1 → 5, **0 pre-existing rows
+  changed in either direction**.
+- **⚠️ THE REGISTRY THE PROMPT ASKED FOR ALREADY EXISTED, WIRED END TO END.** R56's
+  `feed_freshness_registry` + `compute_feed_freshness()` + the LCC cross-DB mirror + a deduped,
+  auto-resolving `lcc_health_alerts` row — and `feed_stale` has genuinely fired 8 times. It read
+  healthy over four dead producers **because nobody registered them**. Three registries already
+  existed; a fourth would have been the drift this repo warns about. **Check what you have before
+  building.**
+- **⚠️ "A SKIPPED STEP IS NO ROW" IS ONLY HALF THE MECHANISM, AND THE PRESCRIBED FIX WOULD HAVE MISSED
+  THE LIVE INSTANCE.** `gsa_ingest_+_diff` was **not absent** from `v_pipeline_task_health` — it carried
+  `status='ok'`, *"Task completed"*, **2026-06-22, 67 days stale**, on a step whose own history says it
+  ran every 7 days. `status` read the last outcome's `event_type` and nothing compared it to when that
+  outcome should have been superseded. So *"enumerate declared steps, not logged ones"* returns nothing
+  for it: **the missing dimension is cadence, not enumeration.**
+- **The evidence was inside the green row's own payload.** `find_latest_gsa_inventory` logged *"Task
+  completed"* with **`result: null`, `duration_seconds: 0`** six weeks running; the view projected
+  `details->>'error'` and never `details->>'result'`.
+- **The fix is at the EMISSION POINT — and it dissolves the enumeration problem.** `record_skip` /
+  `run_guarded_task` make **both branches of a guard write**, so the logged set IS the declared set and
+  no step registry is needed. Five guard sites rewired. **`declared` has no default**: a skip somebody
+  chose is healthy and must be visible without alerting; an undeclared skip is the finding. **Not
+  emitted for scope selection.** `tasks_skipped` previously counted **dry runs** — split, and
+  **`tasks_skipped_undeclared`** added as the number that means something.
+- **⚠️ A PRODUCER IS NOT A TABLE.** A plain `prospect_leads` registry row stays **green** (0d — other
+  lead sources are live) while its `ownership_change` lane is 150 days dead. Structured
+  `filter_column`/`filter_value` through `%I`/`%L` (never free SQL — the function is `SECURITY
+  DEFINER` and runs dynamic `EXECUTE`), both-or-neither CHECK. Also **revoked anon/authenticated
+  write grants** on that config table (anon could repoint the function's targets or delete the
+  registry); SELECT retained for the LCC pull.
+- **The cadence statistic was measured, not chosen.** `is_overdue = age_days > 3 × the step's own p90
+  inter-run gap`. **p90, not median** — clustered runs deflate the median and false-positive healthy
+  monthly steps (`census_demographics` median 3.99d vs p90 28.78d; at 23d the median rule flags it,
+  p90 does not). **NULL below 3 observed gaps**, never false.
+- **Positive-controlled (§2a).** A healthy weekly step read not-overdue; **the same step silenced 60
+  days read overdue**; declared and undeclared skips are distinguishable — all in a self-rolling-back
+  transaction, **0 residue**. A hostile `filter_value` returns `no_data`, not everything. 23 tests,
+  **18 mutations verified RED** (two guards were caught blind by the mutation run and strengthened);
+  comments and docstrings stripped before matching, positive-controlled.
+- **⚠️ FOUND, NAMED, NOT FIXED — the instrument one level up is blind.** The cross-DB freshness monitor
+  has evaluated **no gov or dia feed since 2026-07-26**. Crons 140/141 fire daily and record
+  `succeeded`; the mirror's `synced_at` is stuck; `lcc_finalize_feed_freshness` consumes only
+  `status_code = 200` and **silently drops anything else**, returning `(0,0)`; and
+  `lcc_check_feed_freshness` **excludes mirror rows older than 3 days**, so it evaluates zero feeds and
+  returns `stale: []`. **When the sync stops, the check stops checking and reports nothing wrong.**
+  Live proof: gov reads a stale feed today with **no open `feed_stale` alert**. So B6a's four RED
+  producers **will not reach an alert until this is fixed** — backlog **B6a-follow-up**.
+- **Also named, not fixed:** 10 `step_NN_*` steps of `src/run_pipeline.py` now read overdue at 121–150
+  days (true — CI runs `pipeline_runner`, not that orchestrator); and **the GSA skip is documented in
+  `ci.yml` and compensated by the weekly `gsa-sync` job**, so it is a genuine instance of the class but
+  was **not** the load-bearing cause of the four-producer blindness — that was B6 §8(a) plus the fact
+  that no instrument watched those four tables.
+
+
 ## 2026-08-28 — B5 SHIPPED: gov's sales table becomes ownership history (+ a destructive trigger fixed)
 
 **gov DB LIVE. LCC JS pending a Railway deploy.** Writeup:

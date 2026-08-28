@@ -1585,10 +1585,50 @@ consumer's table.* Same family as Class 11 (the zero is the instrument) and Clas
 no consumer): here the instrument reports **nothing at all**, which reads as silence rather than as
 failure.
 
-**Repair.** Record a `skipped` outcome with a reason at the guarded call site, and build the health
-view over **declared** steps LEFT JOINed to outcomes, so an unrun step renders as `never_ran` instead
-of vanishing. **Never satisfy the guard by widening it** — a precondition that is false on CI and
-true on a workstation is a hosting fact worth surfacing, not a bug to paper over.
+**Repair.** Record a `skipped` outcome with a reason at the guarded call site. **Never satisfy the
+guard by widening it** — a precondition that is false on CI and true on a workstation is a hosting
+fact worth surfacing, not a bug to paper over.
+
+### ✅ Repaired 2026-08-28 (B6a) — and the detector above is INCOMPLETE
+
+`docs/audits/B6a_SKIPPED_STEP_HEALTH_BLINDNESS_2026-08-28.md`. Four refinements, each of which
+changed what the class actually looks for:
+
+- **⚠️ "A skipped step is NO row" is only half of it, and the half stated above would have missed
+  the live instance.** `gsa_ingest_+_diff` was **not absent** from the view. It carried a **GREEN
+  row** — `status='ok'`, *"Task completed"*, `last_outcome_at` **2026-06-22, 67 days stale** — on a
+  step whose own history says it ran every 7 days, because `status` was derived purely from the last
+  outcome's `event_type` with nothing comparing it to when that outcome should have been superseded.
+  **The prescribed repair (enumerate declared steps, LEFT JOIN, render `never_ran`) would have
+  returned nothing for it.** A skip leaves no row *for that run*; what survives is a stale historical
+  success, and it sorts below the fresh rows. **So the detector is: for every step, `age_days` against
+  its own cadence — not merely presence.**
+- **The emission point dissolves the enumeration problem.** Once both branches of every guard write
+  (`record_skip` / `run_guarded_task`), the **logged set IS the declared set** — no step registry, no
+  `never_ran` synthetic row, no fourth registry beside the three that already existed.
+- **Cadence can be derived, and the STATISTIC must be measured.** `is_overdue = age_days > 3 × the
+  step's own p90 inter-run gap` over its last 12 outcomes. **p90, not the median** — clustered runs
+  deflate the median and false-positive healthy steps (`census_demographics` fires several times in
+  one monthly window: median 3.99d vs p90 28.78d; at 23 days old the median rule flags it and the p90
+  rule does not). Below 3 observed gaps, **NULL, never false** (Class 11 / P180: *cannot be sized* ≠
+  *fine*).
+- **⚠️ AND THE SIBLING INSTRUMENT HAS THE SAME SHAPE ONE LEVEL UP.** A freshness registry is
+  **TABLE-keyed, and a producer is not a table**: gov `prospect_leads` reads fresh table-wide (other
+  lead sources are live) while its `ownership_change` lane has been dead since 2026-03-31 — so the
+  obvious registry row would have been **green over a dead producer**. And the cross-DB check that
+  carries it to an alert has evaluated **zero** gov/dia feeds since 2026-07-26: the mirror is stale,
+  finalize drops non-200 silently and returns `(0,0)`, and the check **excludes stale mirror rows** —
+  so **when the sync stops, the check stops checking and reports nothing wrong.** *A guard that fails
+  into silence is the class itself, wearing the instrument's clothes.*
+
+**Positive control is mandatory here (P182).** A surface that *would* show a silent producer but has
+never been seen doing so is a claim. Silence a step deliberately — the same step, same cadence, only
+older — watch it go red, restore. B6a's gate does exactly that, self-rolling-back with 0 residue.
+
+**And a legitimate skip must be DECLARABLE, with no default.** Some steps *should* skip (a domain
+with no such source, a flag deliberately off, a local input folder that a sibling job owns). A skip
+with a declared reason is healthy; an **undeclared** skip is the finding. If every skip alerts, the
+surface becomes the noise it replaces. Read `tasks_skipped_undeclared`, never `tasks_skipped`.
 
 **Related trap found in the same sweep.** A link column can be **unpopulatable** rather than
 unpopulated: gov `property_sale_events.ownership_history_id`/`sales_transaction_id` are `bigint`
