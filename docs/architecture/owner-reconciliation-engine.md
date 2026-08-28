@@ -1,3 +1,11 @@
+> ## ⚠️ NAMING TRAP — THIS IS THE **POINT PERSON** ENGINE, NOT THE PROPERTY OWNER
+>
+> Despite the title, this resolves **which Northmarq broker works the deal**
+> (`lcc_entity_owner_override.owner_user_id`). **It does not resolve who owns the building.**
+> The property owner lives in **`lcc_property_owner`** — see
+> [`property-owner-subsystem.md`](property-owner-subsystem.md), whose opening finding is this exact
+> confusion. Chain state: [`connectivity-and-open-threads.md`](connectivity-and-open-threads.md) §0.
+
 # Owner Reconciliation Engine
 
 **Status: LIVE (2026-07-31).** Determines the best-answer owner for every deal by

@@ -17,6 +17,39 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-28 05:10 UTC — repository-wide consolidation on the ownership→contact chain
+
+Scott: *"apply this to all files in the repository on the topic… consolidate the intention into one
+living document… a clean and clear paper trail without older files distracting us."*
+
+**Surveyed the whole topic: ~22 architecture docs + ~21 audits touch this chain.** I expected to find
+a pile of contradictions. **I did not — and that matters, because the fix is different.** A targeted
+conflict scan (the $500k floor, "producer with no consumer", the coverage percentages, `--min-rent`)
+returned **zero hits** across the ten oldest candidates. They are not wrong; they are **unindexed**,
+and **two of them are dangerously named**.
+
+### ⚠️ The real hazard was naming, not staleness — and I nearly fell into it myself
+
+**`owner-reconciliation-engine.md` does not resolve the property owner.** It resolves the **point
+person** — which Northmarq broker works the deal (`lcc_entity_owner_override.owner_user_id`).
+`sf-owner-capture.md` is also point-person (the Salesforce Task assignee). The property owner lives
+in `lcc_property_owner`. `property-owner-subsystem.md` opens by documenting this exact confusion as
+*"the finding that reframed P0.2."* Both files now carry a **NAMING TRAP** banner, and
+`touchpoint_cadence_spec.md` (2026-04-13) carries one recording that **BREAK-2's "no consumer"
+verdict was overturned**.
+
+### One living document, with a topic index
+
+**`connectivity-and-open-threads.md` is the living doc for the chain**, and it now opens with **§0 —
+the topic index**: the three canonical pages and what each owns, the two naming traps, the
+supporting design docs, and the full evidence trail. Anyone picking this topic up reads one file and
+knows which of the twenty to open.
+
+**Nothing was deleted.** Per `DOCUMENTATION-MAP`, an audit is *evidence for a date* and dated
+evidence stays. The rule now stated on §0: **if a number in a canonical page disagrees with an
+audit, the page wins and the audit gets a supersession banner in the same change** — as
+`C2_CONNECTIVITY_STALL_MAP` now does.
+
 ## 2026-08-28 04:50 UTC — C2e drafted (the mint); and C2's own audit was carrying three dead claims
 
 **C2e prompt drafted** → `prompts/C2e-no-floor-eligible-set-asset-mint-2026-08-28.md`. It implements
@@ -1181,6 +1214,43 @@ conflict resolution on the repo's hottest file.
 **Dated checks at 04:32 UTC — both still pending, both still expected:** N9v auto-attach `0` writes
 (cron 241 fires **06:55 UTC**); N9w sidebar `0.0%` stamped, last row **2026-08-26 22:49 UTC**, still
 pre-reload.
+
+
+## 2026-08-28 (Cowork) — B1 shipped: lane 336 → 1,237, and the badge correctly did NOT move
+
+**Verified independently:** gov **any_history 1,272 → 2,173**, **chain_2plus 149 → 177**,
+`lcc_entity_portfolio_facts` **13,077 → 14,010**, lane **1,237 completed / 644 open**.
+
+**⚠️ The operator's badge stayed at 55 — before and after — and that is the whole point.** 123
+newly-drafted `mismatch`/`all_guarded` cards are below $500k and held at
+`human_gate='below_value_floor'`; **89% of the newly-drafted population routes to automation.**
+*A value gate belongs on what reaches a human, not on what a cron applies* — which is exactly the
+hypothesis B1 was built to test, now demonstrated rather than argued.
+
+**Three corrections to my funnel audit, all measured by the build:**
+1. **"1,548" spanned both domains** — gov 1,501 + dia 47 — and `trace_ownership_to_developer`
+   carries a **further 983** below-floor skips **my audit never mentioned.**
+2. **Only the gov slice has an automated consumer.** **dia has no
+   `v_ownership_transitions_portfolio`**, so a dia task can never be drafted — dia and `trace` keep
+   the $500k floor, **1,030 rows held by design**. Lowering their floor would have minted work no
+   automation could touch, which is the failure this arc exists to prevent.
+3. **The re-openable set was 1,414, not 1,548** (86 no longer suggested, 1 already open).
+
+**⚠️ And the constraint has moved, which changes what to do next.** `any_history` rose **+901**
+while `chain_2plus` rose only **+28** — **that is the population, not a shortfall**: only 210 of the
+1,501 below-floor properties carry ≥2 guard-passing transitions. **The binding constraint on chain
+DEPTH is now the A2-blocked `ambiguous_entity` residue — 126 links / 123 properties** — which is the
+**A2a duplicate-entity class**, and it **applies unaided once merged.**
+
+**Consolidation this round (beyond the prompt folders):**
+- **`LOCAL-MODEL-GAP-AUDIT.md` R1** carried "545 open / 0 completions" as live status. Banner added:
+  superseded, numbers historical, canonical doc named. **Its verdict — *deterministic plumbing, not
+  Ollama* — was left intact and is the durable part**; that P131 lens has since predicted (a) or (c)
+  correctly five more times.
+- **`NEW-CHAT-KICKOFF.md`** updated to 1,237/644 with the goal metric and the badge-didn't-move
+  explanation, so a fresh chat does not re-derive it.
+- Swept for the superseded "545 / 0 completions" figure repo-wide: remaining hits are **dated audits
+  and `prompts/done/`**, which are correct as an evidence trail and deliberately left alone.
 
 
 ## 2026-08-28 (Cowork) — BD funnel re-audit: the chain lane is starved by a floor that now gates FREE work

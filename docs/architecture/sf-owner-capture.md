@@ -1,3 +1,10 @@
+> ## ⚠️ NAMING TRAP — "OWNER" HERE MEANS THE **POINT PERSON**, NOT THE PROPERTY OWNER
+>
+> This captures the Salesforce **Task assignee** as the deal's point person. It says nothing about
+> property ownership. Property owner → **`lcc_property_owner`** /
+> [`property-owner-subsystem.md`](property-owner-subsystem.md). Chain state:
+> [`connectivity-and-open-threads.md`](connectivity-and-open-threads.md) §0.
+
 # Salesforce owner capture → owner-scoped My Day
 
 **Status: LIVE end-to-end (2026-07-31). Owner source = the assignee of the Salesforce
