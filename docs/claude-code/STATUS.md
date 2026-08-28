@@ -981,6 +981,54 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-28 (Cowork) — BD funnel re-audit: the chain lane is starved by a floor that now gates FREE work
+
+Scott redirected the audit: *"where are the biggest backlogs or locks — property by property, then
+owner by owner, until we have a connected history of ownership of all our target markets back to
+the developer."* **Every prior audit in this arc measured QUEUED WORK, which only sees the
+symptom.** This one measures the **funnel**. → `docs/audits/BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md`
+
+**gov funnel:** 20,492 properties → **13,835 live** → 9,830 with a domain `true_owner` (71%) →
+**6,362 with an LCC owner link (46%)** → 4,845 of those have **only the current owner** →
+**1,517 with a chain (11%)** → **149 with 2+ HISTORICAL links (1.1%).**
+*(dia is further along: 1,505 chains, 568 with 2+ historical, deepest chain **14** vs gov's 6.)*
+
+**Against the stated goal — a connected history back to the developer — we are at 1.1%.**
+
+### 🔒 The lock, and it is not a defect
+
+**1,548 of 1,766 skips are `below_value_floor` at $500,000** (last 2026-07-31) — **five times the
+314 the lane has completed.**
+
+**The floor was right when set and is wrong now, for a reason that only became true yesterday.** It
+exists because this was a **human research queue**, and nobody should hand-research a $50k
+property — that is the same shared knob as the gov asset-mint floor and `CADENCE_SIGNAL_MIN_VALUE`.
+**But since A2, the `agrees` bucket is applied automatically by cron 244 from a deterministic,
+record-cited draft. No human sees it, so the marginal cost of a chain is now ~zero.** A floor sized
+for operator attention is suppressing work that costs nothing — and suppressing exactly the
+coverage Scott asked for.
+
+**The fix is to SPLIT the floor by consumer, not remove it** — none/low for the automated path,
+**$500k retained for anything reaching a person.** That distinction did not exist when the floor was
+set, because the automated path did not exist. **B1 drafted** (`prompts/B1-*.md`), with the
+guardrail that if the split cannot cleanly separate the two, **stop rather than lower both.**
+
+**Three further locks, sized, not yet worked:**
+- **~3,468 gov properties have a domain owner that never reached the entity graph** (9,830 vs
+  6,362). Nothing downstream can touch them. ⚠️ **Ask why before building** — the gov
+  `owner_needs_salesforce` lane just taught us a zero can be a **key-space artifact**, not a
+  coverage fact.
+- **74% of pivot owners have no active contact** (1,439 of 5,462) — known, already routed.
+- **⚠️ The cadence surface is 99% overdue — 2,276 of 2,302.** A surface that is entirely red cannot
+  distinguish urgent from stale, so it trains the operator to ignore it. **Badge-that-is-noise at
+  the scale of a whole surface, and unaudited in this arc.**
+
+**⚠️ Note for whoever picks this up: `establish_ownership_history` is fed by
+`lcc_generate_chain_research_tasks` (cron 144), NOT by the A5a/A5c producer
+(`handleGenerateResearchTasks`, crons 34/35).** Different function, different floor, different
+bugs. Do not conflate them.
+
+
 ## 2026-08-27 (Cowork) — C1 answered: RETIRE. The consumer has existed since June, on another surface.
 
 **The Salesforce research lanes should not get a consumer — they are a capture-less second copy of
