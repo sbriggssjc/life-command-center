@@ -981,12 +981,38 @@ count is a constant.
 
 ---
 
+> 🏛️ **Classes 20 and 21 are both instances of one architectural gap, and it now has a standing
+> contract: [`docs/architecture/data-coherence-invariants.md`](../architecture/data-coherence-invariants.md)
+> (I1–I10, plus the checklist for onboarding a new domain database).** This playbook tells you how
+> to FIND these after the fact; that document states what must be true so they cannot be created.
+> **Backlog `P0d / D1–D5` turns the highest-yield detectors here into scheduled checks** — D1 is the
+> Class 20 query below, run over every shared fact store rather than by hand.
+
 ## Class 20 — a SOURCE one domain consumes and a sibling domain never wired up
 
 **Found:** 2026-08-28 (B4 → B5). **First run: gov had never consumed its own `sales_transactions`
 as ownership history — 9,514 named sellers across 4,697 dated properties, 1.8% consumed, ~3,080
 net-new rows / 2,114 properties — while dia derives 2,207 of its 2,757 historical facts from
 exactly that source.**
+
+> ✅ **BUILT AND VERIFIED (B5, same day).** The estimate graded **down** to what shipped: **2,776
+> rows / 2,000 properties**, **677 of which had no ownership history at all beforehand.** gov
+> `ownership_history` 16,177 → 18,953; transitions view 9,595 → 12,371 rows / 4,698 → **5,555**
+> properties. **Quote a ceiling as a ceiling and hand it over to be disproved** — this one was, by
+> 10%, which is the system working.
+>
+> ⚠️ **Two traps this class produced on its first live run, both worth carrying:**
+> **(1)** A parallel window re-measured the same population with a different anti-join key, got
+> **~270–370**, and recommended *"resize before building"* — **after the build had shipped.**
+> Adjudicated by the one check independent of the disputed key (*did this property have ANY history
+> before?* → 677 did not). **When two honest measurements disagree, find the key-independent
+> measurement rather than adjudicating the keys**; and *merged is not running* has a mirror,
+> **in flight is not unbuilt.**
+> **(2)** Wiring a new source exercised a **destructive propagation trigger** nobody had audited —
+> it nulled `properties.recorded_owner_id` for any row naming its parties as text (**7,567 rows
+> already in that shape; 1,446 of 9,312 would have been destroyed**). **Connecting a source runs
+> code paths that have never seen that shape of row. Snapshot and positive-control before the
+> batch.**
 
 **Symptom.** A metric is materially better in one domain than another and everyone has a story for
 why ("dia has better data", "gov's tenant is a federal agency"). The stories are plausible,

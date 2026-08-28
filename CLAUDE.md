@@ -431,6 +431,43 @@ history. That is backlog **B5**, and it also answers **B4** (why dia's deepest c
   delta separately** — B1 moved `any_history` +901 and `chain_2plus` +28.
 - **Deed acquisition is DEFERRED, not refuted** — it remains right for the tail B5 cannot reach.
   Size it *after*, when the residual gap is known rather than assumed.
+- ✅ **B5 SHIPPED 2026-08-28 and the premise held**: gov `ownership_history` **16,177 → 18,953**
+  (+2,776 / 2,000 properties, **677 with no prior history at all**), transitions view 9,595 →
+  12,371 / 4,698 → **5,555** properties. **The ceiling graded DOWN** (3,080 → 2,776), which is what
+  a ceiling handed over to be disproved is for.
+  - ⚠️ **AND IT NEARLY DESTROYED DATA ON THE WAY IN.** `trg_propagate_ownership_to_property` had no
+    guard on `NEW.recorded_owner_id`, so any row naming its parties **as text** (`gsa_lease_diff`,
+    `deed_extraction`, B5) **nulled the property's recorded owner** — **7,567 rows already in that
+    shape; B5's batch would have destroyed 1,446 of 9,312.** Fixed fill-forward. **Any propagation
+    trigger must be fill-forward and positive-controlled in BOTH directions** (it preserves when the
+    source is null; it propagates when set). Others are unaudited — backlog **D3**.
+  - ⚠️ **THE TWO PARALLEL WINDOWS MEASURED ONE POPULATION AND DISAGREED BY 10×, NEITHER ERRORING.**
+    B6 §6 sized the same feeder at **~270–370 rows**, objected that 34% of the source is the retired
+    circular `ownership_change_stub*`, and advised *"resize before building"* — **after B5 had
+    already shipped.** Live: **2 of 2,776 (0.07%)** trace to a stub. **The decisive check was the
+    one that does not depend on the disputed key — 677 properties had NO history before B5, and a
+    duplicate cannot create history for a property that had none.** Two lessons: *merged is not
+    running* has a mirror, **in flight is not unbuilt**; and **when two honest measurements
+    disagree, find the measurement independent of the disputed key** rather than adjudicating keys.
+  - ⚠️ **A2b's earliest-wins date rule does NOT transfer here** — against an already-recorded pair
+    the sale row is **later 217 times, earlier 34** (the inverse of A2b's 26-of-26), so B5 keys on
+    the **party pair**. *The hazard travels with the technique*, and so does the calibration.
+  - ⚠️ **The LCC side does not move until the Railway deploy.** **527 of 579 open tasks carry a
+    pre-B5 draft** and the drafter prepares only `fresh = open ∧ undrafted` — **the stale-draft trap
+    for the THIRD time** (A4b, A2b, B5). `runB5RedraftPass` is keyed on STATE so it catches the next
+    source too; without it B5 converts on **52** tasks, not 579.
+
+### 🏛️ Data coherence is a CONTRACT now — `docs/architecture/data-coherence-invariants.md`
+
+Scott, 2026-08-28: *"all data sources and ingestion should propel the entire database forward, not
+just a bunch of different component parts or subdatabases or tables"* — **for the current two
+domain DBs and every one added later.** Ten invariants (**I1–I10**), a new-database onboarding
+checklist, and the honest status: **two of ten have a standing detector.** Every defect behind it
+was **individually correct code** that passed component tests, boot checks and health views —
+because **these are properties of CONNECTIONS, which nothing asserts.** Campaign **P0d / D1–D5**.
+The two cheapest and highest-yield: **D1** the provenance producer-set diff (Class 20 — it found
+B5) and **D2** the link-column type audit (`property_sale_events` link columns are `bigint` against
+`uuid` PKs — the column **cannot hold the value it is named for**).
 
 ### Dead-end classes are findable on purpose — `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md`
 
