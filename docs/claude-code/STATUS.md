@@ -17,6 +17,40 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-28 21:50 UTC — TIER0_AUTO_ATTACH: the flag was in the wrong place, and my doc made it a deadlock
+
+**The dated verification came due and FAILED — then resolved.** Cron 241 fired at 06:55 UTC on both
+08-27 and 08-28, `cron.job_run_details` said **succeeded** both times, and `tier0_auto` writes stayed
+**0** with 9 auto cards waiting.
+
+**Root cause: the flag lives in two places and only one is the gate.** Scott set
+`TIER0_AUTO_ATTACH=true` as a **Railway environment variable**. The handler reads the
+**`feature_flags_registry` TABLE** — `tier0-auto-attach-tick.js:208`,
+`flagEnabled(await fetchFeatureFlag(FLAG))`. The env var did nothing.
+
+**The tick's own run log is what proved it**, and it is the only durable record:
+
+| ran | flag_enabled | auto_candidates | planned | attached |
+|---|---|---:|---:|---:|
+| 2026-08-28 06:55 | **false** | 9 | 9 | **0** |
+| 2026-08-27 06:55 | **false** | 9 | 9 | **0** |
+
+It found every card and planned every card, then was refused by the flag. ⚠️ **`net._http_response`
+had already pruned** (~6-hour retention, P123) — 15 hours after the run there was no response body
+left to read. **`cron.job_run_details` only ever tells you the POST succeeded.**
+
+### ⚠️ And the documentation made it unresolvable — that part is mine
+
+The canonical page said *"registry flips to `on` only after a tick reports `writes > 0`."* For a
+**registry-gated** flag that is a **deadlock**: the tick cannot write until the registry says on, and
+the policy said don't flip the registry until it writes. Written as a safety rule, it functioned as
+a permanent off switch.
+
+**Resolved: registry flipped to `on` 2026-08-28**, with the cause recorded in the flag's own notes.
+Scott's intent had been unambiguous since 08-27 — the mechanism was wrong, not the decision. **The
+next 06:55 run is the real test**: expect `active_source='tier0_auto'` 0 → 9, all reversible via
+`lcc_tier0_confirm_log`. Recorded as trap **13** on the canonical page.
+
 ## 2026-08-28 — C2e-T2a drafted: tranche two, step one
 
 **Prompt** → `prompts/C2e-T2a-tranche-two-step-one-2026-08-28.md`. **2,570 properties / 2,300
