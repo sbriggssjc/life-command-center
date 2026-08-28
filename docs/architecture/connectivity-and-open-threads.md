@@ -766,9 +766,10 @@ measured today it blocks **exactly** the known brokerages and nothing else. All 
 
 | hop | count | of prior |
 |---|---:|---:|
-| properties (gov 20,493 + dia 11,796) | **32,289** | — |
+| properties — **LIVE** (gov 13,837 non-archived + dia 11,796) | **25,633** | — |
+| ~~properties incl. 6,657 ARCHIVED gov shells~~ | ~~32,289~~ | ⚠️ C2a correction — see below |
 | dia `true_owner` rows that are OPERATORS (P113 trap) | 7,941 of 10,293 | — |
-| **LCC asset anchors** | **5,144** | **16% of properties** ⚠️ **THE GATE** |
+| **LCC asset anchors** | **5,096** | **19.9% of LIVE properties** ⚠️ **THE GATE** |
 | resolved property→owner rows | **4,065** | 13% |
 | distinct owner entities | 2,768 | |
 | **owners with an active contact** | **1,439** | **52% of resolved owners** — healthy |
@@ -830,3 +831,62 @@ rent histogram **exactly** but **over-reports dia by 5,519 rows** (twin-merged p
 page upserts and never deletes) — a mirror validated on one domain is not validated on the other.
 And the largest gov residue is not a guard: **3,363 properties (54% of non-resolvers) simply have no
 `true_owner_id` in the gov database**, which no floor touches.
+
+
+---
+
+## 4f. C2a — the rent-floor curve, and Scott's decision (2026-08-28)
+
+Evidence: [`docs/audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md`](../audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md).
+**Nothing was minted; no floor was changed.**
+
+### ⚠️ It corrected §4e's own denominator
+
+**32,289 / 16% included 6,657 ARCHIVED gov shells**, which every feeder filters out by design (and
+which are genuinely empty — 2 of 6,657 have a `true_owner_id`). Live: gov **13,837** + dia 11,796 =
+**25,633**, anchors **5,096**, coverage **19.9%**. The conclusion is unchanged; the number quoted
+for it is not. *(The 5,144 headline also counted 49 identities pointing at deleted properties.)*
+
+### The finding: the resolve rate holds; the OWNERS degrade
+
+gov technical resolution stays **58–76%** from $500k down to under $50k — so "does it still
+resolve" is the wrong question. What collapses is owner quality: **already-contactable owners fall
+21.8% → 6.8% → 1.6%**, owners known outside the gov feed fall 9.7% → 1.3%, and the named rows stop
+being landlords and become **cities, counties, state DOTs, FedEx and private individuals**.
+
+| floor (cumulative, gov) | minted | resolve | rate | net-new owners | already contactable |
+|---|---:|---:|---:|---:|---:|
+| ≥ $500k *(today)* | 1,779 | 1,218 | 68.5% | 928 | 170 |
+| **≥ $250k** | 3,061 | 2,102 | 68.7% | **1,629** | **323** |
+| ≥ $100k | 5,606 | 4,034 | 71.9% | 3,178 | 564 |
+| below $100k | — | — | — | — | **collapses** |
+
+**Recommendation (Scott's call): $250k now → re-measure → $100k as the hard floor, never below.**
+⚠️ **Mint the ELIGIBLE SET, not the band** — `lcc_mint_gov_asset_entities` takes its own row list,
+so a $250k run should mint the **2,102 that resolve on the same pass**, not 3,061 of which 959 sit
+evidence-less and match the retire predicate on day one.
+
+**⚠️ dia is a different problem and no floor fixes it** — **84% of its un-minted owner slots hold an
+OPERATOR** (the P113 trap) and 73% of its would-resolve population has no rent on file. Its levers
+are `is_operator_not_owner` and rent coverage (A5e). **Change nothing on dia.**
+
+---
+
+## 4g. ⚠️⚠️ THE "$500k FLOOR" IS FIVE INDEPENDENT KNOBS, AND TWO THREADS ARE MOVING DIFFERENT ONES
+
+`CLAUDE.md` (P161) says these are *"the same $500k knob as the gov asset-mint and
+`CADENCE_SIGNAL_MIN_VALUE` — one number, not three."* **Measured 2026-08-28, that is FALSE as
+implemented.** They are separate objects that happen to share a value:
+
+| # | knob | where | who wants to change it |
+|---|---|---|---|
+| 1 | `lcc_mint_gov_asset_entities --min-rent` | CLI arg, gov asset mint | **C2a → $250k** (this thread) |
+| 2 | `gov_research_gate_value_floor()` / dia twin | gov + dia DBs (A5c) | **B1 → split by consumer** (other thread) |
+| 3 | `lcc_weak_role_value_floor()` | LCC Opps (P161 reachability) | — |
+| 4 | `lcc_chain_human_value_floor()` | LCC Opps (ownership chain) | — |
+| 5 | `CADENCE_SIGNAL_MIN_VALUE` | env (P112 cadence gate) | — |
+
+**Two Cowork threads are proposing to change #1 and #2 in the same week, and the docs say they are
+one number.** They are not. Changing one does **not** move the others, and nobody should assume it
+did. **Before touching any "$500k floor", say WHICH of the five you mean.** Fixing the CLAUDE.md
+sentence is backlog **C2d**.
