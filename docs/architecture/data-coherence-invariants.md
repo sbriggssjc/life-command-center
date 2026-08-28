@@ -87,6 +87,39 @@ row, and therefore **has no row in `v_pipeline_task_health`** — which is built
 > **Rule:** open the run row **before** the work (P123), close it after, and record a SKIP with its
 > reason as a first-class outcome. Health must be computed against **expected** runs, not observed.
 
+✅ **CLOSED 2026-08-28 (B6a)** — `docs/audits/B6a_SKIPPED_STEP_HEALTH_BLINDNESS_2026-08-28.md`.
+Four corrections to the statement above, each of which changed the fix:
+
+- **⚠️ "No row" was only half the mechanism, and the worse half is a STALE GREEN ROW.**
+  `gsa_ingest_+_diff` was **not absent** from `v_pipeline_task_health` — it carried
+  `status='ok'`, *"Task completed"*, **67 days stale**, on a step whose own history says it ran
+  every 7 days, because `status` read the last outcome's `event_type` and nothing compared it to
+  when that outcome should have been superseded. **The recommended fix — "enumerate declared
+  steps, not logged ones" — would not have caught it**, because it was never missing. The missing
+  dimension is **cadence**, not enumeration.
+- **The fix is at the EMISSION POINT, and that dissolves the enumeration problem.** Once both
+  branches of every guard write (`record_skip` / `run_guarded_task`), the **logged set IS the
+  declared set** — so no step registry was needed, and a fourth registry was not built beside
+  `feed_freshness_registry`, `data_freshness_monitor.SOURCES` and this view.
+- **⚠️ A PRODUCER IS NOT A TABLE.** R56's `feed_freshness_registry` already implements this
+  invariant end to end — SLA, cross-DB mirror, deduped auto-resolving alert — and read healthy
+  over the four dead producers **because nobody registered them**. Registering `prospect_leads`
+  plainly would still have been GREEN: the table is fresh (other lead sources are live) while its
+  `ownership_change` lane died 2026-03-31. A table-keyed freshness row is fresh whenever **any**
+  of its producers writes. Fixed with a structured `filter_column`/`filter_value` (`%I`/`%L`,
+  never free SQL — the function is `SECURITY DEFINER`) and a both-or-neither CHECK.
+- **A legitimate skip must be DECLARABLE, and the declaration must have no default.** A skip
+  somebody chose is healthy and must be visible without alerting; an undeclared skip is the
+  finding. Read **`tasks_skipped_undeclared`**, never `tasks_skipped` (which previously counted
+  dry runs).
+
+⚠️ **And the instrument one level up is still blind.** The cross-DB monitor has evaluated **no
+gov or dia feed since 2026-07-26**: the mirror is stale, `lcc_finalize_feed_freshness` drops any
+non-200 response silently and returns `(0,0)`, and `lcc_check_feed_freshness` excludes mirror
+rows older than 3 days — so **when the sync stops, the check stops checking and reports nothing
+wrong.** gov reads a stale feed today with no open `feed_stale` alert. **B6a-follow-up**, named
+and sized, deliberately not fixed inside a gov instrument change.
+
 ### I5 — Every source is registered on the authority ladder before it writes
 
 `field_source_priority` is the single place that answers *"if two sources disagree, who wins."*
@@ -163,7 +196,7 @@ Supabase project"; it is a new set of connections that must be asserted on day o
 | I5 | `v_field_provenance_unranked` | ✅ exists · ⚠️ **33 rows** (drift) |
 | I2 | provenance `group by` split by domain | ⚠️ **manual** — run in B5/B6; **no standing view** |
 | I3 | link-column type check against target PK | ❌ **none** |
-| I4 | expected-vs-observed run health | ⚠️ `v_pipeline_task_health` exists but is **blind to skips** → **B6a, prompt drafted 2026-08-28** |
+| I4 | expected-vs-observed run health | ✅ **B6a, 2026-08-28** — skips emit; `is_overdue` vs the step's own p90 cadence; the four dead producers registered and RED. ⚠️ The **cross-DB mirror** that carries this to an alert has been silent since 2026-07-26 (**B6a-follow-up**) |
 | I6 | divergence consumer | ⚠️ `parcel_owner_xref.diverges` has none → **B6d** |
 | I1 | producer/consumer registry | ❌ **none** — this is the biggest hole |
 | I8 | fill-forward trigger audit | ❌ **none** — one instance fixed (B5), others unaudited |
