@@ -124,6 +124,21 @@ Two durable lessons from the fix, both expanded in
 
 ## Rules
 
+00. 🔁 **EVERY TURN CLOSES THE LOOP — [`docs/os/BUILD-TURN-PROTOCOL.md`](docs/os/BUILD-TURN-PROTOCOL.md)
+   is the definition of done.** Scott's standing requirement, 2026-08-28: the repository-clean and
+   self-improvement pass happens **at every turn of every build**, so the next chat can pick any
+   topic up cold and be right. **A change is not finished when the code works — it is finished when
+   the canonical pages are true.** Eight steps: measure before concluding · verify on the state
+   delta and positive-control every zero · establish deploy state via `/version` + `merge-base`
+   (never a handler probe) · reconcile against the parallel window · **update the canonical docs in
+   the SAME change** · correct what is now false in place, **your own calls included** · **extract
+   open intent BEFORE archiving anything** · leave the next step named.
+   ⚠️ **The cost of skipping it is measured, not theoretical** — 25 planned items filed nowhere, a
+   design doc reading *"not executed"* about a cutover that shipped three months earlier, and a
+   freshness monitor that evaluated nothing for 33 days with zero alerts open. **None of them
+   errored.** It is not ceremony: a one-line fix needs a one-line STATUS entry and nothing more.
+   The test is *"can the next session pick this up cold and be right?"*
+
 0. **`LCC_API_KEY` auth is production-ready.** Frontend `auth.js` auto-injects `X-LCC-Key` via a global fetch
    interceptor. To enforce: set `LCC_API_KEY` + `LCC_ENV=production` in the Railway env — **in that order**.
    Flipping `LCC_ENV` first (key empty, no `OPS_SUPABASE_URL` JWT path) 401s every request = **total sign-in

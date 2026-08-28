@@ -86,13 +86,21 @@ from exactly that source. Two more: **`gsa_lease_change_facts`** (336,303 rows; 
   March–April 2026 read **RED** (170/170/150/144d vs a 45-day SLA); detector **seen red on a
   deliberate silence**. ⚠️ `record_skip` **not yet exercised by a real run** — the RED rows prove the
   registry, not the emission.
-- 🚨 **NEXT — `B6a-follow-up` (prompt ready): the alert chain has evaluated NOTHING since
-  2026-07-26.** gov 33d stale / 13 feeds, dia 30d / 5; `feed_stale` **0 open**, last fired
-  **2026-07-24 — two days before the sync died.** A fail-soft returns `(0,0)` for *everything
-  failed*, and the consumer **excludes stale mirror rows**, so **when the sync stops the check stops
-  checking and reports nothing wrong.** Contract invariant **I11**. **Do this before B6b** — B6b's
-  premise is telling whether a restarted producer stays up, and today it cannot be told.
+- ✅ **B6a-follow-up SHIPPED** — the alert chain is alive. gov **13 → 18 feeds** (the transport fix
+  restored five that had been failing silently), both domains synced **today**, and **6 real
+  `feed_stale` alerts** are open after 33 days of zero. **The transport was two different causes**
+  (gov cold-start timeout, dia missing grant). Invariant **I11** now has a standing detector.
+- ⭐ **NEXT — `B6b`: restart the four dead producers.** They are now visible AND alertable, which is
+  the precondition B6a-follow-up existed to create. The alerts name them:
+  `gsa_lease_change_facts` **170d** (the 336k-row landlord-change source), `gsa_lease_timeline` 170d,
+  `prospect_leads_ownership_change` 150d, `property_sale_events` 144d.
+- **Two residuals, both named, neither closed:** `record_skip` has **still not been exercised by a
+  real run** (the RED rows prove the registry, not the emission); and gov's **cold-cache timeout is
+  mitigated by retry, not cured** (`B6a-follow-up-b`).
 - **Then:** **P0d / D1–D2** (the standing coherence detectors).
+- 🔁 **Every turn now closes the loop — [`docs/os/BUILD-TURN-PROTOCOL.md`](../os/BUILD-TURN-PROTOCOL.md),
+  `CLAUDE.md` Rule 00.** Read it before starting: it is the definition of done, and its eight steps
+  are each earned by a measured failure from this week.
 - **Read:** 🏛️ **`docs/architecture/data-coherence-invariants.md`** (the standing contract — I1–I10
   + new-database onboarding) · `ownership-history-lane.md` §3a/§3c ·
   `BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md` §3b/§3c · `connectivity-and-open-threads.md` §4j ·
