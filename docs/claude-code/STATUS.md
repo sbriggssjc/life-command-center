@@ -59,6 +59,38 @@ a name heuristic). ⚠️ **B6's G3 row is REFUTED**: `gsa_lease_events` does ca
 rows) — B6's zero came from `changed_fields ? 'key'` against a jsonb **string**. Also filed:
 **B6b-june** (2026-06-01 is a merged snapshot of two source files, 7,919 leases vs a 7,348–7,495 norm).
 
+## 2026-08-28 — C2b + C2g: the SF bridge self-healed, and both hypotheses for the residue were wrong
+
+Evidence: [`C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md`](../audits/C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md)
+· [`C2g_UNRESOLVED_OWNER_ORGS_2026-08-28.md`](../audits/C2g_UNRESOLVED_OWNER_ORGS_2026-08-28.md).
+Canonical **§4l / §4m**. Measurement only — nothing written.
+
+**The bridge doubled with no bridge code.** SF-linked people reaching a resolved property owner:
+**669 (6.8%) → 1,486 (15.2%), +817**, purely because T1 + T2a built the far bank. C2 said the bridge
+had *"no far bank"*; there are now 8,636 owner rows over 5,992 owners. **Diagnosis and remedy both
+vindicated — and the lesson is to re-measure a downstream gap after fixing an upstream one, before
+building anything for it.**
+
+**⚠️ The residue is 91.5% NOT-AN-OWNER.** Of 7,646 still unconnected across 6,816 orgs, only **489
+orgs / 652 people** are at companies that own properties in our domains. The rest are brokers,
+vendors, tenants, lenders. **So Scott's opening figure — "8–10k Salesforce opportunities not
+connected" — is, measured, ~652 people at 489 owner-orgs.**
+
+### ⚠️ C2g: both leading hypotheses for those 489 were REFUTED
+
+| hypothesis | measured | verdict |
+|---|---|---|
+| the **0.55 confidence gate** | **444 of 489 were NEVER a candidate** in `lcc_property_owner_evidence` | ❌ the gate never saw them |
+| **P113 operator trap** | `true_owner_is_operator` = **0** across all 489 | ❌ |
+
+They were the two documented causes closest to hand. The residue is three populations: **dia 248 of
+271 have no property in the mirror**; **gov 74 of 222 have a property with no asset entity** (the
+minting slice — *exactly* the 74 overlapping the T2b plan, reconciling with C2b's independent
+count); **gov 79 of 222 have a property WITH an asset entity and still no evidence** ← the genuine
+defect, filed as **C2h**. Join controlled first: 19,851 of 20,123 facts key correctly.
+
+**T2b now has a THIRD independent reading against it** — contactability 3.7% (T2a), only 74 of 489
+reachable (C2b), those same 74 the only slice of this residue (C2g). Safe, low-value, not run.
 ## 2026-08-28 — C2b: the Salesforce bridge SELF-HEALED, and the opening premise is retired
 
 Evidence: [`C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md`](../audits/C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md);
