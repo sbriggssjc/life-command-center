@@ -147,6 +147,47 @@ test('Circle and Cir normalize to the same exact frozen building address', () =>
   }
 });
 
+test('a single compound street split requires exact facility corroboration', () => {
+  const target = {
+    candidate_fingerprint: sha('5'),
+    address_token: '131 SUMMERPLACE DR|WEST COLUMBIA|SC|29169',
+    cms_identity: {
+      facility_name: 'South Carolina Endoscopy Center',
+      address: '131 Summerplace Drive', city: 'West Columbia', state: 'SC', zip: '29169',
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/south-carolina-endoscopy-center',
+    address: '131 Summer Place Dr', city: 'West Columbia', state: 'SC', zip: '29169',
+    building_name: 'South Carolina Endoscopy Center',
+    square_footage: '20,519',
+    tenant_name: 'Consultants In Gstrntrlgy',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'facility_corroborated_compound_street_split');
+  assert.equal(built.identity_match.frozen_compound_token, 'SUMMERPLACE');
+  assert.deepEqual(built.identity_match.captured_street_parts, ['SUMMER', 'PLACE']);
+  assert.equal(built.identity_match.corroboration_basis, 'building_name');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const mismatch of [
+    { building_name: 'Unrelated Medical Plaza' },
+    { address: '133 Summer Place Dr' },
+    { address: '131 Summer Park Dr' },
+    { city: 'Columbia' },
+    { state: 'NC' },
+    { zip: '29170' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+});
+
 test('shared-address parent buildings require explicit ASC tenant corroboration', () => {
   const target = {
     candidate_fingerprint: sha('f'),
