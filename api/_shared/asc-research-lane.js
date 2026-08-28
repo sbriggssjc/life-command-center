@@ -56,6 +56,7 @@ export function normalizeAscAddressToken({ address, city, state, zip } = {}) {
     .replace(/\b(ROAD|RD)\b/g, 'RD')
     .replace(/\b(DRIVE|DR)\b/g, 'DR')
     .replace(/\b(LANE|LN)\b/g, 'LN')
+    .replace(/\b(CIRCLE|CIR)\b/g, 'CIR')
     .replace(/\b(HIGHWAY|HWY)\b/g, 'HWY')
     .replace(/\bNORTH\b/g, 'N')
     .replace(/\bSOUTH\b/g, 'S')
@@ -162,7 +163,7 @@ function buildingAddressTokensAgree(left, right) {
   const a = left.split('|');
   const b = right.split('|');
   if (a.length !== 4 || b.length !== 4 || a.slice(1).join('|') !== b.slice(1).join('|')) return false;
-  const stripStreetType = (street) => street.replace(/\s+(?:ST|AVE|BLVD|RD|DR|LN|HWY)$/, '');
+  const stripStreetType = (street) => street.replace(/\s+(?:ST|AVE|BLVD|RD|DR|LN|CIR|HWY)$/, '');
   return stripStreetType(a[0]) === stripStreetType(b[0]);
 }
 
@@ -192,7 +193,7 @@ function capturedDirectionalStreetTypeExtension(frozenAddressToken, capturedAddr
   if (!/^\d+[A-Z]?$/.test(frozenStreet[0] || '')
     || frozenStreet[0] !== capturedStreet[0]) return null;
   const directions = new Set(['N', 'S', 'E', 'W']);
-  const streetTypes = new Set(['ST', 'AVE', 'BLVD', 'RD', 'DR', 'LN', 'HWY']);
+  const streetTypes = new Set(['ST', 'AVE', 'BLVD', 'RD', 'DR', 'LN', 'CIR', 'HWY']);
   const comparison = [...capturedStreet];
   let addedDirectional = null;
   let addedStreetType = null;

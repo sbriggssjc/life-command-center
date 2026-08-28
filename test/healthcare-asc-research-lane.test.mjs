@@ -107,6 +107,43 @@ test('multi-token CMS suite suffixes bind to building-level research pages', () 
   assert.equal(cmsToken, costarToken);
 });
 
+test('Circle and Cir normalize to the same exact frozen building address', () => {
+  const target = {
+    candidate_fingerprint: sha('6'),
+    address_token: normalizeAscAddressToken({
+      address: '1120 Raintree Circle Suite 100', city: 'Allen', state: 'TX', zip: '75013',
+    }),
+    cms_identity: {
+      facility_name: 'Texas Health Spine Surgery Center Allen LLC',
+      address: '1120 Raintree Circle Suite 100', city: 'Allen', state: 'TX', zip: '75013',
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/allen-medical-plaza',
+    address: '1120 Raintree Cir', city: 'Allen', state: 'TX', zip: '75013',
+    square_footage: '44,761',
+    tenants: [{ name: 'Texas Health Spine Surgery Center', occupied_sf: '15,718' }],
+  };
+
+  assert.equal(target.address_token, '1120 RAINTREE CIR|ALLEN|TX|75013');
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+
+  for (const mismatch of [
+    { address: '1122 Raintree Cir' },
+    { city: 'Plano' },
+    { state: 'OK' },
+    { zip: '75002' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+});
+
 test('shared-address parent buildings require explicit ASC tenant corroboration', () => {
   const target = {
     candidate_fingerprint: sha('f'),
