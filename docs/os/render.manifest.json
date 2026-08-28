@@ -15,6 +15,7 @@
         "offer-submission",
         "writing-voice",
         "bov",
+        "deliverable-presentation",
         "intake-triage",
         "personal"
       ],
@@ -22,12 +23,12 @@
       "pasteSoftLimit": 19500,
       "liveMode": "pointer",
       "knowledgeLocation": "_AI-Context/Copilot-Context/LCC-CANON.md",
-      "livePointerNote": "Highest-priority invariants (full text in Knowledge): single-source \u2014 rules live in canon, never re-authored here; same engine everywhere; email/comms route through LCC only; confirmation tiers (Tier 2/3 need user_confirmed); memory is Cortex; **target the OWNER \u2014 the ultimate individual in control** (agents of the LLC/SPE yes, prior listing/procuring brokers no, public entities never); system-of-record via LCC proxy."
+      "livePointerNote": "Highest-priority invariants (full text in Knowledge): single-source — rules live in canon, never re-authored here; same engine everywhere; email/comms route through LCC only; confirmation tiers (Tier 2/3 need user_confirmed); memory is Cortex; **target the OWNER — the ultimate individual in control** (agents of the LLC/SPE yes, prior listing/procuring brokers no, public entities never); system-of-record via LCC proxy."
     },
     "chatgpt": {
       "external": true,
       "liveArtifact": null,
-      "deliverAs": "GPT Knowledge upload of surfaces/chatgpt.canon.md \u2014 Custom GPT instructions cap at 8000 chars, so the canon rides as a Knowledge file (no cap) and the instructions stay a short persona that points at it.",
+      "deliverAs": "GPT Knowledge upload of surfaces/chatgpt.canon.md — Custom GPT instructions cap at 8000 chars, so the canon rides as a Knowledge file (no cap) and the instructions stay a short persona that points at it.",
       "blocks": [
         "comps",
         "resolution",
@@ -35,7 +36,8 @@
         "logging-and-touchpoints",
         "offer-submission",
         "writing-voice",
-        "bov"
+        "bov",
+        "deliverable-presentation"
       ]
     },
     "northmarq": {
@@ -48,7 +50,8 @@
         "logging-and-touchpoints",
         "offer-submission",
         "writing-voice",
-        "bov"
+        "bov",
+        "deliverable-presentation"
       ]
     },
     "claude-personal": {
@@ -63,6 +66,7 @@
         "offer-submission",
         "writing-voice",
         "bov",
+        "deliverable-presentation",
         "intake-triage",
         "personal"
       ]
@@ -79,6 +83,7 @@
         "offer-submission",
         "writing-voice",
         "bov",
+        "deliverable-presentation",
         "intake-triage",
         "personal"
       ]
