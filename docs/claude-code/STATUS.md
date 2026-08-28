@@ -17,6 +17,55 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-28 03:00 UTC — C2: the connectivity stall map. The gate is ASSET IDENTITY, not contacts.
+
+Full writeup: [`docs/audits/C2_CONNECTIVITY_STALL_MAP_2026-08-28.md`](../audits/C2_CONNECTIVITY_STALL_MAP_2026-08-28.md).
+**Diagnosis only — nothing written.** Scott reframed the target: measure where the chain
+*property → recorded ownership → SPE/LLC control → true owner → the right contact → the right
+prospecting bucket and broker → relative priority* actually stalls.
+
+**It stalls at hop 3, and everything downstream is starved by it.**
+
+| hop | count | of prior |
+|---|---:|---:|
+| properties (gov 20,493 + dia 11,796) | **32,289** | — |
+| dia `true_owner` rows that are actually OPERATORS (P113) | 7,941 of 10,293 | — |
+| **LCC asset anchors** | **5,144** | **16% of properties** ⚠️ **THE GATE** |
+| resolved property→owner rows | **4,065** | 13% |
+| distinct owner entities | 2,768 | |
+| **owners with an active contact** | **1,439** | **52% of resolved owners** — the healthy hop |
+| cadences | 2,302 | |
+
+**⚠️ The Salesforce book is connected to the wrong side.** 9,793 SF-linked people are in LCC, 9,491
+with an email, **9,129 (93%) carry a relationship edge — but only 669 (6.8%) reach a resolved
+property owner.** They are attached to their employer org via the `works_at` Salesforce-account edge
+(the same bare-SF signal **P112** disqualified and **P161** gated out of reachability). **The bridge
+has no far bank**: there are only 4,065 property→owner rows for 32,289 properties. Contact
+acquisition is *not* the bottleneck.
+
+**The 16% is a DECISION, not a defect.** `lcc_mint_gov_asset_entities` **refuses to run without
+`--min-rent`**, and CLAUDE.md states the doctrine directly — *"evidence justifies the entity, never
+the reverse"* and *"asset-identity coverage is what gates owner resolution."* ⚠️ **Do not simply
+drop the floor** — minting ~27,000 evidence-less assets re-creates the noise the gate prevents. The
+measured question is **at what rent floor a minted asset actually resolves an owner**: P141 saw
+**612 of 663 resolve at $500k (92%)** and no degradation in lower bands on small samples. Extending
+that curve is the input to the decision.
+
+### ⚠️ Corrections to my own earlier figures in this thread
+
+- **"101 owners with a contact / 157 cadences" was scoped to owners above the $500k floor.**
+  Fleet-wide it is **1,439 pivot contacts and 2,302 cadences** — ~10× larger. Both correct about
+  different populations; quoting the scoped one as the system total understates it badly.
+- **Two instrument errors preceded this map**, both caught only by reading named rows: counting
+  *any* linked entity as a "person" returned **addresses** (`2 Mill St, Lawrence, MA 01840`) and
+  inflated an "unclosed loop" **56×**; and `activity_events` attributes 23,232 events to just **253
+  distinct people**, so it cannot answer "do we correspond with this person" — `email_bodies`
+  (5,509 distinct addresses) is the record, keyed by **address**.
+
+**Not measured, stated so nobody assumes it was:** historical ownership depth on dia; the
+developer/investor/buyer prospecting-type split; Outlook/WebEx per contact (WebEx is not in the
+schema at all); whether the 2,302 cadences carry a correct broker.
+
 ## 2026-08-28 02:30 UTC — N15d: the producer is proven fixed, by CONTROL rather than by wall clock
 
 **The date rolled over and the check is finally readable — but the decisive evidence is not the
