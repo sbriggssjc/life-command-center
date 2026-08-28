@@ -32,7 +32,22 @@ dia, for contrast: 2,075 linked · 1,505 with a chain · 568 with 2+ historical 
 
 ## 2. The locks, ranked
 
-### 🔒 Lock 1 — the $500k value floor is skipping 1,548 properties, and it now gates FREE work
+### ✅ Lock 1 — RESOLVED 2026-08-28 (B1). The floor is now split by consumer.
+
+> **Shipped:** `supabase/migrations/20260828120000_lcc_b1_split_chain_value_floor.sql`.
+> Writeup: [`B1_CHAIN_VALUE_FLOOR_SPLIT_2026-08-28.md`](B1_CHAIN_VALUE_FLOOR_SPLIT_2026-08-28.md).
+> Canonical: [`docs/architecture/ownership-history-lane.md`](../architecture/ownership-history-lane.md).
+>
+> ⚠️ **Three numbers below were corrected by the build, and they change what the finding means:**
+> **(1)** "1,548" is `establish_ownership_history` across BOTH domains — gov 1,501 + dia 47 — and
+> `trace_ownership_to_developer` carries a further 983 below-floor skips this audit never mentioned.
+> **(2)** Only the gov slice has an automated consumer: **dia has no
+> `v_ownership_transitions_portfolio`**, so a dia task can never be drafted. dia and
+> `trace_ownership_to_developer` keep the $500k floor — 1,030 rows held by design.
+> **(3)** The re-openable set is **1,414**, not 1,548: 86 are no longer suggested by the worklist
+> and 1 already had an open task.
+
+### 🔒 Lock 1 (as originally measured) — the $500k value floor is skipping 1,548 properties, and it now gates FREE work
 
 **1,548 of 1,766 skips** in `establish_ownership_history` are `below_value_floor` at **$500,000**
 (last applied 2026-07-31). That is **five times the 314 the lane has completed.**
