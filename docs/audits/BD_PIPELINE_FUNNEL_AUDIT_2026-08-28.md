@@ -121,6 +121,109 @@ value floor that predates the automation.
 > ownership feed mostly records ONE transition per property. The sentence stands as written for
 > coverage; for depth, read §3a of the lane doc.
 
+## 3b. 🔁 RE-EVALUATION after B1a — the funnel has a floor, and it is DOCUMENT ACQUISITION
+
+**B1a settled the depth question, and following it one layer down settles the whole audit.**
+Measured 2026-08-28 on the gov domain:
+
+| layer | count | note |
+|---|---:|---|
+| live properties | 13,835 | |
+| properties with **any** recorded transition | 7,059 | 16,177 transitions — avg 2.3, but most convert to one usable link |
+| properties with a `deed_record` | 4,176 | 5,804 records |
+| **deed records carrying a GRANTOR** | **876** | **15%** — a deed without a grantor cannot make a chain link |
+| **deed DOCUMENTS on file** | **325** | of 1,176 property documents total |
+| deed documents with extracted text | 291 | **the OCR/capture chain works — 90% of docs have bytes** |
+
+**Read the last three rows together.** The document pipeline is *healthy* — 1,057 of 1,176
+documents have bytes, 291 of 325 deed docs have text. **It is not broken. It is empty.**
+**325 deed documents across 13,835 properties is 2.3% coverage.**
+
+### What this means, stated plainly
+
+**The LCC-side machinery for ownership history is now essentially complete and correct.** Across
+A1→B1a it went from 0 completions in 69 days to **1,302**, added ~1,000 properties with ownership
+history, routes every residue class, and holds the operator badge flat at 55 while doing it.
+
+**The remaining constraint is not in LCC. It is that we do not have the deeds.** Chain *depth*
+requires a recorded conveyance per link, and:
+
+- gov's own feed mostly records **one transition per property** (B1a §3a: 99 of 132 remaining open
+  tasks carry exactly one link);
+- the deed table that would supply more carries a grantor on **876 of 5,804 rows**;
+- and only **325 deed documents** exist to extract from.
+
+~~So "a connected history of ownership back to the developer" is gated on acquiring county deed
+records at scale.~~ ⛔ **WRONG — and refuted within the same hour by the very next query. See §3c.**
+
+⚠️ **Do not read this as "the work was wasted."** The machinery had to be correct *first* — every
+record we acquire now flows automatically to a written ownership fact, nightly, with guards and
+reversibility. **We built the consumer before the supply**, which is the right order; the ~1,000
+properties gained came from records that were already on file and previously unreachable.
+
+## 3c. ⛔ §3b's CONCLUSION WAS WRONG. gov HAS THE RECORDS AND HAS NEVER CONSUMED THEM.
+
+**§3b concluded "we do not have the deeds, so this is now an external-acquisition problem." That
+survived exactly one more query.** The mistake was measuring the *deed* tables and stopping —
+without asking the question this repo asks of every stalled lane: **which producer already holds
+this, and does a consumer exist?** (`docs/audits/DEAD_END_AUDIT_PLAYBOOK.md` Class 2.)
+
+**B4 was the thread.** dia has chain depth gov lacks (deepest 14 vs 6; 568 properties with 2+
+historical links vs gov's 178). Asking *where dia's historical facts come from* answers it
+immediately — `lcc_entity_portfolio_facts.ownership_source`:
+
+| domain | source | historical facts | properties |
+|---|---|---:|---:|
+| **dia** | **`sales_transactions_seller_exit`** | **2,207** | **1,584** |
+| dia | (null / legacy) | 536 | 416 |
+| gov | `gov_ownership_chain` (the A1→B1a lane) | 1,356 | 1,302 |
+| gov | `gsa_lease_diff` | 976 | 821 |
+| gov | `county_deed` | 104 | 104 |
+| **gov** | **`sales_transactions_seller_exit`** | **— does not exist —** | **0** |
+
+**dia's dominant source of ownership history is its own sales table**, via a *seller-exit* feeder:
+when a sale is recorded, the SELLER's ownership interval is closed out, which is a historical
+ownership fact by definition. **gov has never had that feeder.**
+
+### The size of it
+
+gov `sales_transactions` (excluding `exclude_from_property_linking`):
+
+- **14,645 rows across 5,321 properties**, sale dates **1970 → 2026-08**
+- **9,514 carry a named `seller`**; **4,697 properties** have a named seller *with a date*
+- and `ownership_history` has consumed **`data_source='sales_transaction'` — 169 rows. 1.8%.**
+
+Anti-joined against everything `ownership_history` already records (property + normalized prior-owner
+name + exact date): **3,080 net-new rows across 2,114 properties.**
+
+**gov currently has 178 properties with a chain and 2,238 with any history. This is a
+2,114-property source sitting on-box, structured, dated, and unconsumed.**
+
+⚠️ **3,080 is a CEILING, not a forecast**, for four reasons that must be measured before it is
+quoted as a result: (1) each seller must resolve to an entity by the ID-to-ID discipline, and the
+A2 residue classes (`ambiguous_entity`, `placeholder`, `no_entity`) will take a share; (2) the
+anti-join keys on an *exact* date, so the **A2b one-conveyance-several-dates** class will inflate
+it — the same conveyance recorded by `costar_sidebar` and by a sale row is one fact, not two;
+(3) `gsa_lease_diff` already covers 3,704 properties and the overlap is real; (4) a seller-exit
+closes an interval — it only deepens a chain where we also know who bought.
+
+⚠️ **The `developer` column is NOT the path to Scott's goal** — it is populated on **32 rows / 30
+properties**. "Back to the developer" is reached by *extending the chain until it terminates*, not
+by reading a field.
+
+### The durable lesson
+
+**§3b measured the tables named after the answer (`deed_records`, `property_documents`) and
+concluded the data did not exist.** It was one join away from a source holding 30× more. This is
+the A5 lesson — *before building a consumer, grep for who already writes the gap* — and the A2
+lesson — *check whether an existing producer already minted the parties* — arriving as a
+**recommendation** rather than a code review. **A conclusion of "we must acquire data" is the most
+expensive conclusion available and therefore earns the highest burden of proof: enumerate every
+table that could carry the fact before reaching it.**
+
+**Deed acquisition (K10 / A1b) is not refuted — it is DEFERRED.** It stays the right answer for
+the tail beyond what sales data can reach. It is simply not the *next* thing.
+
 ## 4. Recommendation
 
 1. ✅ **DONE (B1, 2026-08-28)** — floor split by consumer; 1,414 re-opened, reversibly.
@@ -130,10 +233,20 @@ value floor that predates the automation.
    The whole remaining residue is worth **12** `chain_2plus` properties, and 99 of 132 remaining
    tasks carry one link. `trace_ownership_to_developer` (983) and dia (516) remain gated,
    deliberately — and lifting either would add `any_history`, not depth.
-2. **Then measure the linkage gap (Lock 2)** — ~3,468 properties. Ask *why* the owner never became
-   an entity before building anything; the gov `owner_needs_salesforce` lane just taught us that a
-   zero can be a key-space artifact rather than a coverage fact.
-3. **Audit the cadence surface separately (Lock 4)** — 99% overdue is its own finding.
+2. ⭐ **NEXT — B5: give gov the seller-exit feeder dia already has.** §3c: **9,514 named sellers
+   across 4,697 dated properties, 1.8% consumed, ~3,080 net-new rows / 2,114 properties as a
+   ceiling.** On-box, structured, dated. **Category (a) — deterministic plumbing, no LLM, no
+   acquisition.** Build it as a **new evidence source feeding the SAME A2 apply path**, never as a
+   second writer; grade the ceiling against the four deflators in §3c before quoting any result.
+3. **Then measure the linkage gap (Lock 2 / B2)** — ~3,468 properties. Ask *why* the owner never
+   became an entity before building anything; the gov `owner_needs_salesforce` lane just taught us
+   that a zero can be a key-space artifact rather than a coverage fact.
+   ⚠️ **B5 will move this number** — a seller-exit feeder resolves owners — so **re-measure Lock 2
+   after B5, not before.**
+4. **Audit the cadence surface separately (Lock 4 / B3)** — 99% overdue is its own finding, and
+   Scott named touchpoint generation as a real time sink.
+5. **Deferred, not refuted: deed acquisition (K10 / A1b)** — the right answer for the tail B5
+   cannot reach. Size it *after* B5, when the residual gap is known rather than assumed.
 
 ⚠️ **Re-measure before acting.** The `establish_ownership_history` worklist currently suggests
 **1,834** properties and `trace_ownership_to_developer` **1,729**; both move as A2 completes chains
