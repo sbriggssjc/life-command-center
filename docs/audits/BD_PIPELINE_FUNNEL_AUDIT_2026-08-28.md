@@ -89,13 +89,23 @@ arc.
 
 *"A connected history of ownership of all of our target markets all the way back to the developer."*
 
-> ✅ **UPDATED 2026-08-28 after B1.** gov properties with **any** ownership history
-> **1,272 → 2,173**; with a **chain (2+ historical links) 149 → 177**; the lane's completions
-> **336 → 1,237** — and the operator's `human_actionable` badge did **not** move off **55**.
+> ✅ **UPDATED 2026-08-28 after B1 → B1a.** gov properties with **any** ownership history
+> **1,272 → 2,173 → 2,238**; with a **chain (2+ historical links) 149 → 177 → 178**; the lane's
+> completions **336 → 1,237 → 1,302** — and the operator's `human_actionable` badge did **not**
+> move off **55** through either round.
 > ⚠️ **`any_history` moved 7× harder than `chain_2plus`, and that is the population, not a
 > shortfall** — only 210 of the 1,501 below-floor properties carry ≥2 guard-passing transitions.
-> **The binding constraint on chain DEPTH is now the A2-blocked residue** (`ambiguous_entity`
-> 126 links / 123 properties, the A2a merge class), not the value floor.
+> ⚠️ **B1a REFUTED the "next constraint" named below.** Merging the duplicate entities drained
+> `ambiguous_entity` 126 → 57 links and completed 65 more tasks, and `chain_2plus` moved by
+> **one** — because **64 of those 65 tasks carried exactly one link**. Duplicates were the
+> binding constraint on chain **EXISTENCE**, never on depth.
+> **Chain DEPTH is SOURCE-limited.** If the entire remaining A2-blocked residue were unblocked it
+> would yield **12** more `chain_2plus` properties (ambiguous 1, no_entity 1, placeholder 8 —
+> permanently blocked by design, repeat 2); and of the 132 remaining open tasks, **99 carry
+> exactly one link**, 26 carry two, 7 carry three or more. New depth requires new RECORDS
+> (deed/OCR capture), not more lane work.
+> See `docs/audits/B1a_AMBIGUOUS_ENTITY_MERGE_2026-08-28.md` and
+> `docs/architecture/ownership-history-lane.md` §3a.
 
 **As measured: 149 of 13,835 live gov properties (1.1%) have two or more historical owner links.** The
 machinery to change that is **built, proven and running** — A1 split the lane, A2 applies chains
@@ -105,12 +115,21 @@ after 69 days at zero.
 **It is not short of machinery. It is short of population**, and the largest single reason is a
 value floor that predates the automation.
 
+> ⚠️ **That last clause was true of `any_history` and WRONG of `chain_2plus`, and B1a measured the
+> difference.** Lifting the floor added **901** properties with any history and **28** with a chain;
+> merging the duplicate blockers then added **65** and **1**. Depth was never floor-limited — gov's
+> ownership feed mostly records ONE transition per property. The sentence stands as written for
+> coverage; for depth, read §3a of the lane doc.
+
 ## 4. Recommendation
 
 1. ✅ **DONE (B1, 2026-08-28)** — floor split by consumer; 1,414 re-opened, reversibly.
-   ⚠️ **The next constraint is NOT another floor:** it is the A2-blocked residue
-   (`ambiguous_entity` 126 links / 123 properties — the A2a duplicate-entity merge, which applies
-   unaided once done). `trace_ownership_to_developer` (983) and dia (516) remain gated, deliberately.
+   ✅ **DONE (B1a, 2026-08-28)** — the A2-blocked `ambiguous_entity` residue merged (59 groups /
+   63 losers, 126 → 57 links, +65 completions, +66 facts).
+   ⚠️ **AND IT SETTLED THE QUESTION IN THE OTHER DIRECTION: stop looking for the next blocker.**
+   The whole remaining residue is worth **12** `chain_2plus` properties, and 99 of 132 remaining
+   tasks carry one link. `trace_ownership_to_developer` (983) and dia (516) remain gated,
+   deliberately — and lifting either would add `any_history`, not depth.
 2. **Then measure the linkage gap (Lock 2)** — ~3,468 properties. Ask *why* the owner never became
    an entity before building anything; the gov `owner_needs_salesforce` lane just taught us that a
    zero can be a key-space artifact rather than a coverage fact.

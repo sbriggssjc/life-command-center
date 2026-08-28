@@ -5,7 +5,7 @@
 > The dated audits under `docs/audits/` are the **evidence trail** — go there for *why*, come here
 > for *what is true now*.
 >
-> **Last measured: 2026-08-28 12:35 UTC.** Re-measure before quoting any number.
+> **Last measured: 2026-08-28 (post-B1a).** Re-measure before quoting any number.
 >
 > 📇 **Topic index for the whole ownership→contact chain (~20 files, and two that are named
 > misleadingly): [`connectivity-and-open-threads.md`](connectivity-and-open-threads.md) §0.**
@@ -50,23 +50,34 @@ distrust every record we have* — which trains an operator to skip all of it.
 has not reached is *not* `no_records`, and a payload matching nothing must surface rather than be
 absorbed into a bucket it does not belong to.
 
-## 3. Current state (2026-08-28 12:35 UTC — after B1)
+## 3. Current state (2026-08-28 — after B1a)
 
-**Completed ever 1,237 · open 644 · skipped 355.** From 0 completions in 69 days, then
-336 after A2/A2a/A2b/A4b, then **1,237** after B1 split the value floor by consumer and
-re-opened the 1,414 gov tasks it had been suppressing.
+**Completed ever 1,302 · open 579 · skipped 355.** From 0 completions in 69 days, then
+336 after A2/A2a/A2b/A4b, then 1,237 after B1 split the value floor by consumer, then
+**1,302** after B1a merged the duplicate entities blocking the `ambiguous_entity` chains.
 
-**The goal metric moved: gov properties with any ownership history 1,272 → 2,173; with a
-chain (2+ historical links) 149 → 177.** `lcc_entity_portfolio_facts` 13,077 → 14,010.
+**gov properties with any ownership history 1,272 → 2,173 → 2,238; with a chain (2+
+historical links) 149 → 177 → 178.** `lcc_entity_portfolio_facts` 13,077 → 14,010 → **14,076**.
 
-| action | tasks | human_gate | was (08-28 07:25) |
+⚠️ **B1a refuted the premise it was filed under.** It was filed as *"duplicate entities are
+now the binding constraint on chain DEPTH"*; the merge drained 69 links out of
+`ambiguous_entity` and moved `chain_2plus` by **one** — because **64 of the 65 completed
+tasks carried exactly one link**. Duplicates were the binding constraint on chain
+**EXISTENCE** (+65 `any_history`), never on depth. See §3a.
+
+| action | tasks | human_gate | was (post-B1) |
 |---|---:|---|---:|
-| `agrees` | 197 | not_human | 51 |
-| `no_records` | 173 | not_human | 0 |
-| `mismatch` | 48 + **72 below floor** | actionable / below_value_floor | 48 |
-| `all_guarded` | 7 + **51 below floor** | actionable / below_value_floor | 7 |
-| `sponsor_spe` | 43 | not_human | 25 |
-| `awaiting_draft` | 53 | awaiting_draft | 0 |
+| `agrees` | 132 | not_human | 197 |
+| `no_records` | 173 | not_human | 173 |
+| `mismatch` | 120 (48 actionable + **72 below floor**) | actionable / below_value_floor | 120 |
+| `all_guarded` | 58 (7 actionable + **51 below floor**) | actionable / below_value_floor | 58 |
+| `sponsor_spe` | 43 | not_human | 43 |
+| `awaiting_draft` | 0 | awaiting_draft | 53 |
+
+⚠️ **`agrees` 197 → 132 is the applier working, not a regression** (§3 pre-B1 note): a
+completed task leaves the open lane, so the bucket drains downward. **B1a touched only
+`agrees`** — `mismatch`, `all_guarded`, `no_records` and `sponsor_spe` are unchanged, and
+the `awaiting_draft` 53 drained through the nightly drafter as expected.
 
 ⚠️ **THE OPERATOR'S BADGE DID NOT MOVE — `human_actionable` is 55, exactly as before B1**,
 and that is the design, not a coincidence. 123 newly-drafted `mismatch`/`all_guarded` cards
@@ -76,16 +87,55 @@ population routes to automation** (`agrees` → A2 cron 244, `no_records` → A4
 
 ⚠️ **`any_history` moved 7× harder than `chain_2plus` (+901 vs +28), and that is the
 POPULATION, not a shortfall** — only 210 of the 1,501 below-floor properties carry ≥2
-guard-passing transitions. **The binding constraint on chain DEPTH is now the A2-blocked
-residue, not the floor**: `ambiguous_entity` 126 links / 123 properties (the A2a
-duplicate-entity class, which applies unaided once merged), `no_entity` 49/47,
-`placeholder` 44/31, `repeat_transfer_unrepresentable` 2/1.
+guard-passing transitions.
+
+### 3a. ⚠️ Chain DEPTH is source-limited, not blocker-limited (measured 2026-08-28, B1a)
+
+The A2-blocked residue was filed as the next constraint on depth. **It is not, and the
+number is small enough to close the question.** If the *entire* remaining residue were
+unblocked tomorrow it would yield **12** `chain_2plus` properties in total:
+
+| blocked reason | links | properties | would reach `chain_2plus` |
+|---|---:|---:|---:|
+| `ambiguous_entity` | 57 | 55 | **1** |
+| `no_entity` | 49 | 47 | **1** |
+| `placeholder` | 44 | 31 | **8** ⚠️ unrecoverable by design |
+| `repeat_transfer_unrepresentable` | 4 | 2 | **2** |
+
+And across the whole remaining open lane (132 tasks with a plan): **99 carry exactly one
+link**, 26 carry two, 7 carry three or more, max 6. gov's ownership feed mostly records
+**one transition per property** — so the ceiling on depth is the records on file, not any
+blocker LCC can clear. The next `chain_2plus` movement has to come from new records
+(deed/OCR capture), not from draining this lane.
+
+⚠️ **The largest depth reservoir in the residue is `placeholder` (8 of the 12), and it is
+permanently blocked on purpose** — the placeholder is the GRANTOR (`Previous Owner → Third
+Avenue Partners, LLC`), so there is no party to write and invariant 4 forbids inventing one.
+
+### 3b. ⚠️ Two corroboration signals for entity identity are STRUCTURALLY unobservable (B1a)
+
+Beyond byte-identical-after-case, the natural corroboration for "same party" is a shared
+`external_identities` row, a shared owned asset, or an overlapping portfolio fact. Over the 42
+held groups all three return **0** — and two of those zeros say nothing at all:
+
+| signal | held groups | fleetwide control | verdict |
+|---|---:|---:|---|
+| shared `external_identities` triple | 0 | **0** | ⚠️ structurally impossible |
+| shared owned asset | 0 | **0** | ⚠️ structurally impossible |
+| overlapping portfolio fact | 0 | **3,923** | ✅ genuine zero |
+
+`external_identities` is UNIQUE on `(workspace_id, source_system, source_type, external_id)`
+**excluding `entity_id`** (P178), and `lcc_property_owner` is keyed on `entity_id` = the ASSET.
+Two live entities can never share either. **Reporting "0 of 42 share an identity" would be
+restating a unique constraint as a measurement** — the P182 family, where a predicate
+structurally unable to express the question returns a plausible number. Point every
+corroboration detector at a known positive before believing its zero.
 
 ⚠️ **The drafter clamps `limit` to 500 and scans a 600-row lane window**
 (`lane_scan_capped: true` reports it honestly), so `backlog_remaining: 0` means *nothing
 fresh in the scanned window*, never *nothing left in the lane*. The lane advances only as
-A2 completes tasks and they leave it. That is the real throughput cap, and it is why the
-53 `awaiting_draft` drain over the next nightly cycles rather than at once.
+A2 completes tasks and they leave it. That is the real throughput cap; it is why B1's 53
+`awaiting_draft` drained over the following nightly cycles rather than at once (now 0).
 
 ⚠️ **Observability gap, surfaced not fixed:** several
 `lcc_ownership_chain_draft_run_log` rows are opened `status='started'` and never closed —
@@ -213,7 +263,9 @@ variant A4b now catches). **There is no further recoverable population here.**
 | # | Item | Size |
 |---|---|---|
 | ~~**B1**~~ | ✅ **DONE 2026-08-28** — the $500k floor now applies PER CONSUMER: none on the automated gov `establish_ownership_history` path, unchanged on anything reaching a person. 1,414 re-opened (reversible, batch `b1-reopen-20260828`); lane 336 → 1,237 completions; gov chains 149 → 177; **`human_actionable` unmoved at 55**. | — |
-| **B1-res** | ⚠️ **The A2-blocked residue is now the binding constraint on chain DEPTH, not the floor** — `ambiguous_entity` **126 links / 123 properties** (A2a class: applies unaided once merged), `no_entity` 49/47, `placeholder` 44/31. This is where the next `chain_2plus` movement comes from. | 201 links |
+| ~~**B1-res**~~ | ✅ **DONE 2026-08-28 (B1a)** — 59 groups / 63 losers merged (batch `b1a-20260828-r1`), `ambiguous_entity` **126 → 57 links**; A2 applied 66 facts / completed 65 tasks. ⚠️ **And it REFUTED its own premise**: `chain_2plus` moved 177 → **178**, because 64 of the 65 tasks carried one link. Duplicates blocked chain EXISTENCE (+65 `any_history`), not depth. See §3a. | — |
+| **B1a-held** | **52 groups held, every one named**: `name_variant_beyond_case` **42**, `person_typed_member` 9, `rival_identity_same_system` 1. ⚠️ Two of the three corroboration signals are **structurally unobservable** (see §3b) — the 42 are unprovable, not merely unproven. The 9 person-typed release cheaply once someone retypes the mistyped row. | 52 groups |
+| **B1a-depth** | ⚠️ **The whole remaining blocked residue is worth 12 `chain_2plus` properties** (§3a). Depth is source-limited: 99 of 132 remaining tasks carry ONE link. New depth needs new RECORDS (deed/OCR capture), not lane work. | 12 props |
 | **B1-trace** | `trace_ownership_to_developer` keeps the $500k floor — **983 below-floor skips** held. Its consumer (cron 145 `developer-chain-resolve-tick`) has NOT been graded the way A2 has; grading it is the decision, not an assumption. | 983 |
 | **B1-dia** | dia keeps the floor and **cannot be lifted by a flag** — it has no `v_ownership_transitions_portfolio`, so a dia task can never be drafted. Building the dia side is the prerequisite. | 516 |
 | ~~**A2b**~~ | ✅ **DONE** — `repeat_transfer_unrepresentable` collapsed in the drafter, 32 links → 15, all 14 unblocked. See §4 invariant 12 and the audit. | — |
@@ -240,3 +292,4 @@ variant A4b now catches). **There is no further recoverable population here.**
 | `docs/audits/A2b_REPEAT_CONVEYANCE_COLLAPSE_2026-08-27.md` | one conveyance on several dates: the mechanism corrected off "flicker", the 26-of-26 date rule, and why a dormant producer still needed a sweep |
 | `docs/audits/V8_SPONSOR_FAMILY_REVIEW_2026-08-27.md` | Scott's 12 answers + the evidence check that changed 4 |
 | `docs/audits/B1_CHAIN_VALUE_FLOOR_SPLIT_2026-08-28.md` | the value floor split by CONSUMER: the measured cost of the automated path, why dia and `trace_` are held, and the two gates that treat unknown value in opposite directions |
+| `docs/audits/B1a_AMBIGUOUS_ENTITY_MERGE_2026-08-28.md` | the duplicate-entity merge that refuted its own premise: depth is source-limited, the round trip proven on the P196 duplicate-edge shape, and the two corroboration signals a unique key makes unobservable |
