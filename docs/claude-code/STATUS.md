@@ -17,6 +17,48 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+
+## 2026-08-28 — B6b: the GSA landlord-change detector restarted (gov)
+
+**Shipped.** `gsa_lease_change_facts` **356,291 → 374,257**, max snapshot **2026-02-01 → 2026-07-01**;
+`gsa_lease_timeline` **16,471 → 16,779**, max **2025-12-01 → 2026-07-01**. **Both `feed_stale` alerts
+AUTO-RESOLVED** — verified on the alert row (`resolved_note = 'Auto-resolved: feed refreshed within
+SLA'`), not on a run log. Derivable backlog **5 → 0**; the re-run is a clean no-op. gov suite **921
+pass / 1 skip**; 14 new tests, **13 mutations RED**. Writeup:
+`docs/audits/B6b_GSA_LANDLORD_CHANGE_RESTART_2026-08-28.md`; migration
+`government-lease/sql/20260828_gov_b6b_gsa_change_layer_from_snapshots.sql`; caller
+`src/gsa_change_layer.py` wired into the existing Monday `gsa-sync` on **both** paths.
+
+**What it cost / what it corrected.** Three premises in the brief were wrong and each correction
+changed the build:
+
+1. **The raw feed was never dead.** `gsa_source_pull_log` shows a pull on **2026-08-24** recording
+   `skipped_duplicate` / `consecutive_unchanged=3` — GSA has not published past 2026-07-01, cadence
+   measured at 28–31 days. A feed early in its cycle and a dead feed read identically from
+   `max(snapshot_date)`; the ledger is the instrument.
+2. **The derived layer read a DIFFERENT TABLE** — `gsa_inventory_snapshot_lines` (manual, frozen)
+   vs `gsa_snapshots` (live). **Scheduling the old code unchanged would have derived nothing.**
+   Repoint gated by a full-history digest (137 dates, 136 identical; 22,030 field-level pairs, 0
+   diffs) positive-controlled at 6,223 diffs when mis-keyed — and it is **not a clean superset**:
+   10 dates exist only in the manual panel, which a three-month sample had shown as clean.
+3. **"Undiffed" ≠ "derivable."** 21 undiffed dates, **15 already SPANNED** by an existing diff.
+   Deriving those double-observes conveyances — the A2b fan-out in the time dimension.
+
+**Two traps worth carrying forward.** A **dry run cannot catch a write-time constraint**: one row in
+17,966 (a `$1.00` placeholder rent corrected to `$10,418.00`, ratio 10,417 against `numeric(8,4)`)
+aborted the batch after five clean dry runs. And the **client timed out while the work committed** —
+verified by the row delta, never the return value.
+
+**Deflated honestly:** raw **+1,336** → **+72 net-new conveyances / +63 properties** (18.6× on the
+increment). ⚠️ Non-oscillating went **DOWN 47** — the new months supplied return legs, so more data
+made the P138 guard stricter.
+
+**Not done, named:** nothing fed to `ownership_history`; the `ownership_change` lead lane was **not**
+restarted (**B6b-lead** — 10,635-row blast radius, no credentials to dry-run it, and its only gate is
+a name heuristic). ⚠️ **B6's G3 row is REFUTED**: `gsa_lease_events` does carry lessor pairs (16,907
+rows) — B6's zero came from `changed_fields ? 'key'` against a jsonb **string**. Also filed:
+**B6b-june** (2026-06-01 is a merged snapshot of two source files, 7,919 leases vs a 7,348–7,495 norm).
+
 ## 2026-08-28 21:50 UTC — TIER0_AUTO_ATTACH: the flag was in the wrong place, and my doc made it a deadlock
 
 **The dated verification came due and FAILED — then resolved.** Cron 241 fired at 06:55 UTC on both

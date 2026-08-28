@@ -1374,3 +1374,74 @@ other provenance labels. The gaps are structural, not acquisition.
   `gov_master_backfill_r71|h=<md5>`). Split on `:` and `|` before grouping, or gov `county_deed`
   reads as 1 row instead of **1,614**. And **69% of dia's own `ownership_history` carries a NULL
   `ownership_source`** — the Class-20 detector is blind to it.
+
+---
+
+## 4j. B6b — the GSA landlord-change layer, restarted (2026-08-28)
+
+`gsa_lease_change_facts` **356,291 → 374,257** (max snapshot **2026-02-01 → 2026-07-01**);
+`gsa_lease_timeline` **16,471 → 16,779** (max **2025-12-01 → 2026-07-01**); **both `feed_stale`
+alerts auto-resolved.** Migration
+`government-lease/sql/20260828_gov_b6b_gsa_change_layer_from_snapshots.sql`; caller
+`src/gsa_change_layer.py`, wired into the existing Monday `gsa-sync`. Full writeup:
+`docs/audits/B6b_GSA_LANDLORD_CHANGE_RESTART_2026-08-28.md`.
+
+- **⚠️ THE RAW FEED WAS ALIVE THE WHOLE TIME, AND THE PULL LEDGER SAID SO.** `gsa_snapshots` at 58
+  days old reads exactly like a dead feed from `max(snapshot_date)`. `gsa_source_pull_log` shows the
+  Monday job pulling **2026-08-24**, fingerprinting the file, and recording
+  `action='skipped_duplicate'` / `consecutive_unchanged=3` — GSA has not published past 2026-07-01,
+  and the measured cadence is **monthly (28–31d)**. **A feed early in its publish cycle and a dead
+  feed are indistinguishable from the table alone**; the difference lives in the ledger, and
+  `consecutive_unchanged` is the honest counter. The freshness registry had already separated them
+  (`gsa_source_pull` was *not* among the six open alerts while both derived feeds were) — nobody had
+  read it that way.
+- **⚠️ PRODUCER AND CONSUMER WERE ON TWO COPIES OF ONE PANEL.** `derive_change_facts` reads
+  `gsa_inventory_snapshot_lines` (manual CLI, frozen 2026-02-01); the weekly job writes
+  `gsa_snapshots` (live, 2026-07-01). **Scheduling the existing code unchanged would have derived
+  nothing** — the diagnosis "it has no scheduled caller" was true and insufficient. **When a derived
+  layer is stale behind a live source, diff the table the consumer READS against the table the
+  producer WRITES before concluding anything about schedulers.**
+- **⚠️ AND THE LIVE PANEL IS NOT A CLEAN SUPERSET — A THREE-MONTH SAMPLE SAID IT WAS.** 137 shared
+  dates, 136 byte-identical (positive-controlled: mis-keyed one month → 6,223 diffs), but **10 dates
+  exist ONLY in the manual panel**, two of them serving as `prior_snapshot_date` for 5,029 existing
+  facts. The manual panel is unioned in **per date**, not retired. The full-history digest is what
+  found them; the recent-months sample was clean and wrong.
+- **⚠️ "UNDIFFED" IS NOT "DERIVABLE."** 21 undiffed dates; **15 are already SPANNED** by an existing
+  diff whose prior is before them and whose snapshot is after (2018-06-01 sits inside a
+  `2018-03-01 → 2019-04-01` diff carrying 18,821 facts). Deriving them records a **second
+  observation of conveyances already held** — the A2b per-lease fan-out in the **TIME** dimension.
+  The guard is the whole safety argument. Its cause is an unreported defect in the old writer:
+  `_previous_snapshot_date` resolves the prior from whatever metadata existed at that moment, and
+  the 2026-03-11 run processed files **out of order**, so 2025-12 got prior 2025-08 (4 months) and
+  2026-02 got 2025-12 (2 months). **A fourth inflation source on top of B6's three**, neutralised by
+  B6's `distinct (property, from, to)` stage.
+- **⚠️ THE FAITHFULNESS PROOF FAILED FIRST AND THE STORED DATA WAS THE WRONG ONE.** The port gave
+  35/26/630 against a stored 68/63/1,845 on 2026-02-01 — because the stored rows describe a
+  two-month diff. On dates whose stored prior IS adjacent it is **byte-faithful: 1,409 rows, 1,409
+  matched, 0 differing in any of 13 derived columns.** When a port disagrees with production,
+  establish which is right before adjusting either.
+- **⚠️ A DRY RUN CANNOT CATCH A WRITE-TIME CONSTRAINT.** The apply died `22003` on **one row in
+  17,966** — lease LMT14507's `$1.00` placeholder rent corrected to `$10,418.00`, ratio 10,417
+  against a `numeric(8,4)` column. Five clean dry runs saw nothing, because a dry run proves the
+  SELECTION and never the WRITE. `gov_gsa_pct_or_null` returns **NULL (not representable, not zero —
+  P180)** and the raw rents stay on the row.
+- **⚠️ THE CLIENT TIMED OUT AND THE WORK HAD COMMITTED.** The tick exceeded the 60s PostgREST
+  statement timeout and returned an error; the delta says **+17,966 facts, all 16,779 timeline rows
+  touched**. Verify a batch by the state delta, never the return value (P118 corollary 4). Split
+  into two RPCs since — ⚠️ and adding the defaulted third parameter needs the 2-arg signature
+  **DROPPED first** (42725, N15d/B1).
+- **Deflation, coverage and depth separately (B1):** raw **+1,336** → **+72 net-new conveyances /
+  +63 properties** (18.6× on the increment; 28.1× fleet-wide). The ladder reproduces B6's published
+  stages **exactly** on the pre-B6b subset. ⚠️ **Non-oscillating went DOWN 47** while conveyances rose
+  311 — the new months supplied return legs, so **more data made the P138 flicker guard stricter**.
+- **⚠️ B6's G3 ROW IS REFUTED, BY THE TRAP THAT PRODUCED IT.** `gsa_lease_events` DOES carry old/new
+  lessor pairs — **16,907 rows, 1,176 in 90 days**. `changed_fields` is a jsonb **string** holding
+  JSON text, so `changed_fields ? 'lessor_name'` cannot match and returns a confident **0 of
+  201,212**; the Python consumer parses it and never noticed. Correct probe:
+  `(changed_fields #>> '{}')::jsonb ? 'key'`. **A zero from a JSON/text detector needs a positive
+  control before it becomes a finding** — here the wrong zero had already been published.
+- **Nothing was fed to `ownership_history`, and the lead lane was NOT restarted** — `ingest_ownership`
+  is a different producer over a different source, its blast radius is **10,635 rows**, it cannot be
+  dry-run without credentials, and its only gate is a name heuristic. Its consumer is confirmed
+  alive (**2,041 worked, 208 in Salesforce, 2,149 touched in 30d**), which is why it deserves a
+  measured restart. Backlog **B6b-lead**; its `feed_stale` alert correctly stays open.

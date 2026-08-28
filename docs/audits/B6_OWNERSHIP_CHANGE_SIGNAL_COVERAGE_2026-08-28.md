@@ -34,9 +34,9 @@ left blank.
 
 | # | signal | volume | → ownership history | → comps | standing? | corroborates | next action |
 |---|---|---|---|---|---|---|---|
-| G1 | **`gsa_lease_change_facts`** `landlord_change_flag` | 356,291 rows; **38,213 flagged / 8,845 leases**, 2013-02→2026-02 → deflated **4,845 conveyances / 3,675 props** → **1,338 net-new / 1,202 props** | partial — 6,648 rows / 3,704 props as `gsa_lease_diff`, **last written 2026-03-27** | no | ❌ **NO scheduled caller.** Written only by `src/ingest_gsa_historical.py` (manual CLI). Last row **2026-03-11** | ❌ **not on the `field_source_priority` ladder** | `prospect_leads.lead_source='ownership_change'` — 7,729 leads, 2,041 worked (26%), **0 in 90 days, dead since 2026-03-31** |
+| G1 | **`gsa_lease_change_facts`** `landlord_change_flag` | 356,291 rows; **38,213 flagged / 8,845 leases**, 2013-02→2026-02 → deflated **4,845 conveyances / 3,675 props** → **1,338 net-new / 1,202 props** | partial — 6,648 rows / 3,704 props as `gsa_lease_diff`, **last written 2026-03-27** | no | ✅ **RESTARTED 2026-08-28 (B6b)** — now **374,257 rows to snapshot 2026-07-01**, scheduled on the Monday `gsa-sync`. ⚠️ It was not merely uncalled: `derive_change_facts` read `gsa_inventory_snapshot_lines` (frozen) while the live job writes `gsa_snapshots`. Deflated **+72 net-new / +63 props** | ❌ **not on the `field_source_priority` ladder** | `prospect_leads.lead_source='ownership_change'` — 7,729 leads, 2,041 worked (26%), **0 in 90 days, dead since 2026-03-31** |
 | G2 | `gsa_snapshots` (raw feed) | 1,201,873; **live**, 30,685/90d | via G1 only | no | ✅ live — Mon `0 5 * * 1` → `src/gsa_auto_sync` | — | — |
-| G3 | `gsa_lease_events` | 233,666 — `modified` 161k / `renewed` 40k / `expired` 19.8k / `new_award` 12.7k; live 15,367/90d | **no old/new lessor pair — this is a LESSEE signal, not a landlord one** | no | ✅ live | — | ✅ `gsa_new_award` 7,522 leads, **2,863 worked** — the healthiest lane in the matrix |
+| G3 | `gsa_lease_events` | 233,666 — `modified` 161k / `renewed` 40k / `expired` 19.8k / `new_award` 12.7k; live 15,367/90d | ⚠️ **THIS CELL IS REFUTED (B6b, 2026-08-28): it DOES carry old/new lessor pairs — 16,907 rows, 16,492 usable, 1,176 in 90d, newest 2026-08-05.** `changed_fields` is a jsonb **STRING** holding JSON text, so `changed_fields ? 'lessor_name'` is structurally unable to match and returns a confident 0 of 201,212. Correct probe: `(changed_fields #>> '{}')::jsonb ? 'key'`. The lane is restartable — backlog **B6b-lead** | no | ✅ live | — | ✅ `gsa_new_award` 7,522 leads, **2,863 worked** — the healthiest lane in the matrix |
 | G4 | `gsa_lease_timeline` (`landlord_change_count`) | 16,471 | no | no | ❌ dead, last 2026-03-11, same writer as G1 | — | — |
 | G5 | **`sales_transactions`** seller side | 15,111; **9,686 named-seller + dated + linked / 4,742 props** | **169 rows** labelled `sales_transaction` — but only **269 rows / 215 props** are genuinely absent from the whole store (§6) | is the comps store | ✅ live, 4,539/90d | — | — |
 | G6 | **`property_sale_events`** | 5,208; 5,097 seller names, 5,065 buyer names, 4,832 property_id | **0 — structurally impossible** (§3) | **0 — structurally impossible** | ❌ dead, last 2026-04-06 | — | none |
@@ -84,7 +84,7 @@ years (64 in 2013, 104 in 2016, 312 in 2023, 195 in 2024), so it reaches back pa
 current store covers.
 
 **And it is a FLOOR.** `gsa_snapshots` is live and holds **2026-03, 2026-05, 2026-06 and 2026-07**;
-`gsa_lease_change_facts` stops at **2026-02-01**. Four monthly snapshots have never been diffed.
+`gsa_lease_change_facts` stops at **2026-02-01**. Four monthly snapshots have never been diffed. **↳ ANSWERED by B6b 2026-08-28: the floor lifted to 1,406 rows / 1,263 properties (+72 / +63). ⚠️ The backlog was 5 dates, not 4 (2018-03-01 too), and 15 further undiffed dates are correctly REFUSED because an existing diff already spans them — deriving those would double-observe conveyances the store already holds.**
 (⚠️ **2026-04-01 is missing from the raw feed entirely** — a separate gap, not caused by this.)
 
 ---
