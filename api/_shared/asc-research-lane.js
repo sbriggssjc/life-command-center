@@ -181,6 +181,32 @@ function terminalTownshipMunicipalityAlias(left, right) {
   return { frozen_city: frozen[1], captured_city: captured[1] };
 }
 
+function capturedDirectionalStreetTypeExtension(frozenAddressToken, capturedAddressToken) {
+  if (!frozenAddressToken || !capturedAddressToken) return null;
+  const frozen = frozenAddressToken.split('|');
+  const captured = capturedAddressToken.split('|');
+  if (frozen.length !== 4 || captured.length !== 4
+    || frozen.slice(1).join('|') !== captured.slice(1).join('|')) return null;
+  const frozenStreet = frozen[0].split(' ');
+  const capturedStreet = captured[0].split(' ');
+  if (!/^\d+[A-Z]?$/.test(frozenStreet[0] || '')
+    || frozenStreet[0] !== capturedStreet[0]) return null;
+  const directions = new Set(['N', 'S', 'E', 'W']);
+  const streetTypes = new Set(['ST', 'AVE', 'BLVD', 'RD', 'DR', 'LN', 'HWY']);
+  const comparison = [...capturedStreet];
+  let addedDirectional = null;
+  let addedStreetType = null;
+  if (directions.has(comparison[1]) && !directions.has(frozenStreet[1])) {
+    addedDirectional = comparison.splice(1, 1)[0];
+  }
+  if (streetTypes.has(comparison.at(-1)) && !streetTypes.has(frozenStreet.at(-1))) {
+    addedStreetType = comparison.pop();
+  }
+  if ((!addedDirectional && !addedStreetType)
+    || comparison.join(' ') !== frozenStreet.join(' ')) return null;
+  return { added_directional: addedDirectional, added_street_type: addedStreetType };
+}
+
 function capturedRangeContainsFrozenEndpoint(frozenAddressToken, capturedAddressToken) {
   if (!frozenAddressToken || !capturedAddressToken) return null;
   const frozen = frozenAddressToken.split('|');
@@ -271,10 +297,29 @@ export function buildAscStructuredCapture(target, context = {}) {
     const rangeEndpointMatch = rangeEndpoint && corroboration;
     const municipalityAlias = terminalTownshipMunicipalityAlias(target.address_token, addressToken);
     const municipalityAliasMatch = municipalityAlias && exactTenantCorroboration;
-    if (!parentBuildingMatch && !aliasMatch && !rangeEndpointMatch && !municipalityAliasMatch) {
+    const directionalStreetTypeExtension = capturedDirectionalStreetTypeExtension(
+      target.address_token,
+      addressToken,
+    );
+    const directionalStreetTypeMatch = !parentBuildingMatch
+      && hasAscSublocation(cmsIdentity.address)
+      && directionalStreetTypeExtension
+      && exactTenantCorroboration;
+    if (!parentBuildingMatch && !aliasMatch && !rangeEndpointMatch
+      && !municipalityAliasMatch && !directionalStreetTypeMatch) {
       throw new Error('Captured page does not match the active frozen ASC candidate');
     }
-    identityMatch = municipalityAliasMatch ? {
+    identityMatch = directionalStreetTypeMatch ? {
+      mode: 'tenant_corroborated_directional_street_type_extension',
+      added_directional: directionalStreetTypeExtension.added_directional,
+      added_street_type: directionalStreetTypeExtension.added_street_type,
+      corroboration_basis: exactTenantCorroboration.basis,
+      corroborated_name: exactTenantCorroboration.matched_name,
+      cms_sublocation_preserved: clean(cmsIdentity.address),
+      captured_building_address: clean(context.address),
+      facility_name: clean(cmsIdentity.facility_name),
+      second_review_required: true,
+    } : municipalityAliasMatch ? {
       mode: 'tenant_corroborated_municipality_alias',
       cms_city_preserved: clean(cmsIdentity.city),
       captured_city: clean(context.city),

@@ -236,6 +236,59 @@ test('terminal Township municipality aliases require exact location and explicit
   );
 });
 
+test('captured directional and street type extensions require a CMS sublocation and exact tenant corroboration', () => {
+  const target = {
+    candidate_fingerprint: sha('7'),
+    address_token: '2704 GALLOWAY|MESQUITE|TX|75150',
+    cms_identity: {
+      facility_name: 'Texas GI Endoscopy Center',
+      address: '2704 Galloway Suite 102', city: 'Mesquite', state: 'TX', zip: '75150',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Mesquite TX Endoscopy ASC LLC'],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/americana-medical-plaza',
+    address: '2704 N Galloway Ave', city: 'Mesquite', state: 'TX', zip: '75150',
+    square_footage: '18,844',
+    tenants: [{ name: 'Texas GI Endoscopy Center', occupied_sf: '4,750' }],
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.identity_match.mode, 'tenant_corroborated_directional_street_type_extension');
+  assert.equal(built.identity_match.added_directional, 'N');
+  assert.equal(built.identity_match.added_street_type, 'AVE');
+  assert.equal(built.identity_match.corroboration_basis, 'facility_name');
+  assert.equal(built.identity_match.cms_sublocation_preserved, '2704 Galloway Suite 102');
+  assert.equal(built.identity_match.captured_building_address, '2704 N Galloway Ave');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const mismatch of [
+    { tenants: [{ name: 'Unrelated Medical Group' }] },
+    { address: '2706 N Galloway Ave' },
+    { address: '2704 N Other Ave' },
+    { address: '2704 N N Galloway Ave' },
+    { city: 'Garland' },
+    { state: 'OK' },
+    { zip: '75149' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_identity: { ...target.cms_identity, address: '2704 Galloway' },
+    }, context),
+    /does not match/,
+  );
+});
+
 test('adjacent civic numbers require an evidence-backed candidate alias and tenant corroboration', () => {
   const alias = {
     status: 'approved',
