@@ -1,3 +1,13 @@
+> # ⚠️ ARCHIVED — the May-2026 circle-back register. HISTORICAL RECORD.
+> **🚨 Its §F "Working-tree file corruption / Edit-tool truncation" workaround is OBSOLETE** — a
+> 2026-05 mount artifact. **Do not write files via `bash python open('w')` because of it.**
+> **🚨 O-9's closeout describes `vercel.json` rewrites and a Vercel+Railway dual deploy.** Vercel was
+> retired 2026-07-20 — **and the retired deployment still answers and still holds a service key.**
+> **Open items were extracted to `docs/os/PLANNED-BACKLOG.md` §P14c before this was archived:**
+> **P-1 → I3** (the pooler — it had NO row of its own; the backlog pointed *at this file*),
+> **§E status drift → I10**, **DQ-6 / DQ-8 / O-8 → I18** (O-8's empty `normalized_address` is the
+> fuel backlog **R3** needs). Counts here are three months old.
+
 # Data & Pipeline — Gaps & Findings Register
 
 **Maintained from:** 2026-05-20. **Purpose:** the single circle-back list of everything found and its status, so nothing is lost as the infrastructure is built out. Status legend: ✅ fixed live (reversible) · 🔧 spec'd for branch · ⏸ deferred (dependency) · ⚠ open/needs decision.

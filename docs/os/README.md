@@ -42,7 +42,7 @@ engines were copied and diverged). Full statement: `architecture/connected-agent
 | **Surface bindings** | `docs/os/SURFACE-SYNC-PROTOCOL.md` | How each surface renders the canon + how to update them all |
 | **Agent/surface architecture** | `docs/os/architecture/connected-agent-*.md` | Orchestrator + specialists |
 | **Render & parity (enforcement)** | `docs/os/RENDER-AND-PARITY.md` + `docs/os/tools/` + `canon/blocks/` | Renders canon to surfaces; fails on drift |
-| **Deployment truth (one URL)** | `docs/os/architecture/mcp-server-unification.md` + `INFRASTRUCTURE.md` | Phase 1 live — one base URL for Claude/ChatGPT/Copilot |
+| **Deployment truth (one URL)** | `docs/os/architecture/mcp-server-unification.md` + `docs/architecture/infrastructure-topology.md` | Phase 1 live — one base URL for Claude/ChatGPT/Copilot |
 | **Build status** | `docs/os/BUILD-STATUS.md` | ✅/⏳/📐 for every element — the honest "are we done" |
 | **Access & devices** | `docs/os/ACCESS-TOPOLOGY.md` | Devices × storage × surfaces; Cortex + personal reachability; the D-drive island |
 | **Office Scripts** | `docs/os/architecture/office-scripts/` | Workbook/cell edits Work IQ can't do (>5 MB); the pro-forma escalation fix |

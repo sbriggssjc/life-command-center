@@ -1,3 +1,12 @@
+> # ⚠️ ARCHIVED — the root wave ledger. **RENAMED to end a NAME COLLISION.**
+> **🚨 There were TWO `ROLLOUT_STATUS.md`. The live one is `docs/audits/ROLLOUT_STATUS.md`** (250 KB,
+> cited by `api/admin.js:263` and every `audit/data-flow-2026-05-30/` prompt). **This root copy had
+> ZERO inbound references** and its own banner already redirected readers elsewhere — a document
+> everyone thought they had found.
+> ⚠️ Its "BUILT — flag off" column is self-declared drifted (wrong for `MAILBOX_MIRROR`,
+> `W74_ROLE_ISSUES`, `W75_ACTION_SUMMARY`, `PROPERTY_TWIN_ASSIST`); its P106 entry reads healthy
+> where **P135 later measured 0 writes in 7 days**. Open item → §P14c **I14**.
+
 # ROLLOUT_STATUS
 
 Live rollout ledger for sequenced build waves. Newest wave on top. Each row: what

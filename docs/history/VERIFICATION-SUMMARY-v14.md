@@ -1,3 +1,12 @@
+> # ⚠️ ARCHIVED — 2026-03-07 verification pass. HISTORICAL RECORD.
+> **🚨 Do not conclude LCC can create Salesforce records.** This describes SF write-back as live; the
+> current doctrine is that **LCC's Salesforce surface is a READ-ONLY Power Automate proxy** — a
+> repo-wide grep for `sobjects` / a POST to Salesforce returns nothing (C1 audit).
+> ⚠️ *"Manual git push required"* is moot — **`main` is protected**; *"deploy to GitHub Pages"* was
+> never true of production. Counts are 5 months old and the "~5,000" figures are round in a way
+> characteristic of a page cap, not a census.
+> Open item → §P14c **I21** (team-member SF sync filtering — the only record of that requirement).
+
 # Life Command Center v14 — End-to-End Verification Summary
 **Date:** March 7, 2026
 **Scope:** Steps 7–13 (Write-Back to Salesforce + Filtered Sync)

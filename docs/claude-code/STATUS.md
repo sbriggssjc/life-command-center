@@ -443,6 +443,109 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-28 — 🗄️ CLEANUP PASS 2: infra / hosting / monitoring. 23 more items filed nowhere, and a live contradiction between two canonical pages.
+
+**Root `.md` 50 → 35** (70 → 35 across both passes). Fifteen files read in full before any move.
+**23 items existed in no tracker** — §P14c, **I1–I23**.
+
+**The five that matter most:**
+
+- 🔒 **I1 — the `X-PA-Webhook-Secret` was committed INLINE in a Power Automate export and rotation
+  was never confirmed.** 👤 Scott, security, do this first.
+- ⚠️ **I2 — dia parallel pagination was never reverted or probed, and its gov twin was a
+  194-SECOND regression.** QA-33 says *"dia NOT reverted yet"* and nobody went back.
+- **I3 — the Supavisor pooler move was filed ONLY as a pointer from the backlog INTO the file being
+  archived.** **A pointer into an archive is not a filing.** It now has its own row; the pointer is
+  repointed. **This is the cautionary tale of the pass** — the extract-first gate caught it only
+  because the gate exists.
+- **I4/I5 — a PA flow has been failing daily at ~11:26 UTC since June** ("turn it off" was never
+  confirmed), and **the PA fault branch posts only the run header, so `error_detail` is empty and
+  every flow failure is undiagnosable.**
+- **I9 — six of seven Pipeline Control findings are still true in today's code**, including a banner
+  telling operators *"runs are triggered via CLI — contact your administrator"* when they run on
+  Railway crons.
+
+**Two obsolete WORKFLOW workarounds are now bannered off.** `AUDIT_PROGRESS` and
+`GAPS_AND_FINDINGS_REGISTER` both prescribe writing files via `bash python open('w')` because
+*"sandbox writes are invisible to Windows git"* — a 2026-05 mount artifact. **A future session
+adopting that would be silently slowed by a bug that no longer exists.** Stale *process* advice is
+worse than stale facts: nothing contradicts it.
+
+**A name collision ended.** There were **two `ROLLOUT_STATUS.md`**. The live one is
+`docs/audits/ROLLOUT_STATUS.md` (250 KB, cited by `api/admin.js:263`); the root copy had **zero
+inbound references** and its own banner redirected readers elsewhere — *a document everyone thought
+they had found.* Archived under a disambiguated name.
+
+**Four root files named four different hosting targets** — Vercel (ROLLOUT AD6, a "locked
+architecture decision"), Railway (INFRASTRUCTURE), Render (RENDER_MIGRATION_PLAN), GitHub Pages
+(VERIFICATION-SUMMARY). **Railway is right**, and **none of the four recorded that the retired Vercel
+deployment still answers and still holds a service key** — the fact an infra reader most needs.
+**I16 makes the Render contingency a decision instead of a fourth answer.** 👤 Scott.
+
+### ⚠️ A LIVE CONTRADICTION BETWEEN TWO CANONICAL PAGES — surfaced, not resolved
+
+**`CURRENT-STATE.md` says `LCC_API_KEY` is "production-ready but NOT enforced". `CLAUDE.md` says
+`/api/*` IS auth-enforced** — on the strength of my own probe returning **HTTP 401** while
+`/version` answered normally. **Both cannot be right about the same thing.** Most likely one
+describes the env state and the other a route-level guard. **The resolver is
+`GET /api/diag?kind=auth-ready`.** Flagged in place on `CURRENT-STATE.md`; **neither page should be
+quoted on auth until it is run.**
+
+## 2026-08-28 — ✅ B6b SHIPPED. The change layer is live and self-healing — and it corrected THREE of my premises, including one I raised as an alarm.
+
+Merged: `government-lease#390` (`9b7dfda`, post-merge Test & Lint green on main — **verified on the
+run, not assumed**, after it merged ~30s from opening) · `life-command-center#1903`.
+
+**Verified live by Cowork:** `gsa_lease_change_facts` **336,303 → 374,257** rows, now current to
+snapshot **2026-07-01** (was 2026-02-01) · `gsa_lease_timeline` **16,779** · `landlord_change_flag`
+**38,213 → 39,549** · derivable backlog **0** · **the layer now derives on the Monday `gsa-sync` on
+both paths, so it self-heals whenever GSA publishes.**
+
+**🎯 THE ACCEPTANCE TEST WAS MET IN THE LEDGER, NOT IN A RUN LOG.** Both `feed_stale` alerts —
+`gsa_lease_change_facts` and `gsa_lease_timeline` — **opened AND resolved on 2026-08-28**. The
+monitor repaired yesterday detected the producer repaired today and closed itself. That is the
+whole point of having sequenced B6a → B6a-follow-up → B6b.
+
+### ⚠️ Three corrections to MY prompt's premises — and the first one was my alarm
+
+1. **🚨 "THE RAW FEED IS STALE TOO" WAS WRONG. The raw feed was never dead.** The pull ledger shows a
+   **2026-08-24 pull with `consecutive_unchanged=3`** — **GSA simply has not published August.** I
+   led the prompt with `gsa_snapshots` at 2026-07-01 (~58 days) as a 🚨 finding. **My own prompt
+   warned against exactly this error** (*"a feed early in its cycle and a dead feed look identical
+   from `max(snapshot_date)`"*) — so the guard worked and the check was made, but **I put the alarm
+   in the headline and the caution in a footnote, and the alarm was the wrong half.** Read the
+   producer's own ledger before calling a feed dead.
+2. **"No scheduled caller" was TRUE BUT INSUFFICIENT.** The derivation read a **different table**
+   from the one the live job writes. **Scheduling the old code unchanged would have produced
+   nothing** — a green cron over a no-op, i.e. the exact class B6a exists to expose.
+3. **"Undiffed" ≠ "derivable."** **15 of 21 undiffed dates are already spanned by an existing diff**,
+   and deriving them would have **double-counted conveyances the store already holds.** Backlog
+   count and work count are different numbers.
+
+### New durable footgun (recorded in gov's CLAUDE.md)
+
+⚠️ **A DDL batch that ends in a runtime error rolls the DDL back with it.** That is how a 2-arg
+`gov_gsa_change_layer_tick` overload survived a `DROP` that appeared to have run — found only by
+**censusing the live objects afterwards**. Same family as *merged is not running*: **the statement
+executing is not the object existing.**
+
+### Deliberately left open, with reasoning recorded
+
+- **`B6b-lead`** — `prospect_leads_ownership_change` is **still dead and still correctly alerting**
+  (150d). `ingest_ownership` IS restartable and **B6's claim that its input carries no lessor signal
+  is REFUTED — 16,907 rows do.** But it is a **10,635-row first write gated only by a name
+  heuristic** that could not be dry-run from the sandbox. ⚠️ **Its consumer is confirmed alive —
+  2,041 leads worked, 208 in Salesforce — which is precisely why it deserves a MEASURED restart
+  rather than a blind one.**
+- **`B6b-june`** — `gsa_snapshots` 2026-06-01 is a **merged snapshot of two source files**: an
+  upstream ingest defect, not a change-layer one.
+
+**Open `feed_stale` alerts now 6 → 4:** `prospect_leads_ownership_change` (B6b-lead) ·
+`property_sale_events` 144d (**B6c**, the `bigint`-vs-`uuid` table) · `sam_lease_opportunities` 32d
+vs a 14d SLA · `medicare_clinics` (dia) 64d — ⚠️ still **check the SLA before treating as a defect**,
+CMS publishes slowly. *(The ledger also shows the alerting worked before the July outage —
+`gsa_lease_events` opened 06-20/resolved 06-22, `gsa_leases_snapshot` 07-09/07-14.)*
+
 ## 2026-08-28 — B6b drafted, and re-measuring found the raw feed is stale too
 
 **Prompt: `prompts/B6b-restart-gsa-landlord-change-detector-2026-08-28.md`.** B6a + B6a-follow-up

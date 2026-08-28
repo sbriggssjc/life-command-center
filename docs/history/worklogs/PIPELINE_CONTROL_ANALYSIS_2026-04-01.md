@@ -1,3 +1,9 @@
+> # ⚠️ ARCHIVED — 2026-04-01 UX/safety review of the gov Pipeline Control panel.
+> **🚨 EVERY LINE NUMBER IS WRONG** — the function moved 4051 → **7442**. Do not navigate by them.
+> **🚨 Issue #1 is STALE: `govWriteService` IS defined** (`gov.js:149`, 7 call sites). Not a bug.
+> **The other SIX findings were re-verified live 2026-08-28 and are still true** — backlog **I9**,
+> including the banner still claiming *"runs are triggered via CLI"* when they run on Railway crons.
+
 # Pipeline Control Mode Analysis — gov.js
 **Date**: April 1, 2026
 **File**: /sessions/laughing-zen-heisenberg/mnt/life-command-center/gov.js
