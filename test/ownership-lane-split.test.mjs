@@ -34,7 +34,11 @@ import {
 // file would keep passing while the shipped view drifted away from it.
 const MIGRATION = readdirSync('supabase/migrations')
   .filter((f) => f.includes('ownership_history_lane_split')
-              || f.includes('ownership_mismatch_sponsor_family'))
+              || f.includes('ownership_mismatch_sponsor_family')
+              // B1 (2026-08-28) re-issued the WHOLE split-view body again to add
+              // the human value gate. A guard pinned to the older files keeps
+              // passing while the shipped view drifts away from it (P197).
+              || f.includes('b1_split_chain_value_floor'))
   .map((f) => readFileSync(`supabase/migrations/${f}`, 'utf8'))
   .join('\n');
 

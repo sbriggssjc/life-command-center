@@ -5,7 +5,7 @@
 > The dated audits under `docs/audits/` are the **evidence trail** — go there for *why*, come here
 > for *what is true now*.
 >
-> **Last measured: 2026-08-28 07:25 UTC.** Re-measure before quoting any number.
+> **Last measured: 2026-08-28 12:35 UTC.** Re-measure before quoting any number.
 >
 > 🔗 **Sibling subsystem, same entity graph:**
 > [`tier0-owner-contact-system.md`](tier0-owner-contact-system.md) — matching a PERSON to an owner
@@ -46,9 +46,49 @@ distrust every record we have* — which trains an operator to skip all of it.
 has not reached is *not* `no_records`, and a payload matching nothing must surface rather than be
 absorbed into a bucket it does not belong to.
 
-## 3. Current state (2026-08-28 07:25 UTC)
+## 3. Current state (2026-08-28 12:35 UTC — after B1)
 
-**Completed ever 336 · open 131 · skipped 1,769.** From 0 completions in 69 days.
+**Completed ever 1,237 · open 644 · skipped 355.** From 0 completions in 69 days, then
+336 after A2/A2a/A2b/A4b, then **1,237** after B1 split the value floor by consumer and
+re-opened the 1,414 gov tasks it had been suppressing.
+
+**The goal metric moved: gov properties with any ownership history 1,272 → 2,173; with a
+chain (2+ historical links) 149 → 177.** `lcc_entity_portfolio_facts` 13,077 → 14,010.
+
+| action | tasks | human_gate | was (08-28 07:25) |
+|---|---:|---|---:|
+| `agrees` | 197 | not_human | 51 |
+| `no_records` | 173 | not_human | 0 |
+| `mismatch` | 48 + **72 below floor** | actionable / below_value_floor | 48 |
+| `all_guarded` | 7 + **51 below floor** | actionable / below_value_floor | 7 |
+| `sponsor_spe` | 43 | not_human | 25 |
+| `awaiting_draft` | 53 | awaiting_draft | 0 |
+
+⚠️ **THE OPERATOR'S BADGE DID NOT MOVE — `human_actionable` is 55, exactly as before B1**,
+and that is the design, not a coincidence. 123 newly-drafted `mismatch`/`all_guarded` cards
+are below $500k and held at `human_gate='below_value_floor'`. **89% of the newly-drafted
+population routes to automation** (`agrees` → A2 cron 244, `no_records` → A4 cron 245,
+`sponsor_spe` terminal). See `docs/audits/B1_CHAIN_VALUE_FLOOR_SPLIT_2026-08-28.md`.
+
+⚠️ **`any_history` moved 7× harder than `chain_2plus` (+901 vs +28), and that is the
+POPULATION, not a shortfall** — only 210 of the 1,501 below-floor properties carry ≥2
+guard-passing transitions. **The binding constraint on chain DEPTH is now the A2-blocked
+residue, not the floor**: `ambiguous_entity` 126 links / 123 properties (the A2a
+duplicate-entity class, which applies unaided once merged), `no_entity` 49/47,
+`placeholder` 44/31, `repeat_transfer_unrepresentable` 2/1.
+
+⚠️ **The drafter clamps `limit` to 500 and scans a 600-row lane window**
+(`lane_scan_capped: true` reports it honestly), so `backlog_remaining: 0` means *nothing
+fresh in the scanned window*, never *nothing left in the lane*. The lane advances only as
+A2 completes tasks and they leave it. That is the real throughput cap, and it is why the
+53 `awaiting_draft` drain over the next nightly cycles rather than at once.
+
+⚠️ **Observability gap, surfaced not fixed:** several
+`lcc_ownership_chain_draft_run_log` rows are opened `status='started'` and never closed —
+today's 06:45 cron run included — while the handler returns HTTP 200 and writes its
+proposals. **Read the pg_net response body or the proposal delta, not the run log.**
+
+### Pre-B1 state, retained as the yardstick (07:25 UTC)
 
 | action | tasks | was (08-27 17:15) |
 |---|---:|---:|
@@ -168,6 +208,10 @@ variant A4b now catches). **There is no further recoverable population here.**
 
 | # | Item | Size |
 |---|---|---|
+| ~~**B1**~~ | ✅ **DONE 2026-08-28** — the $500k floor now applies PER CONSUMER: none on the automated gov `establish_ownership_history` path, unchanged on anything reaching a person. 1,414 re-opened (reversible, batch `b1-reopen-20260828`); lane 336 → 1,237 completions; gov chains 149 → 177; **`human_actionable` unmoved at 55**. | — |
+| **B1-res** | ⚠️ **The A2-blocked residue is now the binding constraint on chain DEPTH, not the floor** — `ambiguous_entity` **126 links / 123 properties** (A2a class: applies unaided once merged), `no_entity` 49/47, `placeholder` 44/31. This is where the next `chain_2plus` movement comes from. | 201 links |
+| **B1-trace** | `trace_ownership_to_developer` keeps the $500k floor — **983 below-floor skips** held. Its consumer (cron 145 `developer-chain-resolve-tick`) has NOT been graded the way A2 has; grading it is the decision, not an assumption. | 983 |
+| **B1-dia** | dia keeps the floor and **cannot be lifted by a flag** — it has no `v_ownership_transitions_portfolio`, so a dia task can never be drafted. Building the dia side is the prerequisite. | 516 |
 | ~~**A2b**~~ | ✅ **DONE** — `repeat_transfer_unrepresentable` collapsed in the drafter, 32 links → 15, all 14 unblocked. See §4 invariant 12 and the audit. | — |
 | **A2b-res** | ⚠️ **A4b's 3 `all_guarded` self-transitions (`786` RGR, `7527` EPA, `14058` MAOB) were NOT A2b's population and are still open.** They are punctuation-variant **self**-transitions, correctly guarded — a different defect from a repeated conveyance, and the earlier note that they "are the same flicker" was wrong on both counts. | 3 |
 | **A4b-res** | `is_name_variant` still misses **spaced-letter legal forms and TIC** (`1201 CORBIN, L. L. C.`, `1325 J STREET L P`, `321 E 2nd St TIC`) — measured at **18 address-arm names**, sized deliberately and NOT folded into A4b, whose blast radius was graded on a different rule. | ~18 names |
@@ -191,3 +235,4 @@ variant A4b now catches). **There is no further recoverable population here.**
 | `docs/audits/A4b_TRANSITION_CLEAN_GUARD_2026-08-27.md` | the street-numbered-SPE defect: fleet-wide size, the measured discriminator, the variant pairing, the re-draft sensor |
 | `docs/audits/A2b_REPEAT_CONVEYANCE_COLLAPSE_2026-08-27.md` | one conveyance on several dates: the mechanism corrected off "flicker", the 26-of-26 date rule, and why a dormant producer still needed a sweep |
 | `docs/audits/V8_SPONSOR_FAMILY_REVIEW_2026-08-27.md` | Scott's 12 answers + the evidence check that changed 4 |
+| `docs/audits/B1_CHAIN_VALUE_FLOOR_SPLIT_2026-08-28.md` | the value floor split by CONSUMER: the measured cost of the automated path, why dia and `trace_` are held, and the two gates that treat unknown value in opposite directions |

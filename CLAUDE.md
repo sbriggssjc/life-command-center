@@ -466,6 +466,13 @@ worst failure mode: a `5,447` / `999+` badge that is mostly noise trains the ope
 
 1. **Value-gate the producer.** Emit only above an actionability/value floor — never one item per captured row.
    The floor is a single tunable knob (e.g. `$500k` chain-task floor; `CADENCE_SIGNAL_MIN_VALUE`).
+   - **⚠️ THE FLOOR BELONGS ON WHAT REACHES A HUMAN, AND THAT IS NOT THE SAME AS "THE PRODUCER"
+     ONCE AN AUTOMATED CONSUMER EXISTS (B1, 2026-08-28).** A floor sized for operator attention
+     keeps suppressing work the moment a cron starts applying it — measured at **1,548 skips, five
+     times the lane's lifetime completions**, for **~8 ms of DB time per item**. Split it by
+     CONSUMER (none/low on the automated path, unchanged on anything a person sees), never remove
+     it, and **measure which (domain, research_type) pairs the automation actually covers** — the
+     dia half of that lane has no source view at all. See the B1 section below.
    - **⚠️ "ACTIONABLE-ONLY" HAS TWO AXES — VALUE **AND** DECIDABILITY (P181, 2026-08-26).**
      `npi_missing_inventory` was correctly capped by patient volume and never asked whether the
      question could be answered at all. An NPPES lookup worker had already run and abstained on
@@ -3135,6 +3142,76 @@ with an active Ollama pre-rank (cron 213) and **59 human verdicts recorded**. It
   `gate_reason='lane_no_consumer'`. That is success, not a failure to move the metric. The numbers
   that move are `dia.true_owners.salesforce_id` non-null (**822 → 849**, C1d) and the gov admitted
   count (**1,675 → 1,579**, C1a).
+
+## B1 — a value gate belongs on what reaches a HUMAN, not on what a cron applies (2026-08-28)
+
+`establish_ownership_history` carried **1,548 `below_value_floor` skips at $500k — five times the
+314 the lane had ever completed.** The floor (R60) was **correct when set**: the lane was a human
+research queue whose instruction says *"pull the county deed history via the county-recorder
+portal"*. ⚠️ **And $500k is NOT "one knob" — C2a measured five independent objects carrying that
+literal the same day, refuting this file's own "one number, not three"; B1 makes it six
+(`lcc_chain_human_value_floor()`), which is C2d's preferred direction (a NAMED per-gate knob over a
+repeated literal) but must be counted, not glossed. B1 touches only this lane's research gate.**
+**What changed is the CONSUMER, not the judgement** — since A2 (cron 244) the `agrees`
+bucket is applied automatically from a deterministic, record-cited draft and A4 (cron 245)
+auto-retires `no_records`. Migration `20260828120000`; writeup
+`docs/audits/B1_CHAIN_VALUE_FLOOR_SPLIT_2026-08-28.md`. Result: lane completions **336 → 1,237**,
+gov `any_history` **1,272 → 2,173**, gov `chain_2plus` **149 → 177**, and the operator's
+`human_actionable` badge **unmoved at 55**.
+
+- **⚠️ THE FLOOR IS SPLIT BY CONSUMER, NOT REMOVED — and the boundary was MEASURED, not chosen.**
+  `lcc_chain_lane_has_auto_consumer(domain, research_type)` is the single owner of it and admits
+  **gov + `establish_ownership_history` ONLY**, because the drafter reads
+  `gov.v_ownership_transitions_portfolio` and **dia has no such view** (measured: zero objects
+  matching `%ownership_transition%` on `zqzrriwuavgrquhisnoa`; gov holds 9,595 transitions). A dia
+  task can never be drafted, never auto-applied, and lands on a human — so lowering its floor mints
+  work no automation can touch. `trace_ownership_to_developer` is held for a different reason: its
+  consumer (cron 145) has **not been graded** the way A2 has. **1,030 rows held by design and
+  reported as `held_by_design`, never silently dropped.**
+- **⚠️ THE HUMAN GATE CANNOT LIVE IN THE SEEDER, AND THAT IS STRUCTURAL.** The seeder mints
+  **before** the drafter runs, and it is the DRAFT that decides `agrees` (automation) vs `mismatch`
+  (a person). So the human floor lives on
+  `v_lcc_ownership_history_lane_split.human_actionable` — which
+  `v_lcc_research_lane_summary.human_actionable_tasks` already reads. Measured after the drain: 123
+  new `mismatch`/`all_guarded` cards, **every one below $500k and held**, badge still 55. **89% of
+  the newly-drafted population routed to automation.**
+- **⚠️ TWO GATES, OPPOSITE DIRECTIONS ON AN UNKNOWN VALUE — and both are right.** The automated
+  path **admits** an unpriced task (drafting is ~free; refusing a free chain because we cannot price
+  it buys nothing); the human surface **gates** it ("we cannot size it" is not evidence it is worth
+  an operator's time — P180 / A5c `value_unknown`). Writing one rule for both would have been wrong
+  in one direction whichever way it went.
+- **MEASURE THE COST BEFORE CALLING IT FREE.** The drafter's gov read is **508 ms per 60-property
+  chunk and almost entirely FIXED** — `v_ownership_transitions_portfolio` materialises its whole
+  `norm` CTE (9,595 rows) plus an oscillating-pair self-join on every request, and only **71 of
+  9,595** rows survived a 60-id filter. So cost scales with **CHUNKS, not chains**: the entire
+  below-floor population is ~21 chunks ≈ **10.7 s of gov DB time, once** — about **8 ms per chain**,
+  against a floor that exists to protect operator hours.
+- **⚠️ `backlog_remaining: 0` IS SCOPED TO THE SCAN WINDOW.** The drafter clamps `limit` to 500 and
+  scans a **600-row** lane window; `lane_scan_capped: true` says so. The lane advances only as A2
+  **completes** tasks and they leave the open lane, so the drain is a draft→apply CYCLE, not one
+  pass. Reading `backlog_remaining` as "nothing left in the lane" would have reported the job done
+  with 687 tasks untouched.
+- **⚠️ CHECK WHICH METRIC THE POPULATION CAN ACTUALLY MOVE.** `any_history` rose **+901** while
+  `chain_2plus` rose **+28** — not a shortfall: only **210 of 1,501** below-floor properties have ≥2
+  guard-passing transitions, and most of this population is genuinely single-link. **The binding
+  constraint on chain DEPTH is now the A2-blocked residue** (`ambiguous_entity` 126 links / 123
+  properties — the A2a merge class, which applies unaided once merged), **not the floor.** Quoting
+  +28 as the ceiling, or as a disappointment, would both be wrong.
+- **The overload trap again (N15d):** adding `p_auto_min_value` with a default makes every 2-arg
+  call *"function is not unique"* (42725), so the 2-arg signature is **DROPPED first**. And the
+  effective floor is resolved in **both** the skip sweep and the mint — a row admitted by one and
+  closed by the other is nightly churn that reads exactly like a working producer.
+- **The reversal was RUN before the batch** (P195): a 5-row re-open → un-re-open restored **5 of 5
+  byte-identically**. Reverse the whole batch with `lcc_b1_unreopen('b1-reopen-20260828')`; restore
+  single-floor behaviour by re-scheduling cron 144 with `500000` as the third argument.
+- **⚠️ Observability gap, surfaced not fixed:** `lcc_ownership_chain_draft_run_log` rows open at
+  `status='started'` and several never close — today's 06:45 cron run included — while the handler
+  returns HTTP 200 and writes its proposals. **Read the pg_net response body or the proposal delta,
+  not the run log.**
+- Guard: `test/b1-chain-value-floor-split.test.mjs` (11 tests, **all 11 mutations verified RED**,
+  comments stripped before matching — the migration header discusses the held lanes at length, so a
+  naive grep would pass over the guard's own deletion). `test/ownership-lane-split.test.mjs` now
+  also reads this migration, or it would describe a superseded view (P197).
 
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
