@@ -124,6 +124,21 @@ Two durable lessons from the fix, both expanded in
 
 ## Rules
 
+00. 🔁 **EVERY TURN CLOSES THE LOOP — [`docs/os/BUILD-TURN-PROTOCOL.md`](docs/os/BUILD-TURN-PROTOCOL.md)
+   is the definition of done.** Scott's standing requirement, 2026-08-28: the repository-clean and
+   self-improvement pass happens **at every turn of every build**, so the next chat can pick any
+   topic up cold and be right. **A change is not finished when the code works — it is finished when
+   the canonical pages are true.** Eight steps: measure before concluding · verify on the state
+   delta and positive-control every zero · establish deploy state via `/version` + `merge-base`
+   (never a handler probe) · reconcile against the parallel window · **update the canonical docs in
+   the SAME change** · correct what is now false in place, **your own calls included** · **extract
+   open intent BEFORE archiving anything** · leave the next step named.
+   ⚠️ **The cost of skipping it is measured, not theoretical** — 25 planned items filed nowhere, a
+   design doc reading *"not executed"* about a cutover that shipped three months earlier, and a
+   freshness monitor that evaluated nothing for 33 days with zero alerts open. **None of them
+   errored.** It is not ceremony: a one-line fix needs a one-line STATUS entry and nothing more.
+   The test is *"can the next session pick this up cold and be right?"*
+
 0. **`LCC_API_KEY` auth is production-ready.** Frontend `auth.js` auto-injects `X-LCC-Key` via a global fetch
    interceptor. To enforce: set `LCC_API_KEY` + `LCC_ENV=production` in the Railway env — **in that order**.
    Flipping `LCC_ENV` first (key empty, no `OPS_SUPABASE_URL` JWT path) 401s every request = **total sign-in
@@ -398,6 +413,84 @@ against `sam_entities.created_at` would have caught it.
 A dated blocker is a **hypothesis to re-test**, never an input to a recommendation. The re-test is
 almost always one cheap query or one probe. Corollary: when you *do* re-measure and the note is wrong,
 **fix the note in the same change** — that is how these files stay worth reading.
+
+### ⚠️ "WE MUST ACQUIRE THE DATA" IS THE MOST EXPENSIVE CONCLUSION AVAILABLE — ENUMERATE EVERY TABLE FIRST (B4/B5, 2026-08-28)
+
+After B1a closed the ownership lane as a source of chain DEPTH, gov's deed layer was measured —
+**876 grantor-bearing `deed_records` of 5,804; 325 deed documents for 13,835 properties** — and the
+conclusion written up was *"depth is now an EXTERNAL acquisition problem (county fetchers, K10)."*
+**Both numbers were correct and the conclusion was wrong. It survived one more query.**
+
+**The tables NAMED after the answer were not the tables holding it.** One `group by` on the output's
+provenance column settles it: `lcc_entity_portfolio_facts.ownership_source` shows dia derives
+**2,207 of its 2,757 historical facts** from **`sales_transactions_seller_exit`** — closing the
+SELLER's interval when a sale is recorded — and **gov has no such feeder at all.** gov
+`sales_transactions` holds **14,645 rows / 5,321 properties / 1970→2026, 9,514 with a named seller,
+4,697 properties with a dated seller**, of which `ownership_history` has consumed **169 rows
+(1.8%)** — **3,080 net-new rows / 2,114 properties**, against gov's 178 chained / 2,238 with any
+history. That is backlog **B5**, and it also answers **B4** (why dia's deepest chain is 14 vs gov's 6).
+
+- **A missing feeder has NO representation anywhere** — no error, no zero row, no queue, nothing to
+  audit. Every other detector in this repo examines rows that exist. **Playbook Class 20** is the
+  one that finds rows that were never created, and its detector is a single provenance `group by`
+  split by domain: **a source bucket present for one domain and absent for another IS the finding.**
+- **It is the A5 rule (*grep for who already writes the gap*) and the A2 rule (*check whether an
+  existing producer already minted the parties*) arriving as a RECOMMENDATION rather than a code
+  review** — where no test, guard or reviewer catches it.
+- **⚠️ Do not date a feeder off `updated_at` on an upserted table.**
+  `lcc_entity_portfolio_facts` has **no creation timestamp**, and the nightly
+  `lcc_finalize_entity_portfolios` re-upsert touches **11,828 of 14,076 rows every day** — so every
+  source reads "written today." Find the producer in CODE; **if it is a one-shot, the sibling domain
+  has a Class 8 problem of its own.**
+- **Quote the ANTI-JOINED count, never the raw one**, and report the **coverage delta and the depth
+  delta separately** — B1 moved `any_history` +901 and `chain_2plus` +28.
+- **Deed acquisition is DEFERRED, not refuted** — it remains right for the tail B5 cannot reach.
+  Size it *after*, when the residual gap is known rather than assumed.
+- ✅ **B5 SHIPPED 2026-08-28 and the premise held**: gov `ownership_history` **16,177 → 18,953**
+  (+2,776 / 2,000 properties, **677 with no prior history at all**), transitions view 9,595 →
+  12,371 / 4,698 → **5,555** properties. **The ceiling graded DOWN** (3,080 → 2,776), which is what
+  a ceiling handed over to be disproved is for.
+  - ⚠️ **AND IT NEARLY DESTROYED DATA ON THE WAY IN.** `trg_propagate_ownership_to_property` had no
+    guard on `NEW.recorded_owner_id`, so any row naming its parties **as text** (`gsa_lease_diff`,
+    `deed_extraction`, B5) **nulled the property's recorded owner** — **7,567 rows already in that
+    shape; B5's batch would have destroyed 1,446 of 9,312.** Fixed fill-forward. **Any propagation
+    trigger must be fill-forward and positive-controlled in BOTH directions** (it preserves when the
+    source is null; it propagates when set). Others are unaudited — backlog **D3**.
+  - ⚠️ **THE TWO PARALLEL WINDOWS MEASURED ONE POPULATION AND DISAGREED BY 10×, NEITHER ERRORING.**
+    B6 §6 sized the same feeder at **~270–370 rows**, objected that 34% of the source is the retired
+    circular `ownership_change_stub*`, and advised *"resize before building"* — **after B5 had
+    already shipped.** Live: **2 of 2,776 (0.07%)** trace to a stub. **The decisive check was the
+    one that does not depend on the disputed key — 677 properties had NO history before B5, and a
+    duplicate cannot create history for a property that had none.** Two lessons: *merged is not
+    running* has a mirror, **in flight is not unbuilt**; and **when two honest measurements
+    disagree, find the measurement independent of the disputed key** rather than adjudicating keys.
+  - ⚠️ **A2b's earliest-wins date rule does NOT transfer here** — against an already-recorded pair
+    the sale row is **later 217 times, earlier 34** (the inverse of A2b's 26-of-26), so B5 keys on
+    the **party pair**. *The hazard travels with the technique*, and so does the calibration.
+  - ⚠️ **The LCC side does not move until the Railway deploy.** **527 of 579 open tasks carry a
+    pre-B5 draft** and the drafter prepares only `fresh = open ∧ undrafted` — **the stale-draft trap
+    for the THIRD time** (A4b, A2b, B5). `runB5RedraftPass` is keyed on STATE so it catches the next
+    source too; without it B5 converts on **52** tasks, not 579.
+  - ⚠️ **AND `/api/*` IS AUTH-ENFORCED, SO A BEHAVIOURAL DEPLOY PROBE AGAINST A HANDLER RETURNS
+    `HTTP 401` — WHICH A GREP READS AS "THE FIELD IS ABSENT."** That happened live on 2026-08-28:
+    `GET /api/ownership-chain-draft-tick | grep b5_redraft` matched nothing because the body was
+    `{"error":"Authentication required…"}`, and the empty match was reported as a stale deploy.
+    **Use `/version` plus `git merge-base --is-ancestor <fix-sha> <deployed-sha>`** — the doctrine
+    already in this file — rather than parsing a handler response. If you must probe a handler,
+    **print the HTTP status and grep for a control field that shipped EARLIER in the same
+    response** (`a2b_redraft`), or the probe cannot tell *absent* from *never reached*.
+
+### 🏛️ Data coherence is a CONTRACT now — `docs/architecture/data-coherence-invariants.md`
+
+Scott, 2026-08-28: *"all data sources and ingestion should propel the entire database forward, not
+just a bunch of different component parts or subdatabases or tables"* — **for the current two
+domain DBs and every one added later.** Ten invariants (**I1–I10**), a new-database onboarding
+checklist, and the honest status: **two of ten have a standing detector.** Every defect behind it
+was **individually correct code** that passed component tests, boot checks and health views —
+because **these are properties of CONNECTIONS, which nothing asserts.** Campaign **P0d / D1–D5**.
+The two cheapest and highest-yield: **D1** the provenance producer-set diff (Class 20 — it found
+B5) and **D2** the link-column type audit (`property_sale_events` link columns are `bigint` against
+`uuid` PKs — the column **cannot hold the value it is named for**).
 
 ### Dead-end classes are findable on purpose — `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md`
 

@@ -77,3 +77,34 @@ seventeen days. When consolidating, **enumerate by file type across the whole re
 > Three of these are referenced from live docs (`CAPMARKETS_TAB_PACKET_WORKLOG.md`,
 > `DOSSIER_DEBT_GRAPH_FIX_WORKLOG.md`, `PROMPT_34_WORKLOG.md`). Those references now need the
 > `docs/history/worklogs/` prefix.
+
+---
+
+## `ownership_sales_remediation/` — archived 2026-08-28
+
+**32 dated session statuses, 2026-05-23 → 2026-05-29**, from the Track A/B/C ownership & sales
+remediation campaign (29 done / 2 partial / 1 handoff). Moved here from `docs/ownership_sales_remediation/`.
+
+🚨 **Read `ownership_sales_remediation/README.md` FIRST.** Several files assert things that are now
+false — most dangerously that the A9b contacts cutover was *"not executed"* (it shipped 2026-05-29)
+and that `gov.unified_contacts` is the live store (LCC Opps is; gov is a frozen snapshot). Every
+file predates the Vercel→Railway retirement, and the retired Vercel host **still answers**.
+
+**Eleven open items were extracted to `docs/os/PLANNED-BACKLOG.md` §P14 (M1–M11) before the move.**
+Nothing was lost; nothing here is a work queue.
+
+## Root ownership/sales/provenance cluster — archived 2026-08-28
+
+Twelve `.md` files moved from the **repo root** into `docs/history/` (the doc map's rule is that the
+root is code and config). The six `2026-05-21` files are indexed as a set by
+`../DATA_AUDIT_SESSION_INDEX_2026-05-21.md`, which the move makes correct rather than breaking.
+
+⚠️ **`SPEC_research_task_generator_2026-05-21.md` carries a banner and you must read it** — its cron
+snippets target the **retired-but-live Vercel host**, and its auto-close is the A5a truncation defect
+that falsely closed 5,763 tasks.
+
+**Fourteen further open items were extracted to `PLANNED-BACKLOG.md` §P14b (R1–R14)**, including an
+entire **unexecuted Supabase 3→1 consolidation plan** that had no backlog row anywhere.
+**Relocated rather than archived** (still-live reference): `docs/architecture/ownership-data-provenance.md`,
+`docs/architecture/lease-data-provenance.md`, `docs/architecture/supabase-consolidation-plan.md`,
+and the comps-definition audit + its three companions → `docs/audits/`.

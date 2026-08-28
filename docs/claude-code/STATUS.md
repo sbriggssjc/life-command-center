@@ -75,6 +75,567 @@ week — matching the retire predicate the eligible-set design exists to prevent
 
 **T2b is deliberately out of scope** and stays Scott's call; the prompt asks only what T2a's outcome
 implies for it.
+## 2026-08-28 — B6a-follow-up SHIPPED: the monitor went quiet at the moment it went blind
+
+**LCC Opps LIVE + one dia grant.** Writeup:
+`docs/audits/B6a_FOLLOWUP_FRESHNESS_MONITOR_2026-08-28.md`. Contract **I11** (now ✅ detector live),
+playbook **Class 21**. **gov NOT touched.** Visibility only — the four producers are still dead (B6b).
+
+- **Acceptance met, and it is a state delta, not a status.** `feeds_evaluated` **2 → 25**,
+  `feeds_excluded_stale_mirror` **18 → 0**, mirror `synced_at` **33d (gov) / 30d (dia) stale → today**.
+  **6 `feed_stale` alerts opened — all four B6a producers among them** (170/170/150/144d), plus dia
+  `medicare_clinics` 64d and gov `sam_lease_opportunities` 32d. Re-run is idempotent (`new_alerts 0`).
+- **⚠️ THE TRANSPORT WAS TWO UNRELATED CAUSES THREE DAYS APART, NOT ONE.** All 18 feeds froze in the
+  same week, which reads like one bug in the shared pull. **gov** = a **marginal cold-cache statement
+  timeout** — `500`/`57014` against `anon`'s **3 s** budget; warm the sweep is **231 ms**, but cold it
+  measured **2,601 ms across just its top 8 feeds** and the 05:30 cron is the first touch of the day by
+  construction. **Positive control: the identical request, same key — `500` cold at 17:41, `200` with
+  all 18 feeds warm at 17:44.** **dia** = a **hard revoked `anon` EXECUTE** (`401`/`42501`). Fixing
+  either alone leaves the other silent. **A `500` from a marginal cost is not a break — try it twice.**
+- **⚠️ AND THE BRIEF'S OWN PREMISE WAS PARTLY REFUTED.** §2c said *"do not touch gov, its view is
+  correct."* Its view **is** correct **and was not servable to the caller that reads it** — a different
+  property, and the one that failed. gov is still untouched (mitigated LCC-side by a bounded retry),
+  but *"the view is correct"* was not grounds to stop looking.
+- **The exclusion was KEPT — deleting it is the wrong fix and worse than the bug** (the check would
+  then alert on ages it explicitly cannot vouch for). What changed is that the excluded set became its
+  own deduped, auto-resolving **`feed_mirror_stale`**, and `feeds_evaluated` /
+  `feeds_excluded_stale_mirror` are now separate honest counts. **Both halves are pinned**, because
+  each is a plausible "fix" for the other.
+- **Three further silent paths closed alongside `(0,0)`:** a `RAISE NOTICE`-and-continue on a missing
+  vault secret; a **`200` carrying an empty array** (the P157 shape — a status-code check passes while
+  nothing arrives, so read the body); and a **`lost` class** — `net._http_response` prunes at **~6 h**
+  while the inflight row lingered **24 h**, so a response arriving after finalize ran could **never** be
+  consumed. *Ask what happens to a request that is neither answered nor answerable.*
+- **The dia GRANT could not ship alone.** dia's registry ACL was `anon=arwdDxt`; `anon` EXECUTE on a
+  **SECURITY DEFINER** function over a registry `anon` can write lets any anon caller repoint a feed at
+  an arbitrary table — **the hole B6a closed on gov, still open on dia.** Both halves or neither.
+- **⚠️ §2e sweep: this was the only one of ten `lcc_check_*` with the shape**, and
+  `lcc_check_bd_sync_freshness` **already does it right** — it is the precedent this fix reuses rather
+  than a new alert system. `lcc_check_cron_health` is the nearest neighbour and is covered by a
+  *separate* sibling, so retiring that sibling would open the shape. Named, not fixed.
+- **⚠️ Two self-inflicted traps worth carrying.** (1) `CREATE OR REPLACE` does not replace a function
+  of different arity — all three signatures changed, and missing the `DROP` on
+  `lcc_check_feed_freshness()` alone would have made cron 193 ambiguous (**42725**) and taken the hourly
+  tick's **other three checks** down with it: a monitoring fix that silences monitoring. (2) plpgsql
+  resolves an identifier to a **DECLAREd variable before a SQL alias**, so aliasing
+  `net._http_response` as `r` beside `DECLARE r record` **plans fine and dies only when executed**
+  (`55000`). Found by *running the function*; then the regexp fix **over-reached into the `FOR r IN`
+  loop** and was caught by listing every affected line rather than trusting the substitution.
+- **⚠️ Four of fifteen mutations left the test GREEN and had to be tightened** — `'lost'` also appears
+  in a `FILTER`, the return columns are also *assigned* in the body, the watermark table is also named
+  in an `ON CONFLICT` qualifier, and the mirror predicate also lives in the blind-spot scan. **A
+  body-wide `includes()` is a weak assertion wherever the token recurs.** 17 tests, **15 mutations RED**.
+- **⚠️ NOT fixed, read before quoting the monitor as healthy.** gov's timeout is **mitigated, not
+  cured** — the first attempt each morning will still usually fail and the margin shrinks with every
+  feed registered; watch `lcc_feed_freshness_sync_status.last_attempt_no` and raise **that**, never the
+  retry cap (**B6a-follow-up-b**). The four producers remain dead (**B6b**, now unblocked — its premise
+  was being able to tell whether a restart holds). And **B6a's `record_skip` has STILL not been
+  exercised by a real run**: gov `run_log` carries **0 rows with `skip_reason` ever and 0 rows of any
+  kind since B6a shipped** (newest 2026-08-27 18:52), so the RED producers prove the **registry** rows,
+  not the emission fix. Until a run passes through, *no bad rows* and *no rows at all* read identically.
+
+
+## 2026-08-28 — B6a SHIPPED: a skipped step emits nothing, and the health view was built on emitted rows
+
+**gov DB LIVE + committed.** Writeup:
+`docs/audits/B6a_SKIPPED_STEP_HEALTH_BLINDNESS_2026-08-28.md`. Playbook **Class 21**, contract **I4**,
+gov `CLAUDE.md` §16. **No producer was restarted — B6b owns that; only visibility moved.**
+
+- **Acceptance met.** The four producers dead since March–April 2026 now read **RED**:
+  `gsa_lease_change_facts` 170d · `gsa_lease_timeline` 170d · `prospect_leads.ownership_change` 150d ·
+  `property_sale_events` 144d, against a 45-day SLA. Feeds 14 → 18, stale 1 → 5, **0 pre-existing rows
+  changed in either direction**.
+- **⚠️ THE REGISTRY THE PROMPT ASKED FOR ALREADY EXISTED, WIRED END TO END.** R56's
+  `feed_freshness_registry` + `compute_feed_freshness()` + the LCC cross-DB mirror + a deduped,
+  auto-resolving `lcc_health_alerts` row — and `feed_stale` has genuinely fired 8 times. It read
+  healthy over four dead producers **because nobody registered them**. Three registries already
+  existed; a fourth would have been the drift this repo warns about. **Check what you have before
+  building.**
+- **⚠️ "A SKIPPED STEP IS NO ROW" IS ONLY HALF THE MECHANISM, AND THE PRESCRIBED FIX WOULD HAVE MISSED
+  THE LIVE INSTANCE.** `gsa_ingest_+_diff` was **not absent** from `v_pipeline_task_health` — it carried
+  `status='ok'`, *"Task completed"*, **2026-06-22, 67 days stale**, on a step whose own history says it
+  ran every 7 days. `status` read the last outcome's `event_type` and nothing compared it to when that
+  outcome should have been superseded. So *"enumerate declared steps, not logged ones"* returns nothing
+  for it: **the missing dimension is cadence, not enumeration.**
+- **The evidence was inside the green row's own payload.** `find_latest_gsa_inventory` logged *"Task
+  completed"* with **`result: null`, `duration_seconds: 0`** six weeks running; the view projected
+  `details->>'error'` and never `details->>'result'`.
+- **The fix is at the EMISSION POINT — and it dissolves the enumeration problem.** `record_skip` /
+  `run_guarded_task` make **both branches of a guard write**, so the logged set IS the declared set and
+  no step registry is needed. Five guard sites rewired. **`declared` has no default**: a skip somebody
+  chose is healthy and must be visible without alerting; an undeclared skip is the finding. **Not
+  emitted for scope selection.** `tasks_skipped` previously counted **dry runs** — split, and
+  **`tasks_skipped_undeclared`** added as the number that means something.
+- **⚠️ A PRODUCER IS NOT A TABLE.** A plain `prospect_leads` registry row stays **green** (0d — other
+  lead sources are live) while its `ownership_change` lane is 150 days dead. Structured
+  `filter_column`/`filter_value` through `%I`/`%L` (never free SQL — the function is `SECURITY
+  DEFINER` and runs dynamic `EXECUTE`), both-or-neither CHECK. Also **revoked anon/authenticated
+  write grants** on that config table (anon could repoint the function's targets or delete the
+  registry); SELECT retained for the LCC pull.
+- **The cadence statistic was measured, not chosen.** `is_overdue = age_days > 3 × the step's own p90
+  inter-run gap`. **p90, not median** — clustered runs deflate the median and false-positive healthy
+  monthly steps (`census_demographics` median 3.99d vs p90 28.78d; at 23d the median rule flags it,
+  p90 does not). **NULL below 3 observed gaps**, never false.
+- **Positive-controlled (§2a).** A healthy weekly step read not-overdue; **the same step silenced 60
+  days read overdue**; declared and undeclared skips are distinguishable — all in a self-rolling-back
+  transaction, **0 residue**. A hostile `filter_value` returns `no_data`, not everything. 23 tests,
+  **18 mutations verified RED** (two guards were caught blind by the mutation run and strengthened);
+  comments and docstrings stripped before matching, positive-controlled.
+- **⚠️ FOUND, NAMED, NOT FIXED — the instrument one level up is blind.** The cross-DB freshness monitor
+  has evaluated **no gov or dia feed since 2026-07-26**. Crons 140/141 fire daily and record
+  `succeeded`; the mirror's `synced_at` is stuck; `lcc_finalize_feed_freshness` consumes only
+  `status_code = 200` and **silently drops anything else**, returning `(0,0)`; and
+  `lcc_check_feed_freshness` **excludes mirror rows older than 3 days**, so it evaluates zero feeds and
+  returns `stale: []`. **When the sync stops, the check stops checking and reports nothing wrong.**
+  Live proof: gov reads a stale feed today with **no open `feed_stale` alert**. So B6a's four RED
+  producers **will not reach an alert until this is fixed** — backlog **B6a-follow-up**.
+- **Also named, not fixed:** 10 `step_NN_*` steps of `src/run_pipeline.py` now read overdue at 121–150
+  days (true — CI runs `pipeline_runner`, not that orchestrator); and **the GSA skip is documented in
+  `ci.yml` and compensated by the weekly `gsa-sync` job**, so it is a genuine instance of the class but
+  was **not** the load-bearing cause of the four-producer blindness — that was B6 §8(a) plus the fact
+  that no instrument watched those four tables.
+
+
+## 2026-08-28 — B5 SHIPPED: gov's sales table becomes ownership history (+ a destructive trigger fixed)
+
+**gov DB LIVE. LCC JS pending a Railway deploy.** Writeup:
+`docs/audits/B5_GOV_SELLER_EXIT_FEEDER_2026-08-28.md`.
+
+- **The feeder.** gov had never consumed `sales_transactions` as ownership history — 169 of 9,515
+  named, dated sellers (1.8%). `gov_feed_sales_transitions` (dry-run default, batch-reversible) wrote
+  **2,776 transitions over 2,000 properties**. Transitions view **9,595 → 12,371** rows,
+  **4,698 → 5,555** properties; **2+ guard-passing links 1,376 → 2,118 (+742)**. Idempotent — a
+  re-run plans 0. Reverse: `gov_unfeed_sales_transitions('b5_gov_20260828')`.
+  **Ceiling graded down 3,080 → 2,776 / 2,114 → 2,000.**
+- **⚠️ THE HEADLINE IS THE BUG IT SURFACED.** `trg_propagate_ownership_to_property` had **no guard on
+  `NEW.recorded_owner_id`**, so any dated `ownership_history` row naming its parties as TEXT
+  **overwrote `properties.recorded_owner_id` with NULL** — silently, with no ledger, unrecoverably.
+  **7,567 live rows are in that shape**; B5's first run alone would have destroyed the recorded owner
+  on **1,446 of the 9,312 gov properties that hold one (15.5%)**. Proven on property 7370 and rolled
+  back, before *and* after the fix. Fixed fill-forward by
+  `sql/20260828_gov_b5a_ownership_propagate_fill_forward.sql`; `props_with_recorded_owner` held at
+  9,312 across the real 2,776-row batch. **Do not revert it to unblock a producer.**
+- **⚠️ A2b's earliest-wins rule does not reproduce here** — the sale row is later **217** times and
+  earlier **34** against an already-recorded pair (A2b measured 26 of 26 the other way), so the
+  anti-join keys on the **party pair**, not the date. Quote A2b for its own population.
+- **⚠️ Depth at the SOURCE is not `chain_2plus`.** 1,376 view-level 2+ properties convert to 178
+  facts today (12.9%). LCC is deliberately unmoved as of this entry: any_history 2,238, chain_2plus
+  178, lane completed 1,302, **human_actionable 55**.
+- **⚠️ Stale-draft trap, third arrival** (after A4b and A2b). 527 of 579 open tasks already carry a
+  pre-B5 draft and the drafter prepares only `fresh` = open ∧ undrafted. `runB5RedraftPass` (keyed on
+  STATE, so it catches the next source too) closes it — **JS, so it needs the deploy**; without it B5
+  converts on 52 tasks, not 579.
+- **B5 is the missing consumer for a producer that already mints the parties** — `r9_chain_connect`
+  (cron 104) has read gov sales seller/buyer for months with nothing attaching its output.
+- Guards: `tests/unit/test_b5_sales_transition_feeder.py` (gov, 13, **all mutation-verified RED**),
+  `test/b5-chain-redraft-pass.test.mjs` (LCC, 10, **9 mutations RED**). Suite **4,815 / 0 fail**.
+## 2026-08-28 — B6: the owner/lessee change-signal sweep. Most sources are already consumed; the gaps are four dead producers, two unpopulatable columns, and a health view that cannot see a skipped step.
+
+**AUDIT + DESIGN, nothing built.** Full writeup:
+[`docs/audits/B6_OWNERSHIP_CHANGE_SIGNAL_COVERAGE_2026-08-28.md`](../audits/B6_OWNERSHIP_CHANGE_SIGNAL_COVERAGE_2026-08-28.md).
+Folded into `docs/architecture/connectivity-and-open-threads.md` §4j; backlog rows **B6a–B6g**.
+
+Nineteen signals swept across gov + dia against Scott's three requirements — coverage, corroboration,
+next action. **The framing that "we are missing sources" is largely wrong.** Deeds are **98.5%**
+consumed, the CoStar sidebar writes both parties, and gov's sales table turns out to be ~97%
+represented in `ownership_history` under other provenance labels.
+
+⚠️ **Both numbers I filed the B6 prompt under are corrected.**
+
+- **38,213 landlord-change rows deflate 28.6× → 1,338 net-new / 1,202 properties.** The stages:
+  **46.7% of the flag is a pure name re-spelling** (it is computed on raw string inequality, not a
+  normalized key); then transition-clean guards; then **−33% for property resolution**; then the A2b
+  per-lease fan-out collapses 13,225 → 4,845 conveyances; then P138 oscillation. Still worth
+  building — it spans **2013→2026**, so it adds DEPTH, and it is a **FLOOR** (four monthly snapshots
+  sit undiffed).
+- **`property_sale_events`' two link columns are a TYPE DEFECT, not neglect.**
+  `ownership_history_id` and `sales_transaction_id` are **`bigint` against `uuid` PKs with no FK** —
+  a writer raises `22P02`. **dia's identical table has a compatible `integer` PK and 52 populated
+  rows**, which is the positive control that makes gov's zero structural. This is the comp↔ownership
+  join Scott's framing names, and in gov it has never existed.
+
+**⚠️ The lesson worth keeping: A SKIPPED STEP EMITS NOTHING, AND A HEALTH VIEW BUILT ON EMITTED ROWS
+CANNOT SEE IT.** Four producers died in March–April 2026 —`gsa_lease_change_facts` and
+`gsa_lease_timeline` (2026-03-11), `prospect_leads.ownership_change` (2026-03-31, 7,729 leads of
+which **2,041 were actually worked**), `property_sale_events` (2026-04-06). `pipeline_runner.py`
+guards the diff with `if latest_file and not runner.dry_run:`, and `find_latest_gsa()` globs a
+**local folder** that is always empty on a CI checkout: it returns `None` and is logged **"Task
+completed"**. The guarded `run_task` is then never invoked, writes **no `run_log` row**, and has
+**no row in `v_pipeline_task_health`** — which today reports one failing step (SAM, 401) and
+otherwise all green. **gov `CLAUDE.md` §16 built that view to stop a green `completed` masking a
+FAILED sub-task; the SKIPPED case was left open, and it is invisible in a different way — a failed
+step is a red row, a skipped step is no row.** It is A5a's lesson in a health view: a producer that
+never emitted has no row to `GROUP BY`. **Enumerate declared steps, not logged ones (B6a).**
+
+**Separately: the landlord-change detector has no scheduled caller at all.**
+`gsa_lease_change_facts`/`gsa_lease_timeline` are written **only** by `src/ingest_gsa_historical.py`
+(a manual CLI, reachable from `run_pipeline.py:172`, which CI does not run). The live Monday job
+`src/gsa_auto_sync` writes `gsa_snapshots` + `gsa_lease_events` and **not** the change layer — **the
+raw feed and the derived layer have different writers and only one is scheduled.**
+
+**⚠️ B5 is in flight and its ceiling should be re-derived before it builds.** I could not reproduce
+`3,080 / 2,114`, and **the anti-join is scope-sensitive by 26×**: against the `sales_transaction`
+provenance bucket → **9,517 rows**; against the **whole store** → **366** on the same exact-date key,
+or **269 / 215 props** without the date. 3,080 sits between the two, so I am **not** claiming to have
+found its bug — the ceiling is simply uninterpretable without its scope. **And 3,313 of the 9,686
+named-seller rows are `ownership_change_stub*`, a mechanism gov R37 explicitly RETIRED** (ranked
+priority 9 in every sales-dedup pass), minted *from* ownership history — **feeding them back is
+circular**. Honest target: **~270–370 rows / ~215–291 properties**, mostly `costar_export`. That does
+not refute B5's premise; it resizes the prize by an order of magnitude.
+
+**The corroboration Scott asked for already exists — its verdict just has no reader.**
+`parcel_owner_xref` runs every 30 minutes and produces **8,838 `corroborates` / 561 `diverges` / 362
+properties**. ⚠️ **319 of those 362 already carry the assessor's name as `new_owner` in
+`ownership_history`** — so that is a **propagation gap between the store and
+`properties.recorded_owner_id`**, the cheapest correction in the audit; only **43** are genuine
+net-new. `diverges` produces no task, card or lead (B6d). And the ladder that should adjudicate
+disagreements **has no rung for `gsa_lease_diff` (6,648 rows, its largest source) or
+`sales_transaction`** (B6e).
+
+**Measured and refuted — three would have been expensive builds.** `ownership_research_queue`
+(17,665 rows) is **100% complete**, not a stalled backlog. **Deeds are 98.5% consumed — the gap is
+EXTRACTION** (876 grantors of 5,804), which independently supports B1a/B5's finding that county-deed
+acquisition is the wrong first lever. **gov `CLAUDE.md` §21's "state-lease producer silent 6+ weeks"
+is SUPERSEDED** — 617 rows, all within 90 days, events to 2026-08-05 (its `property_id`-is-NULL half
+still stands). And `gsa_lease_events` is not a landlord signal at all — it is the **LESSEE** half of
+Scott's ask, and it is the healthiest lane in the matrix (7,522 leads, **2,863 worked**).
+
+**⚠️ Detector hygiene, for the next Class-20 sweep:** `ownership_source` is **not** a controlled
+vocabulary — **2,978 distinct values over 14,076 rows**, embedding record ids
+(`county_deed:<uuid>`, `gov_master_backfill_r71|h=<md5>`). Split on `:` and `|` before grouping, or
+gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `ownership_history`
+carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
+
+
+## 2026-08-28 — ✅ B6a-follow-up SHIPPED: the monitor is alive, and its first honest run names the backlog. Plus: the build-turn protocol is now the definition of done.
+
+**Verified live by Cowork (the response transcript ended mid-work, so this is measured, not read):**
+
+| metric | before | after |
+|---|---|---|
+| gov feeds evaluated | **13, frozen 2026-07-26** | **18, synced TODAY** |
+| dia feeds evaluated | 5, frozen 2026-07-29 | **5, synced TODAY** |
+| open `feed_stale` alerts | **0** (for 33 days) | **6, and every one is real** |
+
+⚠️ **gov went 13 → 18 feeds** — the transport fix did not merely un-freeze the mirror, it **restored
+five feeds that had been failing silently.**
+
+**The first honest run names the backlog, which is the strongest possible evidence it is working:**
+`gsa_lease_change_facts` **170d** (⚠️ **the 336k-row landlord-change source B6b exists to restart**) ·
+`gsa_lease_timeline` 170d · `prospect_leads_ownership_change` 150d · `property_sale_events` **144d**
+(⚠️ **the B6c `bigint`-vs-`uuid` table**) · `sam_lease_opportunities` 32d against a 14d SLA ·
+**`medicare_clinics` (dia) 64d — a dia feed nobody was watching.**
+⚠️ **Before treating `medicare_clinics` as a defect, check its SLA is right** — CMS publishes on a
+slow cadence and `facility_patient_counts` is documented as ~annual, so a 45d SLA may simply be
+mis-set. *A wrong SLA and a dead feed render identically.*
+
+**The transport was TWO different causes, one per domain** — which is why "all 18 froze on one date"
+was worth diagnosing before patching the consumer: gov was a **cold-start timeout** (same request,
+same key, 3 minutes apart: cold → HTTP 500, warm → HTTP 200 with all 18 feeds), dia a **missing
+grant**. ⚠️ And restoring dia's grant naively would have **re-opened the privilege-escalation surface
+B6a had just closed on gov** — the revoke was mirrored instead.
+
+**§2e answered:** `lcc_check_feed_freshness` was the **only** check with the go-silent shape, and
+`lcc_check_bd_sync_freshness` **already implemented the fix correctly** — an in-repo precedent reused
+rather than a new pattern invented. **I11 moves from ❌ VIOLATED to ✅ with a standing detector.**
+
+⚠️ **Still open and NOT closed by this:** `record_skip` has **still not been exercised by a real
+run**. The four RED producers remain a *registry* result. The check is a `Task skipped` row for
+`gsa_ingest_+_diff` in `run_log` with `skip_reason='gsa_download_folder_empty'` after the next
+scheduled run (daily `0 8 * * *`).
+
+### 🔁 And the process itself is now the deliverable
+
+Scott: *"incorporate this repository clean and self-improvement process at every turn of every build
+… so the latest chat can always pick a topic up fresh."* Written as
+**[`docs/os/BUILD-TURN-PROTOCOL.md`](../os/BUILD-TURN-PROTOCOL.md)** and wired in as **`CLAUDE.md`
+Rule 00** (so every Claude Code session reads it) and **`DOCUMENTATION-MAP.md` §6y**.
+
+**Eight steps**, each earned by a measured failure from this week: measure before concluding ·
+verify on the state delta and positive-control every zero · establish deploy state via `/version` +
+`merge-base` · reconcile against the parallel window · **update canonical docs in the same change** ·
+correct what is false in place, **your own calls included** · **extract open intent before archiving**
+· leave the next step named. **The test is one question: *can the next session pick this topic up
+cold, from the canonical pages alone, and be right?*** It explicitly is **not** ceremony — a one-line
+fix needs a one-line STATUS entry.
+
+## 2026-08-28 — 🗄️ TOPIC-BASED REPO CLEANUP, pass 1: the ownership/sales/provenance cluster. 25 items were filed nowhere.
+
+**Scott: *"topic based and repository wide, not just the prompts folder — so there is zero confusion
+on what the latest status or build or plans or designs are."*** This pass covers **one topic
+cluster** end to end. It is not a full repo reorganisation; the rest is sized below.
+
+**Both moves were gated on reading every file first**, because the standing rule is *lose nothing,
+especially no planned feature.* **That gate earned its keep: 25 items existed in no backlog, no
+audit and no design doc.**
+
+| moved | from → to | items recovered |
+|---|---|---|
+| **32 session statuses** (2026-05-23 → 05-29) | `docs/ownership_sales_remediation/` → `docs/history/worklogs/ownership_sales_remediation/` | **11** → backlog **§P14, M1–M11** |
+| **12 root `.md` files** + 4 coupled | repo root → `docs/history/` and `docs/audits/` | **14** → backlog **§P14b, R1–R14** |
+| **3 still-live references** | repo root → `docs/architecture/` | (relocated, not archived) |
+
+**Root `.md` count 70 → 50.** The doc map's own rule is *"the root is code and config; do not add a
+new `.md` there"* — it was being violated 70 times.
+
+**The five recovered items that matter most:**
+
+- **R1 — an entire unexecuted Supabase 3→1 consolidation plan**, with rollback, **no backlog row
+  anywhere**, still cited as live by a 2026-07 audit. 👤 Scott's call.
+- **R2/R3/R4 — the duplicate-property RECURRENCE fix was never built.** `upsertDomainProperty` still
+  runs the `address=ilike` fall-through chain; `v_property_address_collisions` has **zero consumers
+  on either DB**. **We clean the output nightly via the twin lane and never fixed the producer** —
+  Class 8, and exactly the pattern this whole campaign is about.
+- **M1 — 617 `ownership_history` rows are grandfathered out of `excl_oh_no_overlap`** and the review
+  queue was never drained. **"C5 DONE" meant the constraint shipped, not that the overlaps were
+  resolved.**
+- **R13 — an unresolved CONTRADICTION that M10 and K10 are sized off.** The remediation plan calls
+  the deed/parcel orphaning *"audit overstated"*; the deed spec's whole premise is the opposite
+  (9,402 orphans). **One of them is wrong.**
+- **M8 / M7 — LoopNet PA Flow 3 has never been built (0 leads ever landed)**, and the `lead-ingest`
+  Edge redeploy was never confirmed, leaving sanitization live only on the **retired-but-answering**
+  host.
+
+**Two archives carry mandatory-read banners**, because several files assert things that are now
+false and would mislead a future session within one paragraph: the A9b cutover design says
+**"Status: design / not executed"** when it shipped 2026-05-29; its runbook's **Step 0 gov→hub
+re-sync is now actively harmful** (it would import the stale snapshot into the authoritative hub);
+and `SPEC_research_task_generator`'s cron snippets **target the retired Vercel host** while its
+auto-close **is** the A5a defect that falsely closed 5,763 tasks.
+
+⚠️ **Also recorded: a LETTER COLLISION.** The May campaign's Track A/B/C are unrelated to the Aug
+lettered prompts. *"B4"* is a May sales worker **and** the dia-vs-gov chain-depth question.
+**Always check the date.**
+
+**Remaining, sized not done: ~50 root `.md` files in other clusters** — capital-markets emails and
+book copy, BOV/lease-extractor specs, Power Automate setup guides, hosting strategy
+(`LONG_TERM_HOSTING_STRATEGY.md` + `PHASE_0_INVENTORY.md` should move with R1's plan), AI-chat
+rollout, and the DQ/intake remainder. **Same discipline required: read, extract unfiled intent,
+then move.** Filed as the next cleanup pass.
+
+## 2026-08-28 (evening) — B6a SHIPPED; the four dead producers read RED. And the alert chain that would carry that to a human has been silent for a month.
+
+Evidence: [`B6a_SKIPPED_STEP_HEALTH_BLINDNESS_2026-08-28.md`](../audits/B6a_SKIPPED_STEP_HEALTH_BLINDNESS_2026-08-28.md) §7a ·
+contract [`data-coherence-invariants.md`](../architecture/data-coherence-invariants.md) **I4 (shipped) / I11 (new)**.
+Merged: `government-lease#389` (code + migrations, Test & Lint ✅) · `life-command-center#1893` (docs, `b31f401`).
+
+**B6a delivered, and delivered the thing I asked for most.** The four producers dead since
+March–April 2026 now read **RED** (170/170/150/144 days against a 45-day SLA); skips emit a
+first-class `Task skipped` row with a declared reason; `is_overdue` is computed against the step's
+**own p90 cadence**; equivalence held at **0-changed in both directions** on every pre-existing feed
+and view column. **And the detector was SEEN going red on a deliberate silence and green again** —
+the §2a requirement, which is what separates this from the view it replaces.
+
+⚠️ **`record_skip` HAS NOT YET BEEN EXERCISED BY A REAL RUN, and the RED rows are not proof that it
+was.** They are a **registry** result — they prove the config rows. The daily pipeline fires
+`0 8 * * *` and the weekly `0 6 * * 1`. **The check that matters is a `Task skipped` row for
+`gsa_ingest_+_diff` in `run_log` carrying `skip_reason='gsa_download_folder_empty'` and
+`skip_declared: true`**, after which its `age_days` resets and it stops reading overdue. **Until a
+run passes through, "no bad rows" and "no rows at all" read identically** — the exact trap the work
+is about, correctly flagged by the build rather than papered over.
+
+**🚨 THE FOLLOW-ON FINDING IS BIGGER THAN THE FIX, and I verified it independently.** The chain that
+carries gov's verdict to an LCC alert **has evaluated nothing since 2026-07-26**, and **every layer
+reports success**: gov `v_feed_freshness` is correct (says `sam_lease_opportunities` is 32d stale) →
+crons **140/141** fire daily and record **`succeeded`** → `lcc_finalize_feed_freshness` consumes
+only `status_code = 200` and **silently drops the rest, returning `(0,0)`** (identical to *nothing to
+do*) → `lcc_domain_feed_freshness.synced_at` frozen at **2026-07-26** gov / **2026-07-29** dia →
+`lcc_check_feed_freshness` **excludes mirror rows older than 3 days**, so it evaluates **zero** feeds
+and returns `new_alerts: 0, stale: []`.
+
+**Verified live 2026-08-28:** gov mirror **33 days** stale across **13 feeds**, dia **30** across
+**5**; `feed_stale` alerts — **8 ever, 0 open, last detected 2026-07-24**, **two days before the sync
+died.** *The alerts stopped when the monitoring stopped.*
+
+- **New invariant `I11` — a monitor must alert on its own blindness.** *"I cannot see this feed"* and
+  *"this feed is fine"* must never render identically. **The staleness guard on the mirror IS the
+  silent failure**, and the exclusion is individually defensible, which is why nobody caught it.
+- **Corollary:** a fail-soft that swallows a non-200 must **count and surface** it. `(0,0)` may
+  never mean both *nothing to do* and *everything failed*.
+- **The contract is now three of eleven invariants with a standing detector** — I4 shipped today,
+  **I11 was added the same day because it was found violated.**
+
+**Next prompt drafted: `B6a-follow-up`** (LCC-side only; gov is correct and must not be touched).
+Sequenced **before B6b**, because B6b's entire premise is being able to tell whether a restarted
+producer stays up — and today it cannot be told. ⚠️ It carries three cautions: **diagnose the
+transport before patching the consumer** (all 18 feeds froze on the same date — and `200 []` would
+pass a status-code check while carrying nothing, the P157 class); **expect a loud, real first run**
+and rank rather than suppress it; and **grep the other `lcc_check_*` functions for the same
+exclusion shape**, naming them without fixing them.
+
+## 2026-08-28 (later) — B5 SHIPPED and found a destructive trigger on the way; B6 swept 19 signals; the two windows produced CONTRADICTORY measurements of one population and B5 wins.
+
+Evidence: [`B5_GOV_SELLER_EXIT_FEEDER_2026-08-28.md`](../audits/B5_GOV_SELLER_EXIT_FEEDER_2026-08-28.md) ·
+[`B6_OWNERSHIP_CHANGE_SIGNAL_COVERAGE_2026-08-28.md`](../audits/B6_OWNERSHIP_CHANGE_SIGNAL_COVERAGE_2026-08-28.md) ·
+new contract [`data-coherence-invariants.md`](../architecture/data-coherence-invariants.md) · playbook **Class 21**.
+
+**⚠️ THE HEADLINE IS A BUG, NOT THE FEEDER.** `trg_propagate_ownership_to_property` (gov, AFTER
+INSERT) had **no guard on `NEW.recorded_owner_id`**, so any dated `ownership_history` row naming its
+parties **as text** — which is how `gsa_lease_diff`, `deed_extraction` **and B5** all write —
+**overwrote `properties.recorded_owner_id` with NULL.** Silently, no ledger, unrecoverable.
+**7,567 live rows are already in that shape**, and **B5's first run alone would have destroyed the
+recorded owner on 1,446 of the 9,312 gov properties that hold one (15.5%).** Proven on property
+7370 in a rolled-back transaction, fixed fill-forward, positive-controlled both directions.
+**Verified live: the guard is in place and `props_with_recorded_owner` held at 9,312.**
+
+**B5 shipped, and every claim verifies independently:** gov `ownership_history` **16,177 → 18,953**
+(+2,776 rows / 2,000 properties) · transitions view **9,595 → 12,371** rows, **4,698 → 5,555**
+properties (**+857 with a first transition ever**) · view-level 2+ links **1,376 → 2,118** ·
+re-plan 0 · reversal round-tripped on 5 real rows first. My ceiling graded **down**: 3,080 → 2,776,
+2,114 → 2,000.
+
+**⚠️ THE LCC SIDE HAS NOT MOVED AT ALL, AND WILL NOT UNTIL THE RAILWAY REDEPLOY.** Verified:
+facts **14,076**, lane completed **1,302**, open **579**, gov `chain_2plus` **178**, `any_history`
+**2,238** — all identical to pre-B5. **527 of 579 open tasks carry a pre-B5 draft**, and the drafter
+only prepares `fresh = open ∧ undrafted` — **the stale-draft trap for the THIRD time** after A4b and
+A2b. `runB5RedraftPass` fixes it, is keyed on STATE (so it catches the next source too), and **is
+JS: without the deploy B5 converts on 52 tasks, not 579.**
+
+**⚠️ AND THE TWO WINDOWS MEASURED ONE POPULATION AND DISAGREED BY 10×, WITH NEITHER SIDE ERRORING.**
+B6 §6 could not reproduce B5's ceiling, found `ownership_change_stub*` at 34% of the source
+population (a mechanism gov R37 retired, minted **from** ownership history — so circular), and
+recommended *"RESIZE BEFORE BUILDING; may not clear the bar."* **B5 had already shipped.**
+Adjudicated live: **2 of 2,776 rows (0.07%)** trace to a stub; the rest are `excel_master` 1,222,
+`costar_export` 625, `costar_sidebar` 141, `gov_master_backfill_r71` tail. **The decisive check was
+the one that does not depend on the disputed key: 677 of the 2,000 properties had NO ownership
+history at all before B5.** A duplicate cannot create history for a property that had none. §6 is
+superseded in place; its scope-sensitivity table (a **26×** swing on one population and one key) is
+the durable content and stands.
+
+- **Durable:** *merged is not running* has a mirror — **in flight is not unbuilt.** Before writing
+  "resize before building" about parallel work, check whether it shipped.
+- **Durable:** when two honest measurements of one population disagree, **find the measurement that
+  does not depend on the disputed key** rather than adjudicating the keys.
+- **A2b's earliest-wins rule does NOT transfer here** — against an already-recorded pair the sale
+  row is **later 217 times, earlier 34** (the opposite of A2b's 26-of-26), so B5 keys on the **party
+  pair**, not the date. A rule calibrated on one population must be re-graded on the next.
+
+**B6's own findings (19 signals, gov + dia):** most sources are already consumed (deeds **98.5%**).
+Both figures I filed B6 under are **corrected** — the 38,213 landlord-change signal deflates
+**28.6×** to **1,338 / 1,202 properties** (46.7% of the flag is a **pure name re-spelling** —
+computed on raw string inequality, not a normalized key), and `property_sale_events`' link columns
+are **`bigint` against `uuid` PKs — unpopulatable (`22P02`), not merely unwired**, with dia's twin
+as the positive control at 52 populated rows. **The real gaps are four producers dead since
+March–April 2026 behind an all-green health view** — `pipeline_runner` skips on an empty local
+folder, logs *"Task completed"*, and emits **no run row at all**, so it has no row in
+`v_pipeline_task_health`. **A failed step is a red row; a skipped step is no row.** Filed as
+**Class 21** and **B6a**, and it is why nobody saw the other three for five months.
+Ranked gaps **B6a–B6g**; two of seven end in *"don't build."*
+
+**🚨 DEPLOY STATE, 2026-08-28 evening — UNKNOWN, and the first probe was worthless.**
+`GET /api/ownership-chain-draft-tick` returned **`HTTP 401 {"error":"Authentication required…"}`**,
+so grepping its body for `b5_redraft` found nothing **because the body was an auth error**, not
+because the field is missing. **I read that empty grep as "the deploy is stale" and said so.**
+
+- ⚠️ **This is the P182 class committed by the detector's own author, twice in two turns** — first
+  reading "all written today" off an upserted `updated_at`, then reading a 401 body as a missing
+  field. **A text-matching probe must carry a positive control IN THE SAME COMMAND** (here:
+  `a2b_redraft`, which shipped pre-B5) **and must print its HTTP status.** A probe that cannot
+  distinguish *absent field* from *never reached the handler* is not a probe.
+- ⚠️ **`LCC_API_KEY` auth is ENFORCED on `/api/*` in production.** Any future behavioural deploy
+  probe must either send `X-LCC-Key` or use an unauthenticated endpoint. **Use `/version` + the
+  documented `git merge-base --is-ancestor <fix-sha> <deployed-sha>` check** — that is the repo's
+  own doctrine for exactly this question and it does not depend on parsing a handler response.
+- ✅ **ANSWERED — DEPLOYED.** Live `/version` = **`e3a0407d25bc`** (`git_pinned: true`), and
+  `git merge-base --is-ancestor 385023cf… e3a0407d` returns **0** — `runB5RedraftPass` (commit
+  **`385023cf`**) IS in the deployed build. **Tonight's 06:45 drafter → 06:49 apply runs with it.**
+  **The check that worked took two commands and parsed nothing** — that is the standing answer to
+  "is my fix running", not a handler probe.
+
+**📋 BASELINE FOR TOMORROW'S VERIFICATION (measured 2026-08-28, post-B5, pre-conversion).** B5's
+gov-side write is banked; **none of it has reached LCC yet.** Assert on the DELTA against these:
+
+| metric | baseline |
+|---|---:|
+| `lcc_entity_portfolio_facts` | **14,076** |
+| lane `completed` / `open` | **1,302 / 579** |
+| gov `chain_2plus` | **178** |
+| gov `any_history` | **2,238** |
+| `human_actionable` (must stay ~flat) | **55** |
+| gov `ownership_history` (source, already banked) | **18,953** |
+| transitions view | **12,371 rows / 5,555 properties** |
+
+**Read `b5_redraft`, `written_draftable`, `facts_inserted` and `tasks_completed`. Do NOT read
+`already_drafted` or `links_already_present`** — both are re-discovery tallies that read exactly
+like throughput (P159a). ⚠️ **Expect coverage (`any_history`) to move much harder than depth
+(`chain_2plus`)** — B1 moved them +901 vs +28, and the source is mostly one transition per
+property. **A big `any_history` gain with a small `chain_2plus` gain is the expected shape, not a
+shortfall.** ⚠️ **`backlog_remaining: 0` is scoped to the scan window** — the lane advances only as
+A2 *completes* tasks, so this is a draft→apply cycle over several nights, not one pass.
+
+**Next prompt drafted: `B6a`** — fix the health view's blindness to SKIPPED steps **before**
+restarting the four dead producers (B6b). Restarting first leaves you unable to tell whether they
+stay up, because the instrument is the broken thing. Acceptance: the four known-dead producers read
+RED, and the detector is **seen** red on a deliberate silence.
+
+**Scott's standing requirement is now a contract, not an audit.**
+[`docs/architecture/data-coherence-invariants.md`](../architecture/data-coherence-invariants.md) —
+**I1–I10**, a new-database onboarding checklist (the planned future domains), and the honest status:
+**two of ten invariants have a standing detector.** Campaign **P0d / D1–D5** turns the highest-yield
+ones into scheduled checks, D1 (the provenance producer-set diff) and D2 (the link-column type
+audit) first because they are cheap and find real defects today.
+
+## 2026-08-28 — B1a merged and refuted its own premise; then MY "we must acquire deeds" conclusion was refuted one query later. gov has never consumed its own sales table.
+
+Evidence: [`B1a_AMBIGUOUS_ENTITY_MERGE_2026-08-28.md`](../audits/B1a_AMBIGUOUS_ENTITY_MERGE_2026-08-28.md);
+audit **§3b/§3c** in [`BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md`](../audits/BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md);
+canonical [`ownership-history-lane.md`](../architecture/ownership-history-lane.md) §3a.
+
+**B1a shipped and moved the wrong number.** 59 groups / 63 losers merged, `ambiguous_entity`
+**126 → 57** links, **+65 completions / +66 facts** (lane **1,237 → 1,302**, `any_history`
+2,173 → **2,238**). But `chain_2plus` moved **by one** — **64 of the 65 completed tasks carried
+exactly ONE link.** **Duplicates constrained chain EXISTENCE, never DEPTH.** The entire remaining
+A2-blocked residue is worth **12** `chain_2plus` properties, 8 of them permanently blocked by
+design (the placeholder is the GRANTOR). **That closes the lane as a depth source.**
+
+**Then I got the follow-up wrong, in the most expensive direction available.** Measuring gov's
+deed layer — **876 grantor-bearing deed records of 5,804; 325 deed documents of 13,835
+properties** — I concluded depth was now an **external acquisition** problem (K10 / county
+fetchers) and wrote it into the audit as §3b. **It survived one more query.**
+
+**B4 was the thread, and one `group by` answered it.** Grouping
+`lcc_entity_portfolio_facts` by `ownership_source` shows dia's depth comes from
+**`sales_transactions_seller_exit` — 2,207 of its 2,757 historical facts** — a feeder that closes
+the SELLER's ownership interval when a sale is recorded. **gov has no such feeder.** gov
+`sales_transactions`: **14,645 rows / 5,321 properties / 1970→2026, 9,514 with a named seller,
+4,697 properties with a dated seller** — and `ownership_history` has consumed
+**`data_source='sales_transaction'` = 169 rows, 1.8%.** Anti-joined on (property, normalized
+prior-owner, exact date): **3,080 net-new rows across 2,114 properties**, against gov's current
+**178** chained and **2,238** with any history.
+
+**Filed as ⭐ B5** (B4 closed as answered; B1b re-scoped to coverage; deed acquisition **deferred,
+not refuted** — it is the right answer for the tail B5 cannot reach). ⚠️ **3,080 is a CEILING** —
+ID-to-ID resolution takes a share, the exact-date key inflates it via the A2b
+one-conveyance-several-dates class, `gsa_lease_diff` already covers 3,704 properties, and a
+seller-exit only deepens a chain where the buyer is known too. ⚠️ **The `developer` column is not
+the path** — 32 rows / 30 properties.
+
+**The durable lesson, and it is mine to own:** *"the source is exhausted"* is a claim about
+**every table that could carry the fact**, not the tables named after it. I measured
+`deed_records` and `property_documents`, found them thin, and recommended acquisition — the most
+expensive conclusion available — while a source holding **30× more** sat one join away. It is the
+A5 rule (*grep for who already writes the gap*) and the A2 rule (*check whether an existing
+producer already minted the parties*) arriving as a **recommendation** instead of a code review,
+where nothing catches it. **Acquisition earns the highest burden of proof.**
+
+**Also durable:** when one domain out-performs another on a metric, **group that metric by its
+provenance column before theorising.** The funnel audit could not see this at all; one
+`group by ownership_source` produced it immediately.
+
+**Scott generalised it correctly and it is a CLASS, not an incident.** Two more unconsumed gov
+sources inside ten minutes: **`gsa_lease_change_facts`** — 336,303 rows, `landlord_change_flag` on
+**38,213 across 8,845 leases**, **38,055 with both old and new lessor names**, spanning
+**2013-02 → 2026-02**, against `ownership_history`'s 6,648 `gsa_lease_diff` rows; and
+**`property_sale_events`** — **5,208 rows carrying `ownership_history_id` AND
+`sales_transaction_id`, both populated on ZERO rows.** The comps↔ownership join table is modelled
+and was never wired. ⚠️ 38,213 is a RAW signal — P138 flicker, A2b per-lease fan-out (the table is
+keyed on `lease_number`), and name variants all inflate it.
+
+Filed as **playbook Class 20** (*a source one domain consumes and a sibling never wired up*) and
+**backlog B6** — the systematic sweep across GSA lease inventory, SAM.gov, public records, sales and
+dia, covering **both** stores (comps + ownership history), with corroboration/contradiction routed
+to a review lane on the **existing** authority ladder and a next-action for every detected change.
+**B6 is audit + design; it builds nothing.**
 
 ## 2026-08-28 — C2e tranche one MINTED. The noise cost the floor existed to prevent is mostly not real.
 
