@@ -17,7 +17,7 @@ Cross-references the per-topic design docs in `docs/architecture/`.
 
 ## 0. 📇 THE TOPIC INDEX — every document on the ownership→contact chain, and what it is for
 
-**This file is the LIVING DOCUMENT for the chain.** Current state is §4e–§4k (**§4k is the newest**); everything else on the
+**This file is the LIVING DOCUMENT for the chain.** Current state is §4e–§4l (**§4l is the newest**); everything else on the
 topic is listed here with its scope and status so no one has to guess which of ~20 files to open.
 **Nothing below is deleted — an audit is evidence for a date, and dated evidence stays.**
 
@@ -1322,6 +1322,12 @@ other provenance labels. The gaps are structural, not acquisition.
   and unpopulatable (`22P02`). **dia's identical table has a compatible `integer` PK and 52
   populated rows** — that is the positive control making gov's zero a type defect rather than
   neglect. This is the comp↔ownership join Scott's framing names, and it has never existed.
+
+  > **↳ ANSWERED 2026-08-28 in §4l — and the last sentence above is the part that did not survive.**
+  > The type facts all hold. But the comp↔ownership join is **not** what this column would restore:
+  > `ownership_history_id` has **ZERO readers on either domain**, and **56% of the gov rows it would
+  > link are `ownership_change_stub*`**, the retired circular source. **Retiring the column is the
+  > recommendation; the real finding is §4l.** Read §4l before acting on this bullet.
 - ⚠️ **The GSA landlord-change signal deflates 28.6×**: 38,213 flagged → 20,271 after name-key
   normalization (**46.7% of the flag is a re-spelling**) → 13,225 property-resolved → **4,845
   distinct conveyances** → **1,338 net-new / 1,202 properties**, spanning 2013→2026. Worth having,
@@ -1610,3 +1616,80 @@ size, and it is deliberately undiagnosed here.** Candidates in order: the `lcc_r
 0.55 confidence gate (the documented 876-asset supersession class); a dia **operator** in the owner
 slot (P113); or an org anchored in one domain with properties in the other. **Do not assume — this
 arc has three instrument errors on record from assuming.**
+
+
+## §4l — B6c: `property_sale_events` — the table has a future, the two link columns do not (2026-08-28)
+
+Full audit: [`docs/audits/B6c_PROPERTY_SALE_EVENTS_2026-08-28.md`](../audits/B6c_PROPERTY_SALE_EVENTS_2026-08-28.md).
+**Diagnosis only — no migration, no column dropped, no type changed.** B6c was briefed to answer
+*"does this table have a consumer"* **before** repairing the `bigint`/`uuid` defect §4j found. It
+does; the columns do not; and the audit found something that outranks both.
+
+### The three verdicts
+
+- **The TABLE is alive — keep it.** 6 live gov triggers, three of them table-specific:
+  `trg_pse_close_listing` (flips a concurrent listing to Sold), `trg_pse_propagate_sale` (writes
+  `properties.latest_sale_price` / `latest_deed_date` / grantor / grantee) and
+  `trg_gov_auto_cap_rate_on_sale_event` (feeds `cap_rate_history`). It is the LCC detail panel's
+  **declared canonical write target** (two write paths) and is read+write allowlisted on both
+  domains. dia has 6 objects on it including `v_property_latest_sale`.
+- **`ownership_history_id` — ZERO readers anywhere. Retire it.** 0 hits across **620 gov objects**,
+  0 across dia, 0 in `api/`; 0 of 5,208 gov rows; **1.9% (52/2,730) on dia after four months**; **no
+  FK on either domain.** ⚠️ **Both gov trigger functions were read in full and neither touches
+  either link column** — they use `property_id`, `sale_date`, `price`, `cap_rate` and the *name*
+  columns. Repairing the type builds a link nobody follows (**Class 2**).
+- **`sales_transaction_id` — one reader, dia-only.** `fn_listing_close_if_sold` uses it to stamp
+  `available_listings.sale_transaction_id`, and that is why dia has the FK. **gov has no reader and
+  gov's own close-listing trigger does not want one.** Held, not retyped: if the two stores
+  consolidate (below) the column disappears rather than getting fixed.
+
+### 🚨 The finding that outranks the type defect — two stores, opposite ideas of "canonical"
+
+`detail.js` states in its own comments that `property_sale_events` is **canonical** and
+`sales_transactions` is *"legacy, retired for write paths."* The database says the reverse:
+
+| | reads `sales_transactions` | reads `property_sale_events` |
+|---|---:|---:|
+| all gov views | **76** | **0** |
+| of which `cm_gov*` (the CM book) | 30 | 0 |
+
+**No trigger or function propagates PSE → `sales_transactions`** (PSE writes to `properties` and
+`available_listings` only), while the reverse direction *does* exist via
+`trg_gov_listing_propagate_to_sale`. **So a sale an operator types into the property panel never
+reaches the comps spine.** Already non-empty and not noise — **6 real priced comps, up to $10.8M
+with cap rates**, exist only in PSE and are invisible to every chart in the book. And PSE is **92.6%
+duplicative** of `sales_transactions` on exact `(property_id, sale_date)` (4,825 of 5,208; **0** PSE
+rows sit on a property with no `sales_transactions` row at all).
+
+⚠️ **Both stores are individually correct and each has a coherent consumer set. Nothing errors and
+no component test can see it, because it is a property of the CONNECTION** — the class the coherence
+contract exists for. Filed as **B6c-dup**, ranked above every column-level repair.
+
+### D2 — the I3 sweep, run on all three projects
+
+**10 genuine defects · 3 low-severity · 5 accepted false positives.** Detector SQL in the audit §7e.
+Two refinements it earned while running, both worth carrying:
+
+- **A declared FK is authoritative and Postgres already type-checks it** — so D2 need only examine
+  *unFK'd* columns. `available_portfolios.portfolio_id` was flagged against a name-derived
+  `portfolios`; its real FK points at `sales_portfolios` (uuid→uuid, correct). **The declaration
+  beat the name guess.**
+- **Every genuinely mismatched undeclared column found is 0% populated** — a column that cannot hold
+  its value never gets one. **Triage by populated-ness first**; a *populated* mismatch is nearly
+  always an external vendor id (Salesforce `00T8W...`) or a uuid stored as text.
+
+⚠️ **LCC Opps returned no mismatches, and that is a BOUNDED zero, not a clean bill** — it evaluated
+**151 of 559** `_id` columns (27%); the other 408 do not resolve to a name-derived target and were
+**not examined**. ⚠️ **And gov and dia's `property_sale_events` are broken on *different* columns**
+(gov's `broker_id` is fine, dia's is `uuid` against an `integer` PK on 2,730 rows) — **neither is a
+safe template for the other**, which is I2's same-shape invariant failing on types.
+
+### The alert is NOT to be resolved — re-scope it
+
+`property_sale_events` is registered in `feed_freshness_registry` on `created_at` at **45 days** and
+reads **`is_stale=true`, age 144**. Its bulk producer was retired **on purpose**; its only live
+producer is an operator form with **no cadence at all**. A 45-day expectation there alerts whenever
+nobody types a sale for six weeks and then sits open forever — **the B6a *"expectation nobody chose"*
+failure, inside the freshness registry.** De-register with the reason recorded, or re-register as a
+DECLARED irregular feed. Backlog **B6c-feed**.
+
