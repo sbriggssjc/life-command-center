@@ -86,6 +86,20 @@ confirmed**. This repo's own rule is that a fix is not fixed until the populatio
 | N6 | **R4 (remaining half) — going-cold detection + suggested-touch prose.** `NEXT_STEP_AI` is on; the missing half is Ollama reading the deal thread and drafting *who's quiet, why, suggested touch* into the cadence engine. | 🟢 | `LOCAL-MODEL-GAP-AUDIT.md` R4; leverage map §4.5 |
 | N7 | **R2 (re-classified) — OM-economics write-back + owner-edge creation.** Measured as category (a): the LLM already ran (3,955 staged items carry `asking_price`/`cap_rate`, `lcc_property_attributes` exists). What is missing is the **deterministic** write-back and the asset→owner edge from the extracted owner. Unblocks offer-context, cadence and dossiers. **Moved OUT of the local-model track into engine connectivity — still high value.** | 🟢 | `LOCAL-MODEL-GAP-AUDIT.md` R2 (re-measured 2026-08-24) |
 
+## P0b — ⭐ BD PIPELINE FUNNEL (re-audit 2026-08-28, Scott's framing: property → owner → chain → developer)
+
+Source: `docs/audits/BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md`. **Every prior audit measured queued
+work; this one measures the funnel.** gov: 13,835 live properties → 6,362 with an LCC owner link →
+**149 with 2+ historical owner links (1.1%)**. Against the goal — *connected ownership history back
+to the developer across target markets* — **that 1.1% is the number that matters.**
+
+| # | Item | State | Notes |
+|---|---|---|---|
+| **B1** | ⭐ **The $500k floor now gates FREE work — split it by consumer.** **1,548 of 1,766 skips are `below_value_floor`**, five times the 314 completed. The floor was correct for a **human** queue; since A2 the `agrees` bucket is applied **automatically by cron 244**, so a chain costs ~nothing. **Split: none/low for the automated path, $500k retained for anything reaching a person** — then re-open the 1,548, reversibly. ⚠️ **If the split cannot cleanly separate the two, STOP rather than lower both.** ⚠️ Fed by `lcc_generate_chain_research_tasks` (cron 144), **not** the A5a/A5c producer — do not conflate. Prompt drafted: `prompts/B1-*.md`. | 🟢 | this is the unlock for Scott's stated goal |
+| **B2** | **~3,468 gov properties have a domain `true_owner` that never reached the entity graph** (9,830 vs 6,362 linked). **Nothing downstream can touch them** — not chains, not contacts, not cadence. ⚠️ **Measure WHY before building**: the gov `owner_needs_salesforce` lane just proved a zero can be a **key-space artifact** (wrong join key) rather than a coverage fact. | 🔴 | Lock 2 |
+| **B3** | ⚠️ **The cadence surface is 99% overdue — 2,276 of 2,302 due.** A surface that is entirely red cannot distinguish urgent from stale and trains the operator to ignore it. **Badge-that-is-noise at the scale of a whole surface**, and never audited in this arc. Diagnose before changing anything. | 🔴 | Lock 4 |
+| **B4** | **dia is materially ahead of gov on chain depth** — 1,505 chains / 568 with 2+ historical / deepest **14**, vs gov 1,517 / 149 / **6**. **Why?** If dia has a source or path gov lacks, that is a transferable unlock rather than a curiosity. | 🔴 | sized, unexplained |
+
 ## P1a — ⭐ THE TOP PRIORITY: a correct producer is now feeding lanes with ZERO consumers
 
 **Measured 2026-08-27 21:40.** A5a made the research-task producer correct (no more false
