@@ -59,7 +59,7 @@ Last updated: **2026-05-24**.
 | "Duplicates for the same sale on the same property" | ✅ FIXED — 0 live duplicates remain; UNIQUE index prevents new ones; cron worker catches any that slip past |
 | "Missing many elements of a sales transaction" | ⏳ PARTIAL — missing-price live rows down 6,302→0 (reclassified, not abandoned); contact PII persistence (C2) still pending |
 
-See `docs/ownership_sales_remediation/2026-05-23_track_a_progress.md` for per-run details and `docs/ownership_sales_remediation/baselines/2026-05-23_post_week0_apply.md` for the original baseline.
+See `docs/history/worklogs/ownership_sales_remediation/2026-05-23_track_a_progress.md` for per-run details and `docs/history/worklogs/ownership_sales_remediation/baselines/2026-05-23_post_week0_apply.md` for the original baseline.
 
 ---
 
