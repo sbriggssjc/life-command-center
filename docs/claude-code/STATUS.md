@@ -17,6 +17,50 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-28 — C2e tranche one MINTED. The noise cost the floor existed to prevent is mostly not real.
+
+Evidence: [`C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md`](../audits/C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md);
+folded into the canonical page as **§4i**. Batch `c2e_gov_eligible_t1_20260828`, gov only, dia untouched.
+
+**The structural finding.** `v_lcc_merge_candidates` and `v_lcc_merge_candidates_normalizer_blind`
+filter **`entity_type = 'organization'`**; a minted asset is **`entity_type = 'asset'`** — so it is
+**structurally incapable of entering either surface.** The merge-noise cost that justified the rent
+floor **cannot occur for asset minting at all.** Measured across 2,000 entities: merge candidates
+5,250 → 5,250, `auto_mergeable` 3,038 → 3,038, normalizer-blind 64 → 64, drift 0 → 0. The entire
+observable cost was **+20 `v_duplicate_candidates` rows (+0.25%)** and **+23 Tier 0 cards with the
+`auto` band flat at 9.**
+
+⚠️ **This does not retire the doctrine.** *"Evidence justifies the entity"* is exactly why the mint
+was eligible-set only: **2,000 minted, 2,000 resolved an owner, 0 evidence-less.** What is refuted
+is the narrower claim that minting *assets* pollutes the merge surfaces.
+
+**Verified live:** asset anchors **5,096 → 7,145**; `lcc_property_owner` **4,065 → 6,065**; distinct
+owner entities **2,768 → 3,743 (+975)**; Tier 0 ask 82 → 91, auto 9 unchanged; drift 0.
+
+### ⚠️ `auto_mergeable` now has TWO threads moving it — and this nearly read as a failed gate
+
+I checked the gate live and got **3,005**, against C2e's reported-unchanged **3,038**. That is the
+"unexplained move is a stop" condition. **It was not the mint:** `lcc_entity_merge_log` shows **64
+merges in that window from the other Cowork thread** (log 66 → 130, 97 entities tombstoned), and
+`v_lcc_merge_candidates` cannot see assets in any case. **C2e's claim was correct at its measurement
+time.** New rule recorded in §4i: with parallel windows, *"the gate did not move"* means nothing
+without a **timestamp and an attribution** — read `lcc_entity_merge_log` before claiming a delta is
+yours.
+
+### 👤 Tranche two — recommended in two steps, not run
+
+**4,811 properties / 4,354 owners remain.** ⚠️ **Tranche one tested the SAFEST population** — its cut
+landed at $543,782 of owner rent, entirely *above* the old floor, so it exercised none of the
+low-rent tail the no-floor decision was actually about. **T2a (owner rent ≥ $100k: 2,570 properties,
+17.2% contactable)** is indistinguishable from tranche one and covers the whole $2M–$20M sweet spot
+— recommended. **T2b (below $100k + unknown: 2,241 properties, ~3% contactable, 17.8% public bodies
+in the bottom band)** is Scott's call, **and the argument has changed**: C2a said stop to avoid
+noise, and that premise is now measured and largely false. What remains is a judgement about
+prospect quality, not technical risk.
+
+⚠️ **Whatever runs, drive `lcc_ingest_domain_owner_evidence` explicitly afterwards** — cron 225's
+400/run cap would leave a 2,570-row tranche evidence-less for most of a week.
+
 ## 2026-08-28 05:10 UTC — repository-wide consolidation on the ownership→contact chain
 
 Scott: *"apply this to all files in the repository on the topic… consolidate the intention into one
