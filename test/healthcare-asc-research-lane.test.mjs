@@ -110,9 +110,9 @@ test('multi-token CMS suite suffixes bind to building-level research pages', () 
 test('Circle and Cir normalize to the same exact frozen building address', () => {
   const target = {
     candidate_fingerprint: sha('6'),
-    address_token: normalizeAscAddressToken({
-      address: '1120 Raintree Circle Suite 100', city: 'Allen', state: 'TX', zip: '75013',
-    }),
+    // This literal reproduces a row frozen before CIRCLE/CIR normalization
+    // existed. Runtime comparison must not require rewriting it.
+    address_token: '1120 RAINTREE CIRCLE|ALLEN|TX|75013',
     cms_identity: {
       facility_name: 'Texas Health Spine Surgery Center Allen LLC',
       address: '1120 Raintree Circle Suite 100', city: 'Allen', state: 'TX', zip: '75013',
@@ -126,10 +126,13 @@ test('Circle and Cir normalize to the same exact frozen building address', () =>
     tenants: [{ name: 'Texas Health Spine Surgery Center', occupied_sf: '15,718' }],
   };
 
-  assert.equal(target.address_token, '1120 RAINTREE CIR|ALLEN|TX|75013');
+  assert.equal(normalizeAscAddressToken(target.cms_identity), '1120 RAINTREE CIR|ALLEN|TX|75013');
   const built = buildAscStructuredCapture(target, context);
-  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address_token, '1120 RAINTREE CIRCLE|ALLEN|TX|75013');
   assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'normalized_frozen_identity_address');
+  assert.equal(built.identity_match.frozen_address_token_preserved, target.address_token);
+  assert.equal(built.identity_match.normalized_comparison_token, '1120 RAINTREE CIR|ALLEN|TX|75013');
 
   for (const mismatch of [
     { address: '1122 Raintree Cir' },
