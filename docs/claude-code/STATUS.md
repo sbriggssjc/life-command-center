@@ -937,6 +937,72 @@ conflict resolution on the repo's hottest file.
 pre-reload.
 
 
+## 2026-08-27 (Cowork) — C1 answered: RETIRE. The consumer has existed since June, on another surface.
+
+**The Salesforce research lanes should not get a consumer — they are a capture-less second copy of
+one that already works.**
+
+The Decision Center lane **`sf_link_candidate`** holds **3,369 owner↔SF-Account candidates**, each
+carrying a resolved `001…` Account id, behind a verdict path (`api/admin.js:10764`) that **PATCHes
+the exact column whose NULL-ness defines both research lanes** — null-guarded, provenance-logged,
+reversible, with an Ollama pre-rank (cron 213). **Verified independently: 102 decisions, last
+2026-08-14.** It already covers **360 of dia's and 1,347 of gov's** gap subjects.
+
+The research lanes, by contrast, have **no capture path at all**: `completeResearch()` posts
+`{research_task_id}` and writes nothing, neither lane has a capture button, and the seeder dedupes
+on `status='queued'` only — so a completion is simply **re-minted** (4.84 tasks/subject on
+`property_missing_recorded_owner`).
+
+### ⚠️ Three corrections to my own brief, all measured
+
+1. **My "gov: 0 of 108 resolve" was a KEY-SPACE ARTIFACT, not a coverage fact.** The lane emits
+   `unified_contacts.unified_id`, and `external_identities` indexes gov only by `gov/true_owner`
+   and `gov/asset` — **so that zero is structural and no amount of minting could change it.**
+   Re-keyed via property → `true_owner_id`, **111 of 114 resolve.** ⚠️ But the names differ on
+   **70 of 120** pairs (`ARCP GSPLTNY01, LLC` → **Nicholas Schorsch**; `INGOLD FAMILY INVESTMENTS
+   LLC` → **Robert Ingold**) — that is **SPE↔sponsor, i.e. P188**, and attaching the sponsor's
+   Account to a question asked about the SPE would be the same error P188 exists to prevent. Safe
+   subset: 55 name-agreeing pairs → **2** with an SF Account. **My conclusion held, for a sharper
+   reason than I gave.**
+2. **NEW DEFECT — the gov lane reads one column and its only writer writes another.** Predicate =
+   `unified_contacts.sf_account_id`; the verdict writes `recorded_owners.sf_account_id`. **1,961
+   gov owners are already linked, 1,292 still read as a gap, and exactly 29 agree.** So **a human
+   who works the Decision Center lane successfully does not clear the research task** — and
+   **96 of the 1,675 admitted rows ($314.7M) is phantom work.** *Check the writer's column against
+   the predicate's column by name, not by concept.*
+3. **dia's two "27"s are different sets — overlap 3.** 27 admitted by the value gate; 27 whose
+   entity carries an SF Account. I had treated them as one.
+
+### ⚠️ My doctrine question failed on CAPABILITY before doctrine
+
+I asked whether mass-creating SF Accounts violates *"LCC never writes back to clean SF."* The
+prior question is simpler: **LCC's entire Salesforce surface is a read-only Power Automate proxy** —
+`_shared/salesforce.js` records that Scott has no admin rights to register a Connected App, and a
+grep for `sobjects` / `/services/data/v` returns **nothing**. Both lanes' generated instruction says
+*"Link **or create** Salesforce account"* — **half of it has never been buildable.** No approval was
+needed because there was nothing to approve. *A capability question you can settle with a grep is
+cheaper than a doctrine question you take to the user.*
+
+**P131: (a) 27 dia + 2 gov · (b) ZERO · (c) dominant.** A Salesforce id exists only in Salesforce —
+no corpus states one, so a model would fabricate an 18-character id that looks exactly real.
+**Fourth time this arc the top-ranked "LLM opportunity" measured as (a)+(c).**
+
+### The recommendation, with numbers: automate 27 · retire 945 · gate 1,702 · repair 1,292
+
+Filed **C1a–C1e**, sequenced: **repair the gov mirror first** (it resizes both lanes) → gate both
+`lane_no_consumer` → retire on the A4 pattern → the 27 as **a new unit of `sf-link-reconcile.js`,
+never a standalone writer** → register the missing dia `field_source_priority` ladder.
+
+**It deliberately did not build the unambiguous 27-row fill**, because `sf_link_candidate`'s verdict
+is the **single owner** of that column and carries the null-guard, provenance row and reversal. A
+separate filler would be the second-writer defect (P119/P194/N15c). **Correct call.**
+
+⚠️ **And the verification is inverted, which must be stated before anyone measures it:** if C1b/C1c
+are taken, **real completions correctly stay at 0 and the lanes disappear instead.** That is the
+success condition, not a failed metric. The numbers that move are `dia.true_owners.salesforce_id`
+non-null (**822 → 849**) and the gov admitted count (**1,675 → 1,579**).
+
+
 ## 2026-08-27 (Cowork) — C1 drafted, and measuring first refuted the plan before it was written
 
 The plan implied by A5 was *"automate the 293 that resolve ID-to-ID, retire the rest."* **Measured
