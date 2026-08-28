@@ -17,6 +17,50 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-28 02:30 UTC — N15d: the producer is proven fixed, by CONTROL rather than by wall clock
+
+**The date rolled over and the check is finally readable — but the decisive evidence is not the
+elapsed window.**
+
+**Wall-clock arm (weak, and stated as weak):** 6.41 hours since the trigger, **2 entities created**,
+**both keyed correctly**, `v_lcc_canonical_name_drift` still **0**.
+`JACO SAVANNAH REALTY, INC.` → `jaco savannah realty`; `asset 4477` (gov mint) → `asset 4477`.
+⚠️ **Neither is a case where the old and new normalizations DISAGREE**, so this shows the trigger
+breaks nothing — it does not by itself show the trigger *corrects* a drifted writer. Two rows is a
+thin sample and is reported as such.
+
+**Positive-control arm (decisive).** A row was inserted through the real writer path carrying a
+**deliberately wrong** `canonical_name` — `century park` — exactly what the outgoing aggressive
+normalizer produces, inside a self-rolling-back transaction:
+
+> **writer supplied `century park`; the trigger stored `century park partners`; corrected = true.**
+> Residue after rollback: **0 rows.**
+
+**The trigger overrides a drifted writer on a live insert.** That is the mechanism proven, not the
+absence of failures inferred — the distinction the N15d audit itself drew when it refused to claim
+a pass off an empty population.
+
+### ⚠️ And the control closes the exact hazard CLAUDE.md has warned about for months
+
+`Century Park Partners` vs `Century Park Properties LLC` is *the* documented example of why
+`lcc_normalize_entity_name` is banned for identity. Measured on the live rule:
+
+| name | new key (live) | old aggressive normalizer |
+|---|---|---|
+| `Century Park Partners LLC` | `century park partners` | `century park` |
+| `Century Park Properties LLC` | `century park properties` | `century park` |
+
+**`would_falsely_link = false`.** Under the old rule both collapse to `century park`, so
+`ensureEntityLink` would have linked two different companies **automatically, with no human
+review**. That failure mode is now closed and demonstrated side by side.
+
+**Verdict: N15d substantially passed.** The producer is fixed — mechanism proven and no drift over a
+real production window. A full-day wall-clock read is still worth taking (daily mint counts range
+0–8), but the risk it was guarding is materially retired.
+
+⏳ **Still pending: cron 241 at 06:55 UTC** — `tier0_auto` writes remain **0**; that window has not
+come round yet today.
+
 ## 2026-08-27 22:25 UTC — N19 executed: 14 groups merged, and Montecito Medical came into view
 
 Scott approved the 19 signal-bearing pairs. **⚠️ They were not 19 pairs — they were 14 GROUPS**, and
