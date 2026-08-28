@@ -189,6 +189,60 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-28 — 🗄️ TOPIC-BASED REPO CLEANUP, pass 1: the ownership/sales/provenance cluster. 25 items were filed nowhere.
+
+**Scott: *"topic based and repository wide, not just the prompts folder — so there is zero confusion
+on what the latest status or build or plans or designs are."*** This pass covers **one topic
+cluster** end to end. It is not a full repo reorganisation; the rest is sized below.
+
+**Both moves were gated on reading every file first**, because the standing rule is *lose nothing,
+especially no planned feature.* **That gate earned its keep: 25 items existed in no backlog, no
+audit and no design doc.**
+
+| moved | from → to | items recovered |
+|---|---|---|
+| **32 session statuses** (2026-05-23 → 05-29) | `docs/ownership_sales_remediation/` → `docs/history/worklogs/ownership_sales_remediation/` | **11** → backlog **§P14, M1–M11** |
+| **12 root `.md` files** + 4 coupled | repo root → `docs/history/` and `docs/audits/` | **14** → backlog **§P14b, R1–R14** |
+| **3 still-live references** | repo root → `docs/architecture/` | (relocated, not archived) |
+
+**Root `.md` count 70 → 50.** The doc map's own rule is *"the root is code and config; do not add a
+new `.md` there"* — it was being violated 70 times.
+
+**The five recovered items that matter most:**
+
+- **R1 — an entire unexecuted Supabase 3→1 consolidation plan**, with rollback, **no backlog row
+  anywhere**, still cited as live by a 2026-07 audit. 👤 Scott's call.
+- **R2/R3/R4 — the duplicate-property RECURRENCE fix was never built.** `upsertDomainProperty` still
+  runs the `address=ilike` fall-through chain; `v_property_address_collisions` has **zero consumers
+  on either DB**. **We clean the output nightly via the twin lane and never fixed the producer** —
+  Class 8, and exactly the pattern this whole campaign is about.
+- **M1 — 617 `ownership_history` rows are grandfathered out of `excl_oh_no_overlap`** and the review
+  queue was never drained. **"C5 DONE" meant the constraint shipped, not that the overlaps were
+  resolved.**
+- **R13 — an unresolved CONTRADICTION that M10 and K10 are sized off.** The remediation plan calls
+  the deed/parcel orphaning *"audit overstated"*; the deed spec's whole premise is the opposite
+  (9,402 orphans). **One of them is wrong.**
+- **M8 / M7 — LoopNet PA Flow 3 has never been built (0 leads ever landed)**, and the `lead-ingest`
+  Edge redeploy was never confirmed, leaving sanitization live only on the **retired-but-answering**
+  host.
+
+**Two archives carry mandatory-read banners**, because several files assert things that are now
+false and would mislead a future session within one paragraph: the A9b cutover design says
+**"Status: design / not executed"** when it shipped 2026-05-29; its runbook's **Step 0 gov→hub
+re-sync is now actively harmful** (it would import the stale snapshot into the authoritative hub);
+and `SPEC_research_task_generator`'s cron snippets **target the retired Vercel host** while its
+auto-close **is** the A5a defect that falsely closed 5,763 tasks.
+
+⚠️ **Also recorded: a LETTER COLLISION.** The May campaign's Track A/B/C are unrelated to the Aug
+lettered prompts. *"B4"* is a May sales worker **and** the dia-vs-gov chain-depth question.
+**Always check the date.**
+
+**Remaining, sized not done: ~50 root `.md` files in other clusters** — capital-markets emails and
+book copy, BOV/lease-extractor specs, Power Automate setup guides, hosting strategy
+(`LONG_TERM_HOSTING_STRATEGY.md` + `PHASE_0_INVENTORY.md` should move with R1's plan), AI-chat
+rollout, and the DQ/intake remainder. **Same discipline required: read, extract unfiled intent,
+then move.** Filed as the next cleanup pass.
+
 ## 2026-08-28 (evening) — B6a SHIPPED; the four dead producers read RED. And the alert chain that would carry that to a human has been silent for a month.
 
 Evidence: [`B6a_SKIPPED_STEP_HEALTH_BLINDNESS_2026-08-28.md`](../audits/B6a_SKIPPED_STEP_HEALTH_BLINDNESS_2026-08-28.md) §7a ·

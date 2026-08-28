@@ -429,6 +429,63 @@ re-measure before acting, but do not re-derive.**
 | K20 | **dia 23654 Census-radius demographics write never completed.** Prompt 16's live-apply checklist items 1–2 were applied and re-verified; **item 3 (the Census-radius demographics write) is the remaining one.** `scripts/backfill-dia-location-trade-area-23654.mjs` passes syntax check and `.env.local` carries a `CENSUS_API_KEY`. Related to the un-re-measured "Census key" note carried in `CURRENT-STATE.md` §7. → `docs/history/worklogs/DOSSIER_LOCATION_TRADE_AREA_23654_WORKLOG.md` |
 | K18 | **`cm_gov_core_cap_rate_dots` retains a lease-derived term fallback that nothing currently uses.** Audited 2026-08-11: all 1,143 plotted dots come from sale-frozen `firm_term_years_at_sale`; `lease_fallback_term_dots = 0`. **Acceptable for current report use** — but future unbackfilled sales could enter through the fallback. Fix if stricter provenance is wanted: expose a term-source flag, or require `firm_term_years_at_sale IS NOT NULL` in the core-dot wrapper. |
 
+## P14 — 🗄️ RECOVERED from the May-2026 ownership/sales remediation campaign (archived 2026-08-28)
+
+**`docs/ownership_sales_remediation/` (32 dated session statuses, 2026-05-23 → 05-29) was read in
+full before being archived to `docs/history/worklogs/ownership_sales_remediation/`.** The campaign
+closed 29 done / 2 partial / 1 handoff — **and eleven items were recorded NOWHERE ELSE in the
+repo.** They are filed here so the archive loses nothing.
+
+⚠️ **Everything in that folder predates the Vercel→Railway retirement (2026-07-20) and the
+`CONTACTS_HUB='ops'` cutover (2026-05-29).** Read the archive's `README.md` banner before quoting
+any file in it.
+
+| # | Item | State | Notes |
+|---|---|---|---|
+| **M1** | **617 grandfathered `ownership_history` rows are EXEMPT from the `excl_oh_no_overlap` constraint** (297 different-owner chain-break pairs + 87 NULL-owner pairs). `v_ownership_overlap_review_queue` exists **with no operator surface** and was never drained. ⚠️ **"C5 DONE" means the constraint shipped, not that the overlaps were resolved.** When the queue drains, flip `overlap_grandfathered = false` and drop the exemption. | 🔴 | c5p2final |
+| **M2** | **dia `ownership_history` carries TWO competing date-column pairs** — `start_date/end_date` and `ownership_start/ownership_end` — written by different writer generations. Consolidation was named as a prerequisite for revisiting C5. **This is a coherence defect in the same family as D2** (a column that cannot mean what it is named). | 🔴 | a6a |
+| **M3** | **C9 Phase 3 — the `commit_Sale`/`commitOwner`/`commitDeed` orchestrators** (validate + canonical resolve + dedup key + provenance in ONE call). Validators shipped; orchestrators never built. **Directly relevant to I1/D4** — a single write path is what makes a producer/consumer registry enforceable. | 🔴 | c9, c9p2_sidebar |
+| **M4** | **A9b phases 6–7 — the dia projection, `dia.properties.unified_id` backref, and the `unified-contacts-projection-tick` hub→domain worker.** Plus an **unmade decision: retire `gov.unified_contacts` or make it a downward projection from the hub.** It is currently a frozen snapshot nobody has ruled on. | 🔴 | a9b design |
+| **M5** | **Contact-dedup pass — 44 email-collision broker-owners** need `sf_contact_id`/`sf_account_id` folded onto their hub owner row (**SF-id lookups miss them post-cutover**), plus 6 same-owner dupes. | 🔴 | a9a, a9b |
+| **M6** | **The Contacts "Engagement (High)" sort is a NO-OP** — `engagement_score` is 0 everywhere and the hub has no `last_call/email/meeting_date` or `total_calls`. Needs a formula over `total_touches` + recency **and a product call on weighting (Scott's)**. ⚠️ A sort control that does nothing is the badge-that-lies failure on an operator surface. | 🔴 | RE-AUDIT |
+| **M7** | **`lead-ingest` Edge Function redeploy was NEVER CONFIRMED** — RCM/LoopNet lead-name sanitization is live only on the **retired-host** fallback path. ⚠️ **P194 class**: the retired Vercel deployment still answers and still holds a service key. | 🔴 | closeout, c9p2_rcm |
+| **M8** | **LoopNet Power Automate Flow 3 has NEVER been built — 0 LoopNet leads have ever landed.** Full spec in `.github/PA_FLOWS.md` §Flow 3. 👤 **Standing owner action (Scott).** | 🔴 | c8 |
+| **M9** | **Three upstream CoStar-sidebar extractor gaps** (separate repo): dia `recorded_date` **94% missing**, gov `guarantor` **100% missing**, and the Sale Contacts tab PII the C2 persistence path is already wired for but never receives. | 🔴 | completeness, c2 |
+| **M10** | **96 residual unmatchable deed orphans** (3 dia + 93 gov) needing per-document county-recorder research. A row-level review view was considered and **explicitly not built**. | 🔴 | a4b, b3 |
+| **M11** | **G7-dia unfinished — ~8,546 dia properties still lack `unified_id`**; `scripts/A9b_dia_property_unified_id.mjs --apply` must be re-run with the name-match source. **Separately the BD entity-sync vault secrets were never set**, leaving `dia.true_owners.lcc_canonical_entity_id` empty and the portfolio/attributes/listings syncs dormant. | 🔴 | sweep, RE-AUDIT |
+
+**Also recovered, appended to existing rows rather than duplicated:** the **17-field
+`field_source_priority` ladder list** with recommended rankings (→ **K3**, whose count of 35 is not
+reconciled with that doc's 37/17); the **624-row `llc_research_queue` count and the
+"FL Sunbiz bulk-data mirror FIRST" build order** (→ **A5g**); and the **30,711-row
+`sf_link_research_queue`** which **C1c must account for** when it retires that lane.
+
+### P14b — recovered from the ROOT ownership/sales/provenance cluster (15 files, archived 2026-08-28)
+
+**Fifteen `.md` files sat at the repo root** against the doc map's own *"root is code and config"*
+rule. All fifteen were read before being moved. **Fourteen more items were recorded nowhere else.**
+
+| # | Item | State | Notes |
+|---|---|---|---|
+| **R1** | ⭐ **SUPABASE CONSOLIDATION — 3 projects → 1, schema-per-domain, us-west-2.** A complete 7-phase plan with rollback, **never executed, never refuted, and with NO backlog row anywhere.** The 3-project topology is still live and `CLAUDE.md` documents it as current. `LCC_Data_Architecture_Audit_2026-07-29.md` still points at it as the live plan. ⚠️ **Its Phase 0 inventory is stale in a way that matters** — it predates today's edge-function split, and Phase 0 must now also inventory the **retired-but-answering Vercel deployment** and `/api/*` auth enforcement. 👤 **Scott's call**, not a build. | 🔴 | → `docs/architecture/supabase-consolidation-plan.md` |
+| **R2** | **`upsertDomainProperty` still uses the `address=ilike` fall-through chain** (`sidebar-pipeline.js:4402/4418/4432/4444`); an ambiguous match must route to review and **never INSERT**. `ambiguous_address_match` appears nowhere in the repo. **This is the RECURRENCE fix for the duplicate-property class the twin lane cleans up after** — Class 8: we repair the output nightly and never fixed the producer. | 🔴 | DQ7 Change 1 |
+| **R3** | **A stable normalized-address key to compare against** (dia column or RPC-exact lookup). **R2 cannot be correct without it.** | 🔴 | DQ7 Change 2 |
+| **R4** | **`v_property_address_collisions` has ZERO consumers on either DB** — the collisions panel was never built. A live detector nobody reads (**Class 2**). | 🔴 | DQ7 Change 3 |
+| **R5** | **TTM window unification — CM quarterly views + PDF composer.** Rolling-12 was decided; ~7 views never converted, so **the dashboard and the PDF are designed to disagree until this lands.** | 🔴 | comps audit R4 |
+| **R6** | **Sales dedup FALSE NEGATIVES** — the `(property, price±$1k, month)` key misses same-property same-price sales days apart. Named instance: **property 28549, two $3.2M rows one day apart**. Live duplicates inside the `live` lane. | 🔴 | comps impl |
+| **R7** | **Availability/sales backslide alarms were never wired into Track B** (three stated invariant queries). **Without them the desync silently returns** — and R1/R2/R3 of that audit already shipped, so the guard is the only thing missing. | 🔴 | comps audit R6 |
+| **R8** | **Ownership provenance rules have never escalated past `record_only`** — no `warn`/`strict` plan exists. **The ladder is recorded and enforces nothing.** | 🔴 | ownership provenance |
+| **R9** | **Lease-provenance reconciliation views have no operator surface** — `v_lease_responsibility_gaps`, `v_lease_expense_structure_inconsistencies`, `v_lease_provenance_audit`, built 2026-04, **zero code consumers since** (**Class 2**). | 🔴 | lease provenance |
+| **R10** | **The BOV skill does not surface the lease SOURCE TIER**, nor flag tier ≥5 as "verify from lease". **The tier data exists; the underwriter never sees it.** | 🔴 | lease provenance |
+| **R11** | **No county-ingest CRON on either domain.** K10 covers building the fetchers; **nothing covers driving them on a schedule** — a separate gap, and the file's own line is *"this is why coverage is 4.5%"*. | 🔴 | deed spec step 4 |
+| **R12** | **TWO parallel property-dedup mechanisms with no chosen source of truth** — DB `dia_auto_merge_property_duplicates` vs Python `property_consolidation.py`. Two rule sets that can disagree about a merge. **I2/I1 class.** | 🔴 | scheduling review §3d |
+| **R13** | ⚠️ **AN UNRESOLVED CONTRADICTION, and M10/K10 are sized off it.** The remediation plan calls the deed/parcel orphaning *"C3 ✅ N/A — audit overstated; system uses join table"*; `SPEC_deed_county_ingestion_fix`'s entire premise is the opposite (9,402 orphaned gov parcel owners). **One of the two is wrong. Settle it before sizing county work.** | 🔴 | plan C3 vs deed spec |
+| **R14** | **`6120 S Yale Ave Ste 300` — 8 property_ids across two normalizations, one real building.** Small, named, never adjudicated; the twin lane should re-surface it. | 🔴 | DQ7 worklist |
+
+**Filed elsewhere, flagged so they are not re-derived:** SAM feed-widening → `docs/audits/ROLLOUT_STATUS.md`
+W1.4 + `OWNERSHIP_RESEARCH_FREE_FIRST_PLAN.md`; **Supavisor pooler move → `GAPS_AND_FINDINGS_REGISTER.md`
+P-1 (👤 Scott)**.
+
 ## P11 — New verticals & long-horizon specs (design-only, nothing authorized)
 
 Kept verbatim in place; listed so they are not mistaken for abandoned. **Every one of these carries an
