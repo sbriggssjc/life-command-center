@@ -76,9 +76,21 @@ drafts, sf-link, junk pre-screen, naming hygiene, dup-pairs, match-disambig, nex
 
 **⭐ The biggest thing that happened in this arc: a dead research lane got a working consumer.**
 `establish_ownership_history` sat at **545 open / 0 completed for 69 days** while 545 finished,
-record-cited drafts sat unused. It is now **314 completed / 156 open**, with **+304 historical
-ownership facts** ($579.9M, 280 owners) and every remaining item named and routed rather than
-pooled. **The whole subsystem is one document —
+record-cited drafts sat unused. It is now **1,237 completed / 644 open** (A1→A2→A2a→A2b→A3→A4→A4b→B1),
+with `lcc_entity_portfolio_facts` at **14,010**, and every remaining item named and routed rather
+than pooled.
+
+**The goal metric — a connected ownership history back to the developer — moved:** gov properties
+with **any** ownership history **1,272 → 2,173**; with a **chain (2+ historical links) 149 → 177**.
+⚠️ **`any_history` moved 7× harder than `chain_2plus`, and that is the POPULATION, not a
+shortfall** — only 210 of the 1,501 below-floor properties carry ≥2 guard-passing transitions.
+**The binding constraint on chain DEPTH is now the A2-blocked `ambiguous_entity` residue**
+(126 links / 123 properties — the A2a duplicate-entity class, which applies unaided once merged),
+**not the value floor.**
+
+⚠️ **And the operator's badge did NOT move — `human_actionable` is 55, before and after B1.** That
+is the design: **89% of the newly-drafted population routes to automation.** A value gate belongs
+on what reaches a human, not on what a cron applies. **The whole subsystem is one document —
 [`docs/architecture/ownership-history-lane.md`](../architecture/ownership-history-lane.md)** — read
 that, not the seven dated audits behind it. Its sibling for entity identity is
 `docs/architecture/tier0-owner-contact-system.md`; **the two share `lcc_merge_entity`,

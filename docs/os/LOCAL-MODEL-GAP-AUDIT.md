@@ -17,6 +17,23 @@ auto-write) and reversible.
 **R1 — Dead research queues: draft-then-confirm the ownership-history + manual-contact lanes.**
 *(MANUAL-RESEARCH + FEEDBACK-LOOP)* — **DONE 2026-08-26 (P131), and the premise was CORRECTED by measurement.**
 
+> ## ✅ SUPERSEDED 2026-08-28 — the lane is now fully consumed. Read the canonical doc, not this row.
+>
+> This row records the **drafter** being built. What followed is a complete consumption arc
+> (A1 → A2 → A2a → A2b → A3 → A4 → A4b → B1), and the numbers below are historical:
+>
+> | | this row (08-26) | now (08-28) |
+> |---|---:|---:|
+> | `establish_ownership_history` completions | **0** | **1,237** |
+> | gov properties with any ownership history | 1,272 | **2,173** |
+> | gov with a chain (2+ historical links) | 149 | **177** |
+>
+> **Canonical, and the only place to read current state:**
+> [`docs/architecture/ownership-history-lane.md`](../architecture/ownership-history-lane.md).
+> **The R1 verdict itself still stands and is the durable part** — the answer was *deterministic
+> plumbing, not Ollama*, and that P131 lens has since been applied five more times, each time
+> correctly predicting (a) or (c) rather than (b).
+
 Original framing: "the evidence is already on-box (deeds, SOS `manager_name`, signatures, `activity_events`);
 have Ollama draft the chain-of-title / most-likely decision-maker into the review card." Live measurement
 changed the answer for BOTH lanes. Shipped state:
