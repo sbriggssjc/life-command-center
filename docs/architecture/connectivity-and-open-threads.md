@@ -1511,3 +1511,81 @@ individuals — set against Scott's own *resolve all ownership, rank later*, wit
 
 ⚠️ **Whatever is decided, drive `lcc_ingest_domain_owner_evidence` in the same pass** — cron 225 caps
 at 400/run.
+
+
+---
+
+## 4l. C2b — the Salesforce bridge SELF-HEALED, and the residue is not an owner problem
+
+Evidence: [`C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md`](../audits/C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md).
+Measurement only — nothing written.
+
+**No bridge code was written and the bridge doubled.** SF-linked people reaching a resolved property
+owner: **669 (6.8%) → 1,486 (15.2%), +817**, purely because T1 + T2a built the far bank. **C2's
+diagnosis and remedy are both confirmed** — hop 3 was the binding constraint. **Re-measure a
+downstream gap after fixing an upstream one, before building anything for it.**
+
+### ⚠️ The residue is 91.5% NOT-AN-OWNER, and that is correct
+
+Of the 7,646 SF people still unconnected, across **6,816 distinct orgs**:
+
+| | |
+|---|---:|
+| orgs carrying a `dia\|gov` `true_owner` identity | **489 (7.2%)** |
+| people at those orgs | **652 (8.5%)** |
+| **people at orgs that are NOT domain owners** | **6,994 (91.5%)** |
+
+Brokers, vendors, tenants, lenders and counsel, edged to their employer by the `works_at`
+Salesforce-account edge. **Their employers do not own our properties. No minting or reconcile will
+connect them, and none should.**
+
+⚠️ **This retires the framing that opened the topic.** *"8–10k Salesforce opportunities not yet
+connected"* is, measured, **~652 people at 489 owner-orgs.**
+
+### ⚠️ It also settles T2b independently: minting it would connect **74 orgs**
+
+Only **74 of the 489** appear in `v_lcc_c2e_asset_mint_plan` — **3.6%** of T2b's 2,054 owners.
+With T2a's measured collapse in contactability to **3.7%**, the case is weak on two independent
+axes. It remains *safe* (graph cost settled across 4,570 minted entities). **Do not run T2b now.**
+
+---
+
+## 4m. C2g — why 489 anchored owner-orgs are unresolved. Both leading hypotheses were WRONG.
+
+Evidence: [`C2g_UNRESOLVED_OWNER_ORGS_2026-08-28.md`](../audits/C2g_UNRESOLVED_OWNER_ORGS_2026-08-28.md).
+Diagnosis only — nothing written.
+
+| hypothesis | measured | verdict |
+|---|---|---|
+| the **0.55 confidence gate** (876 assets with evidence read "Unresolved") | **444 of 489 were NEVER a candidate** — only 45 appear in `lcc_property_owner_evidence` | ❌ **refuted** — the gate never saw them |
+| **P113 operator-in-the-owner-slot** | `true_owner_is_operator` = **0** across all 489 | ❌ **refuted** |
+
+**Both were the documented causes closest to hand, and both were wrong.** The residue is three
+populations:
+
+| | orgs | lever |
+|---|---:|---|
+| **dia — no property in the mirror at all** | **248 of 271** | not a resolution gap; they own nothing we track |
+| **gov — property but NO asset entity** | **74 of 222** | minting — **exactly the 74 that overlap the T2b plan** |
+| **gov — property WITH an asset entity, still no evidence** | **79 of 222** | ⚠️ **the genuine feeder defect** |
+| gov — no property in the mirror | 69 of 222 | as dia |
+
+⚠️ **The 74 reconciles exactly with C2b's independent count** of owner-orgs in
+`v_lcc_c2e_asset_mint_plan` — two different queries, same number. And the
+`true_owner_effective_id::text = external_id` join was **controlled before concluding**: 19,851 of
+20,123 facts match a gov or dia anchor, so the zeros are facts, not artifacts.
+
+### ⚠️ T2b — a THIRD independent reading, same answer
+
+T2b mints the 74. It does not touch the 79 (already minted), the 248 (own nothing here) or the 69.
+**Three separate measurements now converge**: contactability 3.7% (T2a) · only 74 of 489 reachable
+(C2b) · those same 74 the only slice of this residue (C2g). **Safe, and low-value.**
+
+### The next question — 79 gov owner-orgs the feeder should have resolved
+
+Property present, asset entity present, owner anchored — and `lcc_property_owner_evidence` names
+them **zero times** (only 17 of 222 gov orgs here were ever a candidate). **Undiagnosed by design.**
+Test in order: the **400/run cap** on cron 225 (both mints had to drive it explicitly); the
+**`lcc_domain_owner_ambiguous`** lane, where a parked row would make these *correct abstentions*;
+then the **brokerage/junk/placeholder guards**. ⚠️ **In this arc every "silent producer" that looked
+like a defect turned out, at least partly, to be a guard doing its job** — read the verdicts first.
