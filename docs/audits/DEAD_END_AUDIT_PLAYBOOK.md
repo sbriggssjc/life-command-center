@@ -981,6 +981,85 @@ count is a constant.
 
 ---
 
+> 🏛️ **Classes 20 and 21 are both instances of one architectural gap, and it now has a standing
+> contract: [`docs/architecture/data-coherence-invariants.md`](../architecture/data-coherence-invariants.md)
+> (I1–I10, plus the checklist for onboarding a new domain database).** This playbook tells you how
+> to FIND these after the fact; that document states what must be true so they cannot be created.
+> **Backlog `P0d / D1–D5` turns the highest-yield detectors here into scheduled checks** — D1 is the
+> Class 20 query below, run over every shared fact store rather than by hand.
+
+## Class 20 — a SOURCE one domain consumes and a sibling domain never wired up
+
+**Found:** 2026-08-28 (B4 → B5). **First run: gov had never consumed its own `sales_transactions`
+as ownership history — 9,514 named sellers across 4,697 dated properties, 1.8% consumed, ~3,080
+net-new rows / 2,114 properties — while dia derives 2,207 of its 2,757 historical facts from
+exactly that source.**
+
+> ✅ **BUILT AND VERIFIED (B5, same day).** The estimate graded **down** to what shipped: **2,776
+> rows / 2,000 properties**, **677 of which had no ownership history at all beforehand.** gov
+> `ownership_history` 16,177 → 18,953; transitions view 9,595 → 12,371 rows / 4,698 → **5,555**
+> properties. **Quote a ceiling as a ceiling and hand it over to be disproved** — this one was, by
+> 10%, which is the system working.
+>
+> ⚠️ **Two traps this class produced on its first live run, both worth carrying:**
+> **(1)** A parallel window re-measured the same population with a different anti-join key, got
+> **~270–370**, and recommended *"resize before building"* — **after the build had shipped.**
+> Adjudicated by the one check independent of the disputed key (*did this property have ANY history
+> before?* → 677 did not). **When two honest measurements disagree, find the key-independent
+> measurement rather than adjudicating the keys**; and *merged is not running* has a mirror,
+> **in flight is not unbuilt.**
+> **(2)** Wiring a new source exercised a **destructive propagation trigger** nobody had audited —
+> it nulled `properties.recorded_owner_id` for any row naming its parties as text (**7,567 rows
+> already in that shape; 1,446 of 9,312 would have been destroyed**). **Connecting a source runs
+> code paths that have never seen that shape of row. Snapshot and positive-control before the
+> batch.**
+
+**Symptom.** A metric is materially better in one domain than another and everyone has a story for
+why ("dia has better data", "gov's tenant is a federal agency"). The stories are plausible,
+untested, and expensive: they lead to *acquire more data* rather than *wire up what we hold*.
+
+**⚠️ The trap that makes this class invisible.** A missing feeder produces **no error, no zero row,
+and no queue**. There is nothing to audit — the absence has no representation anywhere. Every
+detector in this playbook looks at rows that EXIST; this class is about rows that were never
+created because nobody asked the source for them. **It is the mirror of Class 2 (a producer with no
+consumer): here there is a consumer with an unconnected producer.**
+
+**The detector — group the OUTPUT by its provenance column, split by domain.**
+
+```sql
+-- what actually produces this fact, and does every domain have the same producers?
+select source_domain,
+       split_part(coalesce(ownership_source,'(null)'),':',1) as src_bucket,
+       count(*) filter (where ownership_end_date is not null) as historical,
+       count(distinct source_property_id)                    as props
+from lcc_entity_portfolio_facts
+group by 1,2 order by 1, historical desc;
+```
+
+**A bucket present for one domain and absent for another IS the finding.** One query; it does not
+need a hypothesis first. Then size the unconsumed source and **anti-join it against what the
+consumer already records** — the net-new count, not the raw count, is the number worth quoting.
+
+**⚠️ "The source is exhausted" is a claim about EVERY table that could carry the fact.** This was
+found immediately after concluding the opposite: `deed_records` (876 of 5,804 with a grantor) and
+`property_documents` (325 deed docs) were measured, found thin, and written up as *"this is now an
+external acquisition problem."* **Both numbers were right and the conclusion was wrong** — the
+tables *named after* the answer were not the tables holding it. **Acquisition is the most expensive
+conclusion available and therefore earns the highest burden of proof: enumerate every table that
+could carry the fact before reaching it.**
+
+**⚠️ Do not date a feeder off `updated_at` on an upserted table.** `lcc_entity_portfolio_facts` has
+**no creation timestamp**, and the nightly `lcc_finalize_entity_portfolios` re-upsert touches
+**11,828 of 14,076 rows every day** — so every source reads "written today." Find the producer in
+CODE. **If it turns out to be a one-shot, the sibling domain has a Class 8 problem of its own.**
+
+**Repair shape.** Feed the EXISTING consumer (a new evidence source into the same apply path),
+never a second writer; inherit the guards rather than re-inventing them; and report the **coverage
+delta and the depth delta separately** — they move by very different multiples.
+
+**Where else to point it:** any fact with a provenance/source column and more than one domain —
+owner contacts, listing events, rent, cap rates, documents, broker relationships.
+
 ## Class 17 — a RULE proposed for removal because its false positives are the only part you can see
 
 **Symptom:** a matching or admission rule produces a handful of obviously-wrong outputs. They are
@@ -1468,6 +1547,113 @@ Ordered by expected yield, not by ease:
     university. Deliberately not decided by Claude (see P174).
 
 ---
+
+## Class 21 — a SKIPPED step emits nothing, and a health surface built on emitted rows cannot see it
+
+> ✅ **FIXED for gov (B6a, 2026-08-28)** — producer registry + declared skips; the four dead
+> producers read **RED** (170/170/150/144d vs a 45-day SLA); detector **seen red on a deliberate
+> silence and green after**.
+> ⚠️ **But the RED rows prove the REGISTRY, not the emission fix** — `record_skip` has not yet been
+> exercised by a real run (daily `0 8 * * *`, weekly `0 6 * * 1`). Until one passes through, *no bad
+> rows* and *no rows at all* still read identically **for the emission half**. Class 8 in miniature,
+> inside the fix for Class 21.
+>
+> 🚨 **AND THE CLASS HAS A SECOND STOREY, FOUND IMMEDIATELY ABOVE THIS ONE.** The alert chain that
+> carries gov's verdict to a human **has evaluated nothing since 2026-07-26** and **0 alerts are
+> open**: a fail-soft swallows non-200s and returns `(0,0)` (identical to *nothing to do*), and the
+> consumer **excludes mirror rows it considers stale** — so **when the sync stops, the check stops
+> checking and reports nothing wrong.** Verified: gov 33d / 13 feeds, dia 30d / 5; `feed_stale` last
+> fired **two days before the sync died**. **Fixing a producer's visibility buys nothing while the
+> transport to the alert is silently dead** — always follow the signal all the way to the human.
+> Contract invariant **I11**; backlog **B6a-follow-up**.
+
+**Detector.** Enumerate the steps an orchestrator **declares** and anti-join against the steps that
+**logged an outcome**. A step present in code and absent from the log is the finding. Equivalently:
+for any guarded call site (`if <precondition>: run_task(...)`), ask **what the surface shows when the
+precondition is false**.
+
+**First run (B6, 2026-08-28).** gov `v_pipeline_task_health` reported **one** failing step (SAM, HTTP
+401) and otherwise all green, over a pipeline whose GSA landlord-change detector had not run since
+**2026-03-11**. In `pipeline_runner.py`:
+
+```python
+latest_file = runner.run_task("Find latest GSA inventory", find_latest_gsa)
+if latest_file and not runner.dry_run:
+    runner.run_task("GSA ingest + diff", ingest_and_diff)
+```
+
+`find_latest_gsa()` globs a **local folder** that is always empty on a CI checkout. It returns `None`
+and the task itself **succeeds** — the view shows `find_latest_gsa_inventory` = ok / *"Task
+completed"* / 2026-08-24. The guarded `run_task` on the next line is then **never invoked**, so it
+writes **no `run_log` row**, so it has **no row in the health view at all**. Cost: five months of a
+dead detector, and with it `prospect_leads.lead_source='ownership_change'` (7,729 leads, 2,041 of
+them historically worked).
+
+**⚠️ This is the twin of a fix that already shipped, which is what makes it worth a class.** gov
+`CLAUDE.md` §16 built `v_pipeline_task_health` and `completed_with_errors` precisely so *"the
+orchestrator must NOT report a green `completed` over failed sub-tasks."* That closed the **failed**
+case. **The SKIPPED case was left standing, and it is invisible in a different way: a failed step is
+a RED ROW, a skipped step is NO ROW.** One is a value you can filter on; the other is an absence, and
+absences do not appear in a `GROUP BY`.
+
+**Generalisation.** It is the A5a lesson arriving in a health view rather than a lane — *a producer
+that has never emitted has no row to `GROUP BY`, so enumerate the PRODUCER's population, never the
+consumer's table.* Same family as Class 11 (the zero is the instrument) and Class 2 (a producer with
+no consumer): here the instrument reports **nothing at all**, which reads as silence rather than as
+failure.
+
+**Repair.** Record a `skipped` outcome with a reason at the guarded call site. **Never satisfy the
+guard by widening it** — a precondition that is false on CI and true on a workstation is a hosting
+fact worth surfacing, not a bug to paper over.
+
+### ✅ Repaired 2026-08-28 (B6a) — and the detector above is INCOMPLETE
+
+`docs/audits/B6a_SKIPPED_STEP_HEALTH_BLINDNESS_2026-08-28.md`. Four refinements, each of which
+changed what the class actually looks for:
+
+- **⚠️ "A skipped step is NO row" is only half of it, and the half stated above would have missed
+  the live instance.** `gsa_ingest_+_diff` was **not absent** from the view. It carried a **GREEN
+  row** — `status='ok'`, *"Task completed"*, `last_outcome_at` **2026-06-22, 67 days stale** — on a
+  step whose own history says it ran every 7 days, because `status` was derived purely from the last
+  outcome's `event_type` with nothing comparing it to when that outcome should have been superseded.
+  **The prescribed repair (enumerate declared steps, LEFT JOIN, render `never_ran`) would have
+  returned nothing for it.** A skip leaves no row *for that run*; what survives is a stale historical
+  success, and it sorts below the fresh rows. **So the detector is: for every step, `age_days` against
+  its own cadence — not merely presence.**
+- **The emission point dissolves the enumeration problem.** Once both branches of every guard write
+  (`record_skip` / `run_guarded_task`), the **logged set IS the declared set** — no step registry, no
+  `never_ran` synthetic row, no fourth registry beside the three that already existed.
+- **Cadence can be derived, and the STATISTIC must be measured.** `is_overdue = age_days > 3 × the
+  step's own p90 inter-run gap` over its last 12 outcomes. **p90, not the median** — clustered runs
+  deflate the median and false-positive healthy steps (`census_demographics` fires several times in
+  one monthly window: median 3.99d vs p90 28.78d; at 23 days old the median rule flags it and the p90
+  rule does not). Below 3 observed gaps, **NULL, never false** (Class 11 / P180: *cannot be sized* ≠
+  *fine*).
+- **⚠️ AND THE SIBLING INSTRUMENT HAS THE SAME SHAPE ONE LEVEL UP.** A freshness registry is
+  **TABLE-keyed, and a producer is not a table**: gov `prospect_leads` reads fresh table-wide (other
+  lead sources are live) while its `ownership_change` lane has been dead since 2026-03-31 — so the
+  obvious registry row would have been **green over a dead producer**. And the cross-DB check that
+  carries it to an alert has evaluated **zero** gov/dia feeds since 2026-07-26: the mirror is stale,
+  finalize drops non-200 silently and returns `(0,0)`, and the check **excludes stale mirror rows** —
+  so **when the sync stops, the check stops checking and reports nothing wrong.** *A guard that fails
+  into silence is the class itself, wearing the instrument's clothes.*
+
+**Positive control is mandatory here (P182).** A surface that *would* show a silent producer but has
+never been seen doing so is a claim. Silence a step deliberately — the same step, same cadence, only
+older — watch it go red, restore. B6a's gate does exactly that, self-rolling-back with 0 residue.
+
+**And a legitimate skip must be DECLARABLE, with no default.** Some steps *should* skip (a domain
+with no such source, a flag deliberately off, a local input folder that a sibling job owns). A skip
+with a declared reason is healthy; an **undeclared** skip is the finding. If every skip alerts, the
+surface becomes the noise it replaces. Read `tasks_skipped_undeclared`, never `tasks_skipped`.
+
+**Related trap found in the same sweep.** A link column can be **unpopulatable** rather than
+unpopulated: gov `property_sale_events.ownership_history_id`/`sales_transaction_id` are `bigint`
+against `uuid` PKs with no FK, so a writer raises `22P02` — 0 of 5,208, and no amount of writer work
+would change it. **Before filing an empty FK as neglect, check the column TYPE against its target's
+PK**, and look for a sibling that works (dia's copy has a compatible `integer` PK and 52 populated
+rows — that positive control is what turned "nobody wired it" into "it cannot be wired").
+
 
 ## The habit, in one line
 

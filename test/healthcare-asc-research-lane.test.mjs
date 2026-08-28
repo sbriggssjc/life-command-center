@@ -110,9 +110,9 @@ test('multi-token CMS suite suffixes bind to building-level research pages', () 
 test('Circle and Cir normalize to the same exact frozen building address', () => {
   const target = {
     candidate_fingerprint: sha('6'),
-    address_token: normalizeAscAddressToken({
-      address: '1120 Raintree Circle Suite 100', city: 'Allen', state: 'TX', zip: '75013',
-    }),
+    // This literal reproduces a row frozen before CIRCLE/CIR normalization
+    // existed. Runtime comparison must not require rewriting it.
+    address_token: '1120 RAINTREE CIRCLE|ALLEN|TX|75013',
     cms_identity: {
       facility_name: 'Texas Health Spine Surgery Center Allen LLC',
       address: '1120 Raintree Circle Suite 100', city: 'Allen', state: 'TX', zip: '75013',
@@ -126,16 +126,60 @@ test('Circle and Cir normalize to the same exact frozen building address', () =>
     tenants: [{ name: 'Texas Health Spine Surgery Center', occupied_sf: '15,718' }],
   };
 
-  assert.equal(target.address_token, '1120 RAINTREE CIR|ALLEN|TX|75013');
+  assert.equal(normalizeAscAddressToken(target.cms_identity), '1120 RAINTREE CIR|ALLEN|TX|75013');
   const built = buildAscStructuredCapture(target, context);
-  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address_token, '1120 RAINTREE CIRCLE|ALLEN|TX|75013');
   assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'normalized_frozen_identity_address');
+  assert.equal(built.identity_match.frozen_address_token_preserved, target.address_token);
+  assert.equal(built.identity_match.normalized_comparison_token, '1120 RAINTREE CIR|ALLEN|TX|75013');
 
   for (const mismatch of [
     { address: '1122 Raintree Cir' },
     { city: 'Plano' },
     { state: 'OK' },
     { zip: '75002' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+});
+
+test('a single compound street split requires exact facility corroboration', () => {
+  const target = {
+    candidate_fingerprint: sha('5'),
+    address_token: '131 SUMMERPLACE DR|WEST COLUMBIA|SC|29169',
+    cms_identity: {
+      facility_name: 'South Carolina Endoscopy Center',
+      address: '131 Summerplace Drive', city: 'West Columbia', state: 'SC', zip: '29169',
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/south-carolina-endoscopy-center',
+    address: '131 Summer Place Dr', city: 'West Columbia', state: 'SC', zip: '29169',
+    building_name: 'South Carolina Endoscopy Center',
+    square_footage: '20,519',
+    tenant_name: 'Consultants In Gstrntrlgy',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'facility_corroborated_compound_street_split');
+  assert.equal(built.identity_match.frozen_compound_token, 'SUMMERPLACE');
+  assert.deepEqual(built.identity_match.captured_street_parts, ['SUMMER', 'PLACE']);
+  assert.equal(built.identity_match.corroboration_basis, 'building_name');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const mismatch of [
+    { building_name: 'Unrelated Medical Plaza' },
+    { address: '133 Summer Place Dr' },
+    { address: '131 Summer Park Dr' },
+    { city: 'Columbia' },
+    { state: 'NC' },
+    { zip: '29170' },
   ]) {
     assert.throws(
       () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
