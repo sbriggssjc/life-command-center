@@ -1,3 +1,9 @@
+> # ⚠️ ARCHIVED — retired flow, and a near-duplicate of `BUILD-THE-FLOW-Step-by-Step.md`.
+> Same retired `retired-todo-lcc-sync` flow; the other file supersedes this one (it adds the 7-list
+> expansion and troubleshooting). **As-built authority:
+> `docs/architecture/flows/todo-lcc-sync.md`.** Its "Optional Enhancements" apply to a retired flow
+> and were deliberately NOT filed.
+
 # Power Automate Flow: Microsoft To Do → Life Command Center
 
 This flow runs every hour, pulls all your tasks from Microsoft To Do, and saves them as a JSON file on your OneDrive. The Life Command Center app can then import this file with one click.

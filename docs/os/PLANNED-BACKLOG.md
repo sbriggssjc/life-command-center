@@ -129,6 +129,18 @@ to the developer across target markets* — **that 1.1% is the number that matte
 | **B3** | ⚠️ **The cadence surface is 99% overdue — 2,276 of 2,302 due.** A surface that is entirely red cannot distinguish urgent from stale and trains the operator to ignore it. **Badge-that-is-noise at the scale of a whole surface**, and never audited in this arc. Diagnose before changing anything. | 🔴 | Lock 4 |
 | ~~**B4**~~ | ✅ **ANSWERED 2026-08-28 (diagnosis only) — and it was the thread that produced B5.** dia is ahead on depth because of **one feeder gov never had**: `sales_transactions_seller_exit`, **2,207 of dia's 2,757 historical facts**. It closes the SELLER's ownership interval when a sale is recorded — a historical ownership fact by construction. **The transferable unlock is B5.** ⚠️ **The question that cracked it was "where do the FACTS come from", not "why is dia better"** — one `group by ownership_source` answered in a single query what the funnel audit could not see at all. **When one domain outperforms another on a metric, group that metric by its provenance column before theorising.** | ✅ | audit §3c |
 
+## P0s — 🔒 SECRETS EXPOSED IN THE REPO (found 2026-08-28, cleanup pass 3) — 👤 SCOTT, DO FIRST
+
+⚠️ **These are credential exposures, not hygiene. They outrank every other row in this file.**
+**Rotation is what neutralises them — removing a file from tracking does NOT**, because the value
+remains in git history and in any clone or fork.
+
+| # | Item | State | Notes |
+|---|---|---|---|
+| 🚨 **SEC2** | **`wave0-config-values.txt` is TRACKED IN GIT at the repo root and contains `LCC_API_KEY` in PLAINTEXT.** Verified 2026-08-28: 858 bytes, `git ls-files` confirms tracked, **not in `.gitignore`**. Also carries `LCC_HOST=https://life-command-center-nine.vercel.app` (**the retired host that still answers and still holds a service key**, P194) plus Teams tenant/team/channel IDs. ⚠️ **This is a DIFFERENT and worse exposure than SEC1**, which records the key as *"pasted in plaintext during a curl diagnostic"* — a chat paste is transient; **a tracked file is in history, in every clone, and in every fork.** **Order: (1) ROTATE `LCC_API_KEY` and update the Railway env; (2) `git rm --cached` + `.gitignore`; (3) only then consider history.** ⚠️ **Do NOT reach for `filter-branch` casually** — this repo has a documented near-loss of a 475 MB mailbox doing exactly that (`CLAUDE.md`, destructive-op order). **Rotation alone makes the committed value worthless, which is the outcome that matters.** | 🔴 | `wave0-config-values.txt:6` |
+| 🚨 **SEC3** | **TEN OF SEVENTEEN deployed Power Automate packages contain literal JWT-like values**, per `docs/os/POWER-AUTOMATE-DEPLOYED-CATALOG.md`. `docs/architecture/flows/sync-sf-activities-to-supabase.md` carries an unresolved **P0**: *"plaintext credential material detected in exported definition — rotate exposed Supabase keys immediately"*, with **`Credential rotation completed: TBD`**. ⚠️ **I1 covers only the `X-PA-Webhook-Secret`; the Supabase key rotation across those ten packages is a SEPARATE and larger item that was never filed.** Establish which keys, whether any are service-role, and rotate. | 🔴 | flows catalog |
+| **SEC4** | **Every PA flow export committed to this repo is a credential-bearing artefact by default.** SEC2 and SEC3 are two instances of one pattern. **Add a pre-commit or CI check for JWT-shaped / `sb_secret_` / long-hex strings in `*.json` flow exports and `*.txt` config files** — the guard this repo has for conflict markers, applied to secrets. Without it the next export re-introduces the same exposure silently. | 🔴 | derived |
+
 ## P0d — 🏛️ DATA COHERENCE: make the connections assertable, across every database
 
 **Scott's standing requirement, 2026-08-28:** *"eliminate these exact types of code and/or logical
@@ -467,6 +479,35 @@ any file in it.
 reconciled with that doc's 37/17); the **624-row `llc_research_queue` count and the
 "FL Sunbiz bulk-data mirror FIRST" build order** (→ **A5g**); and the **30,711-row
 `sf_link_research_queue`** which **C1c must account for** when it retires that lane.
+
+### P14d — recovered from the ROOT Power Automate / flow cluster (7 files, 2026-08-28)
+
+**Cleanup pass 3.** Root `.md` **35 → 29**. ⚠️ **This pass also produced `SEC2`–`SEC4` above, which
+outrank everything here.**
+
+| # | Item | State | Notes |
+|---|---|---|---|
+| ⭐ **J1** | **`sf-promotion-worker` HAS NEVER LEFT REPORT-ONLY.** `enforce` defaults `false` (`sf-promotion-worker/index.ts:144`) **and the Salesforce rungs of `field_source_priority` were never seeded** — so **no Salesforce field can ever be promoted.** A whole promotion path that reports success and writes nothing. **K3/B6e/C1e cover other ladders, not these.** | 🔴 | SF plan §7.3/§6.3 |
+| **J2** | **The PA `reschedule` branch was never built** — LCC calls the flow with `action:'reschedule'` and the flow has **no branch for it**, so rescheduled dates never reach Salesforce. A caller sending to a branch that does not exist. | 🔴 | PA guide:272 |
+| **J3** | **No SF task CREATION or status-lifecycle path from LCC** (`/sync/update-sf-task` was specced, never built). | 🔴 | PA guide 270–271 |
+| **J4** | **`sync_outbound_enabled` is `false`** — the formal outbound pipeline and its audit trail are OFF; direct edge calls are the live workaround. | 🔴 | PA guide:274 |
+| **J5** | **Three PA flows exist in NEITHER the baseline registry NOR `retired_flows`** — RCM Email Watcher, LoopNet, `LCC - Personal Calendar Sync`. **Their existence, state and owner are recorded nowhere.** Feeds **I19**; and note `FLOW-REGISTRY.yaml` DOES record Scott as confirmed owner for all 17 baseline flows, so I19 is narrower than it reads. | 🔴 | catalog vs files |
+| **J6** | **Salesforce custom-object API names are documented GUESSES** (`Property__c`/`Comp__c`/`Listing__c`/`Deal__c`) and they drive Flow 1's `Objects` array. Confirm them. | 🔴 | SF plan O-2 |
+| **J7** | **RLS posture on the `sf_*` staging tables and the `salesforce-files` bucket was never established** (service-role-only was intended). | 🔴 | SF plan O-4 |
+| **J8** | **`sf_company_staging` / `sf_contact_staging` were never built** — they appear **nowhere in the repo but the plan**, yet §9 routes Contacts and Companies to LCC Opps with no landing table. | 🔴 | SF plan §5.1/§9 |
+| **J9** | **`marketing_leads` RLS / service-role-key check was never performed** — it was a named candidate cause of the original 0-row diagnosis and was never ruled out. | 🔴 | RCM Fix 4 |
+| **J10** | **10,410 stale May-2020 `salesforce_tasks` Data-Loader rows** — disposition never decided. | 🔴 | PA guide §3 |
+| **J11** | **Personal-Outlook flag→To Do "Option B" was never built** — `flow-personal-email-flag-to-todo.json` exists at root, unused. | 🔴 | Personal-Outlook:94 |
+| **J12** | **⚠️ `SALESFORCE_LCC_INGESTION_PLAN.md` contradicts production and itself, and is cited from RUNTIME CODE.** §10 says *"every 6 months, full crawl"*; the deployed `SF -> LCC: Object Sync` is **HOURLY**. §12 names `field_precedence_policy`/`field_value_provenance`, which its own §5.3 supersedes with `lcc_merge_field()`/`field_source_priority`. ⚠️ **KEPT AT ROOT deliberately** — `supabase/functions/intake-salesforce-files/index.ts` cites it by path in a **user-visible runtime error string** (lines 5/114/216), plus 4 more path-anchored refs. **Fix the contradictions in place; if it ever moves, repoint all seven in the same change.** | 🔴 | SF plan |
+| **J13** | **The retired-URL problem is NOT solved by archiving the root files — it is LIVE in `docs/architecture/flows/`.** `rcm-power-automate.md`, `loopnet-power-automate.md` and `lcc-personal-calendar-sync.md` **all still record `life-command-center-nine.vercel.app` as the endpoint.** Same P194 foot-gun, in the directory we just made authoritative. | 🔴 | flows dir |
+| **J14** | **FOUR homes for one topic, and two of them near-collide by name.** `docs/os/FLOW-REGISTRY.yaml` (live state) · `docs/architecture/flows/` (46 as-built docs) · `.github/PA_FLOWS.md` (contracts) · **`docs/flows/` (2 files — a name collision with `docs/architecture/flows/`)**. **Fold `docs/flows/` into `docs/architecture/flows/`** and keep the registry + contract sheet as the other two authorities. Also missing: design pages for the four SF-backbone flows (Object Sync, Retry/Dead-letter, On-demand Backfill, Property Promotion). | 🔴 | derived |
+
+**Cross-checks that CONFIRMED existing rows:** **I5** — the design always mandated capturing the
+failed slice and a dead-letter listing *"each object type, Salesforce record URL, and last error"*;
+**the built flow dropped it**, so I5 is a regression from spec, not an omission. **I4** — backfill was
+designed as **Flow 4, manual/button only**; there is no designed daily-bulk variant, which
+**strengthens "turn it off" over "fix it."** **M7/M8** — `RCM_LOOPNET_FIX_INSTRUCTIONS` is *the
+document that put RCM/LoopNet on the retired host in the first place.*
 
 ### P14c — recovered from the ROOT infra/hosting/monitoring cluster (15 files, 2026-08-28)
 

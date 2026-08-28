@@ -1,3 +1,10 @@
+> # ⚠️ ARCHIVED — both flows are retired or absent from the production baseline.
+> `FLOW-REGISTRY.yaml` lists **`retired-unflag-completed` — state: retired**; the flag→To Do flow is
+> absent from the 17-flow 2026-08-11 baseline.
+> ⚠️ **Its `[EmailID:` / `[EmailLink:` free-text marker contract is SUPERSEDED by
+> `processing_log.staged_at`** (P121) — *anchor a handoff on a durable fact, never a transient
+> marker*. **As-built authority: `docs/architecture/flows/{flagged-email-to-todo,unflag-completed-email-tasks}.md`.**
+
 # Bidirectional Email Flag Flow — Setup Guide
 
 ## How It Works
