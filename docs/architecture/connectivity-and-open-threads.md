@@ -1095,3 +1095,74 @@ The measured owner cliff (C2a projected 6.8% / 1.6%; live 6.6% / 1.5%):
 
 ⚠️ **Whatever runs, drive the evidence ingest explicitly afterwards** (cron 225's 400/run cap), and
 **dia stays untouched** — 84% operator-blocked (P113); its levers are the flag and rent coverage.
+
+
+---
+
+## 4i. C2e — tranche one MINTED, and the noise cost the floor existed to prevent is mostly not real
+
+Evidence: [`C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md`](../audits/C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md).
+**Applied to production, gov only, batch `c2e_gov_eligible_t1_20260828`. dia untouched.**
+
+### The finding that changes the doctrine's application
+
+**`v_lcc_merge_candidates` and `v_lcc_merge_candidates_normalizer_blind` filter
+`entity_type = 'organization'`. A minted asset is `entity_type = 'asset'` — structurally incapable
+of entering either surface.** So the merge-noise cost that justified the rent floor **cannot occur
+for asset minting at all**. Measured across the 2,000-entity mint: merge candidates 5,250 → 5,250,
+`auto_mergeable` 3,038 → 3,038, normalizer-blind 64 → 64, canonical drift 0 → 0.
+
+The entire observable cost: **+20 rows on `v_duplicate_candidates`** (+0.25%) and **+23 Tier 0
+cards — with the `auto` band, the only one that can trigger an unattended write, flat at 9.**
+
+⚠️ **This does NOT retire the doctrine.** *"Evidence justifies the entity"* still holds and is why
+the mint was eligible-set only: **2,000 minted, 2,000 resolved an owner, 0 left evidence-less.**
+What is refuted is the specific claim that minting assets pollutes the merge surfaces.
+
+### Live state after tranche one (verified 2026-08-28)
+
+| | before | after |
+|---|---:|---:|
+| LCC asset anchors | 5,096 | **7,145** |
+| `lcc_property_owner` rows | 4,065 | **6,065** |
+| distinct owner entities | 2,768 | **3,743** (+975) |
+| live entities | 62,368 | 64,293 (+3.2%) |
+| Tier 0 ask / auto | 82 / 9 | **91 / 9** |
+| canonical-name drift | 0 | **0** |
+
+### ⚠️ `auto_mergeable` now has TWO threads moving it — timestamp every "unchanged" claim
+
+C2e reported `auto_mergeable` unchanged at **3,038**; a check hours later read **3,005**. The mint
+did not do it: **64 merges landed in that window from the other Cowork thread** (merge log 66 → 130,
+97 entities tombstoned), and `v_lcc_merge_candidates` cannot see assets anyway. **C2e's claim was
+correct at its measurement time.** With parallel windows, *"the gate did not move"* is only
+meaningful with a timestamp and an attribution — check `lcc_entity_merge_log` before treating a
+delta as your own.
+
+### 👤 Tranche two — recommended in two steps, NOT run
+
+**4,811 properties / 4,354 owners remain** in `v_lcc_c2e_asset_mint_plan`.
+⚠️ **Tranche one tested the SAFEST population** — its cut landed at $543,782 of owner rent, entirely
+*above* the old floor, so it exercised none of the low-rent tail the no-floor decision was about.
+
+- **T2a — owner rent ≥ $100k: 2,570 properties / 2,300 owners, 17.2% already contactable.**
+  Statistically indistinguishable from tranche one's 21.3%, and it covers the whole $2M–$20M sweet
+  spot. **Recommended.**
+- **T2b — below $100k + rent-unknown: 2,241 properties / 2,054 owners, ~3% contactable, 17.8%
+  public bodies in the bottom band.** 👤 **Scott's call — and the argument has changed.** C2a said
+  stop here to avoid manufacturing noise; **that premise is now measured and largely false.** The
+  remaining case against is *prospect quality*, not technical risk: these are mostly cities,
+  counties, DOTs, corporate occupiers and private individuals. Against it stands Scott's own
+  rationale — *resolve all ownership, rank later* — and ranking is `v_priority_queue`'s job.
+
+⚠️ **Whatever is run, drive `lcc_ingest_domain_owner_evidence` explicitly afterwards** — cron 225's
+400/run cap would otherwise leave a 2,570-row tranche evidence-less for most of a week, matching the
+retire predicate.
+
+### Still not measured (C2e §8)
+
+Whether a resolved owner converts to a call · search/UI cost of +3.2% entities · the **3,362 gov
+properties with no `true_owner_id`** (54% of the non-resolving residue, the largest remaining lever,
+a gov-side capture question) · ⚠️ **public-body counts are LOWER BOUNDS** — `lcc_looks_like_person`
+returns true for `CITY OF SALEM` and `BROOME COUNTY` (the A3/P196 two-capitalised-token false
+positive), and no second classifier was written, deliberately.
