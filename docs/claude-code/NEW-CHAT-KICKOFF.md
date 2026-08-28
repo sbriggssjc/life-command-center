@@ -72,14 +72,32 @@ from exactly that source. Two more: **`gsa_lease_change_facts`** (336,303 rows; 
 **38,213 / 8,845 leases**, 2013→2026) and **`property_sale_events`** (**5,208 rows whose
 `ownership_history_id` and `sales_transaction_id` are populated on ZERO rows**).
 
-- **In flight:** **B5** — give gov the seller-exit feeder (`prompts/B5-*.md`).
-- **Next:** **B6** — the systematic owner/lessee-change signal sweep (`prompts/B6-*.md`), audit +
-  design, builds nothing.
-- **Read:** `docs/architecture/ownership-history-lane.md` §3a ·
-  `docs/audits/BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md` §3b/§3c ·
-  `docs/architecture/connectivity-and-open-threads.md` §4j · playbook **Class 20**.
+- ✅ **B5 SHIPPED** — gov `ownership_history` **16,177 → 18,953** (+2,776 / 2,000 properties, **677
+  with no prior history at all**); transitions view 4,698 → **5,555** properties.
+- ✅ **B6 AUDITED** — 19 signals swept; ranked gaps **B6a–B6g**; two of seven end in *don't build*.
+- 🚨 **THE ONE THING TO CHECK FIRST: has the Railway redeploy shipped `runB5RedraftPass`?** The LCC
+  side is **unmoved** (facts 14,076 · completed 1,302 · `chain_2plus` 178) because **527 of 579 open
+  tasks carry a pre-B5 draft** and the drafter prepares only `fresh = open ∧ undrafted`. Without the
+  deploy B5 converts on **52** tasks, not 579. **The gov-side gain is banked; the LCC-side gain is
+  not.**
+- **Next:** **B6a** (the health view is blind to SKIPPED steps — four producers died behind it) and
+  **P0d / D1–D2** (the standing coherence detectors).
+- **Read:** 🏛️ **`docs/architecture/data-coherence-invariants.md`** (the standing contract — I1–I10
+  + new-database onboarding) · `ownership-history-lane.md` §3a/§3c ·
+  `BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md` §3b/§3c · `connectivity-and-open-threads.md` §4j ·
+  playbook **Class 20 / Class 21**.
+- ⛔ **`B6_…md` §6 is SUPERSEDED** — do not act on its `~270–370` resizing of B5 or revert it.
 
-⚠️ **Two traps already paid for on this thread — do not repeat them.**
+⚠️ **Four traps already paid for on this thread — do not repeat them.**
+**(3)** **Connecting a new source runs code paths that have never seen that shape of row.** B5's
+first insert exercised a propagation trigger that **nulled real recorded owners** — 7,567 rows
+already damaged, 1,446 of 9,312 about to be. **Snapshot and positive-control both directions before
+any batch that writes a new row shape.**
+**(4)** **The two windows measured one population and disagreed by 10×, with neither erroring.**
+B6 §6 advised *"resize before building"* about a build that had already shipped. **When two honest
+measurements disagree, find the measurement independent of the disputed key** — here, *did this
+property have any history before?* (677 did not). ***Merged is not running* has a mirror: *in flight
+is not unbuilt*.**
 **(1)** *"We must acquire the data"* was written into the audit as §3b on the strength of gov's thin
 deed layer (876 grantor-bearing records of 5,804), and refuted one query later. **Acquisition is the
 most expensive conclusion available; enumerate every table that could carry the fact first.**

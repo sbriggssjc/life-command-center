@@ -178,6 +178,45 @@ cover the population B5 is about.
 
 ## 6. ⚠️ B5's `3,080 / 2,114` ceiling — I could not reproduce it, and the scope is why
 
+> ## ⛔ SUPERSEDED 2026-08-28 — B5 SHIPPED BEFORE THIS WAS READ, AND THE SHIPPED RESULT REFUTES §6's CONCLUSION. DO NOT ACT ON THE `~270–370` FIGURE OR REVERT B5.
+>
+> §6's recommendation — *"RESIZE BEFORE BUILDING; may not clear the bar"* — was written against a
+> build that had **already run**. Verified live on the gov DB after the batch:
+>
+> | check | result |
+> |---|---|
+> | rows B5 actually wrote | **2,776** (`data_source='sales_transaction_seller_exit'`), 2,000 properties |
+> | **traceable to `ownership_change_stub*` (§6's circularity objection)** | **2 of 2,776 — 0.07%** |
+> | provenance of the rest | `excel_master` 1,222 · `costar_export` 625 · `costar_sidebar` 141 · `gov_master_backfill_r71` (the tail) |
+> | **properties that had NO ownership history at all before B5** | **677** — B5 gave them their first |
+> | properties that had some and gained a link | 1,323 |
+> | gov `ownership_history` | 16,177 → **18,953** |
+> | transitions view | 9,595 → **12,371** rows · 4,698 → **5,555** properties |
+> | `properties.recorded_owner_id` populated | **9,312, unmoved** (the trigger bug held) |
+>
+> **The circularity objection was correct in principle and empirically nil in effect** — B5's guards
+> already excluded the stubs. **677 properties gaining a first-ever transition is decisive and does
+> not depend on the key debate at all**: a row that duplicated existing knowledge could not create
+> history for a property that had none.
+>
+> **Why the two measurements disagreed:** B5 keys its anti-join on the **party pair**, §6 keyed on
+> **(property, prior-owner, exact date)**. B5 measured that against an already-recorded pair the
+> sale row is **later 217 times and earlier 34** — the *opposite* of A2b's 26-of-26 — so the date is
+> not a safe key here and A2b's earliest-wins rule does **not** transfer. §6's own headline finding
+> (a 26× swing on one population and one key) is right, and is the reason it landed on the wrong
+> number: **it is a caution about METHOD, not a sizing.**
+>
+> **Durable lesson — the two-windows problem arrived as two CONTRADICTORY MEASUREMENTS of one
+> population, which is worse than a merge conflict because neither side errors.** Both were run
+> honestly, hours apart, and only one had run the build. **When two measurements of one population
+> disagree, find the measurement that does not depend on the disputed key** (here: *did this
+> property have any history before?*) rather than adjudicating the keys. And **before writing
+> "resize before building" about work in flight, check whether it has already shipped** —
+> `merged is not running` has a mirror, *in flight is not unbuilt*.
+>
+> **§6 is retained verbatim below** because its scope-sensitivity table is the durable content and
+> is unaffected. Only its conclusion and the §9 row-6 recommendation are void.
+
 B5 (in flight) sizes the gov seller-exit feeder at **3,080 net-new rows / 2,114 properties**,
 anti-joined on *(property, normalized prior-owner name, exact date)*. Running that same key I get
 **366 rows / 291 properties**. The gap is not the normalizer or the guards — **it is which rows you
@@ -372,7 +411,7 @@ Ranked by *what would actually move*, not by raw volume. Two of the seven end in
 | **3** | **Fix `property_sale_events`' two link columns** (`bigint` → `uuid`) and add the FKs. | the comp↔ownership join for **5,208 gov rows**; dia's compatible copy proves the linker works | small, additive; the writer is dormant so nothing regresses | **BUILD.** This is the connective tissue Scott named |
 | **4** | **Give `parcel_owner_xref.diverges` a consumer.** | **362 properties**, of which **319** need only a `recorded_owner_id` repoint (the history already agrees) and **43** are genuine net-new | small — the detector already runs | **BUILD.** Cheapest real correction here |
 | **5** | **Register `gsa_lease_diff` and `sales_transaction` on the `gov.ownership_history` ladder**, and add the missing evidence sources to `lcc_property_owner_evidence`. | makes **6,817 rows** adjudicable that currently are not | small | **BUILD** — prerequisite for #1 and B5 both |
-| **6** | **gov seller-exit feeder (B5).** | ⚠️ **~270–370 rows / ~215–291 properties**, not 3,080 (§6) | a new view + ingestion | **RESIZE BEFORE BUILDING.** May not clear the bar once B5 re-derives against the whole store |
+| **6** | ~~**gov seller-exit feeder (B5).**~~ ⛔ **VOID — B5 SHIPPED.** | **Actual: 2,776 rows / 2,000 properties**, of which **677 had NO prior ownership history at all**. The `~270–370` estimate and the circularity objection are refuted — **2 of 2,776 (0.07%)** trace to `ownership_change_stub*`. | shipped | ✅ **DONE. Do not resize, do not revert** — see the §6 supersession banner |
 | **7** | **`state_lease_events.property_id`** — 123 `lessor_change` events, 99 leads, 0 worked, and no property link | 123 events; **0 of 617 rows carry a property_id** | needs an address matcher for state inventories | **DO NOT BUILD YET.** The leads it already produces are 0% worked — fix the consumer before widening the producer (P179 Class 2) |
 | — | **dia D1 Class 8** — the seller-exit backfill was one-shot; non-sidebar dia sales get no seller exit | 2,974 of 3,702, decaying | — | **REPORT ONLY**, per B5 §1c |
 | — | **dia D2** — 69% of dia `ownership_history` has NULL `ownership_source` | 6,922 rows | — | **REPORT ONLY.** The Class-20 detector is blind to it |

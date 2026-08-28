@@ -117,13 +117,29 @@ consumption. → backlog **P1a / C1–C3**
 > `chain_2plus` properties (8 permanently blocked by design — the placeholder is the GRANTOR), and
 > **99 of 132 remaining open tasks carry one link.** **Stop looking for the next blocker here.**
 >
-> ⚠️ **AND THE FOLLOW-UP CONCLUSION ("we must acquire deeds") WAS WRONG — see `4j` below / audit
-> §3c.** gov has **never consumed its own `sales_transactions`** as ownership history (9,514 named
-> sellers, **1.8% consumed**, 3,080 net-new rows / 2,114 properties) while dia derives 2,207 of its
-> 2,757 historical facts from exactly that source. → **B5 (in flight)**, plus **B6** (the systematic
-> sweep) and playbook **Class 20**. Deed acquisition is **deferred, not refuted**.
-> → `docs/architecture/ownership-history-lane.md` §3a · `BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md`
-> §3b/§3c · `connectivity-and-open-threads.md` §4j
+> ⚠️ **AND THE FOLLOW-UP CONCLUSION ("we must acquire deeds") WAS WRONG.** gov had **never consumed
+> its own `sales_transactions`** as ownership history. **✅ B5 SHIPPED 2026-08-28** and the premise
+> held: gov `ownership_history` **16,177 → 18,953** (+2,776 / 2,000 properties, **677 with no prior
+> history at all**), transitions view 9,595 → **12,371** rows / 4,698 → **5,555** properties.
+> Deed acquisition is **deferred, not refuted**.
+>
+> 🚨 **THE LCC SIDE HAS NOT MOVED AND WILL NOT UNTIL THE RAILWAY REDEPLOY.** Verified post-B5:
+> facts **14,076**, completed **1,302**, open **579**, `chain_2plus` **178**, `any_history` **2,238**
+> — all identical to pre-B5. **527 of 579 open tasks carry a pre-B5 draft** and the drafter prepares
+> only `fresh = open ∧ undrafted`. `runB5RedraftPass` is **JS**: without the deploy B5 converts on
+> **52** tasks, not 579.
+>
+> ⚠️ **B5 also found and fixed a DESTRUCTIVE trigger** — `trg_propagate_ownership_to_property` nulled
+> `properties.recorded_owner_id` for any row naming parties as text; **7,567 rows already in that
+> shape**, **1,446 of 9,312 would have been destroyed**. Guard verified live; `recorded_owner_id`
+> held at **9,312**. Other propagation triggers are **unaudited** → backlog **D3**.
+>
+> ⛔ **`B6_…md` §6 is SUPERSEDED — do not act on its `~270–370` resizing of B5 or revert it.**
+> Two windows measured one population and disagreed 10×; **2 of 2,776 rows (0.07%)** are the
+> circular class it objected to.
+> → `docs/architecture/ownership-history-lane.md` §3a/§3c · `BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md`
+> §3b/§3c · `connectivity-and-open-threads.md` §4j · **`data-coherence-invariants.md`** (the new
+> standing contract) · playbook **Class 20 / Class 21**
 
 ### Ownership-history lane — the first dead research lane with a working consumer (2026-08-27)
 `establish_ownership_history` produced **545 items and consumed none for 69 days**. A1 split it into

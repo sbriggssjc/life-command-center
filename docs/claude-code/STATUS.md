@@ -128,6 +128,87 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-28 (later) — B5 SHIPPED and found a destructive trigger on the way; B6 swept 19 signals; the two windows produced CONTRADICTORY measurements of one population and B5 wins.
+
+Evidence: [`B5_GOV_SELLER_EXIT_FEEDER_2026-08-28.md`](../audits/B5_GOV_SELLER_EXIT_FEEDER_2026-08-28.md) ·
+[`B6_OWNERSHIP_CHANGE_SIGNAL_COVERAGE_2026-08-28.md`](../audits/B6_OWNERSHIP_CHANGE_SIGNAL_COVERAGE_2026-08-28.md) ·
+new contract [`data-coherence-invariants.md`](../architecture/data-coherence-invariants.md) · playbook **Class 21**.
+
+**⚠️ THE HEADLINE IS A BUG, NOT THE FEEDER.** `trg_propagate_ownership_to_property` (gov, AFTER
+INSERT) had **no guard on `NEW.recorded_owner_id`**, so any dated `ownership_history` row naming its
+parties **as text** — which is how `gsa_lease_diff`, `deed_extraction` **and B5** all write —
+**overwrote `properties.recorded_owner_id` with NULL.** Silently, no ledger, unrecoverable.
+**7,567 live rows are already in that shape**, and **B5's first run alone would have destroyed the
+recorded owner on 1,446 of the 9,312 gov properties that hold one (15.5%).** Proven on property
+7370 in a rolled-back transaction, fixed fill-forward, positive-controlled both directions.
+**Verified live: the guard is in place and `props_with_recorded_owner` held at 9,312.**
+
+**B5 shipped, and every claim verifies independently:** gov `ownership_history` **16,177 → 18,953**
+(+2,776 rows / 2,000 properties) · transitions view **9,595 → 12,371** rows, **4,698 → 5,555**
+properties (**+857 with a first transition ever**) · view-level 2+ links **1,376 → 2,118** ·
+re-plan 0 · reversal round-tripped on 5 real rows first. My ceiling graded **down**: 3,080 → 2,776,
+2,114 → 2,000.
+
+**⚠️ THE LCC SIDE HAS NOT MOVED AT ALL, AND WILL NOT UNTIL THE RAILWAY REDEPLOY.** Verified:
+facts **14,076**, lane completed **1,302**, open **579**, gov `chain_2plus` **178**, `any_history`
+**2,238** — all identical to pre-B5. **527 of 579 open tasks carry a pre-B5 draft**, and the drafter
+only prepares `fresh = open ∧ undrafted` — **the stale-draft trap for the THIRD time** after A4b and
+A2b. `runB5RedraftPass` fixes it, is keyed on STATE (so it catches the next source too), and **is
+JS: without the deploy B5 converts on 52 tasks, not 579.**
+
+**⚠️ AND THE TWO WINDOWS MEASURED ONE POPULATION AND DISAGREED BY 10×, WITH NEITHER SIDE ERRORING.**
+B6 §6 could not reproduce B5's ceiling, found `ownership_change_stub*` at 34% of the source
+population (a mechanism gov R37 retired, minted **from** ownership history — so circular), and
+recommended *"RESIZE BEFORE BUILDING; may not clear the bar."* **B5 had already shipped.**
+Adjudicated live: **2 of 2,776 rows (0.07%)** trace to a stub; the rest are `excel_master` 1,222,
+`costar_export` 625, `costar_sidebar` 141, `gov_master_backfill_r71` tail. **The decisive check was
+the one that does not depend on the disputed key: 677 of the 2,000 properties had NO ownership
+history at all before B5.** A duplicate cannot create history for a property that had none. §6 is
+superseded in place; its scope-sensitivity table (a **26×** swing on one population and one key) is
+the durable content and stands.
+
+- **Durable:** *merged is not running* has a mirror — **in flight is not unbuilt.** Before writing
+  "resize before building" about parallel work, check whether it shipped.
+- **Durable:** when two honest measurements of one population disagree, **find the measurement that
+  does not depend on the disputed key** rather than adjudicating the keys.
+- **A2b's earliest-wins rule does NOT transfer here** — against an already-recorded pair the sale
+  row is **later 217 times, earlier 34** (the opposite of A2b's 26-of-26), so B5 keys on the **party
+  pair**, not the date. A rule calibrated on one population must be re-graded on the next.
+
+**B6's own findings (19 signals, gov + dia):** most sources are already consumed (deeds **98.5%**).
+Both figures I filed B6 under are **corrected** — the 38,213 landlord-change signal deflates
+**28.6×** to **1,338 / 1,202 properties** (46.7% of the flag is a **pure name re-spelling** —
+computed on raw string inequality, not a normalized key), and `property_sale_events`' link columns
+are **`bigint` against `uuid` PKs — unpopulatable (`22P02`), not merely unwired**, with dia's twin
+as the positive control at 52 populated rows. **The real gaps are four producers dead since
+March–April 2026 behind an all-green health view** — `pipeline_runner` skips on an empty local
+folder, logs *"Task completed"*, and emits **no run row at all**, so it has no row in
+`v_pipeline_task_health`. **A failed step is a red row; a skipped step is no row.** Filed as
+**Class 21** and **B6a**, and it is why nobody saw the other three for five months.
+Ranked gaps **B6a–B6g**; two of seven end in *"don't build."*
+
+**🚨 DEPLOY STATE, 2026-08-28 evening: `b5_redraft` is ABSENT from the live tick response.** The
+probe (`GET /api/ownership-chain-draft-tick` on `tranquil-delight-production-633f`) returned no
+match, which **on its face** means the Railway build predates B5 and tonight's 06:45/06:49 crons
+will convert **52** of 579 tasks rather than 579. ⚠️ **An empty grep is exactly the zero this repo
+distrusts** — it is equally consistent with the request never reaching the handler. **Re-probe with
+a positive control (`a2b_redraft`, shipped pre-B5) and the HTTP status before acting**: `a2b_redraft`
+present + `b5_redraft` absent ⇒ genuinely stale; neither present ⇒ the probe measured nothing.
+**The gov-side gain (+2,776 rows) is banked either way; only the LCC-side conversion is at risk,
+and it is recoverable on any later night once deployed.**
+
+**Next prompt drafted: `B6a`** — fix the health view's blindness to SKIPPED steps **before**
+restarting the four dead producers (B6b). Restarting first leaves you unable to tell whether they
+stay up, because the instrument is the broken thing. Acceptance: the four known-dead producers read
+RED, and the detector is **seen** red on a deliberate silence.
+
+**Scott's standing requirement is now a contract, not an audit.**
+[`docs/architecture/data-coherence-invariants.md`](../architecture/data-coherence-invariants.md) —
+**I1–I10**, a new-database onboarding checklist (the planned future domains), and the honest status:
+**two of ten invariants have a standing detector.** Campaign **P0d / D1–D5** turns the highest-yield
+ones into scheduled checks, D1 (the provenance producer-set diff) and D2 (the link-column type
+audit) first because they are cheap and find real defects today.
+
 ## 2026-08-28 — B1a merged and refuted its own premise; then MY "we must acquire deeds" conclusion was refuted one query later. gov has never consumed its own sales table.
 
 Evidence: [`B1a_AMBIGUOUS_ENTITY_MERGE_2026-08-28.md`](../audits/B1a_AMBIGUOUS_ENTITY_MERGE_2026-08-28.md);
