@@ -1522,6 +1522,56 @@ Ordered by expected yield, not by ease:
 
 ---
 
+## Class 21 — a SKIPPED step emits nothing, and a health surface built on emitted rows cannot see it
+
+**Detector.** Enumerate the steps an orchestrator **declares** and anti-join against the steps that
+**logged an outcome**. A step present in code and absent from the log is the finding. Equivalently:
+for any guarded call site (`if <precondition>: run_task(...)`), ask **what the surface shows when the
+precondition is false**.
+
+**First run (B6, 2026-08-28).** gov `v_pipeline_task_health` reported **one** failing step (SAM, HTTP
+401) and otherwise all green, over a pipeline whose GSA landlord-change detector had not run since
+**2026-03-11**. In `pipeline_runner.py`:
+
+```python
+latest_file = runner.run_task("Find latest GSA inventory", find_latest_gsa)
+if latest_file and not runner.dry_run:
+    runner.run_task("GSA ingest + diff", ingest_and_diff)
+```
+
+`find_latest_gsa()` globs a **local folder** that is always empty on a CI checkout. It returns `None`
+and the task itself **succeeds** — the view shows `find_latest_gsa_inventory` = ok / *"Task
+completed"* / 2026-08-24. The guarded `run_task` on the next line is then **never invoked**, so it
+writes **no `run_log` row**, so it has **no row in the health view at all**. Cost: five months of a
+dead detector, and with it `prospect_leads.lead_source='ownership_change'` (7,729 leads, 2,041 of
+them historically worked).
+
+**⚠️ This is the twin of a fix that already shipped, which is what makes it worth a class.** gov
+`CLAUDE.md` §16 built `v_pipeline_task_health` and `completed_with_errors` precisely so *"the
+orchestrator must NOT report a green `completed` over failed sub-tasks."* That closed the **failed**
+case. **The SKIPPED case was left standing, and it is invisible in a different way: a failed step is
+a RED ROW, a skipped step is NO ROW.** One is a value you can filter on; the other is an absence, and
+absences do not appear in a `GROUP BY`.
+
+**Generalisation.** It is the A5a lesson arriving in a health view rather than a lane — *a producer
+that has never emitted has no row to `GROUP BY`, so enumerate the PRODUCER's population, never the
+consumer's table.* Same family as Class 11 (the zero is the instrument) and Class 2 (a producer with
+no consumer): here the instrument reports **nothing at all**, which reads as silence rather than as
+failure.
+
+**Repair.** Record a `skipped` outcome with a reason at the guarded call site, and build the health
+view over **declared** steps LEFT JOINed to outcomes, so an unrun step renders as `never_ran` instead
+of vanishing. **Never satisfy the guard by widening it** — a precondition that is false on CI and
+true on a workstation is a hosting fact worth surfacing, not a bug to paper over.
+
+**Related trap found in the same sweep.** A link column can be **unpopulatable** rather than
+unpopulated: gov `property_sale_events.ownership_history_id`/`sales_transaction_id` are `bigint`
+against `uuid` PKs with no FK, so a writer raises `22P02` — 0 of 5,208, and no amount of writer work
+would change it. **Before filing an empty FK as neglect, check the column TYPE against its target's
+PK**, and look for a sibling that works (dia's copy has a compatible `integer` PK and 52 populated
+rows — that positive control is what turned "nobody wired it" into "it cannot be wired").
+
+
 ## The habit, in one line
 
 **Read the named rows before you believe the aggregate, and before you write.**

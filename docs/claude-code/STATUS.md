@@ -50,6 +50,83 @@
   (cron 104) has read gov sales seller/buyer for months with nothing attaching its output.
 - Guards: `tests/unit/test_b5_sales_transition_feeder.py` (gov, 13, **all mutation-verified RED**),
   `test/b5-chain-redraft-pass.test.mjs` (LCC, 10, **9 mutations RED**). Suite **4,815 / 0 fail**.
+## 2026-08-28 — B6: the owner/lessee change-signal sweep. Most sources are already consumed; the gaps are four dead producers, two unpopulatable columns, and a health view that cannot see a skipped step.
+
+**AUDIT + DESIGN, nothing built.** Full writeup:
+[`docs/audits/B6_OWNERSHIP_CHANGE_SIGNAL_COVERAGE_2026-08-28.md`](../audits/B6_OWNERSHIP_CHANGE_SIGNAL_COVERAGE_2026-08-28.md).
+Folded into `docs/architecture/connectivity-and-open-threads.md` §4j; backlog rows **B6a–B6g**.
+
+Nineteen signals swept across gov + dia against Scott's three requirements — coverage, corroboration,
+next action. **The framing that "we are missing sources" is largely wrong.** Deeds are **98.5%**
+consumed, the CoStar sidebar writes both parties, and gov's sales table turns out to be ~97%
+represented in `ownership_history` under other provenance labels.
+
+⚠️ **Both numbers I filed the B6 prompt under are corrected.**
+
+- **38,213 landlord-change rows deflate 28.6× → 1,338 net-new / 1,202 properties.** The stages:
+  **46.7% of the flag is a pure name re-spelling** (it is computed on raw string inequality, not a
+  normalized key); then transition-clean guards; then **−33% for property resolution**; then the A2b
+  per-lease fan-out collapses 13,225 → 4,845 conveyances; then P138 oscillation. Still worth
+  building — it spans **2013→2026**, so it adds DEPTH, and it is a **FLOOR** (four monthly snapshots
+  sit undiffed).
+- **`property_sale_events`' two link columns are a TYPE DEFECT, not neglect.**
+  `ownership_history_id` and `sales_transaction_id` are **`bigint` against `uuid` PKs with no FK** —
+  a writer raises `22P02`. **dia's identical table has a compatible `integer` PK and 52 populated
+  rows**, which is the positive control that makes gov's zero structural. This is the comp↔ownership
+  join Scott's framing names, and in gov it has never existed.
+
+**⚠️ The lesson worth keeping: A SKIPPED STEP EMITS NOTHING, AND A HEALTH VIEW BUILT ON EMITTED ROWS
+CANNOT SEE IT.** Four producers died in March–April 2026 —`gsa_lease_change_facts` and
+`gsa_lease_timeline` (2026-03-11), `prospect_leads.ownership_change` (2026-03-31, 7,729 leads of
+which **2,041 were actually worked**), `property_sale_events` (2026-04-06). `pipeline_runner.py`
+guards the diff with `if latest_file and not runner.dry_run:`, and `find_latest_gsa()` globs a
+**local folder** that is always empty on a CI checkout: it returns `None` and is logged **"Task
+completed"**. The guarded `run_task` is then never invoked, writes **no `run_log` row**, and has
+**no row in `v_pipeline_task_health`** — which today reports one failing step (SAM, 401) and
+otherwise all green. **gov `CLAUDE.md` §16 built that view to stop a green `completed` masking a
+FAILED sub-task; the SKIPPED case was left open, and it is invisible in a different way — a failed
+step is a red row, a skipped step is no row.** It is A5a's lesson in a health view: a producer that
+never emitted has no row to `GROUP BY`. **Enumerate declared steps, not logged ones (B6a).**
+
+**Separately: the landlord-change detector has no scheduled caller at all.**
+`gsa_lease_change_facts`/`gsa_lease_timeline` are written **only** by `src/ingest_gsa_historical.py`
+(a manual CLI, reachable from `run_pipeline.py:172`, which CI does not run). The live Monday job
+`src/gsa_auto_sync` writes `gsa_snapshots` + `gsa_lease_events` and **not** the change layer — **the
+raw feed and the derived layer have different writers and only one is scheduled.**
+
+**⚠️ B5 is in flight and its ceiling should be re-derived before it builds.** I could not reproduce
+`3,080 / 2,114`, and **the anti-join is scope-sensitive by 26×**: against the `sales_transaction`
+provenance bucket → **9,517 rows**; against the **whole store** → **366** on the same exact-date key,
+or **269 / 215 props** without the date. 3,080 sits between the two, so I am **not** claiming to have
+found its bug — the ceiling is simply uninterpretable without its scope. **And 3,313 of the 9,686
+named-seller rows are `ownership_change_stub*`, a mechanism gov R37 explicitly RETIRED** (ranked
+priority 9 in every sales-dedup pass), minted *from* ownership history — **feeding them back is
+circular**. Honest target: **~270–370 rows / ~215–291 properties**, mostly `costar_export`. That does
+not refute B5's premise; it resizes the prize by an order of magnitude.
+
+**The corroboration Scott asked for already exists — its verdict just has no reader.**
+`parcel_owner_xref` runs every 30 minutes and produces **8,838 `corroborates` / 561 `diverges` / 362
+properties**. ⚠️ **319 of those 362 already carry the assessor's name as `new_owner` in
+`ownership_history`** — so that is a **propagation gap between the store and
+`properties.recorded_owner_id`**, the cheapest correction in the audit; only **43** are genuine
+net-new. `diverges` produces no task, card or lead (B6d). And the ladder that should adjudicate
+disagreements **has no rung for `gsa_lease_diff` (6,648 rows, its largest source) or
+`sales_transaction`** (B6e).
+
+**Measured and refuted — three would have been expensive builds.** `ownership_research_queue`
+(17,665 rows) is **100% complete**, not a stalled backlog. **Deeds are 98.5% consumed — the gap is
+EXTRACTION** (876 grantors of 5,804), which independently supports B1a/B5's finding that county-deed
+acquisition is the wrong first lever. **gov `CLAUDE.md` §21's "state-lease producer silent 6+ weeks"
+is SUPERSEDED** — 617 rows, all within 90 days, events to 2026-08-05 (its `property_id`-is-NULL half
+still stands). And `gsa_lease_events` is not a landlord signal at all — it is the **LESSEE** half of
+Scott's ask, and it is the healthiest lane in the matrix (7,522 leads, **2,863 worked**).
+
+**⚠️ Detector hygiene, for the next Class-20 sweep:** `ownership_source` is **not** a controlled
+vocabulary — **2,978 distinct values over 14,076 rows**, embedding record ids
+(`county_deed:<uuid>`, `gov_master_backfill_r71|h=<md5>`). Split on `:` and `|` before grouping, or
+gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `ownership_history`
+carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
+
 
 ## 2026-08-28 — B1a merged and refuted its own premise; then MY "we must acquire deeds" conclusion was refuted one query later. gov has never consumed its own sales table.
 
