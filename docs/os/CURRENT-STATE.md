@@ -269,7 +269,7 @@ from lcc_clean_assist_proposals group by source`:
 | Intake channel provenance (grade by channel, never fleet-wide) | `docs/audits/W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md` |
 | Wave rollout ledger | `ROLLOUT_STATUS.md` |
 | Running work log | `docs/claude-code/STATUS.md` |
-| Connectivity map + open threads | `docs/architecture/connectivity-and-open-threads.md` |
+| **Connectivity map + open threads — the property→owner→contact→cadence chain** | `docs/architecture/connectivity-and-open-threads.md` — **§4e is the current chain state (2026-08-28)**; §4b's counts are superseded. ⚠️ **BREAK-2's "cadence has no consumer" verdict is OVERTURNED** (Scott 2026-08-27: the cadence layer is core, it is un-started not orphaned), and **BREAK-3's 49.2% is *of assets*, not properties** (13% on the property denominator) |
 | Cowork session setup | `docs/os/COWORK-SETUP-AND-FUTUREPROOFING.md` |
 | Fresh-chat kickoff | `docs/claude-code/NEW-CHAT-KICKOFF.md` |
 
