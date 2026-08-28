@@ -1,3 +1,9 @@
+> **📍 CANONICAL PAGE: [`docs/architecture/connectivity-and-open-threads.md`](../architecture/connectivity-and-open-threads.md) §4e** — this file is the EVIDENCE for one
+> measurement; the canonical page carries the standing chain state. ⚠️ **This round OVERTURNED
+> BREAK-2's verdict** (the cadence layer is not being retired — Scott 2026-08-27) and added a
+> **denominator warning to BREAK-3** (its 49.2% is *of assets*; the property-denominator figure is
+> 13%). Both corrections are in that page.
+
 # C2 — the connectivity stall map: where the chain actually breaks
 
 **Measured live 2026-08-28 against all three databases. Diagnosis only — nothing was written.**

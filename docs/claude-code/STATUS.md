@@ -17,6 +17,37 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-28 03:20 UTC — C2a drafted; and the consolidation pass overturned a live verdict
+
+**C2a prompt drafted** → `prompts/C2a-asset-mint-floor-resolve-curve-2026-08-28.md`. Pure
+measurement: **at what rent floor does a minted asset actually resolve an owner?**, banded by domain,
+with the operator exclusion, denominators stated per band, and a positive control. **Mints nothing;
+the floor decision stays Scott's.**
+
+### ⚠️ The consolidation caught two stale claims in the canonical connectivity doc
+
+`docs/architecture/connectivity-and-open-threads.md` **already owned this topic** — its §4b is
+literally *"the asset → owner → contact → cadence chain"*. So C2 was folded in as **§4e** rather
+than left beside it, and the audit now banners to the canonical page. Two corrections that a future
+chat would otherwise have inherited:
+
+- **⚠️ BREAK-2's verdict is OVERTURNED.** It concluded *"cadence is a producer with no consumer
+  (doctrine violation)"*. **Scott, 2026-08-27: the cadence layer is "absolutely a huge part of this
+  build."** The layer is **intended and un-built-out, not orphaned** — it reads empty because Scott
+  has not begun using LCC for BD, the effort so far having been the build itself. **So "1,728 never
+  touched" measures an un-started pipeline, and the remedy is to finish the consumer, not to gate
+  the producer harder.** A future chat reading BREAK-2 cold would have moved to retire it. The
+  genuine defects it found still stand: the future-dated `last_touch_at` writer, `owner_user_id`
+  present on only 7 rows, and cadences on unreachable parties.
+- **⚠️ BREAK-3's "49.2% owner resolution coverage" is *of ASSETS*, not of properties.** It reads
+  1,910 of **3,886 assets**; against all **32,289 properties** the same coverage is **13%**. They
+  differ ~6× and both are correct. A denominator warning now sits on that heading — this is the same
+  scoping trap that made me quote "101 contacts / 157 cadences" when the fleet-wide figures are
+  **1,439 and 2,302**.
+
+**Backlog rows C2a / C2b / C2c** carry the measurement, the Salesforce bridge, and the explicitly
+unmeasured list.
+
 ## 2026-08-28 03:00 UTC — C2: the connectivity stall map. The gate is ASSET IDENTITY, not contacts.
 
 Full writeup: [`docs/audits/C2_CONNECTIVITY_STALL_MAP_2026-08-28.md`](../audits/C2_CONNECTIVITY_STALL_MAP_2026-08-28.md).

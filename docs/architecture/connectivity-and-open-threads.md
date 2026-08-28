@@ -1,4 +1,12 @@
-# LCC — Connectivity Map + Open Threads (state as of 2026-07-31)
+# LCC — Connectivity Map + Open Threads
+
+> **Chain state re-measured 2026-08-28 — see §4e, which SUPERSEDES the §4b numbers.**
+> Route status below is as of 2026-07-31 unless a section says otherwise.
+>
+> ⚠️ **Two corrections a future chat must not miss:**
+> **(1) BREAK-2's verdict is OVERTURNED — the cadence layer is NOT being retired** (see the box in
+> BREAK-2). **(2) §4b's coverage percentages use ASSETS as the denominator, not PROPERTIES**, and
+> the two differ by 6× — see §4e before quoting either.
 
 The pick-up-quickly handoff for future chats. Covers where each ingestion/reconciliation route stands,
 what's live vs connector-gated, and every open gap through the **email / phone / Salesforce** routes.
@@ -370,6 +378,22 @@ and OM writers; it is listed here so it stops being invisible.
 person entity is never hard-deleted; the reversal drops the edge.
 
 ### BREAK-2 — cadence is a producer with no consumer (severity: HIGH, doctrine violation)
+
+> ## ⚠️ VERDICT OVERTURNED BY SCOTT, 2026-08-27 — DO NOT RETIRE THE CADENCE LAYER
+>
+> This section concluded that cadence was a producer with no consumer. **Scott's direction:**
+> *"The cadence layer is absolutely a huge part of this build… relative level of importance and
+> impact that directs our next best touchpoint or call when compared to the balance of the leads or
+> marketing activities we could complete."*
+>
+> **The layer is INTENDED and unbuilt-out, not orphaned.** The reason it reads empty is that
+> **Scott has not begun using LCC for BD** — the effort to date has been the build itself. So
+> "1,728 never touched" measures an un-started pipeline, not a broken one, and the Consumption-Layer
+> remedy here is **to finish the consumer, not to gate the producer harder.**
+>
+> The genuine defects this section found still stand and are still worth fixing: the future-dated
+> `last_touch_at` writer, the missing `owner_user_id` on all but 7 rows (broker assignment — backlog
+> **C2c**), and cadences on parties with no contact method.
 Of **1,905** `touchpoint_cadence` rows: **1,728 (91%) never touched**, **1,803** overdue < 90 days (a bulk
 stamp that went stale), 68 overdue > 1 yr (oldest due **2021-09-06**), only **23** due in the future, only
 **7** carrying `owner_user_id` (the documented producer gap → the ROE line on the owner card is blank).
@@ -475,6 +499,11 @@ reversible; runbooks are in the migration header.
   instantly "overdue". **Not yet on a cron** — schedule it alongside the other daily sweeps.
 
 ### BREAK-3 — owner resolution coverage (severity: MEDIUM, **35.9% → 49.2%**, Prompt 113)
+
+> ⚠️ **DENOMINATOR WARNING — this percentage is *of ASSETS*, not of PROPERTIES.** It reads
+> 1,910 of **3,886 assets**. Measured against all **32,289 properties** (gov 20,493 + dia 11,796)
+> the same coverage is **13%**, because only **5,144 properties have an LCC asset entity at all**.
+> Both numbers are correct about different populations. **§4e is the property-denominator view.**
 
 **1,396 → 1,910 of 3,886 assets (35.9% → 49.2%)**; owner entities **690 → 1,118**. Batch tag
 `p113_dom_owner_20260815`, reversible. Against the 2026-07-31 audit baseline (102 of 4,837 ≈ 2%) the
@@ -727,3 +756,35 @@ measured today it blocks **exactly** the known brokerages and nothing else. All 
 - `correspondence-ingestion-design.md`
 - `property-tab-ux-review.md`
 - **this file** (`connectivity-and-open-threads.md`) — the route-level status index.
+
+
+---
+
+## 4e. Chain re-measured 2026-08-28 (C2) — the gate is ASSET IDENTITY
+
+**Supersedes §4b's counts.** Full evidence: [`docs/audits/C2_CONNECTIVITY_STALL_MAP_2026-08-28.md`](../audits/C2_CONNECTIVITY_STALL_MAP_2026-08-28.md).
+
+| hop | count | of prior |
+|---|---:|---:|
+| properties (gov 20,493 + dia 11,796) | **32,289** | — |
+| dia `true_owner` rows that are OPERATORS (P113 trap) | 7,941 of 10,293 | — |
+| **LCC asset anchors** | **5,144** | **16% of properties** ⚠️ **THE GATE** |
+| resolved property→owner rows | **4,065** | 13% |
+| distinct owner entities | 2,768 | |
+| **owners with an active contact** | **1,439** | **52% of resolved owners** — healthy |
+| cadences | 2,302 | |
+
+**A property with no asset entity cannot carry owner evidence at all**, so every hop below is
+starved by the first. The owner→contact conversion is *not* the problem.
+
+**⚠️ The Salesforce book is connected to the wrong side.** 9,793 SF-linked people, 9,491 with an
+email, **9,129 (93%) carrying a relationship edge — but only 669 (6.8%) reach a resolved property
+owner.** They attach to their employer org via the `works_at` Salesforce-account edge (the bare-SF
+signal P112 disqualified and P161 gated out of reachability). **The bridge has no far bank.**
+
+**The 16% is a value-gated DECISION, not a defect** — `lcc_mint_gov_asset_entities` refuses to run
+without `--min-rent`. ⚠️ **Do not drop the floor without the measurement**: minting ~27,000
+evidence-less assets re-creates the noise the gate prevents. Backlog **C2a** is that measurement
+(resolve-rate by rent band); **C2b** is the SF bridge; **C2c** is what C2 did *not* measure
+(dia ownership depth, the developer/investor/buyer split, Outlook/WebEx per contact — **WebEx is not
+in the schema at all** — and broker assignment).
