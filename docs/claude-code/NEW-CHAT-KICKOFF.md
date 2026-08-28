@@ -82,8 +82,17 @@ from exactly that source. Two more: **`gsa_lease_change_facts`** (336,303 rows; 
   `human_actionable` **55**. Read `b5_redraft` / `written_draftable` / `facts_inserted`, **never**
   `already_drafted` or `links_already_present`. ⚠️ **Expect coverage to move far harder than depth**
   (B1: +901 vs +28) — that is the population, not a shortfall.
-- **Next:** **B6a** (the health view is blind to SKIPPED steps — four producers died behind it) and
-  **P0d / D1–D2** (the standing coherence detectors).
+- ✅ **B6a SHIPPED** — gov producer registry + declared skips; the four producers dead since
+  March–April 2026 read **RED** (170/170/150/144d vs a 45-day SLA); detector **seen red on a
+  deliberate silence**. ⚠️ `record_skip` **not yet exercised by a real run** — the RED rows prove the
+  registry, not the emission.
+- 🚨 **NEXT — `B6a-follow-up` (prompt ready): the alert chain has evaluated NOTHING since
+  2026-07-26.** gov 33d stale / 13 feeds, dia 30d / 5; `feed_stale` **0 open**, last fired
+  **2026-07-24 — two days before the sync died.** A fail-soft returns `(0,0)` for *everything
+  failed*, and the consumer **excludes stale mirror rows**, so **when the sync stops the check stops
+  checking and reports nothing wrong.** Contract invariant **I11**. **Do this before B6b** — B6b's
+  premise is telling whether a restarted producer stays up, and today it cannot be told.
+- **Then:** **P0d / D1–D2** (the standing coherence detectors).
 - **Read:** 🏛️ **`docs/architecture/data-coherence-invariants.md`** (the standing contract — I1–I10
   + new-database onboarding) · `ownership-history-lane.md` §3a/§3c ·
   `BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md` §3b/§3c · `connectivity-and-open-threads.md` §4j ·

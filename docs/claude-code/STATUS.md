@@ -189,6 +189,56 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-28 (evening) — B6a SHIPPED; the four dead producers read RED. And the alert chain that would carry that to a human has been silent for a month.
+
+Evidence: [`B6a_SKIPPED_STEP_HEALTH_BLINDNESS_2026-08-28.md`](../audits/B6a_SKIPPED_STEP_HEALTH_BLINDNESS_2026-08-28.md) §7a ·
+contract [`data-coherence-invariants.md`](../architecture/data-coherence-invariants.md) **I4 (shipped) / I11 (new)**.
+Merged: `government-lease#389` (code + migrations, Test & Lint ✅) · `life-command-center#1893` (docs, `b31f401`).
+
+**B6a delivered, and delivered the thing I asked for most.** The four producers dead since
+March–April 2026 now read **RED** (170/170/150/144 days against a 45-day SLA); skips emit a
+first-class `Task skipped` row with a declared reason; `is_overdue` is computed against the step's
+**own p90 cadence**; equivalence held at **0-changed in both directions** on every pre-existing feed
+and view column. **And the detector was SEEN going red on a deliberate silence and green again** —
+the §2a requirement, which is what separates this from the view it replaces.
+
+⚠️ **`record_skip` HAS NOT YET BEEN EXERCISED BY A REAL RUN, and the RED rows are not proof that it
+was.** They are a **registry** result — they prove the config rows. The daily pipeline fires
+`0 8 * * *` and the weekly `0 6 * * 1`. **The check that matters is a `Task skipped` row for
+`gsa_ingest_+_diff` in `run_log` carrying `skip_reason='gsa_download_folder_empty'` and
+`skip_declared: true`**, after which its `age_days` resets and it stops reading overdue. **Until a
+run passes through, "no bad rows" and "no rows at all" read identically** — the exact trap the work
+is about, correctly flagged by the build rather than papered over.
+
+**🚨 THE FOLLOW-ON FINDING IS BIGGER THAN THE FIX, and I verified it independently.** The chain that
+carries gov's verdict to an LCC alert **has evaluated nothing since 2026-07-26**, and **every layer
+reports success**: gov `v_feed_freshness` is correct (says `sam_lease_opportunities` is 32d stale) →
+crons **140/141** fire daily and record **`succeeded`** → `lcc_finalize_feed_freshness` consumes
+only `status_code = 200` and **silently drops the rest, returning `(0,0)`** (identical to *nothing to
+do*) → `lcc_domain_feed_freshness.synced_at` frozen at **2026-07-26** gov / **2026-07-29** dia →
+`lcc_check_feed_freshness` **excludes mirror rows older than 3 days**, so it evaluates **zero** feeds
+and returns `new_alerts: 0, stale: []`.
+
+**Verified live 2026-08-28:** gov mirror **33 days** stale across **13 feeds**, dia **30** across
+**5**; `feed_stale` alerts — **8 ever, 0 open, last detected 2026-07-24**, **two days before the sync
+died.** *The alerts stopped when the monitoring stopped.*
+
+- **New invariant `I11` — a monitor must alert on its own blindness.** *"I cannot see this feed"* and
+  *"this feed is fine"* must never render identically. **The staleness guard on the mirror IS the
+  silent failure**, and the exclusion is individually defensible, which is why nobody caught it.
+- **Corollary:** a fail-soft that swallows a non-200 must **count and surface** it. `(0,0)` may
+  never mean both *nothing to do* and *everything failed*.
+- **The contract is now three of eleven invariants with a standing detector** — I4 shipped today,
+  **I11 was added the same day because it was found violated.**
+
+**Next prompt drafted: `B6a-follow-up`** (LCC-side only; gov is correct and must not be touched).
+Sequenced **before B6b**, because B6b's entire premise is being able to tell whether a restarted
+producer stays up — and today it cannot be told. ⚠️ It carries three cautions: **diagnose the
+transport before patching the consumer** (all 18 feeds froze on the same date — and `200 []` would
+pass a status-code check while carrying nothing, the P157 class); **expect a loud, real first run**
+and rank rather than suppress it; and **grep the other `lcc_check_*` functions for the same
+exclusion shape**, naming them without fixing them.
+
 ## 2026-08-28 (later) — B5 SHIPPED and found a destructive trigger on the way; B6 swept 19 signals; the two windows produced CONTRADICTORY measurements of one population and B5 wins.
 
 Evidence: [`B5_GOV_SELLER_EXIT_FEEDER_2026-08-28.md`](../audits/B5_GOV_SELLER_EXIT_FEEDER_2026-08-28.md) ·

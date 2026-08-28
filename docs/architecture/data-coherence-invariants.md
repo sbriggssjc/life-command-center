@@ -161,6 +161,35 @@ conclusion in this very arc.
 > **Rule:** a fact store carries `created_at` **and** a provenance column. Never date a producer off
 > `updated_at` on an upserted table; find the producer in code.
 
+### I11 — A monitor must alert on its own blindness. An exclusion of stale inputs IS a silent failure.
+
+**Added 2026-08-28 from B6a's follow-on finding, and independently verified.** This is the sharpest
+instance of the class in the whole campaign, because **every layer reported success.**
+
+The cross-DB freshness monitor has **evaluated nothing since 2026-07-26**:
+
+1. gov's own `v_feed_freshness` is **correct** and says `sam_lease_opportunities` is 32 days stale.
+2. LCC crons **140/141** fire daily and record `succeeded` — but `lcc_domain_feed_freshness.synced_at`
+   is frozen at **2026-07-26 (gov) / 2026-07-29 (dia)**, because `lcc_finalize_feed_freshness`
+   consumes only `status_code = 200` and **silently drops everything else**, returning `(0,0)` —
+   indistinguishable from *"nothing to do."*
+3. `lcc_check_feed_freshness` **excludes mirror rows older than 3 days**, so it evaluates **zero**
+   gov/dia feeds and returns `new_alerts: 0, stale: []`.
+
+**Verified independently 2026-08-28:** gov mirror **33 days** stale, dia **30**; `feed_stale`
+alerts — **8 ever, 0 open, last detected 2026-07-24**, i.e. two days *before* the sync died. **The
+alerts stopped when the monitoring stopped, and the surface has read healthy for a month.**
+
+> **The staleness guard on the mirror IS the silent failure.** The exclusion is individually
+> defensible — evaluating a stale mirror would produce false alerts — but **"I cannot see this feed"
+> and "this feed is fine" must never render identically.**
+>
+> **Rule:** every check that filters out inputs it cannot trust must **emit an alert for the
+> filtered set**, and must be **verified to fire by deliberately starving it** (I4 §2a). A monitor
+> that has never been seen going red on its own blindness is a claim, not a monitor.
+> **Corollary:** a fail-soft that swallows a non-200 must **count and surface** it. `(0,0)` may
+> never mean both *nothing to do* and *everything failed*.
+
 ### I10 — A one-shot backfill is not a producer
 
 If the mechanism that filled a store was a migration or a script, the store **decays from the moment
@@ -197,12 +226,14 @@ Supabase project"; it is a new set of connections that must be asserted on day o
 | I2 | provenance `group by` split by domain | ⚠️ **manual** — run in B5/B6; **no standing view** |
 | I3 | link-column type check against target PK | ❌ **none** |
 | I4 | expected-vs-observed run health | ✅ **B6a, 2026-08-28** — skips emit; `is_overdue` vs the step's own p90 cadence; the four dead producers registered and RED. ⚠️ The **cross-DB mirror** that carries this to an alert has been silent since 2026-07-26 (**B6a-follow-up**) |
+| **I11** | a check that alerts on its own blindness | ❌ **VIOLATED, LIVE AND VERIFIED** — the cross-DB freshness monitor has evaluated **zero** feeds for **33 days** (gov) / **30** (dia) and **0 alerts are open**; `feed_stale` last fired **2026-07-24**, two days before the sync died → **B6a-follow-up** |
 | I6 | divergence consumer | ⚠️ `parcel_owner_xref.diverges` has none → **B6d** |
 | I1 | producer/consumer registry | ❌ **none** — this is the biggest hole |
 | I8 | fill-forward trigger audit | ❌ **none** — one instance fixed (B5), others unaudited |
 | I9 | fact stores lacking `created_at` | ❌ **none** |
 
-**The honest state: two of ten invariants have a standing detector.** Everything else was found by
+**The honest state: three of eleven invariants have a standing detector** (I4 shipped 2026-08-28;
+I11 was added the same day *because it was found violated*). Everything else was found by
 a human asking the right question, which does not scale and is exactly what Scott is asking us to
 stop relying on. **Backlog `D1–D4` turns the highest-yield ones into scheduled checks.**
 
