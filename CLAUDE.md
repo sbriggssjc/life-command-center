@@ -3068,6 +3068,74 @@ Writeup: `docs/audits/A5c_RESEARCH_TASK_VALUE_GATE_2026-08-27.md`.
   unchanged (44 → 51 ms) because the gate's LATERAL aggregates report `never executed` under its id
   predicate. dia head 684 ms, probe 33 ms.
 
+## C1 — the Salesforce lanes already had a consumer, on a different surface (2026-08-27)
+
+`true_owner_needs_salesforce` (837 open) and gov `owner_needs_salesforce` (108 open) have **0 real
+completions ever** and were about to get a consumer built. **They already have one.** The Decision
+Center lane **`sf_link_candidate`** holds **3,369 owner↔SF-Account candidates**, every one carrying
+a resolved `001…` Account id, behind a verdict path (`api/admin.js:10764`) that **PATCHes the exact
+column whose NULL-ness defines both research lanes** — null-guarded, provenance-logged, reversible,
+with an active Ollama pre-rank (cron 213) and **59 human verdicts recorded**. It already covers
+**360 of dia's and 1,347 of gov's** gap subjects. Diagnosis only, nothing built. Writeup:
+`docs/audits/C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE_2026-08-27.md`.
+
+- **⚠️ BEFORE BUILDING A CONSUMER, GREP FOR WHO ALREADY WRITES THE GAP COLUMN.** Not who reads the
+  lane, not who is named after it — **who writes the field whose NULL-ness IS the gap**. That one
+  query (`sf_link_candidate` → `PATCH true_owners.salesforce_id`) turns "build a consumer" into
+  "retire a duplicate surface". The generalisation of A5's *read a handler's direction before
+  counting it as a consumer*: **`sf-link-reconcile.js` runs domain→LCC and no cron calls it**, and
+  the one cron in the family (`cron.job` 48 `lcc-sf-link-tick`) is `active=false` **and posts to
+  `'vercel'`**, the host retired 2026-07-20 that P194 proved still answers.
+- **⚠️ A LANE'S PREDICATE AND ITS ONLY WRITER CAN BE ON DIFFERENT COLUMNS, AND NOTHING ERRORS.**
+  The gov lane reads `unified_contacts.sf_account_id`; the verdict writes
+  `recorded_owners.sf_account_id`. Measured: **1,961 gov owners are already linked, 1,292 still
+  read as a gap, exactly 29 agree** — so a human who works the DC lane successfully **does not
+  clear the research task**, which stays open and is re-minted. **96 of the 1,675 admitted rows
+  ($314.7M) are phantom work.** dia is unaffected because both sides read the same column — the
+  asymmetry is invisible from either side alone, so **check the writer's column against the
+  predicate's column by name, not by concept.**
+- **⚠️ "0 RESOLVE TO AN ENTITY" WAS A KEY-SPACE ARTIFACT, AND THE OBVIOUS RE-KEY IS THE WRONG
+  PARTY.** The gov lane emits `unified_contacts.unified_id`; `external_identities` indexes gov by
+  `gov/true_owner` and `gov/asset` only, so the join returns 0 **structurally** and would after any
+  amount of minting (the P197 shape). Re-keyed via the owner's property → `true_owner_id`, **111 of
+  114 resolve** — **but the names differ on 70 of 120 pairs**, and read on named rows the difference
+  is SPE↔sponsor and sometimes a person: `ARCP GSPLTNY01, LLC` → **`Nicholas Schorsch`**,
+  `INGOLD FAMILY INVESTMENTS LLC` → **`Robert Ingold`**, `PORTALS OWNER, LLC` →
+  `Republic Properties Corp.` Attaching the sponsor's Salesforce Account to a question asked about
+  the SPE is **P188** exactly. Safe subset: 55 name-agreeing pairs → **2** with an SF Account.
+  **A wrong-key zero and a real zero look identical; so do a right-key number and a wrong-party one.**
+- **⚠️ TWO CORRECT COUNTS THAT ARE THE SAME NUMBER ARE PROBABLY NOT THE SAME SET.** dia's value gate
+  admits **27** owners; **27** open dia tasks resolve to an entity carrying an SF Account. **The
+  overlap is 3.** One is a value population, the other an automation population.
+- **⚠️ HALF THE LANE'S STATED JOB WAS NEVER BUILDABLE — CHECK CAPABILITY BEFORE DOCTRINE.** Both
+  lanes' generated instruction reads *"Link **or create** Salesforce account for X"*. LCC's entire
+  Salesforce surface is a **read-only Power Automate proxy** (`_shared/salesforce.js` states Scott
+  has no admin rights to register a Connected App); a repo-wide grep for `sobjects` /
+  `/services/data/v` / a POST to Salesforce returns **nothing**. So "never write back to clean SF"
+  is the second reason, not the first. **A doctrine question you can settle with a grep is cheaper
+  than one you take to the user.**
+- **P131: (a) 27 dia + 2 gov · (b) ZERO · (c) dominant.** (b) is a measurement: a Salesforce Account
+  id exists only in Salesforce — no document, email, OM, deed or capture anywhere states one, so a
+  model would fabricate an 18-character id that looks exactly like a real one. **Fourth time in this
+  arc the top-ranked "LLM opportunity" measured as (a) plus (c).**
+- **Completing a task writes nothing and does not stick.** `completeResearch()` posts
+  `{research_task_id}` alone; neither lane has a capture button (only `owner_contact_manual` (P173)
+  and `establish_ownership_history` (P179) do — Dead-End **Class 3**), and the seeder dedupes on
+  `status='queued'` only, so a completion with the gap intact is re-minted. Churn: **4.84**
+  tasks/subject on `property_missing_recorded_owner`, 1.95 on `true_owner_needs_salesforce`.
+- **Recommendation: automate 27, retire 945, gate 1,702, repair 1,292 — build no consumer.**
+  Backlog **C1a** (mirror repair, first — it resizes both lanes) → **C1b** (gate `lane_no_consumer`,
+  the `owner_needs_sos` precedent) → **C1c** (retire on the A4 pattern; ⚠️ a bare `skipped` is not
+  terminal to the seeder) → **C1d** (the 27, **as a new unit of `sf-link-reconcile.js`, never a
+  standalone writer** — the verdict path is the single owner of that column) → **C1e** (register
+  `dia.true_owners.salesforce_id` in `field_source_priority`; gov has ladders for both its tables,
+  dia has none).
+- **⚠️ THE VERIFICATION IS INVERTED AND MUST BE STATED THAT WAY.** If C1b/C1c are taken, real
+  completions correctly stay **0** and the lanes disappear instead — open counts to 0,
+  `gate_reason='lane_no_consumer'`. That is success, not a failure to move the metric. The numbers
+  that move are `dia.true_owners.salesforce_id` non-null (**822 → 849**, C1d) and the gov admitted
+  count (**1,675 → 1,579**, C1a).
+
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
 Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration
@@ -3262,6 +3330,10 @@ Related invariants from the same round:
     nothing writes that person into `owner_contact_pivot`. Result: **11 owners, $240.5M,
     suppressed AND invisible.** Whenever a surface excludes a population on the grounds that
     it is "already handled", name the thing that handles it and verify that it does.
+- **Salesforce lanes — consumer or retire (C1):**
+  `docs/audits/C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE_2026-08-27.md` — why a lane with 0 completions did NOT
+  need a consumer built (one already existed on another surface), the lane-predicate-vs-writer column split,
+  and the wrong-key zero that reads exactly like a coverage gap.
 - **Merge reversibility + Tier 0 park reasons (P196):**
   `docs/audits/P196_MERGE_REVERSIBILITY_AND_PARK_REASONS_2026-08-27.md` — the shared merge path's undo,
   the BEFORE-INSERT trigger that silently defeats `ON CONFLICT DO UPDATE`, and the two prescribed
