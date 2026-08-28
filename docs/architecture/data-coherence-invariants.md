@@ -75,6 +75,29 @@ defect is invisible until someone writes.
 > **Rule:** a column named `<table>_id` must be the type of `<table>`'s PK and carry an FK, or carry
 > a comment stating why not. **A nullable FK is cheap; a type mismatch is unpayable.**
 
+> **⚠️ SWEPT 2026-08-28 (D2 / B6c) — and the repair is mostly NOT worth doing, which the invariant
+> as written does not tell you.** `docs/audits/B6c_PROPERTY_SALE_EVENTS_2026-08-28.md`. Both of
+> `property_sale_events`' link columns are confirmed impossible (`bigint` vs `uuid`, no FK, 0 of
+> 5,208), **and `ownership_history_id` has ZERO readers on either domain** — 0 hits across 620 gov
+> objects, 0 across dia, 0 in `api/`. Retyping it would satisfy I3 and build a link nobody follows
+> (**Dead-End Class 2**). **I3 says a link column must be type-compatible; it does not say every
+> `<table>_id` column deserves to exist.** Ask who reads it before repairing it — the honest
+> disposition for a dead link column is `DROP`, and the invariant is then satisfied vacuously.
+>
+> Three things the sweep established that belong with the rule:
+>
+> 1. **A declared FK is authoritative and Postgres already type-checks it**, so the detector need
+>    only examine *unFK'd* columns. `available_portfolios.portfolio_id` looked like a defect against
+>    a name-derived `portfolios`; its real FK points at `sales_portfolios` (uuid→uuid, correct).
+> 2. **Every genuinely mismatched undeclared column found across both domains is 0% populated** — a
+>    column that cannot hold its value never gets one. **Triage by populated-ness before reading
+>    names**: a *populated* mismatch is nearly always an external vendor id (a Salesforce
+>    `00T8W...`) or a uuid stored as text, i.e. an accepted false positive.
+> 3. ⚠️ **The same table can be broken on different columns in different domains.** gov's
+>    `property_sale_events.broker_id` is fine and dia's is broken; gov's two link columns are broken
+>    and dia's are fine. **Neither domain is a safe template for the other** — I2's same-shape
+>    invariant failing on TYPES, which I2's provenance `group by` cannot see.
+
 ### I4 — A producer emits a run row even when it does nothing, and ESPECIALLY when it SKIPS
 
 **Playbook Class 21.** `pipeline_runner` guards the GSA diff on a local folder that is always empty
@@ -249,7 +272,7 @@ Supabase project"; it is a new set of connections that must be asserted on day o
 |---|---|---|
 | I5 | `v_field_provenance_unranked` | ✅ exists · ⚠️ **33 rows** (drift) |
 | I2 | provenance `group by` split by domain | ⚠️ **manual** — run in B5/B6; **no standing view** |
-| I3 | link-column type check against target PK | ❌ **none** |
+| I3 | link-column type check against target PK | ⚠️ **manual, published 2026-08-28** — the catalogue query is in `docs/audits/B6c_PROPERTY_SALE_EVENTS_2026-08-28.md` **§7e**; **no standing view** (same status as I2). Run on all three projects: **10 genuine defects, 3 low-severity, 5 accepted false positives.** Two refinements it earned while running: **(a) a DECLARED FK is authoritative and Postgres already type-checks it**, so the detector need only examine *unFK'd* columns — that removes a whole false-positive class; **(b) every genuinely mismatched undeclared column found is 0% populated** (a column that cannot hold its value never gets one), so **triage by populated-ness first** — a *populated* mismatch is nearly always an external vendor id or a uuid-as-text. ⚠️ **Positive-control it before believing a zero (P182)**, and note LCC Opps' zero is **bounded**: 151 of 559 `_id` columns evaluated, the rest not name-resolvable and **not examined**. |
 | I4 | expected-vs-observed run health | ✅ **B6a, 2026-08-28** — skips emit; `is_overdue` vs the step's own p90 cadence; the four dead producers registered and RED. Mirror repaired by **B6a-follow-up**. ⚠️ **B6b added the first producer to actually exercise it** (`gsa_change_layer`, emitting on both branches, DECLARED skip when GSA has not published) and found a registry defect the instrument could not see: `gsa_lease_timeline` was keyed on `created_at`, which an UPSERT only moves when a NEW row first appears — a **correct** rebuild over a stable roster would have read STALE and re-opened the alert. Corrected to `updated_at`. **Check the ts_column is one the producer always touches, not merely one it sometimes does.** |
 | **I11** | a check that alerts on its own blindness | ✅ **DETECTOR LIVE 2026-08-28 (B6a-follow-up)** — `lcc_check_feed_freshness` keeps the 3-day mirror exclusion and now opens a deduped, auto-resolving **`feed_mirror_stale`** over the set it refuses to evaluate; `lcc_finalize_feed_freshness` counts/records/retries non-200 into `lcc_feed_freshness_sync_status`. `feeds_evaluated` **2 → 25**, excluded **18 → 0**, **6 `feed_stale` opened** (B6a's four among them). Positive-controlled in **both** directions on the live month-old mirror. ⚠️ gov's cold-cache timeout is **mitigated (retry), not cured** — B6a-follow-up-b |
 | I6 | divergence consumer | ⚠️ `parcel_owner_xref.diverges` has none → **B6d** |
