@@ -1610,3 +1610,49 @@ size, and it is deliberately undiagnosed here.** Candidates in order: the `lcc_r
 0.55 confidence gate (the documented 876-asset supersession class); a dia **operator** in the owner
 slot (P113); or an org anchored in one domain with properties in the other. **Do not assume — this
 arc has three instrument errors on record from assuming.**
+
+
+---
+
+## 4n. C2h — the "silent feeder" resolved every one of them. It is the sponsor↔SPE gap.
+
+Evidence: [`C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT_2026-08-28.md`](../audits/C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT_2026-08-28.md).
+Diagnosis only — nothing written.
+
+**C2g called these 79 "the genuine feeder defect." They are not a defect.** Every one of their
+properties **is** resolved: the feeder resolved the **SPE that holds title** (the correct recorded
+owner) while the Salesforce person works for the **sponsor**. Both sides are right.
+
+| SF person's employer *(a gov `true_owner`)* | LCC resolved owner *(title holder)* |
+|---|---|
+| **Avery Capital** | **AC** ORLANDO SPV LLC |
+| **Ball Ventures** | **BV**GC PARCEL C, LLC |
+| **Browman Development Co.** | **BDC** Livermore L.P. |
+| **Carmel Partners** | **CP** VI Van Gordon, LLC |
+| Corporate Office Properties Trust | REDSTONE GATEWAY 100, LLC |
+
+**The SPE initials are the sponsor's initials.** Split: **69 sponsor↔SPE · 8 true duplicates (same
+canonical key) · 2 probable duplicates.**
+
+⚠️ **One column turned the whole diagnosis around:** `prop_resolved_to_someone` equalled
+`props_with_asset` on all 79. C2g's *"everything the feeder needs is present and it produced
+nothing"* was wrong because it never asked whether the property had resolved **to someone else**.
+**When a producer looks silent, check whether it answered a different question before calling it
+silent.**
+
+### Do NOT build a third sponsor detector
+
+`lcc_owner_sponsor_domain` (P190) and `lcc_ownership_sponsor_family` (A3) both exist and are
+**human-confirm by design** — A3 measured a lexical sponsor detector at **~25% precision** raw, and
+P196 at 4-of-6 even with three guards. Feed these 69 into the existing confirm surfaces as
+candidates; they arrive with **stronger evidence than either surface normally has** (the sponsor is
+independently attested as a gov `true_owner` *and* carries Salesforce people). **Not sized here.**
+
+### Real residue found while reading
+
+**`Casa De Chupita` → `Undisclosed` at confidence 0.57** — a **placeholder won a resolution**, and
+`lcc_is_placeholder_owner_name` does not list `Undisclosed`. **`Chiapelone Trust` →
+`BGC-Havasu Project LLC by Newmark Knight Frank`** — brokerage pollution inside a resolved owner
+name (the P116 class; gov's `gov_strip_brokerage_suffix` exists to strip exactly that suffix).
+Two more (`Consilium → Easterly`, `Carosella → WMC`) are unexplained at confidence 1.00 and want
+reading individually.
