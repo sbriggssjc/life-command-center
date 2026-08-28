@@ -1,3 +1,15 @@
+> # ⚠️ ARCHIVED — 2026-03-23 change record. Its §4 spec was SUPERSEDED by the flow actually built.
+> ⚠️ **Legacy-host instructions at lines 34, 35, 99** (`life-command-center-nine.vercel.app`) — line
+> 35 literally reads *"AFTER: <vercel url>"*, i.e. **an instruction to point a PA flow at the
+> retired-but-answering host** (P194). Lines 232/236/243/247/739 treat `PA_WEBHOOK_SECRET` as a
+> Vercel env var. **Do not follow any of it.**
+> ⚠️ Line 154 says *"Complete SF Task — NEW, needs creation"*; **it was built 2026-05-12** —
+> as-built: `docs/architecture/flows/complete-sf-task.md`.
+> **Its §4 payload contract and its "What's missing" gap table were the ONLY record of several open
+> items** — extracted to `PLANNED-BACKLOG.md` before archiving (the PA `reschedule` branch, SF task
+> creation / status lifecycle, `sync_outbound_enabled=false`, task-intent classification, and the
+> 10,410 stale May-2020 `salesforce_tasks` rows).
+
 # Power Automate Update Guide — Salesforce & RCM Flows
 
 > **Purpose**: Step-by-step instructions for updating Power Automate flows to fix RCM ingestion and enable recurring Salesforce activity sync.

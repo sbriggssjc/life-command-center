@@ -1,3 +1,17 @@
+> # 🚨 ARCHIVED — DO NOT FOLLOW ITS POWER AUTOMATE SECTIONS. THEY POINT AT A RETIRED HOST THAT STILL ANSWERS.
+> **This file instructs an operator to set PA flow URIs to
+> `https://life-command-center-nine.vercel.app/api/{rcm-ingest,loopnet-ingest,lead-health}` (lines
+> 167, 608, 636, 666, 684, 701, 714) and hands them working `curl` commands against it.**
+> **Vercel was retired 2026-07-20 — but per P194 that deployment STILL ANSWERS and STILL HOLDS A
+> SERVICE KEY.** Following these steps silently writes production data through an unmaintained
+> build. `server.js` on Railway is the sole `/api/*` router; `vercel.json` (which this file edits at
+> 129–132, 186–192) was deleted.
+> **The CODE half is fully shipped** — `authenticateWebhook` (`api/sync.js:74`), `parseLoopNetEmail`
+> (:2024), `handleLoopNetIngest` (:2100), `handleLeadHealth` (:2324), all mounted at
+> `server.js:294-298`. **Only the PA half is outstanding → backlog M8**, whose authoritative spec is
+> **`.github/PA_FLOWS.md` §Flow 3, NOT this file's older competing copy.**
+> Open item recovered: the **`marketing_leads` RLS/service-role check (Fix 4) was never performed.**
+
 # RCM & LoopNet Lead Ingestion — Fix & Build Instructions
 
 ## Diagnosis: Why RCM Leads Aren't Landing

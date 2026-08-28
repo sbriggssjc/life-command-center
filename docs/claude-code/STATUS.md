@@ -16,6 +16,27 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-28 — Cross-lane property identity contract and build queue documented (design only)
+
+**DOCUMENTATION ONLY — nothing activated, migrated, promoted, or written to live systems.** Canonical design:
+[`docs/architecture/property-identity-and-address-resolution.md`](../architecture/property-identity-and-address-resolution.md).
+Backlog: **PI1–PI8** in `docs/os/PLANNED-BACKLOG.md` P10a. The ASC integration contract now names
+the shared dependency without authorizing extraction or adoption.
+
+The restricted frozen ASC sample established that repeated capture failures are a platform class, not just
+bad strings: suite/floor versus parent building, shared campuses, suffix/directional/locality/range variants,
+compound street spacing, historical frozen-token drift, explicit tenant corroboration, valid source
+missingness, stale sidebar candidate state, and ambiguous database-function output. The new contract turns
+those aggregate lessons into a versioned match hierarchy, structured decision object, rule lifecycle,
+de-identified golden corpus, sidebar diagnostics, shadow evaluation, governed alias-ledger design, and
+aggregate quality measures.
+
+**Boundaries preserved:** no private candidate rows, source payloads, run IDs, or licensed evidence entered
+Git; no full-universe ingestion, canonical promotion, Salesforce write, outreach, opportunity creation,
+unattended licensed-source scraping, evidence deletion, or IDTF activation. An on-box model is advisory only
+and can never decide or write identity. **Next gate:** finish the frozen 50-property sample, review its
+aggregate outcomes, then separately decide whether PI2/PI3 (corpus + pure matcher) should begin.
+
 
 
 ## 2026-08-28 — B6c: `property_sale_events` — answered, and deliberately not repaired
@@ -524,6 +545,61 @@ vocabulary — **2,978 distinct values over 14,076 rows**, embedding record ids
 gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `ownership_history`
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
+
+## 2026-08-28 — 🚨 CLEANUP PASS 3 FOUND A LIVE CREDENTIAL EXPOSURE. That outranks the cleanup.
+
+**`wave0-config-values.txt` is TRACKED IN GIT at the repo root and holds `LCC_API_KEY` in
+PLAINTEXT.** Verified: 858 bytes, `git ls-files --error-unmatch` confirms tracked, **not in
+`.gitignore`**. It also carries `LCC_HOST=https://life-command-center-nine.vercel.app` — **the
+retired host that still answers and still holds a service key** (P194) — plus Teams tenant/team/
+channel IDs.
+
+⚠️ **This is a DIFFERENT and worse exposure than SEC1**, which records the key as *"pasted in
+plaintext during a curl diagnostic."* **A chat paste is transient; a tracked file is in git history,
+in every clone, and in every fork.** Filed as **SEC2**.
+
+**And it is not the only one. `SEC3`:** `docs/os/POWER-AUTOMATE-DEPLOYED-CATALOG.md` reports **ten of
+seventeen** deployed PA packages contain **literal JWT-like values**, and
+`docs/architecture/flows/sync-sf-activities-to-supabase.md` carries an unresolved **P0** —
+*"rotate exposed Supabase keys immediately"* — with **`Credential rotation completed: TBD`**.
+**I1 covered only the `X-PA-Webhook-Secret`; this is a separate, larger, never-filed item.**
+
+👤 **Scott, order matters: (1) ROTATE `LCC_API_KEY` and update Railway; (2) `git rm --cached` +
+`.gitignore`; (3) only then consider history.** ⚠️ **Do not reach for `filter-branch` casually** —
+this repo nearly lost a 475 MB mailbox doing exactly that. **Rotation is what makes the committed
+value worthless, and that is the outcome that matters.** `SEC4` proposes the standing guard (a
+JWT/`sb_secret_`/long-hex check over flow exports and config files) so the next export cannot
+re-introduce it silently.
+
+### Cleanup pass 3 — the Power Automate cluster (root `.md` 35 → 29)
+
+**14 more unfiled items (`P14d`, J1–J14).** The four that matter:
+
+- **J1 — `sf-promotion-worker` has NEVER left report-only.** `enforce` defaults `false` **and the
+  Salesforce rungs of `field_source_priority` were never seeded**, so **no Salesforce field can ever
+  be promoted.** A whole promotion path that reports success and writes nothing.
+- **J2 — LCC calls the PA flow with `action:'reschedule'` and the flow has no such branch**, so
+  rescheduled dates never reach Salesforce. A caller sending to a branch that does not exist.
+- **J13 — archiving the root files did NOT solve the retired-URL problem.**
+  `rcm-power-automate.md`, `loopnet-power-automate.md` and `lcc-personal-calendar-sync.md` **still
+  record the retired host as their endpoint — inside `docs/architecture/flows/`, the directory this
+  pass just confirmed as authoritative.**
+- **J14 — FOUR homes for one topic**, two of which near-collide by name (`docs/flows/` vs
+  `docs/architecture/flows/`).
+
+**`RCM_LOOPNET_FIX_INSTRUCTIONS.md` got the strongest banner yet** — it instructs an operator to
+point two PA flows at the retired host and hands them working `curl` commands against it. Its
+**code** half is fully shipped; only the PA half (M8) is outstanding, and its spec **competes with
+the authoritative `.github/PA_FLOWS.md` §Flow 3.**
+
+⚠️ **`SALESFORCE_LCC_INGESTION_PLAN.md` was deliberately KEPT AT ROOT** — `intake-salesforce-files/
+index.ts` cites it **by path in a user-visible runtime error string**. It contradicts production
+(§10 says "every 6 months"; the deployed sync is **hourly**) and itself (§12 vs §5.3) — **J12 fixes
+it in place.**
+
+**Two cross-checks strengthened existing rows rather than adding new ones:** **I5** is a *regression
+from spec* (the design always mandated capturing the failed slice and a dead-letter listing), and
+**I4**'s backfill was designed **manual/button-only**, so *"turn it off"* beats *"fix it."*
 
 ## 2026-08-28 — B6c drafted, and re-measuring turned "fix the bigint" into "does this table have a future?"
 

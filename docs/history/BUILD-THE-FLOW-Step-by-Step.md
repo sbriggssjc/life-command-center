@@ -1,3 +1,9 @@
+> # ⚠️ ARCHIVED — builds a RETIRED flow against a UI that no longer exists.
+> `docs/os/FLOW-REGISTRY.yaml` lists **`retired-todo-lcc-sync` — state: retired**, and this builds it
+> against `life-command-center.html` and a manual file-picker sync button, both gone. The To Do
+> surface is now `outlook-todo-completion-poll` plus the P119/P121 mailbox mirror.
+> **As-built authority: `docs/architecture/flows/todo-lcc-sync.md`.**
+
 # Build the To Do Sync Flow — Step by Step
 
 Open **flow.microsoft.com** side by side with this guide and follow each step.
