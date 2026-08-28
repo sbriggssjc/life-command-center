@@ -59,6 +59,100 @@ a name heuristic). ⚠️ **B6's G3 row is REFUTED**: `gsa_lease_events` does ca
 rows) — B6's zero came from `changed_fields ? 'key'` against a jsonb **string**. Also filed:
 **B6b-june** (2026-06-01 is a merged snapshot of two source files, 7,919 leases vs a 7,348–7,495 norm).
 
+## 2026-08-28 — C2b: the Salesforce bridge SELF-HEALED, and the opening premise is retired
+
+Evidence: [`C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md`](../audits/C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md);
+canonical **§4l**. Measurement only — nothing written.
+
+**No bridge code was written and the bridge doubled.** Same query, two dates:
+
+| | C2 (pre-mint) | **now** |
+|---|---:|---:|
+| SF-linked people reaching a **resolved property owner** | **669 (6.8%)** | **1,486 (15.2%)** |
+
+**+817 people, +122%, purely because T1 + T2a built the far bank.** C2 said the bridge had *"no far
+bank — only 4,065 property→owner rows for 32,289 properties"*; there are now **8,636 rows over 5,992
+owners**. That is the cleanest confirmation in this arc that **hop 3 was the binding constraint** —
+diagnosis and remedy both vindicated, and it argues for re-measuring a downstream gap after fixing an
+upstream one **before** building anything for it.
+
+### ⚠️ The residue is 91.5% NOT-AN-OWNER — and that retires the framing this whole thread opened with
+
+Of the 7,646 still unconnected, across **6,816 distinct orgs**: only **489 orgs (7.2%) / 652 people
+(8.5%)** are at companies that are property owners in our domains. The other **6,994 (91.5%)** are at
+brokerages, vendors, tenants, lenders and counsel — edged to their employer by the `works_at`
+Salesforce-account edge. **Their employers do not own our properties. No minting or reconcile will
+connect them, and none should.**
+
+**So Scott's opening figure — *"8–10k Salesforce opportunities… not yet connected"* — is, measured,
+~652 people at 489 owner-orgs.** The rest are correctly unconnected. That is a much smaller and much
+more actionable number than the one this topic started from.
+
+### ⚠️ It settles T2b on a second, independent axis
+
+Only **74 of the 489** unresolved owner-orgs appear in the T2b plan — **3.6%** of its 2,054 owners.
+Combined with T2a's measured collapse in contactability to **3.7%** in that band, **T2b is weak on
+two independently measured axes.** It stays *safe* (graph cost settled across 4,570 minted entities),
+so it can be revisited if the ranked queue runs dry. **Recommendation: do not run it now.**
+
+### The next question, deliberately undiagnosed
+
+**415 of the 489 owner-orgs are NOT reachable by minting** — anchored, with SF people attached, and
+still unresolved for some other reason. **That is a resolution gap, not an asset-identity gap — a
+different lever from everything C2a–C2e pulled.** Filed as **C2g**, with candidates ranked and none
+assumed: the `lcc_reconcile_property_owner` **0.55 confidence gate** (CLAUDE.md documents 876 assets
+with evidence still reading "Unresolved"), a dia **operator** in the owner slot, or cross-domain
+anchoring.
+
+## 2026-08-28 — C2e-T2a MINTED: gov asset coverage 39.2% → 57.8%
+
+Evidence: [`C2e_T2a_TRANCHE_TWO_STEP_ONE_MINT_2026-08-28.md`](../audits/C2e_T2a_TRANCHE_TWO_STEP_ONE_MINT_2026-08-28.md);
+canonical **§4k**. Batches `c2e_gov_eligible_t2a_20260828` + `c2e_t2a_evidence_20260828`, gov only.
+
+| | C2a baseline | after T1 | **after T2a** |
+|---|---:|---:|---:|
+| **gov asset coverage** (of 13,837 non-archived) | 24.7% | 39.2% | **57.8%** |
+| asset anchors, both domains | 5,096 | 7,147 | **9,717** |
+| `lcc_property_owner` rows | 4,065 | 6,065 | **8,636** |
+| **distinct resolved owner entities** | 2,768 | 3,743 | **5,992** |
+| plan remaining | 6,811 | 4,811 | **2,241** |
+
+**2,570 minted · 2,570 resolved an owner · 0 evidence-less · 0 orphans**, and the population
+reproduced C2e §6 exactly *before* the write. Gates held **and were attributed** per the §4i rule —
+merge candidates 5,194 → 5,194, `auto_mergeable` 3,006 → 3,006, drift 0 → 0, readings timestamped
+seven minutes apart.
+
+**The gate that starved the whole chain has now moved from 24.7% to 57.8% in two staged passes,
+with the noise cost measured across 4,570 entities rather than assumed.**
+
+### ⚠️ Predicted +44 duplicate groups, measured +46 — and chasing the 2-row gap found a real defect
+
+`lcc_mint_gov_asset_entities` passes `lcc_normalize_entity_name(m.name)` as `canonical_name`, and
+**the N15c `BEFORE INSERT` trigger overwrites it.** Only **2,497 of 2,570 (97.2%)** matched what the
+function supplied. Re-running the prediction against the key actually **persisted** gives 46 exactly.
+
+**The trigger is working as N15c intended — one writer for the dedup key.** But the argument inside
+the mint is now **dead code that reads like the answer**, and it is what produced the wrong
+prediction. **Durable rule: predict a canonical-key effect with the key the WRITER persists, not the
+one the caller passes** — where a `BEFORE` trigger owns a derived column, the caller's argument is a
+suggestion. Same family as P157/P182. Filed as **N15g** (cosmetic).
+
+**This is also the value of predicting before measuring**: a +46 against no prediction reads as
+"about right" and the defect stays hidden.
+
+### ⚠️ Tier 0 moved +4, not the predicted ~+20 — a population signal, not a miss
+
+Only **7.0%** of T2a's owners carry a second identity, against tranche one's 12.9%. **Resolving an
+owner makes "who do we call there" askable; it does not manufacture a bench.**
+
+### 👤 T2b — safe to run, low-value to run. No default taken.
+
+2,241 properties / 2,054 owners. **The graph argument is settled** — T2b's predicted duplicate rate
+(1.16%) is **lower than T2a's actual (1.79%)**, computed against the live post-T2a graph with the
+corrected key. What remains is the **owner cliff**, exactly where C2a predicted: contactability
+**21.3% → 17.2% → 3.7%**, known-beyond-gov 12.9% → 7.0% → **1.9%**. Cities, counties, DOTs,
+corporate occupiers, private individuals. **A prospect-quality judgement, not a technical risk.**
+
 ## 2026-08-28 21:50 UTC — TIER0_AUTO_ATTACH: the flag was in the wrong place, and my doc made it a deadlock
 
 **The dated verification came due and FAILED — then resolved.** Cron 241 fired at 06:55 UTC on both

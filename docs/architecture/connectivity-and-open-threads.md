@@ -1445,3 +1445,116 @@ alerts auto-resolved.** Migration
   dry-run without credentials, and its only gate is a name heuristic. Its consumer is confirmed
   alive (**2,041 worked, 208 in Salesforce, 2,149 touched in 30d**), which is why it deserves a
   measured restart. Backlog **B6b-lead**; its `feed_stale` alert correctly stays open.
+
+
+---
+
+## 4k. C2e-T2a — tranche two step one MINTED. gov asset coverage 39.2% → 57.8%.
+
+Evidence: [`C2e_T2a_TRANCHE_TWO_STEP_ONE_MINT_2026-08-28.md`](../audits/C2e_T2a_TRANCHE_TWO_STEP_ONE_MINT_2026-08-28.md).
+Batches `c2e_gov_eligible_t2a_20260828` (mint) + `c2e_t2a_evidence_20260828` (evidence). gov only.
+
+| | C2a baseline | after T1 | **after T2a** |
+|---|---:|---:|---:|
+| gov asset anchors | 3,422 | 5,425 | **7,995** |
+| **gov asset coverage** (of 13,837 non-archived) | 24.7% | 39.2% | **57.8%** |
+| asset anchors, both domains | 5,096 | 7,147 | **9,717** |
+| `lcc_property_owner` rows | 4,065 | 6,065 | **8,636** |
+| **distinct resolved owner entities** | 2,768 | 3,743 | **5,992** |
+| plan view remaining | 6,811 | 4,811 | **2,241** |
+
+**The eligible-set promise held again: 2,570 minted · 2,570 resolved an owner · 0 evidence-less ·
+0 orphans**, and the population reproduced C2e §6 exactly *before* anything was written (2,570 /
+2,300 / 17.2% contactable). The slice is contiguous with tranche one — its top owner rent
+$543,718 against T1's cut at $543,782.
+
+**Gates held and the claim is ATTRIBUTED** (the §4i rule): `v_lcc_merge_candidates` 5,194 → 5,194,
+`auto_mergeable` **3,006 → 3,006**, normalizer-blind 64 → 64, drift 0 → 0, both readings timestamped
+seven minutes apart. Structural, as C2e established.
+
+### ⚠️ Predicted +44 duplicate groups, measured +46 — and the 2-row gap is a real finding
+
+`lcc_mint_gov_asset_entities` passes **`lcc_normalize_entity_name(m.name)`** as `canonical_name`,
+and the **N15c `BEFORE INSERT` trigger overwrites it** with `lcc_entity_canonical_key(name)`. All
+2,570 rows carry the trigger's key; only **2,497 (97.2%)** equal what the function passed. Re-running
+the prediction against the key actually **persisted** gives 46, exactly.
+
+**This is the trigger working as N15c intended — one writer for the dedup key.** But the argument
+inside the mint function is now **dead code that reads like the answer**, which is what produced the
+wrong prediction. **Durable rule: predict a canonical-key effect with the key the WRITER persists,
+not the one the caller passes** — where a `BEFORE` trigger owns a derived column, the caller's
+argument is a suggestion. Same family as the P157/P182 traps. Filed as **N15g** (cosmetic).
+
+### ⚠️ Tier 0 moved +4, not the predicted ~+20 — a POPULATION signal, not a miss
+
+Only **7.0%** of T2a's owners carry a second identity, against tranche one's 12.9%. **Resolving an
+owner makes "who do we call there" askable; it does not manufacture a bench.**
+
+### 👤 T2b — safe to run, low-value to run. Still Scott's call, no default taken.
+
+**2,241 properties / 2,054 owners** (803 under $50k · 715 at $50–100k · 536 rent-unknown).
+
+| | T1 | T2a actual | **T2b predicted** |
+|---|---:|---:|---:|
+| already contactable | 21.3% | 17.2% | **3.7%** |
+| known beyond gov | 12.9% | 7.0% | **1.9%** |
+| new duplicate groups | 1.00% | **1.79%** | **1.16%** |
+
+**The two axes moved in opposite directions.** T2a ran *hotter* than predicted on duplicates and far
+*colder* on Tier 0 — and **T2b's predicted duplicate rate is LOWER than T2a's actual**, computed with
+the corrected key against the live post-T2a graph rather than extrapolated. **The graph cost is now
+measured across 4,570 minted entities and is not the issue.** The owner cliff, however, is real and
+arrived exactly where C2a said: contactability **21.3% → 17.2% → 3.7%**. That is a *prospect-quality*
+judgement, not a technical risk — cities, counties, state DOTs, corporate occupiers, private
+individuals — set against Scott's own *resolve all ownership, rank later*, with ranking being
+`v_priority_queue`'s job.
+
+⚠️ **Whatever is decided, drive `lcc_ingest_domain_owner_evidence` in the same pass** — cron 225 caps
+at 400/run.
+
+
+---
+
+## 4l. C2b — the Salesforce bridge SELF-HEALED, and the residue is not an owner problem
+
+Evidence: [`C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md`](../audits/C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md).
+Measurement only — nothing written.
+
+**No bridge code was written and the bridge doubled.** SF-linked people reaching a resolved property
+owner: **669 (6.8%) → 1,486 (15.2%), +817**, purely because T1 + T2a built the far bank. **C2's
+diagnosis and remedy are both confirmed** — hop 3 was the binding constraint.
+
+### ⚠️ The residue is 91.5% NOT-AN-OWNER, and that is correct
+
+Of the 7,646 SF people still unconnected, across **6,816 distinct orgs**:
+
+| | |
+|---|---:|
+| orgs carrying a `dia\|gov` `true_owner` identity | **489 (7.2%)** |
+| people at those orgs | **652 (8.5%)** |
+| **people at orgs that are NOT domain owners** | **6,994 (91.5%)** |
+
+They are brokers, vendors, tenants, lenders and counsel, edged to their employer by the `works_at`
+Salesforce-account edge. **Their employers do not own our properties. No minting or reconcile will
+connect them, and none should.**
+
+⚠️ **This retires the framing that opened the topic.** *"8–10k Salesforce opportunities not yet
+connected"* is, measured, **~652 people at 489 owner-orgs.** The rest are correctly unconnected.
+
+### ⚠️ It also settles T2b independently: minting it would connect **74 orgs**
+
+Only **74 of the 489** unresolved owner-orgs appear in `v_lcc_c2e_asset_mint_plan` — **3.6%** of
+T2b's 2,054 owners. Combined with T2a's finding that contactability collapses to **3.7%** in that
+band, **the case for T2b is weak on two independently measured axes.** It remains *safe* (the graph
+cost is settled across 4,570 minted entities), so it can be revisited if the ranked queue runs dry.
+**Recommendation: do not run T2b now.**
+
+### The actionable slice, and the next question
+
+**489 orgs / 652 people**: companies that **are** domain property owners, **have** Salesforce people
+attached, and whose properties are **not** resolved to them. ⚠️ **415 of the 489 are NOT reachable
+by minting** — they are anchored and unresolved for some other reason. **That is the next thing to
+size, and it is deliberately undiagnosed here.** Candidates in order: the `lcc_reconcile_property_owner`
+0.55 confidence gate (the documented 876-asset supersession class); a dia **operator** in the owner
+slot (P113); or an org anchored in one domain with properties in the other. **Do not assume — this
+arc has three instrument errors on record from assuming.**
