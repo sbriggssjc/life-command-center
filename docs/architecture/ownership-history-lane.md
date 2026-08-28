@@ -158,6 +158,42 @@ A2 completes tasks and they leave it. That is the real throughput cap; it is why
 today's 06:45 cron run included — while the handler returns HTTP 200 and writes its
 proposals. **Read the pg_net response body or the proposal delta, not the run log.**
 
+### 3c. ⚠️ It WAS source-limited — and the source was gov's own sales table (B5, shipped 2026-08-28)
+
+§3a concluded depth needs new RECORDS and named county-deed capture as the constraint. Measured
+correctly, wrong table. **B5 built the feeder gov never had** — `sales_transactions_seller_exit`, the
+source that supplies 2,207 of dia's 2,757 historical facts.
+
+**Live on gov now:** `ownership_history` **16,177 → 18,953** (+2,776 transitions / 2,000 properties);
+transitions view **9,595 → 12,371** rows and **4,698 → 5,555** properties (**+857 gaining a first
+transition ever**); properties with **2+ guard-passing links 1,376 → 2,118 (+742)**. Idempotent,
+batch-reversible. Full writeup: `docs/audits/B5_GOV_SELLER_EXIT_FEEDER_2026-08-28.md`.
+
+**The ceiling graded down honestly: 3,080 → 2,776 links, 2,114 → 2,000 properties.**
+
+- **⚠️ The port is SEMANTIC, not literal.** dia's `ownership_history` is interval-shaped so its
+  producer closes a tenure; gov's is transition-shaped, and a gov sale names the buyer too — so gov
+  gets a complete two-party dated transition, which is *stronger* than a seller exit.
+- **⚠️ A2b's earliest-wins rule does NOT reproduce on this population.** A2b measured
+  costar-vs-lease-diff at earliest **26 of 26**; here the sale row is **later 217 times and earlier
+  34** against an already-recorded pair. The anti-join therefore keys on the **party pair at any
+  date**, not on the date. *Quote A2b's rule for the population it was measured on.*
+- **⚠️ Depth at the SOURCE is not depth in the FACTS.** 1,376 view-level 2+ properties convert to
+  only **178** `chain_2plus` today (12.9%). Report the two separately; do not read +742 as +742.
+- **B5 is the missing CONSUMER for a producer that already mints the parties.**
+  `r9_chain_connect` (cron 104) has read gov `sales_transactions.seller/buyer/developer` for months
+  and nothing ever attached its output — A2 previously measured 291 of 331 resolved grantors as r9's.
+- **⚠️ It exposed a destructive bug in a shared write path.**
+  `trg_propagate_ownership_to_property` had no guard on `NEW.recorded_owner_id`, so any dated
+  name-only row **NULLed `properties.recorded_owner_id`** — silently, unrecoverably. **7,567 live rows
+  are in that shape**, and B5 alone would have destroyed **1,446 of 9,312 (15.5%)**. Proven on
+  property 7370 and rolled back, both directions. Fixed fill-forward (B5a). **Do not revert it.**
+- **⚠️ The stale-draft trap, for the THIRD time** (after A4b's stale guard verdict and A2b's stale
+  collapse). 527 of 579 open tasks already carried a pre-B5 draft and the drafter prepares only
+  `fresh` = open ∧ undrafted, so B5 would have converted on **52**. Closed by `runB5RedraftPass`,
+  keyed on STATE (*"the planner now yields more links than this draft used"*), so it self-clears and
+  catches the next source too. **It is JS — it needs a Railway deploy; the gov half is already live.**
+
 ### Pre-B1 state, retained as the yardstick (07:25 UTC)
 
 | action | tasks | was (08-27 17:15) |

@@ -17,6 +17,39 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-28 — B5 SHIPPED: gov's sales table becomes ownership history (+ a destructive trigger fixed)
+
+**gov DB LIVE. LCC JS pending a Railway deploy.** Writeup:
+`docs/audits/B5_GOV_SELLER_EXIT_FEEDER_2026-08-28.md`.
+
+- **The feeder.** gov had never consumed `sales_transactions` as ownership history — 169 of 9,515
+  named, dated sellers (1.8%). `gov_feed_sales_transitions` (dry-run default, batch-reversible) wrote
+  **2,776 transitions over 2,000 properties**. Transitions view **9,595 → 12,371** rows,
+  **4,698 → 5,555** properties; **2+ guard-passing links 1,376 → 2,118 (+742)**. Idempotent — a
+  re-run plans 0. Reverse: `gov_unfeed_sales_transitions('b5_gov_20260828')`.
+  **Ceiling graded down 3,080 → 2,776 / 2,114 → 2,000.**
+- **⚠️ THE HEADLINE IS THE BUG IT SURFACED.** `trg_propagate_ownership_to_property` had **no guard on
+  `NEW.recorded_owner_id`**, so any dated `ownership_history` row naming its parties as TEXT
+  **overwrote `properties.recorded_owner_id` with NULL** — silently, with no ledger, unrecoverably.
+  **7,567 live rows are in that shape**; B5's first run alone would have destroyed the recorded owner
+  on **1,446 of the 9,312 gov properties that hold one (15.5%)**. Proven on property 7370 and rolled
+  back, before *and* after the fix. Fixed fill-forward by
+  `sql/20260828_gov_b5a_ownership_propagate_fill_forward.sql`; `props_with_recorded_owner` held at
+  9,312 across the real 2,776-row batch. **Do not revert it to unblock a producer.**
+- **⚠️ A2b's earliest-wins rule does not reproduce here** — the sale row is later **217** times and
+  earlier **34** against an already-recorded pair (A2b measured 26 of 26 the other way), so the
+  anti-join keys on the **party pair**, not the date. Quote A2b for its own population.
+- **⚠️ Depth at the SOURCE is not `chain_2plus`.** 1,376 view-level 2+ properties convert to 178
+  facts today (12.9%). LCC is deliberately unmoved as of this entry: any_history 2,238, chain_2plus
+  178, lane completed 1,302, **human_actionable 55**.
+- **⚠️ Stale-draft trap, third arrival** (after A4b and A2b). 527 of 579 open tasks already carry a
+  pre-B5 draft and the drafter prepares only `fresh` = open ∧ undrafted. `runB5RedraftPass` (keyed on
+  STATE, so it catches the next source too) closes it — **JS, so it needs the deploy**; without it B5
+  converts on 52 tasks, not 579.
+- **B5 is the missing consumer for a producer that already mints the parties** — `r9_chain_connect`
+  (cron 104) has read gov sales seller/buyer for months with nothing attaching its output.
+- Guards: `tests/unit/test_b5_sales_transition_feeder.py` (gov, 13, **all mutation-verified RED**),
+  `test/b5-chain-redraft-pass.test.mjs` (LCC, 10, **9 mutations RED**). Suite **4,815 / 0 fail**.
 ## 2026-08-28 — B6: the owner/lessee change-signal sweep. Most sources are already consumed; the gaps are four dead producers, two unpopulatable columns, and a health view that cannot see a skipped step.
 
 **AUDIT + DESIGN, nothing built.** Full writeup:
