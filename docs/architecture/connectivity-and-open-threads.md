@@ -17,7 +17,7 @@ Cross-references the per-topic design docs in `docs/architecture/`.
 
 ## 0. 📇 THE TOPIC INDEX — every document on the ownership→contact chain, and what it is for
 
-**This file is the LIVING DOCUMENT for the chain.** Current state is §4e–§4h; everything else on the
+**This file is the LIVING DOCUMENT for the chain.** Current state is §4e–§4k (**§4k is the newest**); everything else on the
 topic is listed here with its scope and status so no one has to guess which of ~20 files to open.
 **Nothing below is deleted — an audit is evidence for a date, and dated evidence stays.**
 
@@ -1072,6 +1072,10 @@ Duplicate formation is 1.5× — mildly super-linear, **no cliff on graph ground
 
 ### 4i.4 👤 Tranche two — recommended in two steps, Scott's call on the second
 
+> ⚠️ **STEP ONE (T2a) IS NOW APPLIED — see §4k. The "4,811 / 4,354 remain" and "run it"
+> below were true when written; live it is 2,241 / 2,054, and T2a is done.** The T2b half of this
+> block still stands and is still Scott's, but §4k re-sized it against the post-T2a graph.
+
 **4,811 properties / 4,354 owners remain**, all still in the plan view (it self-excludes minted rows).
 
 1. **T2a — owner rent ≥ $100k: 2,570 properties / 2,300 owners, 17.2% already contactable** —
@@ -1095,6 +1099,85 @@ The measured owner cliff (C2a projected 6.8% / 1.6%; live 6.6% / 1.5%):
 
 ⚠️ **Whatever runs, drive the evidence ingest explicitly afterwards** (cron 225's 400/run cap), and
 **dia stays untouched** — 84% operator-blocked (P113); its levers are the flag and rent coverage.
+
+
+---
+
+## 4k. C2e-T2a — tranche two step one MINTED; the prediction missed by 2 and the 2 were the finding (2026-08-28)
+
+Evidence: [`docs/audits/C2e_T2a_TRANCHE_TWO_STEP_ONE_MINT_2026-08-28.md`](../audits/C2e_T2a_TRANCHE_TWO_STEP_ONE_MINT_2026-08-28.md).
+**APPLIED to production, gov only, batches `c2e_gov_eligible_t2a_20260828` (mint) +
+`c2e_t2a_evidence_20260828` (evidence). No dia asset minted. T2b NOT run.**
+
+| | before | after |
+|---|---:|---:|
+| **gov asset anchors** | 5,425 | **7,995** |
+| **gov asset coverage** (of 13,837 non-archived) | 39.2% | **57.8%** |
+| `lcc_property_owner` rows / owners | 6,065 / 3,743 | **8,636 / 5,992** |
+| live entities | 64,304 | **66,874** (+4.00%) |
+| plan view remaining | 4,811 | **2,241** |
+
+**2,570 minted · 2,570 resolved an owner · 0 evidence-less · 0 orphans.** Population reproduced
+C2e §6 exactly before writing (2,570 / 2,300 / 17.2% contactable), and the slice is contiguous with
+tranche one ($543,718 against its $543,782 cut).
+
+### ⚠️ Predict a canonical-key effect with the key the WRITER persists, not the caller's argument
+
+`v_duplicate_candidates` moved **+46** against a predicted **+44**. The gap is not noise:
+`lcc_mint_gov_asset_entities` passes `lcc_normalize_entity_name(name)` as `canonical_name` and the
+**N15c `BEFORE INSERT` trigger overwrites it** with `lcc_entity_canonical_key(name)` — all 2,570 rows
+carry the trigger's key and only **2,497 (97.2%)** equal what the function passed. Re-run against the
+key actually written: **12 + 34 = 46**, exact. The trigger is doing its job (one writer for the dedup
+key); the function's argument is **dead code that reads like the answer**, which is exactly why it
+produced a wrong prediction. Cosmetic cleanup filed as **N15g**.
+
+### The gates, all attributed
+
+Merge surfaces flat and *attributed*: `v_lcc_merge_candidates` 5,194 → 5,194, **`auto_mergeable`
+3,006 → 3,006**, normalizer-blind 64 → 64, drift 0 → 0 (positive-controlled at 64,304).
+⚠️ **`lcc_entity_merge_log` shows 0 merges in the measurement window** (newest 13:27Z, nine hours
+prior), so per §4i.5 the "unchanged" claim carries a timestamp and an attribution.
+
+**Tier 0 +4, not the predicted ~+20** — `auto` **9 → 9 with ZERO cards on any owner T2a made
+resolvable** (the only band that can trigger an unattended write); `ask` +1 and `parked` +3 are
+*exactly* the 1 and 3 cards on T2a owners. The shortfall is a population signal: only **7.0%** of
+these owners carry a second identity against tranche one's 12.9%, so there is less bench for Tier 0
+to match. Resolving an owner makes the question *askable*; it does not manufacture a bench.
+
+### The 7 residual `eligible` candidates are all brokerages
+
+`evidence_written 2578` against a **+2,571** row delta — 7 idempotent re-writes, matching the 7 rows
+still reading `eligible`: `Stan Johnson Co` ×4, `SVN®`, `NAI Pfefferle`, `Bradford Allen Realty
+Services`. `lcc_reconcile_property_owner` filters brokerages *inside* its scoring CTE, so they clear
+the candidate view and score zero forever. **The sixth guard working — not a defect, not a backlog.**
+(3 gov + 4 dia; **1 dia property resolved** because the ingest function takes no domain argument —
+work cron 225 would have done that night.)
+
+### 4k.1 👤 T2b — sized live against the post-T2a graph; still Scott's, no default taken
+
+**2,241 properties / 2,054 owners** (803 under $50k · 715 at $50–100k · 536 rent-unknown).
+
+| | tranche one | **T2a actual** | **T2b predicted** |
+|---|---:|---:|---:|
+| already contactable | 21.3% | **17.2%** | **3.7%** (76) |
+| known beyond gov | 12.9% | 7.0% | **1.9%** (38) |
+| new duplicate groups | +20 (1.00%) | **+46 (1.79%)** | **+26 (1.16%)** |
+| Tier 0 cards | +23 | **+4** | fewer still |
+
+**The two axes moved in opposite directions and that is the whole answer.** The graph cost is now
+measured across 4,570 minted entities and is not the issue — **T2b's predicted duplicate rate is
+LOWER than T2a's actual**, computed with the corrected key against the live graph rather than
+extrapolated. What *did* arrive exactly where C2a said is the **owner cliff**: 21.3% → 17.2% →
+**3.7%** contactable.
+
+**T2b is safe to run and low-value to run.** Nothing measured argues against it on graph grounds; it
+is cheaper than the tranche just completed. The decision is purely whether *"resolve all ownership,
+rank later"* should be applied to a population ~96% un-contactable today. **Not run.**
+
+⚠️ Public-body figures stay **lower bounds** — `lcc_looks_like_person` returns true for `CITY OF
+SALEM` / `BROOME COUNTY` (A3/P196). A pattern floor over T2a's owners is 182 of 2,300 (7.9%); the
+`lcc_looks_like_person` reading of 618 is a **broader and different** measure. No second classifier
+was written, deliberately.
 
 
 ---
@@ -1197,7 +1280,7 @@ correct at its measurement time.** With parallel windows, *"the gate did not mov
 meaningful with a timestamp and an attribution — check `lcc_entity_merge_log` before treating a
 delta as your own.
 
-### 👤 Tranche two — ⚠️ SUPERSEDED BY §4i.4 above, which owns this decision. Kept for its detail only; if the two differ, §4i.4 is authoritative.
+### 👤 Tranche two — ⚠️ DOUBLY SUPERSEDED: **T2a is APPLIED (§4k)**, and §4i.4 owned the decision before that. Kept for its detail only; where they differ, **§4k wins, then §4i.4**.
 
 **4,811 properties / 4,354 owners remain** in `v_lcc_c2e_asset_mint_plan`.
 ⚠️ **Tranche one tested the SAFEST population** — its cut landed at $543,782 of owner rent, entirely
@@ -1217,7 +1300,7 @@ delta as your own.
 400/run cap would otherwise leave a 2,570-row tranche evidence-less for most of a week, matching the
 retire predicate.
 
-### Still not measured (C2e §8)
+### Still not measured (C2e §8) — ⚠️ re-read against §4k, which closed part of this list
 
 Whether a resolved owner converts to a call · search/UI cost of +3.2% entities · the **3,362 gov
 properties with no `true_owner_id`** (54% of the non-resolving residue, the largest remaining lever,
