@@ -249,6 +249,58 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-28 — ✅ B6a-follow-up SHIPPED: the monitor is alive, and its first honest run names the backlog. Plus: the build-turn protocol is now the definition of done.
+
+**Verified live by Cowork (the response transcript ended mid-work, so this is measured, not read):**
+
+| metric | before | after |
+|---|---|---|
+| gov feeds evaluated | **13, frozen 2026-07-26** | **18, synced TODAY** |
+| dia feeds evaluated | 5, frozen 2026-07-29 | **5, synced TODAY** |
+| open `feed_stale` alerts | **0** (for 33 days) | **6, and every one is real** |
+
+⚠️ **gov went 13 → 18 feeds** — the transport fix did not merely un-freeze the mirror, it **restored
+five feeds that had been failing silently.**
+
+**The first honest run names the backlog, which is the strongest possible evidence it is working:**
+`gsa_lease_change_facts` **170d** (⚠️ **the 336k-row landlord-change source B6b exists to restart**) ·
+`gsa_lease_timeline` 170d · `prospect_leads_ownership_change` 150d · `property_sale_events` **144d**
+(⚠️ **the B6c `bigint`-vs-`uuid` table**) · `sam_lease_opportunities` 32d against a 14d SLA ·
+**`medicare_clinics` (dia) 64d — a dia feed nobody was watching.**
+⚠️ **Before treating `medicare_clinics` as a defect, check its SLA is right** — CMS publishes on a
+slow cadence and `facility_patient_counts` is documented as ~annual, so a 45d SLA may simply be
+mis-set. *A wrong SLA and a dead feed render identically.*
+
+**The transport was TWO different causes, one per domain** — which is why "all 18 froze on one date"
+was worth diagnosing before patching the consumer: gov was a **cold-start timeout** (same request,
+same key, 3 minutes apart: cold → HTTP 500, warm → HTTP 200 with all 18 feeds), dia a **missing
+grant**. ⚠️ And restoring dia's grant naively would have **re-opened the privilege-escalation surface
+B6a had just closed on gov** — the revoke was mirrored instead.
+
+**§2e answered:** `lcc_check_feed_freshness` was the **only** check with the go-silent shape, and
+`lcc_check_bd_sync_freshness` **already implemented the fix correctly** — an in-repo precedent reused
+rather than a new pattern invented. **I11 moves from ❌ VIOLATED to ✅ with a standing detector.**
+
+⚠️ **Still open and NOT closed by this:** `record_skip` has **still not been exercised by a real
+run**. The four RED producers remain a *registry* result. The check is a `Task skipped` row for
+`gsa_ingest_+_diff` in `run_log` with `skip_reason='gsa_download_folder_empty'` after the next
+scheduled run (daily `0 8 * * *`).
+
+### 🔁 And the process itself is now the deliverable
+
+Scott: *"incorporate this repository clean and self-improvement process at every turn of every build
+… so the latest chat can always pick a topic up fresh."* Written as
+**[`docs/os/BUILD-TURN-PROTOCOL.md`](../os/BUILD-TURN-PROTOCOL.md)** and wired in as **`CLAUDE.md`
+Rule 00** (so every Claude Code session reads it) and **`DOCUMENTATION-MAP.md` §6y**.
+
+**Eight steps**, each earned by a measured failure from this week: measure before concluding ·
+verify on the state delta and positive-control every zero · establish deploy state via `/version` +
+`merge-base` · reconcile against the parallel window · **update canonical docs in the same change** ·
+correct what is false in place, **your own calls included** · **extract open intent before archiving**
+· leave the next step named. **The test is one question: *can the next session pick this topic up
+cold, from the canonical pages alone, and be right?*** It explicitly is **not** ceremony — a one-line
+fix needs a one-line STATUS entry.
+
 ## 2026-08-28 — 🗄️ TOPIC-BASED REPO CLEANUP, pass 1: the ownership/sales/provenance cluster. 25 items were filed nowhere.
 
 **Scott: *"topic based and repository wide, not just the prompts folder — so there is zero confusion

@@ -83,6 +83,14 @@ belongs to the app window.** If it is not obvious which window you are in, ask.
 - Prompts: `<id>-<kebab-topic>-<YYYY-MM-DD>.md`.
 - Architecture/design: lower-kebab, no date — these are living documents, updated in place.
 
+## 6y. 🔁 The build-turn protocol — this map's parent rule
+
+📍 **[`BUILD-TURN-PROTOCOL.md`](BUILD-TURN-PROTOCOL.md) is the definition of done for every change**
+(Scott, 2026-08-28). This map answers *where does a document go*; that page answers *what must be
+true before a turn is finished* — and step ⑤ (**update the canonical docs in the same change**) plus
+step ⑦ (**extract open intent before archiving**) are what keep this map from becoming fiction.
+**§6z below is step ⑦'s full procedure.**
+
 ## 6z. 🗄️ Topic-based cleanup — the standing procedure (proven 2026-08-28)
 
 **Cleanup is BY TOPIC CLUSTER, repo-wide — never by folder.** A folder pass leaves the same topic

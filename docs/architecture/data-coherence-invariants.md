@@ -257,10 +257,19 @@ Supabase project"; it is a new set of connections that must be asserted on day o
 | I8 | fill-forward trigger audit | ❌ **none** — one instance fixed (B5), others unaudited |
 | I9 | fact stores lacking `created_at` | ❌ **none** |
 
-**The honest state: three of eleven invariants have a standing detector** (I4 shipped 2026-08-28;
-I11 was added the same day *because it was found violated*). Everything else was found by
-a human asking the right question, which does not scale and is exactly what Scott is asking us to
-stop relying on. **Backlog `D1–D4` turns the highest-yield ones into scheduled checks.**
+**The honest state: FOUR of eleven invariants have a standing detector** — I5 (pre-existing),
+**I4 and I11 both shipped 2026-08-28**, and I11 was *added* that same day **because it was found
+violated**. Everything else is still found by a human asking the right question, which does not
+scale and is exactly what Scott is asking us to stop relying on. **Backlog `P0d / D1–D5` turns the
+highest-yield remaining ones into scheduled checks; D1 and D2 are the cheap ones that find real
+defects today.**
+
+⚠️ **Read this table as a SCORECARD, and expect it to move in both directions.** I11 did not exist
+until the day it was violated — **the count of invariants is not fixed, and a new row appearing is
+the contract working, not a regression.** Conversely a ✅ here means *a detector exists and has been
+seen firing*, never *this class cannot recur*: I4 is ✅ while `record_skip` has still not been
+exercised by a real run, and I11 is ✅ while gov's cold-cache timeout is **mitigated by retry, not
+cured**.
 
 ---
 
