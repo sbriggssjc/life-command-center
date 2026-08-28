@@ -3213,6 +3213,69 @@ gov `any_history` **1,272 → 2,173**, gov `chain_2plus` **149 → 177**, and th
   naive grep would pass over the guard's own deletion). `test/ownership-lane-split.test.mjs` now
   also reads this migration, or it would describe a superseded view (P197).
 
+## C2e — the eligible-set asset mint: the floor's stated cost was measured and is mostly not real (2026-08-28)
+
+gov asset coverage **24.7% → 39.2%** (3,425 → 5,425 anchors of 13,837 non-archived);
+`lcc_property_owner` **4,065 → 6,065 rows / 2,768 → 3,743 owners**. **2,000 minted, 2,000 carry
+evidence AND a resolved owner, 0 evidence-less, 0 orphans.** Plan
+`v_lcc_c2e_asset_mint_plan` (migration `20260828140000`), batch `c2e_gov_eligible_t1_20260828`,
+reversible by tag. **Tranche two (4,811 props) NOT run.** Writeup:
+`docs/audits/C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md`; canonical
+`docs/architecture/connectivity-and-open-threads.md` §4i.
+
+- **⚠️ THE GATE WAS DEFENDED ON A COST THAT CANNOT EXIST. `v_lcc_merge_candidates` AND
+  `v_lcc_merge_candidates_normalizer_blind` FILTER `entity_type = 'organization'`; A MINTED ASSET
+  IS `entity_type = 'asset'`.** Across a 2,000-entity mint: merge candidates **5,250 → 5,250**,
+  **`auto_mergeable` 3,038 → 3,038**, normalizer-blind **64 → 64**, drift **0 → 0**. The rent floor
+  had been justified for years as protection against merge/duplicate noise; for asset minting that
+  protection was **structurally unnecessary**, and the whole observable cost was
+  `v_duplicate_candidates` **+20** (the one duplicate view that groups ALL entity types on
+  `canonical_name`) and +23 Tier 0 cards. **Before paying a real price to avoid a surface cost,
+  read the surface's own WHERE clause and ask whether the rows can reach it at all.**
+- **⚠️ A STAGED TRANCHE TAKEN "RICHEST FIRST" MEASURES THE SAFEST POPULATION AND LICENSES NOTHING.**
+  The rank-1145 cut landed at **$543,782 of owner rent — entirely ABOVE the old $500k floor**, so
+  tranche one exercised none of the low-rent tail the decision was about. Contactability
+  **21.3% vs 10.8%**, known-beyond-gov **12.9% vs 4.4%**, duplicate-group formation **1.0% vs
+  1.5%** for the remainder. **Say which population a staged measurement actually covered**, or the
+  next tranche inherits a reassurance it never earned.
+- **⚠️ PREDICT THE DELTA BEFORE THE WRITE, THEN RECONCILE.** `v_duplicate_candidates` was predicted
+  at **+20 new groups** from the canonical-key collisions and measured at **+20**. A prediction that
+  matches is what turns "the number moved a little" into "the number moved for the reason I think"
+  (the A2 `on conflict do nothing` lesson, applied forward instead of after the surprise).
+- **⚠️ AN EXPECTED-FLAT SURFACE THAT MOVES IS A MECHANISM QUESTION, NOT A FOOTNOTE.** The brief said
+  Tier 0 must not move because "assets are not owners". It moved (`ask` 82 → 91). **`ask` +9 matches
+  EXACTLY the 9 cards on owners whose only resolved property came from this batch** — resolving an
+  owner is what makes "who do we call there" askable. The safety statement is the narrow one:
+  **`auto` (the sole band that can trigger an unattended write) held at 9, and zero `auto` cards
+  landed on any owner C2e made resolvable.**
+- **⚠️ A SHARED MINT FUNCTION HARD-CODED ITS CALLER'S REASON, AND IT WAS FALSE FOR THE NEXT CALLER.**
+  `lcc_mint_gov_asset_entities` stamped `metadata.minted_because = 'a verified dated gov ownership
+  transition exists and the property cleared the caller's rent floor'` — **false on BOTH clauses**
+  for an eligible-set mint that requires no transition and applies no floor. Writing that 2,000
+  times would poison the exact field a future reader uses to judge whether the entity is justified.
+  Made a caller argument (`p_reason`, migration `20260828140100`), defaulting to the feeder's
+  existing string so its behaviour is byte-identical. ⚠️ **DROP the 3-arg signature first** — a
+  defaulted 4th parameter otherwise makes every 3-arg call **42725 "function is not unique"**
+  (N15d/B1), and **`notify pgrst, 'reload schema'`** or the feeder's next RPC 404s.
+- **⚠️ A CRON CAP TURNS "MINT THE ELIGIBLE SET" INTO A LIE FOR A WEEK.** The eligible-set promise is
+  that every minted entity carries evidence immediately. **Cron 225 (`lcc-domain-owner-feeder`) is
+  capped at 400/run, daily** — left to the schedule, 2,000 entities sit matching the retire
+  predicate for ~5 days. `lcc_ingest_domain_owner_evidence` was driven explicitly (~6 s per 400).
+  **Whenever a one-shot producer outruns its consumer's per-run cap, drive the consumer in the same
+  pass.** (It has no domain parameter, so 4 pre-existing dia rows rode along — the same 4 cron 225
+  would have done that night; **no dia asset was minted**.)
+- **`2,000` was round BY CONSTRUCTION, not a cap** (the `cum_props <= 2000` cut) — but note the mint
+  ran as **direct SQL**. Through the feeder's PostgREST path the row list would have **silently
+  truncated at 1,000**.
+- **Owners are cut WHOLE, richest gov portfolio first.** Evidence lands per property, so a split
+  owner is a half-resolved owner. The plan view **self-excludes minted rows**, so it is also the
+  live remaining-backlog surface and tranche two reads the same object.
+- **It closed N15d's open item incidentally**: the N15c `canonical_name` trigger had never been
+  exercised by a real producer. 2,000 entities through a live write path, **all 2,000 on-key, drift
+  still 0**, detector positive-controlled at 64,356.
+- **dia untouched, deliberately** — 84% of its un-minted owner slots hold an OPERATOR (P113).
+
+
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
 Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration
