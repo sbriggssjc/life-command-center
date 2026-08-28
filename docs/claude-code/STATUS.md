@@ -17,6 +17,87 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-28 04:00 UTC — C2a landed; and the "$500k floor" turns out to be FIVE knobs, not one
+
+Evidence: [`docs/audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md`](../audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md).
+Folded into the canonical page as **§4f**. **Nothing minted, no floor changed.**
+
+### ⚠️⚠️ Cross-thread collision caught — read this before touching any floor
+
+`CLAUDE.md` (P161) states these are *"the same $500k knob as the gov asset-mint and
+`CADENCE_SIGNAL_MIN_VALUE` — one number, not three."* **Measured today, that is FALSE as
+implemented — there are FIVE independent objects sharing a value:**
+`lcc_mint_gov_asset_entities --min-rent` (CLI) · `gov_research_gate_value_floor()` + its dia twin ·
+`lcc_weak_role_value_floor()` · `lcc_chain_human_value_floor()` · `CADENCE_SIGNAL_MIN_VALUE` (env).
+
+**And two Cowork threads are proposing to change two different ones this week** — **C2a** (this
+thread) wants the asset-mint floor at $250k; **B1** (the automation window, prompt already drafted)
+wants to split the *research-gate* floor by consumer. **Changing one does not move the others, and
+the docs say it does.** Recorded as canonical §4g; fixing the CLAUDE.md sentence is backlog **C2d**.
+
+### C2a corrected C2's own denominator
+
+**32,289 / 16% included 6,657 ARCHIVED gov shells** that every feeder filters out by design — and
+that are genuinely empty (2 of 6,657 carry a `true_owner_id`). Live: **25,633 properties, 5,096
+anchors, 19.9%**. Conclusion unchanged; the quoted number was wrong. *(The 5,144 also counted 49
+identities pointing at deleted properties.)*
+
+### The finding: the resolve rate holds — the OWNERS degrade
+
+gov technical resolution stays **58–76%** from $500k to under $50k, so *"does it still resolve"* was
+the wrong question. What collapses is owner quality: **already-contactable owners 21.8% → 6.8% →
+1.6%**, owners known outside the gov feed 9.7% → 1.3%, and the named rows become **cities, counties,
+state DOTs, FedEx and private individuals**.
+
+| floor (cumulative, gov) | minted | resolve | rate | net-new owners | already contactable |
+|---|---:|---:|---:|---:|---:|
+| ≥ $500k *(today)* | 1,779 | 1,218 | 68.5% | 928 | 170 |
+| **≥ $250k** | 3,061 | 2,102 | 68.7% | **1,629** | **323** |
+| ≥ $100k | 5,606 | 4,034 | 71.9% | 3,178 | 564 |
+
+⚠️ **Mint the ELIGIBLE SET, not the band.** `lcc_mint_gov_asset_entities` takes its own row list, so
+a $250k run mints the **2,102 that resolve on the same pass**, not 3,061 of which 959 sit
+evidence-less and match the documented retire predicate on day one. That is the difference between
+honouring *"evidence justifies the entity, never the reverse"* and merely citing it.
+
+⚠️ **dia is a different problem and no floor fixes it** — **84% of its un-minted owner slots hold an
+OPERATOR** (P113) and 73% of the would-resolve population has no rent on file. **Change nothing on
+dia**; its levers are `is_operator_not_owner` and rent coverage (A5e).
+
+**👤 The floor decision is Scott's.** Recommendation: **$250k now → re-measure → $100k as the hard
+floor, never below.**
+
+## 2026-08-28 03:20 UTC — C2a drafted; and the consolidation pass overturned a live verdict
+
+**C2a prompt drafted** → `prompts/C2a-asset-mint-floor-resolve-curve-2026-08-28.md`. Pure
+measurement: **at what rent floor does a minted asset actually resolve an owner?**, banded by domain,
+with the operator exclusion, denominators stated per band, and a positive control. **Mints nothing;
+the floor decision stays Scott's.**
+
+### ⚠️ The consolidation caught two stale claims in the canonical connectivity doc
+
+`docs/architecture/connectivity-and-open-threads.md` **already owned this topic** — its §4b is
+literally *"the asset → owner → contact → cadence chain"*. So C2 was folded in as **§4e** rather
+than left beside it, and the audit now banners to the canonical page. Two corrections that a future
+chat would otherwise have inherited:
+
+- **⚠️ BREAK-2's verdict is OVERTURNED.** It concluded *"cadence is a producer with no consumer
+  (doctrine violation)"*. **Scott, 2026-08-27: the cadence layer is "absolutely a huge part of this
+  build."** The layer is **intended and un-built-out, not orphaned** — it reads empty because Scott
+  has not begun using LCC for BD, the effort so far having been the build itself. **So "1,728 never
+  touched" measures an un-started pipeline, and the remedy is to finish the consumer, not to gate
+  the producer harder.** A future chat reading BREAK-2 cold would have moved to retire it. The
+  genuine defects it found still stand: the future-dated `last_touch_at` writer, `owner_user_id`
+  present on only 7 rows, and cadences on unreachable parties.
+- **⚠️ BREAK-3's "49.2% owner resolution coverage" is *of ASSETS*, not of properties.** It reads
+  1,910 of **3,886 assets**; against all **32,289 properties** the same coverage is **13%**. They
+  differ ~6× and both are correct. A denominator warning now sits on that heading — this is the same
+  scoping trap that made me quote "101 contacts / 157 cadences" when the fleet-wide figures are
+  **1,439 and 2,302**.
+
+**Backlog rows C2a / C2b / C2c** carry the measurement, the Salesforce bridge, and the explicitly
+unmeasured list.
+
 ## 2026-08-28 03:00 UTC — C2: the connectivity stall map. The gate is ASSET IDENTITY, not contacts.
 
 Full writeup: [`docs/audits/C2_CONNECTIVITY_STALL_MAP_2026-08-28.md`](../audits/C2_CONNECTIVITY_STALL_MAP_2026-08-28.md).

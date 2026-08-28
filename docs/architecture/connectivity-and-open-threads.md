@@ -1,4 +1,12 @@
-# LCC — Connectivity Map + Open Threads (state as of 2026-07-31)
+# LCC — Connectivity Map + Open Threads
+
+> **Chain state re-measured 2026-08-28 — see §4e, which SUPERSEDES the §4b numbers.**
+> Route status below is as of 2026-07-31 unless a section says otherwise.
+>
+> ⚠️ **Two corrections a future chat must not miss:**
+> **(1) BREAK-2's verdict is OVERTURNED — the cadence layer is NOT being retired** (see the box in
+> BREAK-2). **(2) §4b's coverage percentages use ASSETS as the denominator, not PROPERTIES**, and
+> the two differ by 6× — see §4e before quoting either.
 
 The pick-up-quickly handoff for future chats. Covers where each ingestion/reconciliation route stands,
 what's live vs connector-gated, and every open gap through the **email / phone / Salesforce** routes.
@@ -370,6 +378,22 @@ and OM writers; it is listed here so it stops being invisible.
 person entity is never hard-deleted; the reversal drops the edge.
 
 ### BREAK-2 — cadence is a producer with no consumer (severity: HIGH, doctrine violation)
+
+> ## ⚠️ VERDICT OVERTURNED BY SCOTT, 2026-08-27 — DO NOT RETIRE THE CADENCE LAYER
+>
+> This section concluded that cadence was a producer with no consumer. **Scott's direction:**
+> *"The cadence layer is absolutely a huge part of this build… relative level of importance and
+> impact that directs our next best touchpoint or call when compared to the balance of the leads or
+> marketing activities we could complete."*
+>
+> **The layer is INTENDED and unbuilt-out, not orphaned.** The reason it reads empty is that
+> **Scott has not begun using LCC for BD** — the effort to date has been the build itself. So
+> "1,728 never touched" measures an un-started pipeline, not a broken one, and the Consumption-Layer
+> remedy here is **to finish the consumer, not to gate the producer harder.**
+>
+> The genuine defects this section found still stand and are still worth fixing: the future-dated
+> `last_touch_at` writer, the missing `owner_user_id` on all but 7 rows (broker assignment — backlog
+> **C2c**), and cadences on parties with no contact method.
 Of **1,905** `touchpoint_cadence` rows: **1,728 (91%) never touched**, **1,803** overdue < 90 days (a bulk
 stamp that went stale), 68 overdue > 1 yr (oldest due **2021-09-06**), only **23** due in the future, only
 **7** carrying `owner_user_id` (the documented producer gap → the ROE line on the owner card is blank).
@@ -475,6 +499,11 @@ reversible; runbooks are in the migration header.
   instantly "overdue". **Not yet on a cron** — schedule it alongside the other daily sweeps.
 
 ### BREAK-3 — owner resolution coverage (severity: MEDIUM, **35.9% → 49.2%**, Prompt 113)
+
+> ⚠️ **DENOMINATOR WARNING — this percentage is *of ASSETS*, not of PROPERTIES.** It reads
+> 1,910 of **3,886 assets**. Measured against all **32,289 properties** (gov 20,493 + dia 11,796)
+> the same coverage is **13%**, because only **5,144 properties have an LCC asset entity at all**.
+> Both numbers are correct about different populations. **§4e is the property-denominator view.**
 
 **1,396 → 1,910 of 3,886 assets (35.9% → 49.2%)**; owner entities **690 → 1,118**. Batch tag
 `p113_dom_owner_20260815`, reversible. Against the 2026-07-31 audit baseline (102 of 4,837 ≈ 2%) the
@@ -727,3 +756,137 @@ measured today it blocks **exactly** the known brokerages and nothing else. All 
 - `correspondence-ingestion-design.md`
 - `property-tab-ux-review.md`
 - **this file** (`connectivity-and-open-threads.md`) — the route-level status index.
+
+
+---
+
+## 4e. Chain re-measured 2026-08-28 (C2) — the gate is ASSET IDENTITY
+
+**Supersedes §4b's counts.** Full evidence: [`docs/audits/C2_CONNECTIVITY_STALL_MAP_2026-08-28.md`](../audits/C2_CONNECTIVITY_STALL_MAP_2026-08-28.md).
+
+| hop | count | of prior |
+|---|---:|---:|
+| properties — **LIVE** (gov 13,837 non-archived + dia 11,796) | **25,633** | — |
+| ~~properties incl. 6,657 ARCHIVED gov shells~~ | ~~32,289~~ | ⚠️ C2a correction — see below |
+| dia `true_owner` rows that are OPERATORS (P113 trap) | 7,941 of 10,293 | — |
+| **LCC asset anchors** | **5,096** | **19.9% of LIVE properties** ⚠️ **THE GATE** |
+| resolved property→owner rows | **4,065** | 13% |
+| distinct owner entities | 2,768 | |
+| **owners with an active contact** | **1,439** | **52% of resolved owners** — healthy |
+| cadences | 2,302 | |
+
+**A property with no asset entity cannot carry owner evidence at all**, so every hop below is
+starved by the first. The owner→contact conversion is *not* the problem.
+
+**⚠️ The Salesforce book is connected to the wrong side.** 9,793 SF-linked people, 9,491 with an
+email, **9,129 (93%) carrying a relationship edge — but only 669 (6.8%) reach a resolved property
+owner.** They attach to their employer org via the `works_at` Salesforce-account edge (the bare-SF
+signal P112 disqualified and P161 gated out of reachability). **The bridge has no far bank.**
+
+**The 16% is a value-gated DECISION, not a defect** — `lcc_mint_gov_asset_entities` refuses to run
+without `--min-rent`. ⚠️ **Do not drop the floor without the measurement**: minting ~27,000
+evidence-less assets re-creates the noise the gate prevents. Backlog **C2a** is that measurement
+(resolve-rate by rent band); **C2b** is the SF bridge; **C2c** is what C2 did *not* measure
+(dia ownership depth, the developer/investor/buyer split, Outlook/WebEx per contact — **WebEx is not
+in the schema at all** — and broker assignment).
+
+### 4e-i. C2a measured the floor curve (2026-08-28) — the rate holds, the OWNERS do not
+
+Full evidence: [`docs/audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md`](../audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md).
+**Measurement only — nothing minted, no floor changed.**
+
+⚠️ **Denominator correction to §4e above: the gate is 20%, not 16%.** `32,289 properties` includes
+**6,657 ARCHIVED gov shells** that both gov portfolio views filter out by design (and that are
+genuinely empty — 2 carry a `true_owner_id`). Non-archived: gov **3,422 / 13,837 = 24.7%**,
+dia **1,674 / 11,796 = 14.2%**, fleet **5,096 / 25,633 = 19.9%**.
+
+**gov: the technical resolve rate does NOT degrade** — 68.5% / 69.0% / 75.9% / 69.0% / 58.5% / 48.9%
+across ≥$500k → unknown. That flatness was treated as an instrument fault until controlled three
+ways: a **mutation control** (same query, identity join on `recorded_owner_id`) returns **0 in every
+band across 6,688 rows**; dia's identical query shape **does** degrade (18.5% → 1.6%); and the
+rejecting arms fire. The rate is real.
+
+**What collapses is the owner.** Net-new owners already carrying an active contact:
+**18.3% / 21.8% / 15.6% / 6.8% / 1.6% / 3.2%**. Known beyond the gov feed: 9.7% → 1.3%. And the
+named rows turn over completely — the top band is LCOR, Centerpoint, Durst, USAA Real Estate; the
+bottom band is **CITY OF SALEM, COUNTY OF DAWSON, Transportation Hawaii Department Of, FedEx, Bank
+of Colorado** and private individuals. ⚠️ **The "small per property, big per owner" defence was
+tested and refuted**: of the 1,549 owners unlocked at $100–250k, **19** reach $500k of gov rent
+across their whole portfolio.
+
+👤 **Recommended to Scott: $250k now (+1,282 properties, +884 resolving, +701 owners, 153 already
+contactable), re-measure, $100k as the hard floor, never below.** And ⚠️ **mint the ELIGIBLE SET,
+not the band** — `lcc_mint_gov_asset_entities` takes its own row list, so a $250k run can be 2,102
+properties that all carry evidence on the same pass instead of 3,061 of which 959 match the retire
+predicate on day one.
+
+**dia: the floor is the wrong knob and no floor helps.** 6,780 of its 10,122 no-asset properties
+(**84% of those carrying an owner**) point at an `is_operator_not_owner` row (P113); only **188 of
+11,796** dia properties are priced ≥$500k at all; and dia prices only 35% of its properties, so
+**75% of dia's would-resolve population sits in `rent unknown`** — a coverage gap wearing a value
+judgement (A5c). dia's lever is the operator flag and rent coverage, not a rent floor.
+
+⚠️ **Two instrument facts worth carrying forward:** `lcc_property_owner_facts` reproduces gov's own
+rent histogram **exactly** but **over-reports dia by 5,519 rows** (twin-merged properties; the apply
+page upserts and never deletes) — a mirror validated on one domain is not validated on the other.
+And the largest gov residue is not a guard: **3,363 properties (54% of non-resolvers) simply have no
+`true_owner_id` in the gov database**, which no floor touches.
+
+
+---
+
+## 4f. C2a — the rent-floor curve, and Scott's decision (2026-08-28)
+
+Evidence: [`docs/audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md`](../audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md).
+**Nothing was minted; no floor was changed.**
+
+### ⚠️ It corrected §4e's own denominator
+
+**32,289 / 16% included 6,657 ARCHIVED gov shells**, which every feeder filters out by design (and
+which are genuinely empty — 2 of 6,657 have a `true_owner_id`). Live: gov **13,837** + dia 11,796 =
+**25,633**, anchors **5,096**, coverage **19.9%**. The conclusion is unchanged; the number quoted
+for it is not. *(The 5,144 headline also counted 49 identities pointing at deleted properties.)*
+
+### The finding: the resolve rate holds; the OWNERS degrade
+
+gov technical resolution stays **58–76%** from $500k down to under $50k — so "does it still
+resolve" is the wrong question. What collapses is owner quality: **already-contactable owners fall
+21.8% → 6.8% → 1.6%**, owners known outside the gov feed fall 9.7% → 1.3%, and the named rows stop
+being landlords and become **cities, counties, state DOTs, FedEx and private individuals**.
+
+| floor (cumulative, gov) | minted | resolve | rate | net-new owners | already contactable |
+|---|---:|---:|---:|---:|---:|
+| ≥ $500k *(today)* | 1,779 | 1,218 | 68.5% | 928 | 170 |
+| **≥ $250k** | 3,061 | 2,102 | 68.7% | **1,629** | **323** |
+| ≥ $100k | 5,606 | 4,034 | 71.9% | 3,178 | 564 |
+| below $100k | — | — | — | — | **collapses** |
+
+**Recommendation (Scott's call): $250k now → re-measure → $100k as the hard floor, never below.**
+⚠️ **Mint the ELIGIBLE SET, not the band** — `lcc_mint_gov_asset_entities` takes its own row list,
+so a $250k run should mint the **2,102 that resolve on the same pass**, not 3,061 of which 959 sit
+evidence-less and match the retire predicate on day one.
+
+**⚠️ dia is a different problem and no floor fixes it** — **84% of its un-minted owner slots hold an
+OPERATOR** (the P113 trap) and 73% of its would-resolve population has no rent on file. Its levers
+are `is_operator_not_owner` and rent coverage (A5e). **Change nothing on dia.**
+
+---
+
+## 4g. ⚠️⚠️ THE "$500k FLOOR" IS FIVE INDEPENDENT KNOBS, AND TWO THREADS ARE MOVING DIFFERENT ONES
+
+`CLAUDE.md` (P161) says these are *"the same $500k knob as the gov asset-mint and
+`CADENCE_SIGNAL_MIN_VALUE` — one number, not three."* **Measured 2026-08-28, that is FALSE as
+implemented.** They are separate objects that happen to share a value:
+
+| # | knob | where | who wants to change it |
+|---|---|---|---|
+| 1 | `lcc_mint_gov_asset_entities --min-rent` | CLI arg, gov asset mint | **C2a → $250k** (this thread) |
+| 2 | `gov_research_gate_value_floor()` / dia twin | gov + dia DBs (A5c) | **B1 → split by consumer** (other thread) |
+| 3 | `lcc_weak_role_value_floor()` | LCC Opps (P161 reachability) | — |
+| 4 | `lcc_chain_human_value_floor()` | LCC Opps (ownership chain) | — |
+| 5 | `CADENCE_SIGNAL_MIN_VALUE` | env (P112 cadence gate) | — |
+
+**Two Cowork threads are proposing to change #1 and #2 in the same week, and the docs say they are
+one number.** They are not. Changing one does **not** move the others, and nobody should assume it
+did. **Before touching any "$500k floor", say WHICH of the five you mean.** Fixing the CLAUDE.md
+sentence is backlog **C2d**.
