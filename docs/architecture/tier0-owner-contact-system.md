@@ -40,7 +40,7 @@ separate, standing decision** (`account-based-contact-intelligence.md`).
 | owner merges logged (all reversible) | **66** |
 | `tier0_auto` writes | **0** — see §6, this is a pending verification, not a failure |
 | curated sponsor entries | **8** |
-| `TIER0_AUTO_ATTACH` | **`off` in the registry** — it describes the RUNTIME, not the intent |
+| `TIER0_AUTO_ATTACH` | ✅ **`on` since 2026-08-28.** ⚠️ **THE GATE IS THE `feature_flags_registry` TABLE, NOT A RAILWAY ENV VAR** — `tier0-auto-attach-tick.js:208` calls `flagEnabled(await fetchFeatureFlag(FLAG))`. Setting the env var on 08-27 had **no effect**: cron 241 logged `flag_enabled=false, planned=9, attached=0` on both 08-27 and 08-28 |
 | merge-detector blind groups remaining | **64** (176 entities) |
 | `canonical_name` drift / invisible to `ensureEntityLink` | **0 / 0** — N15c+N15e complete, all 62,368 keyed |
 
@@ -109,6 +109,15 @@ cron **241 at 06:55 UTC**. The GET is an ungated dry run and writes nothing.
     **25 of 32 `weak_partial`** cards. Tightening it would have parked Easterly ($85.0M) to
     remove ~$5.6M of wrong. A rule's false positives are visible; what it holds up is not.
     **Do not tighten this comparator.** *(P198 — P179 Class 2 read backwards)*
+13. **⚠️ A FLAG CAN LIVE IN TWO PLACES AND ONLY ONE OF THEM IS THE GATE.** `TIER0_AUTO_ATTACH` was
+    set as a **Railway env var** and had no effect for two days: the handler calls
+    `flagEnabled(await fetchFeatureFlag(FLAG))` — it reads the **`feature_flags_registry` TABLE**.
+    Cron 241 reported `succeeded` both mornings while its own run log said
+    `flag_enabled=false, auto_candidates=9, planned=9, attached=0`. **A green cron proves the POST,
+    not the write** — and `net._http_response` prunes to ~6 hours, so the handler's OWN run log is
+    the only durable record. ⚠️ **The docs made it worse:** this page said *"registry flips to `on`
+    only after a tick reports writes > 0"*, which for a registry-gated flag is a **deadlock** — the
+    tick can never write until the registry says on. *(2026-08-28)*
 12. **`lcc_name_has_spe_marker` is named backwards** — it detects a PORTFOLIO/sponsor marker
     and returns **FALSE for every name containing the literal string "SPE"**. Read the
     function, never its name. *(P198)*
@@ -116,10 +125,17 @@ cron **241 at 06:55 UTC**. The GET is an ungated dry run and writes nothing.
 ## 6. Open — and what is merely PENDING vs genuinely open
 
 **⏳ Pending verification, not failure:**
-- **`TIER0_AUTO_ATTACH`** is set in Railway and redeployed, but cron 241 last ran **06:55 UTC before
-  the redeploy** and reported `flag_off`. **The next 06:55 run is the first honest test** — expect
-  `active_source='tier0_auto'` 0 → 9. Do not diagnose before it. Registry flips to `on` only after
-  a tick reports `writes > 0`.
+- ~~**`TIER0_AUTO_ATTACH`** … registry flips to `on` only after a tick reports `writes > 0`.~~
+  ⚠️ **RESOLVED 2026-08-28 — and that policy was a DEADLOCK I wrote.** The handler gates on the
+  **`feature_flags_registry` table** (`fetchFeatureFlag`), not the Railway env var Scott set, so
+  *"flip the registry only after a tick writes"* could never be satisfied: **the registry IS the
+  gate.** Two runs proved it — 08-27 and 08-28 both logged **`flag_enabled=false`,
+  `auto_candidates=9`, `planned=9`, `attached=0`**. The tick found and planned every card and was
+  refused by the flag. **Registry flipped to `on` 2026-08-28; the next 06:55 run is the real test**
+  (expect `active_source='tier0_auto'` 0 → 9).
+  **Durable lesson: a green cron proves the POST, not the write — read the handler's OWN run log**
+  (`lcc_tier0_auto_attach_run_log`), because `net._http_response` prunes to ~6 hours and
+  `cron.job_run_details` only ever says the POST succeeded.
 - **Sidebar `_provider` stamp rate** — 0%, but the newest row predates the extension reload. One
   CoStar capture settles it.
 
