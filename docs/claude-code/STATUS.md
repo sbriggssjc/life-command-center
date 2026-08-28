@@ -16,7 +16,78 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-28 — Cross-lane property identity contract and build queue documented (design only)
 
+**DOCUMENTATION ONLY — nothing activated, migrated, promoted, or written to live systems.** Canonical design:
+[`docs/architecture/property-identity-and-address-resolution.md`](../architecture/property-identity-and-address-resolution.md).
+Backlog: **PI1–PI8** in `docs/os/PLANNED-BACKLOG.md` P10a. The ASC integration contract now names
+the shared dependency without authorizing extraction or adoption.
+
+The restricted frozen ASC sample established that repeated capture failures are a platform class, not just
+bad strings: suite/floor versus parent building, shared campuses, suffix/directional/locality/range variants,
+compound street spacing, historical frozen-token drift, explicit tenant corroboration, valid source
+missingness, stale sidebar candidate state, and ambiguous database-function output. The new contract turns
+those aggregate lessons into a versioned match hierarchy, structured decision object, rule lifecycle,
+de-identified golden corpus, sidebar diagnostics, shadow evaluation, governed alias-ledger design, and
+aggregate quality measures.
+
+**Boundaries preserved:** no private candidate rows, source payloads, run IDs, or licensed evidence entered
+Git; no full-universe ingestion, canonical promotion, Salesforce write, outreach, opportunity creation,
+unattended licensed-source scraping, evidence deletion, or IDTF activation. An on-box model is advisory only
+and can never decide or write identity. **Next gate:** finish the frozen 50-property sample, review its
+aggregate outcomes, then separately decide whether PI2/PI3 (corpus + pure matcher) should begin.
+
+
+
+## 2026-08-28 — B6c: `property_sale_events` — answered, and deliberately not repaired
+
+**Diagnosis only. No migration, no column dropped, no type changed.** Writeup:
+`docs/audits/B6c_PROPERTY_SALE_EVENTS_2026-08-28.md`. The brief said to answer *"does this table
+have a consumer"* **before** fixing the `bigint`/`uuid` link columns §4j found. Answer: **the table
+does, the two link columns do not, and the audit found something that outranks both.**
+
+**The three verdicts.** The **table is load-bearing — keep it**: 6 live gov triggers (close-listing,
+propagate-sale-to-`properties`, cap-rate snapshot), the LCC detail panel's *declared canonical write
+target* (2 write paths), read+write allowlisted on both domains. **`ownership_history_id` has ZERO
+readers anywhere** — 0 hits across **620 gov objects**, 0 across dia, 0 in `api/`; 0 of 5,208 gov
+rows; **1.9% (52/2,730) on dia after four months**; no FK on either domain. Retyping it builds a link
+nobody follows (**Class 2**) into a population that is **56% `ownership_change_stub*`**, the retired
+circular source. **`sales_transaction_id` has exactly one reader, dia-only** (`fn_listing_close_if_sold`);
+gov has none, and gov's own close-listing trigger does not want one — **held, not retyped**, because
+if the two stores consolidate the column disappears rather than getting fixed.
+
+**🚨 What outranks it (`B6c-dup`).** `detail.js` says in its own comments that `property_sale_events`
+is canonical and `sales_transactions` is *"legacy, retired for write paths."* The database says the
+opposite: **76 of 76** gov views that read a sale store read `sales_transactions` and **ZERO** read
+`property_sale_events` (30 of them are the `cm_gov*` CM views). Nothing propagates PSE →
+`sales_transactions`, though the reverse direction exists. **So a sale an operator types into the
+property panel never reaches the comps spine** — already **6 real priced comps, up to $10.8M with cap
+rates**, invisible to every chart in the book. PSE is also **92.6% duplicative** of
+`sales_transactions` on exact `(property_id, sale_date)`. ⚠️ **Both stores are individually correct
+with coherent consumers; nothing errors and no component test can see it, because it is a property
+of the CONNECTION.**
+
+**D2 swept all three projects** — 10 genuine defects, 3 low-severity, 5 accepted false positives;
+SQL published as I3's detector (audit §7e), and I3's status row moves **❌ none → ⚠️ manual**. Two
+refinements the sweep earned: **a declared FK is authoritative and Postgres already type-checks it**,
+so only *unFK'd* columns need examining (`available_portfolios.portfolio_id` was a false positive on
+exactly that basis); and **every genuinely mismatched undeclared column found is 0% populated** — a
+column that cannot hold its value never gets one — so **triage by populated-ness before reading
+names**, since a *populated* mismatch is nearly always an external vendor id or a uuid-as-text.
+
+**⚠️ Three honest limits, stated rather than smoothed over.** (1) **LCC Opps' zero is BOUNDED** — 151
+of 559 `_id` columns evaluated; the other 408 were **not examined**, so this is not "LCC is clean."
+(2) **The `feed_stale` alert is to be re-scoped, not resolved** (`B6c-feed`): the bulk producer was
+retired on purpose and the only live producer is an operator form with no cadence, so a 45-day
+expectation alerts whenever nobody types a sale for six weeks and then sits open forever — the B6a
+*"expectation nobody chose"* failure inside the freshness registry. (3) **Nothing was shipped, so
+there is no guard** — when B6c-dup acts, the guard ships with it, and it must strip comments before
+matching, because this audit quotes the broken predicate repeatedly (the N18/A5c lesson).
+
+**Canonical docs updated in the same change:** `PLANNED-BACKLOG.md` (B6c ✅, D2 ✅, plus new
+`B6c-dup` 🔴 / `B6c-oh` / `B6c-feed` / `D2-dia` / `D2-shape`), `data-coherence-invariants.md` (I3
+body + detector row), `connectivity-and-open-threads.md` (**new §4l**, and the §4j bullet annotated
+where its last sentence did not survive re-measurement).
 
 ## 2026-08-28 — B6b: the GSA landlord-change detector restarted (gov)
 
