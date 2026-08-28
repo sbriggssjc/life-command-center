@@ -282,7 +282,41 @@ never have matched anything. **Decision 1 of §7 is therefore closed.** Note one
 adopted rule worth knowing: `BREIT via Blackstone Real Estate Income Trust I` keys
 `breit via blackstone real estate income i`, because `trust` is a stripped legal form.
 
-### ⚠️ Drift = 0 proves the BACKFILL, not the producer
+### ✅ 2026-08-28 07:35 — THE PRODUCER IS VERIFIED FIXED
+
+The nightly cron block ran. **3 entities minted** (02:21 and 06:30 UTC) and the trigger derived every
+key correctly — `JACO SAVANNAH REALTY, INC.` → `jaco savannah realty`, `asset 4477`, `David Bibb`.
+**Drift held at 0**, and each new entity is the ONLY live row on its key: **0 duplicate-key groups
+were touched by a new mint.** So the trigger and the JS dual-read agree in production, and the
+~4/day duplicate leak did not recur. This — not the backfill — is the verification the round turns on.
+
+### ⚠️ CORRECTION: enforcing UNIQUE is a BIGGER job than §7 said — 3,930 → 8,136 groups
+
+§7 decision 2 quoted 3,930 violating groups. That was measured on the OLD keys. On the N15c key
+`v_duplicate_candidates` reads **8,136 groups** (6,600 by a direct `GROUP BY canonical_name` over live
+entities). The extra ~4,200 are not an over-collapse — they are **pre-existing duplicates the
+disagreeing keys were hiding**, and they are the whole point of the fix. Read on named rows, every
+sampled group is unambiguously one party:
+
+| key | members |
+|---|---|
+| `office properties income` | `Office Properties Income` ×2 + `Office Properties Income Trust` ×6 |
+| `aei capital` | `AEI Capital` ×2, `Aei Capital Corp` ×2, `AEI Capital Corporation` ×2 |
+| `brown brick and mortar` | `BROWN BRICK & MORTAR LLC` ×2 + `Brown Brick and Mortar LLC` ×3 |
+| `rainier companies` | `Rainier Companies` ×2 + `The Rainier Companies` ×3 |
+| `realty income` | `Realty Income` ×2, `Realty Income Corp.`, `Realty Income Corporation` ×2 |
+| `rmr group` | `RMR Group` + `The RMR Group` ×4 |
+| `artis` | `Artis` + `Artis Reit` ×3 |
+
+Note `Realty Income` specifically: N15b documented that `dup-pair-planner.ownerCore` reduces it to the
+**empty string**, so it "fails to match ITSELF". The N15c key groups all five. And the `trust`/`reit`
+strips are Scott's adopted rule doing exactly what it was adopted for.
+
+**So decision 2 is now a larger and better-evidenced call than when it was posed** — more to merge,
+but the candidates are real. It remains Scott's.
+
+### ⚠️ Drift = 0 proves the BACKFILL, not the producer — the note below is now SUPERSEDED by the
+### verification above, and is kept as the reasoning that made the check worth running
 
 **Zero entities have been minted since 18:00 UTC**, so no real ingestion has exercised the trigger
 and the dual-read together. That is the Class 8 distinction this round exists to respect: a one-shot
