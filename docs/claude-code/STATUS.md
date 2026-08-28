@@ -17,6 +17,30 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 
+## 2026-08-28 — C2e-T2a drafted: tranche two, step one
+
+**Prompt** → `prompts/C2e-T2a-tranche-two-step-one-2026-08-28.md`. **2,570 properties / 2,300
+owners** at `owner_gov_rent >= 100000` — verified against `v_lcc_c2e_asset_mint_plan` (4,811 / 4,354
+remaining, splitting 2,570/2,300 and 2,241/2,054 exactly as C2e §6 predicted). **17.2% already
+contactable**, indistinguishable from tranche one's 21.3%, and it covers the whole $2M–$20M sweet
+spot ($140k–$1.4M of rent at ~7% cap).
+
+**The prompt front-loads what tranche one did NOT establish:** its cut landed at **$543,782 of owner
+rent — entirely above the old $500k floor**, so it tested the safest population in the system and
+exercised none of the low-rent tail. C2e measured tranche two as mildly worse (duplicate-group
+formation 1.5× the rate), not catastrophically.
+
+**Two attribution traps are written in explicitly**, both already hit in this arc: **`auto_mergeable`
+has two threads moving it** (C2e's 3,038 → 3,005 was 64 merges from the other window, not the mint —
+read `lcc_entity_merge_log` before attributing a delta), and **predict the duplicate-group delta
+(~+38) before measuring, then reconcile it** rather than accepting a number that moves "about right".
+
+**The step that must not be skipped:** drive `lcc_ingest_domain_owner_evidence` explicitly after the
+mint. Cron 225 caps at 400/run daily, so a 2,570-row tranche would sit evidence-less for most of a
+week — matching the retire predicate the eligible-set design exists to prevent.
+
+**T2b is deliberately out of scope** and stays Scott's call; the prompt asks only what T2a's outcome
+implies for it.
 ## 2026-08-28 — B6a-follow-up SHIPPED: the monitor went quiet at the moment it went blind
 
 **LCC Opps LIVE + one dia grant.** Writeup:
