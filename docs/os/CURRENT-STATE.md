@@ -75,6 +75,21 @@ real branded signature, threading, and deal context; save-to-Outlook-Drafts (sav
 their data tab renders (`checkKpiSeriesConsistency` is the tripwire).
 → `CLAUDE.md` §"CM export", `public/reports/cm-brand.json`
 
+### ⚠️ Salesforce research lanes — RETIRE, do not build a consumer (C1, 2026-08-27)
+`true_owner_needs_salesforce` (dia) and `owner_needs_salesforce` (gov) are a **capture-less second
+copy** of a consumer that has worked since June: the Decision Center lane **`sf_link_candidate`**
+(3,369 candidates with resolved `001…` Account ids; verdict path `api/admin.js:10764` PATCHes the
+exact column whose NULL-ness defines both lanes; **102 decisions, last 2026-08-14**). The research
+lanes have **no capture path** — `completeResearch()` writes nothing and the seeder re-mints.
+⚠️ **Live defect: the gov lane reads `unified_contacts.sf_account_id` while its only writer writes
+`recorded_owners.sf_account_id`** — 1,961 gov owners already linked, 1,292 still read as a gap,
+**29 agree**; working the DC lane does not clear the task, and **96 admitted rows ($314.7M) are
+phantom work.**
+⚠️ **"Link *or create* Salesforce account" was never buildable** — LCC's SF surface is a **read-only
+Power Automate proxy** (no Connected App; no `sobjects` call anywhere).
+**Recommendation: automate 27 · retire 945 · gate 1,702 · repair 1,292 — build no consumer.**
+→ backlog **C1a–C1e**; `docs/audits/C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE_2026-08-27.md`
+
 ### Research-task producer — correct and value-gated (A5a + A5c, 2026-08-27)
 The generator read a 29,643-row feed through a call **PostgREST caps at 1,000** and auto-closed
 everything outside the window as `gap_resolved` — its guard compared the **requested** limit against
