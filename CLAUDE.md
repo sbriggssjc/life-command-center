@@ -456,6 +456,14 @@ history. That is backlog **B5**, and it also answers **B4** (why dia's deepest c
     pre-B5 draft** and the drafter prepares only `fresh = open ∧ undrafted` — **the stale-draft trap
     for the THIRD time** (A4b, A2b, B5). `runB5RedraftPass` is keyed on STATE so it catches the next
     source too; without it B5 converts on **52** tasks, not 579.
+  - ⚠️ **AND `/api/*` IS AUTH-ENFORCED, SO A BEHAVIOURAL DEPLOY PROBE AGAINST A HANDLER RETURNS
+    `HTTP 401` — WHICH A GREP READS AS "THE FIELD IS ABSENT."** That happened live on 2026-08-28:
+    `GET /api/ownership-chain-draft-tick | grep b5_redraft` matched nothing because the body was
+    `{"error":"Authentication required…"}`, and the empty match was reported as a stale deploy.
+    **Use `/version` plus `git merge-base --is-ancestor <fix-sha> <deployed-sha>`** — the doctrine
+    already in this file — rather than parsing a handler response. If you must probe a handler,
+    **print the HTTP status and grep for a control field that shipped EARLIER in the same
+    response** (`a2b_redraft`), or the probe cannot tell *absent* from *never reached*.
 
 ### 🏛️ Data coherence is a CONTRACT now — `docs/architecture/data-coherence-invariants.md`
 

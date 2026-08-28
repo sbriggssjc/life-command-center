@@ -75,11 +75,13 @@ from exactly that source. Two more: **`gsa_lease_change_facts`** (336,303 rows; 
 - ✅ **B5 SHIPPED** — gov `ownership_history` **16,177 → 18,953** (+2,776 / 2,000 properties, **677
   with no prior history at all**); transitions view 4,698 → **5,555** properties.
 - ✅ **B6 AUDITED** — 19 signals swept; ranked gaps **B6a–B6g**; two of seven end in *don't build*.
-- 🚨 **THE ONE THING TO CHECK FIRST: has the Railway redeploy shipped `runB5RedraftPass`?** The LCC
-  side is **unmoved** (facts 14,076 · completed 1,302 · `chain_2plus` 178) because **527 of 579 open
-  tasks carry a pre-B5 draft** and the drafter prepares only `fresh = open ∧ undrafted`. Without the
-  deploy B5 converts on **52** tasks, not 579. **The gov-side gain is banked; the LCC-side gain is
-  not.**
+- ✅ **Deploy verified live 2026-08-28** — `/version` = `e3a0407d25bc`, and `385023cf`
+  (`runB5RedraftPass`) is an ancestor. **The first conversion night is 2026-08-29, 06:45 → 06:49
+  UTC.** **Baseline to measure the delta against** (post-B5, pre-conversion): facts **14,076** ·
+  lane **1,302 completed / 579 open** · gov `chain_2plus` **178** · `any_history` **2,238** ·
+  `human_actionable` **55**. Read `b5_redraft` / `written_draftable` / `facts_inserted`, **never**
+  `already_drafted` or `links_already_present`. ⚠️ **Expect coverage to move far harder than depth**
+  (B1: +901 vs +28) — that is the population, not a shortfall.
 - **Next:** **B6a** (the health view is blind to SKIPPED steps — four producers died behind it) and
   **P0d / D1–D2** (the standing coherence detectors).
 - **Read:** 🏛️ **`docs/architecture/data-coherence-invariants.md`** (the standing contract — I1–I10
