@@ -6,7 +6,7 @@
 > the traps already paid for.
 >
 > **Nothing here replaces the per-round audits — they are the evidence and they stay.** This page
-> tells you which one to open. Last measured **2026-08-27 20:50 UTC**.
+> tells you which one to open. Last measured **2026-08-27 22:25 UTC**.
 >
 > 🔗 **Sibling subsystem, same entity graph:**
 > [`ownership-history-lane.md`](ownership-history-lane.md) — the `establish_ownership_history`
@@ -25,15 +25,15 @@ the ones nobody could act on, and asks Scott about the rest. A confirmed answer 
 active contact and a person→owner edge. **The account is the pursuit; who to call there is a
 separate, standing decision** (`account-based-contact-intelligence.md`).
 
-## 2. Live state — 2026-08-27 20:50 UTC
+## 2. Live state — 2026-08-27 22:25 UTC
 
 | | |
 |---|---|
 | candidate pairs | **684** |
 | lane cards shown to the operator | **91** (ask 82 + auto 9) |
-| parked, not shown | **137** |
+| parked, not shown | **141** — +4 are Montecito Medical, newly visible after N19 consolidated its rent onto the entity carrying its candidates |
 | human attaches recorded | **27** |
-| owner merges logged (all reversible) | **44** |
+| owner merges logged (all reversible) | **66** |
 | `tier0_auto` writes | **0** — see §6, this is a pending verification, not a failure |
 | curated sponsor entries | **8** |
 | `TIER0_AUTO_ATTACH` | **`off` in the registry** — it describes the RUNTIME, not the intent |
