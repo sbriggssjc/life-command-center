@@ -1099,7 +1099,65 @@ The measured owner cliff (C2a projected 6.8% / 1.6%; live 6.6% / 1.5%):
 
 ---
 
-## 4i. C2e — tranche one MINTED, and the noise cost the floor existed to prevent is mostly not real
+## 4j. ⚠️ THE UNCONNECTED-SOURCE CLASS — gov never consumed its own sales table (B4→B5→B6, 2026-08-28)
+
+**This page exists to track connectivity, and it had no row for the largest disconnection in the
+system: sources we hold that no consumer reads.** Playbook **Class 20**.
+
+**How it surfaced.** B1a closed `establish_ownership_history` as a source of chain DEPTH (64 of its
+65 completions carried ONE link). The deed layer was then measured — **876 grantor-bearing
+`deed_records` of 5,804; 325 deed documents for 13,835 properties** — and written up as *"depth is
+now an external ACQUISITION problem."* **Both numbers correct, conclusion wrong.** One
+`group by ownership_source` on `lcc_entity_portfolio_facts` overturned it.
+
+| domain | source | historical facts | properties |
+|---|---|---:|---:|
+| **dia** | **`sales_transactions_seller_exit`** | **2,207** | **1,584** |
+| gov | `gov_ownership_chain` (A1→B1a) | 1,356 | 1,302 |
+| gov | `gsa_lease_diff` | 976 | 821 |
+| gov | `county_deed` | 104 | 104 |
+| **gov** | **`sales_transactions_seller_exit`** | **absent** | **0** |
+
+**Three unconsumed gov sources, measured:**
+
+1. **`sales_transactions`** — 14,645 rows / 5,321 properties / 1970→2026; **9,514 named sellers,
+   4,697 dated properties**; `ownership_history` has consumed **169 rows (1.8%)**;
+   **3,080 net-new / 2,114 properties**. → **B5, in flight.**
+2. **`gsa_lease_change_facts`** — **336,303 rows**, `landlord_change_flag` on **38,213 across 8,845
+   leases**, **38,055 with both old and new lessor names**, **2013-02 → 2026-02**. ⚠️ RAW signal:
+   P138 flicker (return leg), A2b per-lease fan-out (**keyed on `lease_number`**), name variants.
+3. **`property_sale_events`** — **5,208 rows carrying `ownership_history_id` AND
+   `sales_transaction_id`; both populated on ZERO rows.** The comps↔ownership join table is
+   **modelled and never wired.**
+
+**Why this page could not see it.** A missing feeder produces **no error, no zero row, no queue** —
+there is nothing to audit but the absence. Every route in §1 tracks a connection that EXISTS and
+might be broken; this class is a connection that was never made.
+
+**Detector (needs no hypothesis):** group the output by its provenance column, split by domain — **a
+source bucket present for one domain and absent for another IS the finding.**
+
+⚠️ **Do not date a feeder off `updated_at` on an upserted table** — `lcc_entity_portfolio_facts`
+has **no creation timestamp** and the nightly re-upsert touches **11,828 of 14,076 rows daily**, so
+every source reads "written today." Find producers in code; **a one-shot means the sibling domain
+has a Class 8 problem too.**
+
+**Scott's spec for the sweep (B6):** every place a change of **owner or lessee** is reported — GSA
+lease inventory, SAM.gov, public records, sales, dia — must reach **both** stores (**transaction
+history / comps** AND **ownership history**), be read **against** each other over time, and
+**direct a next action**. Corroboration rides the **existing** `field_source_priority` ladder and
+supersession tiers; a contradiction goes to a **review lane, never a silent winner** — and note a
+GSA lessor-of-record change and a recorded deed are different KINDS of claim (in a ground lease
+both can be true at once). **B6 is audit + design and builds nothing.**
+
+### 4i.5 — C2e cross-window state notes (verified 2026-08-28)
+
+> ⚠️ **CONSOLIDATED 2026-08-28.** This block and §4i above were written **independently by the two
+> parallel windows on the same day** and both were headed `## 4i` — a duplicate heading, which is
+> the documentation form of the §4a *two-windows-one-file* lesson. **Nothing was deleted**: §4i
+> (above) is the primary record and owns the **tranche-two decision (§4i.4)**; this block is kept
+> for the three things it measured that §4i does not carry — live state, the `auto_mergeable`
+> two-thread warning, and the still-unmeasured list. **Where the two overlap, §4i wins.**
 
 Evidence: [`C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md`](../audits/C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md).
 **Applied to production, gov only, batch `c2e_gov_eligible_t1_20260828`. dia untouched.**
@@ -1139,7 +1197,7 @@ correct at its measurement time.** With parallel windows, *"the gate did not mov
 meaningful with a timestamp and an attribution — check `lcc_entity_merge_log` before treating a
 delta as your own.
 
-### 👤 Tranche two — recommended in two steps, NOT run
+### 👤 Tranche two — ⚠️ SUPERSEDED BY §4i.4 above, which owns this decision. Kept for its detail only; if the two differ, §4i.4 is authoritative.
 
 **4,811 properties / 4,354 owners remain** in `v_lcc_c2e_asset_mint_plan`.
 ⚠️ **Tranche one tested the SAFEST population** — its cut landed at $543,782 of owner rent, entirely

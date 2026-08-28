@@ -224,6 +224,29 @@ table that could carry the fact before reaching it.**
 **Deed acquisition (K10 / A1b) is not refuted — it is DEFERRED.** It stays the right answer for
 the tail beyond what sales data can reach. It is simply not the *next* thing.
 
+### 3c-ii. And B5 is not the only one — two more unconsumed sources, found in ten minutes
+
+Scott's response to §3c was the right generalisation: *"we have various places that a change in
+ownership or lessee will be reported that we need to ensure is working to feed transaction history
+(comps) and ownership history."* Two immediate confirmations, gov only, no code read:
+
+- **`gsa_lease_change_facts` — 336,303 rows carrying a THIRTEEN-YEAR landlord-change series.**
+  `landlord_change_flag` on **38,213 rows across 8,845 leases**, **38,055 with both
+  `lessor_name_old` and `lessor_name_new`**, snapshots **2013-02-01 → 2026-02-01**. What
+  `ownership_history` holds from `gsa_lease_diff`: **6,648 rows / 3,704 properties.**
+  ⚠️ **38,213 is a RAW signal, not 38,213 conveyances** — P138 flicker (which has a return leg),
+  the A2b per-lease fan-out (**this table is keyed on `lease_number`, so it is maximally exposed**),
+  and lessor name variants all inflate it. **8,845 leases is closer; properties fewer still.**
+- **`property_sale_events` — 5,208 rows carrying `ownership_history_id` AND
+  `sales_transaction_id`. Both are populated on ZERO rows.** The table whose entire purpose is to
+  join comps to ownership history **has never linked one row to either.** The connective tissue is
+  modelled and unwired.
+
+**This is now a CLASS, not three incidents** — `DEAD_END_AUDIT_PLAYBOOK.md` **Class 20**, and the
+systematic sweep is backlog **B6**. The detector is one query and needs no hypothesis: **group the
+output by its provenance column, split by domain; a bucket present for one domain and absent for
+another is the finding.**
+
 ## 4. Recommendation
 
 1. ✅ **DONE (B1, 2026-08-28)** — floor split by consumer; 1,414 re-opened, reversibly.

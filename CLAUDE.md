@@ -399,6 +399,39 @@ A dated blocker is a **hypothesis to re-test**, never an input to a recommendati
 almost always one cheap query or one probe. Corollary: when you *do* re-measure and the note is wrong,
 **fix the note in the same change** — that is how these files stay worth reading.
 
+### ⚠️ "WE MUST ACQUIRE THE DATA" IS THE MOST EXPENSIVE CONCLUSION AVAILABLE — ENUMERATE EVERY TABLE FIRST (B4/B5, 2026-08-28)
+
+After B1a closed the ownership lane as a source of chain DEPTH, gov's deed layer was measured —
+**876 grantor-bearing `deed_records` of 5,804; 325 deed documents for 13,835 properties** — and the
+conclusion written up was *"depth is now an EXTERNAL acquisition problem (county fetchers, K10)."*
+**Both numbers were correct and the conclusion was wrong. It survived one more query.**
+
+**The tables NAMED after the answer were not the tables holding it.** One `group by` on the output's
+provenance column settles it: `lcc_entity_portfolio_facts.ownership_source` shows dia derives
+**2,207 of its 2,757 historical facts** from **`sales_transactions_seller_exit`** — closing the
+SELLER's interval when a sale is recorded — and **gov has no such feeder at all.** gov
+`sales_transactions` holds **14,645 rows / 5,321 properties / 1970→2026, 9,514 with a named seller,
+4,697 properties with a dated seller**, of which `ownership_history` has consumed **169 rows
+(1.8%)** — **3,080 net-new rows / 2,114 properties**, against gov's 178 chained / 2,238 with any
+history. That is backlog **B5**, and it also answers **B4** (why dia's deepest chain is 14 vs gov's 6).
+
+- **A missing feeder has NO representation anywhere** — no error, no zero row, no queue, nothing to
+  audit. Every other detector in this repo examines rows that exist. **Playbook Class 20** is the
+  one that finds rows that were never created, and its detector is a single provenance `group by`
+  split by domain: **a source bucket present for one domain and absent for another IS the finding.**
+- **It is the A5 rule (*grep for who already writes the gap*) and the A2 rule (*check whether an
+  existing producer already minted the parties*) arriving as a RECOMMENDATION rather than a code
+  review** — where no test, guard or reviewer catches it.
+- **⚠️ Do not date a feeder off `updated_at` on an upserted table.**
+  `lcc_entity_portfolio_facts` has **no creation timestamp**, and the nightly
+  `lcc_finalize_entity_portfolios` re-upsert touches **11,828 of 14,076 rows every day** — so every
+  source reads "written today." Find the producer in CODE; **if it is a one-shot, the sibling domain
+  has a Class 8 problem of its own.**
+- **Quote the ANTI-JOINED count, never the raw one**, and report the **coverage delta and the depth
+  delta separately** — B1 moved `any_history` +901 and `chain_2plus` +28.
+- **Deed acquisition is DEFERRED, not refuted** — it remains right for the tail B5 cannot reach.
+  Size it *after*, when the residual gap is known rather than assumed.
+
 ### Dead-end classes are findable on purpose — `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md`
 
 Nine live defects were found in one session on 2026-08-22, all by accident, and every one

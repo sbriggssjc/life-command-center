@@ -64,6 +64,21 @@ where nothing catches it. **Acquisition earns the highest burden of proof.**
 provenance column before theorising.** The funnel audit could not see this at all; one
 `group by ownership_source` produced it immediately.
 
+**Scott generalised it correctly and it is a CLASS, not an incident.** Two more unconsumed gov
+sources inside ten minutes: **`gsa_lease_change_facts`** — 336,303 rows, `landlord_change_flag` on
+**38,213 across 8,845 leases**, **38,055 with both old and new lessor names**, spanning
+**2013-02 → 2026-02**, against `ownership_history`'s 6,648 `gsa_lease_diff` rows; and
+**`property_sale_events`** — **5,208 rows carrying `ownership_history_id` AND
+`sales_transaction_id`, both populated on ZERO rows.** The comps↔ownership join table is modelled
+and was never wired. ⚠️ 38,213 is a RAW signal — P138 flicker, A2b per-lease fan-out (the table is
+keyed on `lease_number`), and name variants all inflate it.
+
+Filed as **playbook Class 20** (*a source one domain consumes and a sibling never wired up*) and
+**backlog B6** — the systematic sweep across GSA lease inventory, SAM.gov, public records, sales and
+dia, covering **both** stores (comps + ownership history), with corroboration/contradiction routed
+to a review lane on the **existing** authority ladder and a next-action for every detected change.
+**B6 is audit + design; it builds nothing.**
+
 ## 2026-08-28 — C2e tranche one MINTED. The noise cost the floor existed to prevent is mostly not real.
 
 Evidence: [`C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md`](../audits/C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md);
