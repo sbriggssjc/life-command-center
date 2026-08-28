@@ -946,6 +946,97 @@ while still honouring *"evidence justifies the entity, never the reverse."*
 ~6,811 new asset entities is **+11% on a 62,368-entity graph**, landing on
 `v_lcc_merge_candidates`, search and every count surface. **Measure it on the first tranche before
 running the second** — that is the gate's actual purpose, and it has never been quantified.
+> **↳ MEASURED 2026-08-28 in §4i, and the sentence above is now WRONG on its main claim.** Minted
+> assets **cannot land on `v_lcc_merge_candidates` at all** — that view filters
+> `entity_type = 'organization'`. Across a 2,000-entity mint the merge surfaces did not move by a
+> single row. Left in place as the hypothesis that was tested; read §4i for the result.
 
 ⚠️ **dia is unaffected and must not be swept in.** No floor helps it: **84% of its un-minted owner
 slots hold an OPERATOR** (P113) and 73% of the would-resolve population has no rent on file.
+
+---
+
+## 4i. C2e — tranche one MINTED; the noise cost measured, and mostly not real (2026-08-28)
+
+Evidence: [`docs/audits/C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md`](../audits/C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md).
+**Tranche one is APPLIED to production (gov only, dia untouched). Tranche two is NOT run — §4i.4
+hands the call back to Scott.**
+
+### What shipped
+
+`v_lcc_c2e_asset_mint_plan` (migration `20260828140000`) is the eligible set: gov properties with no
+asset entity whose owner resolves **ID-to-ID** on the same pass — the candidate view's own CASE arm
+for arm, plus C2a's sixth (brokerage-at-reconcile) guard. **6,811 eligible of a 10,415 no-asset
+slice**, reproducing C2a exactly. Owners taken **whole**, richest gov portfolio first, cut at
+`cum_props <= 2000` → **`owner_rank <= 1145` = 2,000 properties / 1,145 owners**, batch
+`c2e_gov_eligible_t1_20260828`.
+
+| | before | after |
+|---|---:|---:|
+| live entities | 62,356 | 64,356 (+3.21%) |
+| **`lcc_property_owner` rows** | **4,065** | **6,065** |
+| **distinct owner entities** | **2,768** | **3,743** (+975) |
+| minted entities / identities / **orphans** | — | 2,000 / 2,000 / **0** |
+| **minted entities left evidence-less** | — | **0** |
+| gov asset coverage (of 13,837 non-archived) | 24.7% | **39.2%** |
+
+**Every one of the 2,000 carries evidence and a resolved owner.** ⚠️ That required driving
+`lcc_ingest_domain_owner_evidence` explicitly: **cron 225 is capped at 400/run**, so on the schedule
+alone 2,000 entities would have sat matching the retire predicate for ~5 days.
+
+### ⚠️ The floor's stated purpose was largely not real
+
+`v_lcc_merge_candidates` and `v_lcc_merge_candidates_normalizer_blind` filter
+`entity_type = 'organization'`. Minted assets are `entity_type = 'asset'` — **structurally
+incapable** of entering either. Measured across 2,000 mints: merge candidates **5,250 → 5,250**,
+**`auto_mergeable` 3,038 → 3,038**, normalizer-blind **64 → 64**, canonical drift **0 → 0**
+(detector positive-controlled at 64,356). The entire observable cost was **`v_duplicate_candidates`
++20** (predicted +20 before writing) and **+23 Tier 0 cards**.
+
+**Tier 0 moved although the brief said it must not — and it is the pipeline working.** `ask` +9
+matches *exactly* the 9 cards on owners whose only resolved property came from this batch; resolving
+an owner is what makes "who do we call there" askable. **`auto` — the only band that can trigger an
+unattended write — did not grow (9 → 9), and zero `auto` cards landed on any owner C2e made
+resolvable.**
+
+Incidentally this closes **N15d's open item**: the N15c `canonical_name` trigger had never been
+exercised by a real producer. 2,000 entities through a live write path, **all on-key, drift still 0**.
+
+### ⚠️ Tranche one tested the SAFEST population — do not extrapolate linearly
+
+The rank-1145 cut lands at **$543,782 of owner gov rent**, so tranche one sits *entirely above the
+old $500k floor* and exercised none of the low-rent tail the no-floor decision is about.
+
+| | tranche one (1,145 owners) | tranche two (4,354 owners) |
+|---|---:|---:|
+| already contactable | **21.3%** | **10.8%** |
+| known beyond the gov feed | 12.9% | 4.4% |
+| predicted new duplicate groups | 20 (1.00%) | 72 (**1.50%**) |
+
+Duplicate formation is 1.5× — mildly super-linear, **no cliff on graph grounds**.
+
+### 4i.4 👤 Tranche two — recommended in two steps, Scott's call on the second
+
+**4,811 properties / 4,354 owners remain**, all still in the plan view (it self-excludes minted rows).
+
+1. **T2a — owner rent ≥ $100k: 2,570 properties / 2,300 owners, 17.2% already contactable** —
+   indistinguishable from tranche one's 21.3%, and it covers the whole $2M–$20M sweet spot
+   ($140k–$1.4M of rent at ~7%). **Recommended: run it.**
+2. **T2b — below $100k + rent-unknown: 2,241 properties / 2,054 owners, ~3% contactable, 17.8%
+   public bodies in the bottom band.** 👤 **Scott's call, and the argument has changed.** C2a said
+   stop here because minting would "manufacture surface noise" — **measured, that premise is largely
+   false.** What remains is not a technical risk but a prospect-quality judgement: these owners are
+   mostly cities, counties, state DOTs, corporate occupiers and private individuals. Against that
+   stands Scott's own rationale that ranking is `v_priority_queue`'s job, not the mint's.
+
+The measured owner cliff (C2a projected 6.8% / 1.6%; live 6.6% / 1.5%):
+
+| slice | properties | owners | contactable | public body (LB) |
+|---|---:|---:|---:|---:|
+| ≥ $100k | 2,570 | 2,300 | 17.2% | 2.7% |
+| $50–100k | 742 | 715 | **6.6%** | 5.7% |
+| < $50k | 821 | 803 | **1.5%** | **17.8%** |
+| unknown | 678 | 536 | 3.2% | — |
+
+⚠️ **Whatever runs, drive the evidence ingest explicitly afterwards** (cron 225's 400/run cap), and
+**dia stays untouched** — 84% operator-blocked (P113); its levers are the flag and rent coverage.
