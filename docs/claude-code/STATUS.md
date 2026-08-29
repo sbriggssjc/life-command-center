@@ -16,6 +16,20 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-28 — C5b answered; C6 build prompt written (still nothing written to live systems)
+
+Closes **C5b** and corrects C5 §5's "narrower" framing. Prompt:
+`docs/claude-code/prompts/C6-per-asset-band-eligibility-with-reachability.md`. Backlog **C6**.
+
+- ⚠️ **The per-asset fix is better founded than widening to `unknown` but NOT narrower on its own:**
+  all five bands, all roles = **4,506 rows / 3,622 owners — a 20× flood.**
+- **P5 `aged_building_value_add` is 83% of it** (58 → 1,681) and is the weakest signal in the set.
+  ⚠️ **`aged_props` is NOT gov-scoped** — no `source_domain` filter, so **P5 covers dia** (26 → 565).
+  Touching it is a cross-domain change; nothing in this arc has been. **P5 keeps the role gate.**
+- **The design that works — per-asset PLUS the P112 reachability precondition, P1/P2/P3/P8 only:**
+  **P1 74→149 · P2 32→95 · P3 62→163 · P8 76→213 = 244 → 497 rows / 303 owners.** ~2×, not 14×,
+  and every emitted row is callable. **Reachability is what converts a flood into a call list.**
+
 ## 2026-08-28 — C5: 224 owners callable today, and the `buyer` exclusion is the larger half (diagnosis only)
 
 **NOTHING WRITTEN.** Audit:

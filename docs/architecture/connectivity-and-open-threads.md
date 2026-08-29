@@ -1924,6 +1924,32 @@ existed the whole time. The role gate sat between them.**
 classifier and no doctrine call, because the join is already there and already says `is_current`.
 `buyer` alone is 578 owners / $410.4M. **224 owners are callable the day it ships.**
 
+### ⚠️ C5b answered — and it corrects the "narrower" framing above
+
+The per-asset fix is **better founded** than widening to `unknown`, but **not narrower on its own**.
+P5/P8 were untested when that was written:
+
+| band | today | per-asset, all roles |
+|---|---:|---:|
+| P5 `aged_building_value_add` | 58 | **1,681** |
+| P8 `agency_active_solicitations` | 76 | **1,497** |
+| **all five bands** | **226 rows** | **4,506 rows / 3,622 owners** — a 20× flood |
+
+⚠️ **`aged_props` is NOT gov-scoped** — no `source_domain` filter, so **P5 covers dia** (26 → 565).
+Touching it is a cross-domain change; nothing in this arc has been. **P5 is 83% of the flood and the
+weakest signal in the set** ("built 25+ years ago" implies no timing). **It keeps the role gate.**
+
+**The design that works — per-asset PLUS the P112 reachability precondition, P1/P2/P3/P8 only:**
+
+| band | today | after |
+|---|---:|---:|
+| P1 | 74 | **149** · P2 32 → **95** · P3 62 → **163** · P8 76 → **213** |
+| **total** | **244 rows** | **497 rows / 303 owners — every one callable** |
+
+**~2×, not 14×.** Without reachability the same change emits 3,235 rows over 2,719 owners of whom
+**only 11% are contactable** — P112 at scale. Reachability is what converts a flood into a call
+list. Build prompt: `docs/claude-code/prompts/C6-per-asset-band-eligibility-with-reachability.md`.
+
 ### Not measured
 
 Whether any named lease is terminal (date ≠ outcome) · whether the 224 contacts are the *disposition*
