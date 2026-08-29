@@ -16,6 +16,33 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-29 — C8: the prospecting brief hides $515M of resolved owners (C4b resolved as inert)
+
+**NOTHING WRITTEN.** Audit `docs/audits/C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md`;
+prompt `docs/claude-code/prompts/C8-prospecting-brief-admit-resolved-owners.md`; canonical **§3**.
+**C4b ✅ resolved · C8 🟢 build-ready · C8b 🔴 filed.**
+
+- ⚠️ **C4b was mis-sized by me last round and is corrected.** Removing `user_owner` is a **literal
+  no-op** (0 rows). *"Governs 46% of the surface"* **conflated the GATE with the ARM** — the gate is
+  load-bearing, the token inside it is inert. `seller_flipper` is also 0; **`unknown` (93.9%) is not
+  in the declared `BD_OWNER_ROLES` vocabulary at all.**
+- ⚠️ **P0.4's gate IS load-bearing — 703 gated vs 66,167 ungated (94×)** — because P0.4/P0.5 have
+  **no bounding JOINs**. **So C4 §5's 62,554 is CORRECT for that arm**: the right number attached to
+  the wrong arm. **Class 23 in mirror image — the same predicate on two arms has different blast
+  radii; measure each.**
+- **The real finding: the same Class 24 defect on a SECOND, live, operator-facing surface.**
+  `handleProspectingBrief` shows **80 of 311** eligible rows. Of the 231 excluded as `unknown`,
+  **47 are resolved owners carrying $515.2M — more than the $442.8M it shows** — against **3**
+  brokerages. **Easterly ($114.9M, 85 properties), NGP Capital, USAA Real Estate, US Fed Properties
+  Trust, Gardner Tanenbaum, GI Partners, Trammell Crow, Clarion Partners** are all excluded.
+  **16 of the top 18 excluded rows are resolved owners; zero are brokerages.**
+- **The gate's INTENT is right** (its comment says brokers polluted the call sheet) — `owner_role`
+  is the wrong instrument. Fix is C6's rule: admit on the per-asset fact, with an **explicit**
+  brokerage guard. **80 → 127 rows, +$515.2M.**
+- 🔴 **C8b filed:** `Brandywine Realty Trust` at **$34,920,891.77 / 0 properties** is the N18
+  fabricated `attributed_rent` value (the gov-wide `max`). **N18 fixed one consumer; `rank_value`
+  is another and was never checked.**
+
 ## 2026-08-29 — C7: broker assignment is premature, not broken (diagnosis; recommendation is NOT to build)
 
 **NOTHING WRITTEN.** Audit `docs/audits/C7_BROKER_ASSIGNMENT_IS_PREMATURE_2026-08-29.md`; canonical
