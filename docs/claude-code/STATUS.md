@@ -726,6 +726,76 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-29 — ✅ B6c-dup SHIPPED. The collision was real, the write path did leak, and the orphan count was ZERO — after three wrong answers, two of them mine.
+
+`docs/audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md`. **Decision, in writing:
+`sales_transactions` is the canonical comps spine; `property_sale_events` is a CAPTURE surface that
+propagates into it.** 77 of 77 gov views that read a sale store read the spine (all 30 `cm_gov*` CM
+views); zero read PSE. **`detail.js` said the opposite in its own comments — corrected at 4 sites,
+each marked and quoting the old wording.** Shipped `trg_gov_pse_propagate_to_sale` (AFTER INSERT,
+**the single owner of that transition**), `field_source_priority` @5, ledger + kill switch + batch
+reversal.
+
+**The leak was confirmed BEHAVIOURALLY, in a rolled-back transaction — PSE +1, spine +0,
+`latest_sale_price` set — not by reading the propagation code.** That is the right way to prove a
+gap between two stores.
+
+⚠️ **BLAST RADIUS TODAY IS ZERO, AND THAT IS THE POINT.** The operator path has **never** produced a
+row; all 5,208 PSE rows are bulk importers that wrote the spine independently, and inserts stopped
+2026-04-06. **Fix-before-it-bites, so the build is small** — the right time to close a leak is
+before it has leaked.
+
+### ⛔ ALL THREE ORPHAN FIGURES WERE WRONG. THE TRUE COUNT IS ZERO.
+
+**330 / $4.48B (mine) → 9 / $558.8M (mine, "corrected") → 6 / $29.2M (CC's own first re-measure) →
+ZERO.** Three root causes, all in one anti-join, now **playbook Class 25**:
+
+1. **The exact-date join was the wrong key.** `sales_transactions.sale_date` is **month-truncated
+   for its dominant source** — `costar_sidebar` **87.4% day-1**, ownership stubs **100%**. Re-keyed
+   on `(property, YEAR-MONTH)`: **0 orphans of 1,694**, impossible-price positive control **1,694**.
+   Every named orphan had an **exact price twin 3–21 days away, every twin on the 1st.**
+   ⚠️ **`dedup_natural_key` had been stating that granularity all along** (`property | price | YYYY-MM`).
+   **Look for the dedup/natural key before writing an anti-join, then run the neighbouring key.**
+2. **`property_id IS NULL` ≠ dangling.** Dangling was **0 and structurally impossible** —
+   `ON DELETE SET NULL`. The 321 are **NULL-link rows, 321 detached in ONE batch on 2026-04-03** by a
+   bulk property deletion. **A `LEFT JOIN … WHERE pk IS NULL` cannot tell "points nowhere" from
+   "points at nothing."**
+3. **`transaction_state` was never read.** The "$529.6M invisible to the spine" is **quarantine** —
+   `needs_review` / `duplicate_superseded` with `exclude_from_market_metrics = true`. **The store had
+   already judged its own residue.** An exclusion check means every membership column, **state
+   machines included**, not just the ones named `exclude_*`.
+
+**True population: 1,687 live twins · 7 quarantined ($604.1M) · 0 absent · 0 live twins with a null
+price. The spine was COMPLETE.**
+
+⚠️ **The lesson I most need to carry: the FINDING and its SIZE are separate claims, and I conflated
+them twice.** The collision was real and the fix was right; only the number was wrong — three times.
+Reported separately, a corrected number does not read as a retracted defect. **And this is the third
+time this arc I led with an alarming figure that measurement deflated** (the GSA raw feed, then this
+twice). The checking is working; **my ordering of alarm-before-caution is the part that keeps
+failing.**
+
+⚠️ **Two process notes worth keeping:** the parallel window merged `main` into this branch
+concurrently and **both resolutions of the same `STATUS.md` conflict were correct** — both kept both
+entries, newest-first, no markers (the §4a lesson, resolved well on both sides). And **gov #391
+merged 31 seconds after opening, before CI finished** — no harm, Test & Lint went green 31 seconds
+later, but that is the PR #1793 pattern and it was flagged factually rather than let pass.
+
+## 2026-08-28 — 🗄️ CLEANUP COMPLETE: root `.md` 70 → 10 across five topic passes
+
+**Final pass moved the Dialysis-book copy/emails to `docs/capital-markets/` and the DIA-demographics
++ lease-abstract worklogs to `docs/history/`.**
+
+**The 10 that remain are all defensible:** `CLAUDE.md`, `AGENTS.md`, `LCC-OS.md` (entry points) ·
+`WRITE_SURFACE_POLICY.md` (**canon-bound — `canon/00-INDEX.md` invariant #4 binds to it by name**) ·
+`SALESFORCE_LCC_INGESTION_PLAN.md` (**cited by path in a user-visible runtime error string**) ·
+`BRIGGS-WRITING-VOICE.md` · four `SPEC_*` files (low-risk; a future pass can triage them).
+
+**Across five passes: 62 items recovered that existed in NO tracker** — P14 (M1–M11), P14b (R1–R14),
+P14c (I1–I23), P14d (J1–J14), P14e (AI1–AI10) — **plus SEC2–SEC4 and two defects fixed in flight**
+(the Vercel-era pre-commit hard fail; the canon write-policy naming deleted files).
+**Not one of them would have survived a move-first cleanup.**
+
 ## 2026-08-28 — B6c-dup drafted, and the sizing check I demanded settled it AGAINST ME
 
 **Prompt: `prompts/B6c-dup-two-sale-stores-disagree-2026-08-28.md`.**
