@@ -2876,8 +2876,25 @@ trigger is the sole writer. Writeup: `docs/audits/N15c_CANONICAL_NAME_SINGLE_WRI
   carrying `d8fcfbf` preceded the 20:03 backfill. The sandbox cannot reach the Railway host —
   `http=000` while `api.github.com` returns 200 — so `/version` must be checked from somewhere that
   can.)
-- 👤 **One decision remains Scott's:** whether the column becomes an enforced **UNIQUE** key
-  (3,930 groups violated it before the backfill).
+- ✅ **THE PRODUCER IS VERIFIED FIXED — AND CONFIRMED AT SCALE (2026-08-29).** The first check rested
+  on 3 mints; a bulk sync has since minted **4,618** (live 62,346 → 66,901) and **drift is still 0**.
+- **⚠️ DRIFT = 0 IS NECESSARY AND NOT SUFFICIENT — A DUPLICATE STORM READS DRIFT 0 TOO**, because the
+  trigger dutifully computes a correct key for every duplicate. The gate that matters is *did a new
+  mint land on a key that already had a live entity*: **22 of 4,618 (0.48%)**. And **19 of those are
+  not an LCC defect** — each colliding gov `asset` pair carries a DIFFERENT `gov/asset/<property_id>`,
+  i.e. two rows in gov `properties` for one building, differing only by address punctuation
+  (`303 "H" St` / `303 H St`, `St. Albans` / `St Albans`) which the key strips. The asset path mints
+  one entity per domain property id **by contract**, so LCC is mirroring a DOMAIN-level duplicate the
+  N15c key merely made visible (**N20**) — do not "fix" it by weakening that contract. **The genuine
+  residual is 3 of 4,618 (0.06%)**, from `api/sync.js` / `api/domains.js`, which now compute the right
+  key but still POST `entities` without looking up by it (**N21**).
+- 👤 **One decision remains Scott's, and its size CHANGED:** whether the column becomes an enforced
+  **UNIQUE** key. ⚠️ **3,930 was measured on the OLD keys; on the N15c key it is 8,136 groups**
+  (`v_duplicate_candidates`). The extra ~4,200 are **not an over-collapse** — read on named rows they
+  are pre-existing duplicates the disagreeing keys were hiding (`Office Properties Income` /
+  `…Income Trust` ×8; `AEI Capital` / `Corp` / `Corporation` ×6; `Rainier Companies` /
+  `The Rainier Companies`; **`Realty Income` ×5**, the name N15b showed the old fuzzy comparator
+  reduces to the empty string so it cannot match itself). **Surfacing them is the fix working.**
 - 👤 **Two decisions were left to Scott. ⚠️ BOTH LINES BELOW ARE NOW SUPERSEDED — see the N15d/N15e
   section that follows.** (1) The **537 stale rows** were **recomputed 2026-08-27 (batch `n15e_go`),
   drift 537 → 0**; the "recomputing discards a captured string some preserve" concern measured at
