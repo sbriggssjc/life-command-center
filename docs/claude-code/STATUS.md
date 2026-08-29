@@ -16,6 +16,66 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-29 — B6d: the feed expectations are graded, and two "mis-sized SLAs" are real outages
+
+Closes the **B6a → B6a-follow-up → B6b → B6b-lead** arc.
+[`docs/audits/B6d_FEED_EXPECTATION_GRADING_2026-08-29.md`](../audits/B6d_FEED_EXPECTATION_GRADING_2026-08-29.md).
+Backlog **B6d** (+ **B6d-cms**, **B6d-sam**). Applied live to gov, dia and LCC Opps; every committed
+function body and all 25 registry rows verified byte-identical to live by md5.
+
+**Open `feed_stale` 4 → 2, and both survivors are genuine breaks.** All 25 feeds now carry a
+`cadence_class` and either a bound with a mandatory `expectation_basis` or **no bound with a mandatory
+`unwatched_reason`** — CHECK-enforced, so a round number with no reasoning can no longer be added.
+
+- ⚠️ **THE POPULATION IS 25, NOT 23.** LCC Opps has its own registry (`om_intake`, `salesforce_sync`),
+  evaluated by the same check through its `lcc_local` arm and invisible to a count taken from the
+  domain databases. **Enumerate every registry that feeds the monitor.**
+- ⚠️ **RULE 3c HELD TWICE — and this is the finding.** Both alerts the brief read as mis-sized SLAs
+  are ingestion outages. dia **`medicare_clinics`**: p50 gap 2d and a **max gap ever of 41d**, so the
+  45d bound was never the problem — **27 failed + 6 abandoned** CMS runs since the last success
+  2026-06-25, while `dataset_modified_date` reads **2026-08-25**. gov **`sam_lease_opportunities`**:
+  re-scoped 14 → 21 **and deliberately left violated at 33d**; the weekly producer is healthy
+  (`usajobs`, same workflow, landed 2026-08-24) and the SAM call returns **401 Unauthorized**.
+  ⚠️ That 401 is **not** §18's rate limit (different key, different endpoint) — and §18's own
+  *"the 401 is not real"* correction is exactly what makes a real 401 easy to dismiss.
+- ⚠️ **MEASURING A FEED'S OWN GAPS IS CIRCULAR ONCE IT HAS BEEN DEAD.** An outage is a CLOSED gap and
+  enters its own distribution: `gsa_lease_change_facts` has 2 dates and one 170d gap — *the outage B6b
+  repaired* — so 3×p90 derives a **510-day** bound. **B6a's p90 rule does not transfer from steps to
+  feeds** (a dead step's gap never closes; a dead feed's does). Lifetime windows also mix eras
+  (`usajobs` p90 31.8 over life, 7 in the scheduled era). Primary basis = the **declared** schedule;
+  below three gaps the verdict is `cannot_be_sized_from_data`, recorded rather than dressed up.
+- ⚠️ **THE GSA FAMILY IS FOUR FEEDS, ONE PUBLISHER, AND CARRIED FOUR BOUNDS** (65/35/45/45) — three
+  below the publication cycle's own peak. Publication is monthly with a **21–51d lag**, so peak data
+  age is ~82d: snapshot **65 → 90**, derived trio **→ 75** (pinned by a guard). It was **6 days from
+  firing** on a healthy feed, with `consecutive_unchanged=3` proving GSA has not published August, and
+  `gsa_lease_events` **would have fired 2026-09-10** — its cadence changed on 2026-08-10 when the
+  fingerprint dedupe began skipping, and its bound had not. **`gsa_source_pull` stays tight at 21**:
+  *did WE stop pulling* is a different question, with a different owner, from *is GSA publishing*.
+- ⚠️ **`opm_workforce` 120 → 200 because 120 was UNMEETABLE by the process that feeds it** — data is
+  74–75d old *at the moment of a successful manual import* and the one observed import interval is
+  119d. It fired three times in three months, every one closed "expected".
+- ⚠️ **RETIRING AN EXPECTATION MADE ITS ALERT PERMANENT, and it was already live.** The auto-resolve
+  arm requires the feed to be PRESENT, so a retired feed's alert can never close — exactly what
+  B6c-dup's `is_active = false` did to `property_sale_events` earlier the same day. Fixed with **B6a's
+  own lesson one layer up: an unwatched feed EMITS**, with a NULL bound as a *positive* statement, and
+  a resolve arm keyed on that — **never on absence**, which also covers a feed whose query errored or
+  whose mirror went blind. The residual is **counted as `alerts_orphaned`, never auto-resolved**.
+- **Controls (rolled back):** opm@199d → 0 alerts, opm@205d → 1, gsa@95d → 1, unwatched@1800d → 0,
+  orphan counter → 1 named. Guards: LCC 7 tests **12/12 mutations RED**, gov 8 tests **12/12 RED**;
+  full LCC suite **4,855 tests, 0 fail**.
+- ⚠️ **Both guards first passed a mutation they were written to catch** — a whole-body grep for a
+  literal (`feed_mirror_stale`) and for a predicate (the 3-day exclusion) that each legitimately appear
+  more than once, which is **B6c-dup's own documented lesson, reproduced in guards written after it**.
+  And **comment-stripping was not enough**: B6d stores each retirement's reasoning in a *column*, and
+  `property_sale_events`' reason quotes `is_active = false` — so the gov guard failed on itself until
+  it also blanked **string literals**. The A5c/N18 defect one level deeper.
+- **Housekeeping:** the pre-existing backlog id **B6d was renamed B6h** (the `parcel_owner_xref`
+  divergence consumer, unbuilt and doc-only) — this round's id was already inside `expectation_basis`
+  values on three live databases, so it was the cheaper rename. Pointers in `STATUS`, `I6` and the
+  backlog updated.
+- **NOT done, deliberately:** no producer started, stopped or altered. The two real breaks are filed
+  (**B6d-cms**, **B6d-sam**), not fixed — fixing them here would blur which change moved which number.
+
 ## 2026-08-28 — CONSOLIDATION: BD ranking gets a canonical page
 
 **Docs only.** New canonical page **`docs/architecture/bd-ranking-and-priority-queue.md`** — one
@@ -783,7 +843,7 @@ not refute B5's premise; it resizes the prize by an order of magnitude.
 properties**. ⚠️ **319 of those 362 already carry the assessor's name as `new_owner` in
 `ownership_history`** — so that is a **propagation gap between the store and
 `properties.recorded_owner_id`**, the cheapest correction in the audit; only **43** are genuine
-net-new. `diverges` produces no task, card or lead (B6d). And the ladder that should adjudicate
+net-new. `diverges` produces no task, card or lead (B6h, renamed from B6d 2026-08-29). And the ladder that should adjudicate
 disagreements **has no rung for `gsa_lease_diff` (6,648 rows, its largest source) or
 `sales_transaction`** (B6e).
 
