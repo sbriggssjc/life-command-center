@@ -16,6 +16,53 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-29 — B6b-lead: the lead lane was graded, funnelled, and deliberately NOT restarted
+
+**Diagnosis only. Nothing written to `ownership_history`, `prospect_leads`, or any gov table.**
+Writeup: `docs/audits/B6b_lead_OWNERSHIP_LEAD_RESTART_2026-08-29.md`. Backlog **B6b-lead**;
+contract **I4**; connectivity **§4q**; gov `CLAUDE.md` **§21a**.
+
+**🛑 The restart was not taken, and the reason is not the one the prompt anticipated.** It set a stop
+condition on the gate (*if `is_same_owner` cannot separate a re-spelling from a sale, stop*). **The
+gate passed** — 91.80% agreement with the alnum-key reference over all 16,492 rows, erring
+conservative (it suppresses 9,146 vs the reference's 7,940). What failed is the premise in §0:
+
+- **⚠️ THE LANE HAS NO HUMAN CONSUMER.** All 7,729 `ownership_change` leads: `assigned_to` **0**,
+  `last_contacted_at` **0**, `next_action` **0**, `sf_lead_id` **0**; `sf_sync_status` `'pending'`
+  for every one; only `new` and `filtered_multi_tenant` have ever appeared in `pipeline_status`.
+  The three numbers that justified the restart reproduce **exactly** and are all mislabelled —
+  *2,041 worked* is an automated exclusion filter, *208 pushed to Salesforce* is `sf_contact_id`
+  (a matched existing contact), *2,149 touched in 30d* is **1,216 of them on one day**. A5 and P119
+  landing together on the one lane whose liveness nobody re-checked because it was already
+  "verified." Per the Consumption-Layer rule, a producer with no consumer does not get restarted.
+- **⚠️ 59% of that evidence is another lane's.** `route_to_pipeline` hard-codes
+  `lead_source='ownership_change'` for every row regardless of `data_source`: only **3,199** leads
+  trace to `gsa_lease_diff`, **4,530** to `county_deed`. **That is why the badge never went quiet
+  when the lane died.** Its input today is 4,369 rows with **zero** `gsa_lease_diff` — 2,776 are
+  B5's sale-derived transitions from the day before. It also reads `ownership_history`, not the
+  events, so **the lead lane is downstream of the ownership-fact write** and "restart the leads
+  without writing facts" is impossible as coded.
+- **⚠️ Both top-2 would-write rows by value are false acquisitions** — `LCOR` → `LCOR ALEXANDRIA`
+  at **$75.4M** (arm 3's `length > 5` guard blocks short sponsor names) and a `JPMORGAN` → `MORGAN`
+  truncation at $26.3M. An agreement rate is not a safety property when errors sit at the top of the
+  ranking. `normalize_entity` also mangles names via unanchored `str.replace` (`ACME CORPORATION` →
+  `ACMEORATION`; live: `ALACHUA,UNTY OF`, `GRAHAMMPANIES`), order-dependently.
+- **Blast radius 584 / 568 properties / $433.4M — the backlog's 10,635 is 18× too high** (it counted
+  usable events without applying the gate or the dedup). Only **42** arrived since the lane died;
+  **158 (27.1%)** clear the $500k floor. ✅ **B5a's fill-forward guard is live and decisive** —
+  without it this restart would have nulled recorded owners on up to 568 properties.
+- **Sequenced recommendation:** 👤 **Scott decides retire-vs-restart first** (nobody has worked one
+  of these 7,729 leads) → fix the provenance laundering → fix the three gate defects → then restart
+  value-gated at 584 rows. **B6e stays a genuine prerequisite.**
+- **Guard shipped (gov):** `tests/unit/test_changed_fields_jsonb_probe.py` — 14 tests, **9 mutations
+  RED**, pinning the Class-11 jsonb-string trap (`changed_fields ? 'k'` → a silent 0 of 233,666)
+  that produced two published wrong findings. ⚠️ One assertion **passed its own mutation** on the
+  first pass and had to be re-anchored on the comment-ONLY case; and `#` cannot be stripped naively
+  in Python because `#>>` is the operator the guard looks for.
+- **Suite:** gov 936 pass / 10 fail — the 10 are **pre-existing** in `test_sos_detail_fetcher.py`
+  (922 pass / same 10 fail without this change) and are sandbox dependency-version artifacts, not
+  touched by this work.
+
 ## 2026-08-28 — C5: 224 owners callable today, and the `buyer` exclusion is the larger half (diagnosis only)
 
 **NOTHING WRITTEN.** Audit:
