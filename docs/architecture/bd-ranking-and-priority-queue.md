@@ -65,35 +65,48 @@ of the surface roughly doubles, from ~19% to ~38%. ⚠️ **620 rows, 497 assets
 three different questions**: the queue emits one row per **(owner, property, band)**, so an asset
 tripping both P1 and P8 emits two rows. Do not use them interchangeably.
 
-**931 of 1,267 rows (73%) are data-completion work, not calls.** ~336 are deal-timing signals.
-**Only 256 of 5,992 resolved owners (4.3%) appear anywhere in the queue.**
+**Data-completion work is now 934 of 1,646 rows (57%)** — P0.4 555 + P-CONTACT 231 + P0.5 148 —
+against **620 deal-timing rows (38%)**. ⚠️ **Pre-C6 this read 931 of 1,267 (73%); both the numerator
+and the denominator moved, so never compare the percentages alone.** The data-completion rows did
+not fall — **the deal-timing rows roughly doubled underneath them.**
 
-⚠️ The 73% is **not itself a defect** — P0.4/P0.5 are doctrinal producers with named consumers. But
-a surface three-quarters data-completion trains the operator to skim it, which is the
-badge-that-is-noise failure one level up.
+⚠️ The 57% is **not itself a defect** — P0.4/P0.5 are doctrinal producers with named consumers. But
+a surface still more than half data-completion trains the operator to skim it, which is the
+badge-that-is-noise failure one level up. **That is C4a's remaining prize, not C6's.**
 
-## 3. ⚠️ The gate — the single most important fact on this page
+## 3. ⚠️ The gate — RETIRED BY C6 on 2026-08-29. Read this before quoting anything below it.
 
-Every gov deal-timing band (P1/P2/P3/P8) reads one CTE:
+**What runs today** (`gov_owner_props`, live-verified 2026-08-29):
 
 ```sql
 gov_owner_props AS (
   SELECT ... FROM entity_effective_role eer
     JOIN lcc_entity_portfolio_facts f ON f.entity_id = eer.entity_id
-         AND f.is_current AND f.source_domain = 'gov'          -- ← the per-asset fact, already here
+         AND f.is_current AND f.source_domain = 'gov'      -- holds a CURRENT gov asset
     JOIN lcc_property_attributes   a ON a.source_domain = f.source_domain
          AND a.source_property_id = f.source_property_id
-  WHERE eer.effective_owner_role = ANY (ARRAY['developer','user_owner'])   -- ← the entire gate
+  WHERE EXISTS (SELECT 1 FROM owner_contact_pivot ocp     -- ← and is REACHABLE
+                 WHERE ocp.entity_id = eer.entity_id
+                   AND ocp.active_contact_entity_id IS NOT NULL)
 )
 ```
 
-`effective_owner_role` = `COALESCE(entities.behavioral_override, entities.owner_role)`.
+**The `effective_owner_role` predicate is gone entirely** — no role filter remains on P1/P2/P3/P8.
+`eer.effective_owner_role` is still SELECTed and still rendered on the card; it no longer decides
+eligibility.
 
-**It reconciles to the row:** gov properties with a current owner fact + attributes + a lease
-expiring ≤24 months = **1,216**; add the role predicate = **74**; observed P1 = **74**.
-**Not value-gated, not cadence-gated, not opportunity-gated, not stale.**
+### What it used to be, and why that mattered
 
-### The role column
+```sql
+  WHERE eer.effective_owner_role = ANY (ARRAY['developer','user_owner'])   -- RETIRED 2026-08-29
+```
+
+`effective_owner_role` = `COALESCE(entities.behavioral_override, entities.owner_role)`. It
+reconciled to the row: gov properties with a current owner fact + attributes + a lease expiring
+≤24 months = **1,216**; add the role predicate = **74**; observed P1 = **74**. Not value-gated, not
+cadence-gated, not opportunity-gated, not stale — **just the wrong grain** (§4, Class 24).
+
+### The role column — still true, and still the reason C4a is open
 
 | `effective_owner_role` | live entities (66,874) | reachable by `gov_owner_props` | of 5,992 resolved owners |
 |---|---:|---:|---:|
@@ -103,13 +116,21 @@ expiring ≤24 months = **1,216**; add the role predicate = **74**; observed P1 
 | **`user_owner`** | **0** | **0** | **0** |
 | `operator` | — | 2 | — |
 
-- ⚠️ **`user_owner` has no producer anywhere.** Named in the gate, in P0.4/P0.5 and in the doctrine;
-  **written by nothing, ever.** Dead-End **Class 22**.
+- ⚠️ **`user_owner` has no producer anywhere.** Named in the doctrine and — **still today** — in the
+  **P0.4 and P0.5** arms, which C6 did not touch. **Written by nothing, ever.** Dead-End **Class 22**.
+  Open as **C4b**.
 - **`developer` has a producer that is exhausted, not broken** —
   `lcc_developer_classification_log` = **285 rows lifetime**, candidates view down to **2 open**. It
   keys on `properties.developer_name`, so it can only find parties a domain DB already labelled.
   ⚠️ **That is the N18 view** — whose ranking N18 found was arbitrary, not knowing it sits upstream
-  of the entire ranked call list.
+  of the ranked call list.
+
+⚠️ **C6 removed the role gate from the four gov deal-timing bands ONLY. Four
+`effective_owner_role = ANY (...)` predicates remain in the view** (live-verified 2026-08-29, count
+taken off `pg_get_viewdef`): the two-value `('developer','user_owner')` form still gates **P0.4
+(555) + P0.5 (148) + P5 (58) = 761 of the queue's 1,646 rows**, and `recent_acquirers`/P4 (12) uses
+a three-value form that adds `'buyer'`. **So a gate arm that has never matched a row still governs
+46% of the surface** — C4b is not cosmetic.
 
 ## 4. The two defects, and the fix
 
@@ -125,14 +146,21 @@ permanently ineligible however many gov buildings it owns.
 ⚠️ **This class hides behind accurate data.** Every excluded label was right, so nothing looked
 broken.
 
-### The invisible population
+### The invisible population — ✅ the reachable half is CLOSED by C6
 
-**1,924 owners hold a current gov property with a P1/P2/P3 signal and are invisible** — 1,052
-`buyer`, 871 `unknown`. **224 are contactable today.** ⚠️ C4's "56 contactable" was P1-only and
-`unknown`-only; **224 is the figure to quote.**
+**As measured 2026-08-28 (pre-C6):** 1,924 owners held a current gov property with a P1/P2/P3 signal
+and were invisible — 1,052 `buyer`, 871 `unknown` — of which **224 were contactable**.
+⚠️ C4's "56 contactable" was P1-only and `unknown`-only; **224 was the figure to quote.**
 
-⏰ **173 owners have a gov lease expiring within 90 days and are on no surface; 14 contactable.**
-The named callable list (top 25 by top-asset rent) is tabulated in
+**C6 surfaced the contactable ones. 303 owners now carry a deal-timing band.** ⚠️ **The
+UNREACHABLE ~1,700 are still invisible, and that is deliberate** — surfacing them would emit
+cadences that can never advance (P112). **They are a contact-acquisition backlog, not a queue
+backlog**, and they are the Tier 0 / `v_owner_contact_enrich_queue` lane's population, not this
+page's.
+
+⏰ Pre-C6, 173 owners had a gov lease expiring within 90 days and were on no surface; 14 were
+contactable. **All 14 now appear in P1** (17 rows). The named callable list (top 25 by top-asset
+rent) is tabulated in
 [`C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md`](../audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md) §4.
 
 ⚠️ **`lcc_property_attributes` carries a DATE, not an OUTCOME** — renewal, extension and holdover
@@ -184,9 +212,11 @@ appear in P1** (17 rows), in both the live view and the refreshed cache. **Boyd 
 |---|---:|
 | `touchpoint_cadence` rows | 2,301 |
 | …carrying `owner_user_id` | **48 (2%)** |
-| `v_priority_queue` rows carrying `owner_user_id` | **14 of 1,267 (1%)** |
+| `v_priority_queue` rows carrying `owner_user_id` | **14 of 1,646 (0.9%)** |
 
 BREAK-2 measured 7 in August; 48 now — real movement, still ~2%.
+
+⚠️ **C6 made this worse in relative terms, not better:** the queue grew by 377 deal-timing rows and **none of them carries an owner.** A ranked call list that belongs to nobody is the next constraint — **C4c**.
 
 ⚠️ **Do NOT re-derive the mapping in JS. Three different user tables:**
 `touchpoint_cadence.owner_user_id` FKs `users(id)`; `lcc_entity_owner_override.owner_user_id` FKs
