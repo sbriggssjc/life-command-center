@@ -1796,3 +1796,63 @@ wrong, and it costs a change that should have shipped. **Wrong-and-cautious is n
   result deserves the same positive control before it becomes a finding.
 - The **`LIMIT 5` without the `ORDER BY`** footgun in `CLAUDE.md` — same root: measuring a query
   shape other than the one that actually runs.
+
+---
+
+## Class 24 — a PARTY-LEVEL label answering a PER-ASSET question, when the join already has the answer
+
+**Found 2026-08-28 (C5), worth $410.4M of invisible signal on one surface.**
+
+`gov_owner_props` decides whether a seller-side band fires by reading `entities.owner_role`. That
+column is a **party-level identity** — what this firm mostly is. The bands ask a **per-asset
+question**: *is this party the current owner of a building whose lease is running out?*
+
+**578 owners typed `buyer` hold a gov property with a lease expiring inside 24 months.** They are
+not mislabelled — Boyd Watterson (45 gov assets), Prologis, RMR Group and HC Government Realty Trust
+genuinely are buyers, and that label drives real account-based prospecting. **They are also, right
+now, the owner of an expiring building.** A REIT is permanently a buyer and therefore permanently
+ineligible, however many assets it holds.
+
+### The tell
+
+**The query had already computed the right answer and then threw it away.** The CTE joins
+`lcc_entity_portfolio_facts ON is_current = true` — a per-asset ownership fact, established, in
+scope, two lines above the predicate — and then filters on the entity's global label instead.
+
+```sql
+JOIN lcc_entity_portfolio_facts f ON f.entity_id = eer.entity_id
+     AND f.is_current            -- ← the per-asset answer, already in hand
+WHERE eer.effective_owner_role = ANY (ARRAY['developer','user_owner'])   -- ← a party-level label
+```
+
+### The detector
+
+For any gate on a role, type, status, segment or category column, ask: **is the question this gate
+serves asked of the PARTY, or of the ROW?** If the row, check whether the query already carries a
+row-level fact that answers it. A label describing what something *usually is* cannot answer what it
+*currently holds*.
+
+Two prompts that surface it fast:
+
+- **Can one entity be in two states at once for different rows?** A firm that buys and owns; a
+  clinic that is a tenant here and an owner there; a contact who is a broker on one deal and a
+  principal on another. If yes, a single-valued party column cannot be the gate.
+- **Would the label still be correct if the gate were wrong?** Here every excluded label was
+  *correct*, which is why nothing looked broken. **Class 24 hides behind accurate data.**
+
+### ⚠️ The trap in the fix
+
+Firing the band is **not** choosing the pitch. `account-based-contact-intelligence.md` is explicit
+that acquisitions and disposition are different contacts, tones and buckets, and that the buy-side
+relationship is the funnel *into* the disposition conversation. **Correcting the gate makes the
+signal visible; it does not decide how the call is made.** Collapsing those two decisions is how a
+correct fix produces a wrong outreach.
+
+### Sibling classes
+
+- **Class 22** — a gate arm that never matches. Same surface, same round: 22 is an arm with no
+  producer, 24 is an arm asking the wrong grain.
+- **Class 23** — a predicate's blast radius belongs to the query. All three are failures to read the
+  predicate *in the context of its own FROM clause*.
+- The **P113 operator-in-the-owner-slot** trap is the mirror at the row level: there a per-asset
+  fact (`is_operator_not_owner`) exists and must be consulted; here one exists and is ignored.

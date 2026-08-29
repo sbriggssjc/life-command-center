@@ -16,6 +16,32 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-28 — C5: 224 owners callable today, and the `buyer` exclusion is the larger half (diagnosis only)
+
+**NOTHING WRITTEN.** Audit:
+[`docs/audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md`](../audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md);
+canonical **§4p**. Answers **C4e**; adds **C5/C5a/C5b**.
+
+- **1,924 owners hold a current gov property with a P1/P2/P3 signal and are invisible to the queue**
+  — 1,052 `buyer`, 871 `unknown`. **224 are contactable today.**
+  ⚠️ **C4's "56 contactable" was P1-only and `unknown`-only** — easily misread as the total. **224.**
+- ⚠️ **C4e answered: the `buyer` exclusion is a CATEGORY ERROR, not a bad label. 578 owners /
+  $410.4M** — bigger than the `unknown` half. Boyd Watterson (45 gov assets), Prologis, RMR,
+  HC Government Realty Trust are all correctly typed `buyer` **and** are the current owner of a
+  building whose lease is expiring. `owner_role` is a party-level identity; the bands ask a
+  per-asset question — **and the CTE already joined `is_current=true`, then discarded it.**
+- ⚠️ **Firing the band is not choosing the pitch** — acquisitions vs disposition are different
+  contacts and tones (`account-based-contact-intelligence.md`). The bucket stays C4a.
+- ⏰ **173 owners have a gov lease expiring within 90 days and are on no surface; 14 contactable.**
+  **Boyd Watterson is 2026-08-31 — three days out.** ⚠️ **Not verified whether that lease is
+  renewing, extended or terminal — the attributes row carries a date, not an outcome.**
+- **The names are the ones the Tier 0 arc already resolved** — Boyd, Easterly, NGP, RMR, Gardner
+  Tanenbaum, GI Partners. The contacts were confirmed, the signal existed, and **the role gate sat
+  between them.**
+- **Recommendation shifts:** the **per-asset fix (C5)** is narrower and better founded than widening
+  to `unknown` — no new classifier, no doctrine call. Still pair with the P112 reachability
+  precondition.
+
 ## 2026-08-28 — C4 §5 self-correction: widening the BD gate admits 2,521, not 62,554 (diagnosis only)
 
 **NOTHING WRITTEN.** Same-day follow-up to the C4 entry below, sizing the decision it left to Scott.
