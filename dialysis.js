@@ -7655,9 +7655,21 @@ function renderDiaOwnershipResearch() {
   // Context header
   html += '<div style="padding:12px 14px;background:var(--s2);border:1px solid var(--border);border-radius:8px;margin-bottom:14px">';
   html += '<div style="font-size:13px;color:var(--text);line-height:1.5">';
+  // ⚠️ Copy corrected 2026-08-29 after measuring the lane end to end
+  // (docs/audits/DIA_OWNERSHIP_LANE_COVERAGE_2026-08-29.md). The previous text
+  // claimed resolving a canonical "auto-fills any linked properties whose
+  // true_owner is still NULL" — there are ZERO such properties; the propagation
+  // already ran. It also read as a survey of the duplicate-owner problem when it
+  // is a readout of the 38 hand-written owner_canonical_patterns regexes: only
+  // 72 of 7,255 recorded_owners match one, and there are no byte-identical
+  // duplicate names, so 99% of owners can never appear here. Saying so is the
+  // difference between "this lane is nearly clean" and "this lane sees 1% of the
+  // population" — the operator cannot tell those apart from the counts alone.
   html += '<strong>Ownership research backlog.</strong> Each row is one canonical entity (e.g. "SMBC Leasing & Finance Inc") that has multiple recorded_owner name variants in our deed data. ';
-  html += 'Resolving the canonical&rsquo;s true_owner_id once via the property detail panel auto-fills any linked properties whose true_owner is still NULL ';
-  html += '(via the migration-V propagation trigger). Sorted by total properties &mdash; biggest leverage first.';
+  html += 'Sorted by total properties &mdash; biggest leverage first. ';
+  html += '<span style="color:var(--text3)">Scope: this lane is driven by the curated <code>owner_canonical_patterns</code> table, so it shows only owners a pattern has been written for ';
+  html += '(72 of 7,255 recorded_owners) &mdash; it is not a survey of every duplicate owner name. ';
+  html += 'Note the true_owner slot is rarely empty: on ~79% of these properties it already holds the <em>operator</em> (DaVita, Fresenius), not the landlord, so linking a buyer here is a supersession decision rather than a blank to fill.</span>';
   html += '</div></div>';
 
   // Metrics row

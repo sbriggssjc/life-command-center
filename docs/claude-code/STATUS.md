@@ -862,6 +862,42 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-29 — B6d drafted: grade the feed EXPECTATIONS. Two more alerts fire imminently for non-defect reasons.
+
+**Prompt: `prompts/B6d-grade-the-feed-expectations-2026-08-29.md`.** It closes the
+B6a → B6a-follow-up → B6b arc honestly, **grades expectations only, and writes no data.**
+
+**B6b-lead's refusal is what makes it urgent.** We *decided* not to restart
+`prospect_leads_ownership_change` — so its alert now **describes a decision and will sit open
+forever**. ⚠️ **An alert describing a decision is the badge-that-is-noise failure, inside the
+alerting system we just spent three prompts repairing.**
+
+**Live: 23 feeds · 4 alerting · 19 ok.** The four have three non-defect explanations and one genuine
+hypothesis: retire the ownership-lead expectation (no human consumer); re-scope `property_sale_events`
+(**its only live producer is an operator form with no cadence** — a 45-day SLA alerts whenever nobody
+types a sale for six weeks); re-scope `sam_lease_opportunities` (a 14-day SLA against a documented
+**~10 lookups/day** limit is unachievable); and **measure CMS's actual cadence** for
+`medicare_clinics` before touching it — ⚠️ **that one is still a hypothesis, and widening an SLA to
+silence a real break would bury it.**
+
+🚨 **Two more fire imminently, and neither is a defect:** **`opm_workforce` is age 120 against an SLA
+of 120 — it alerts tomorrow**, and **`gsa_leases_snapshot` (59 vs 65) fires in ~6 days because GSA
+has not published August.** *A publisher that has not published is not a broken pipeline.* Catching
+these before they fire is the difference between a graded surface and a surface people learn to
+ignore.
+
+⚠️ **The tell that these were never graded: `expected_max_age_days = 45` appears on 10 of 23 feeds.**
+A default, not a measurement — which is why the prompt grades **all 23**, not just the six in
+trouble, and requires each to state its **cadence class**: continuous (operator), scheduled (cron),
+or **external publication** (GSA monthly, CMS ~annual, OPM slow, SAM rate-limited). **An
+external-publication feed's SLA is a property of the PUBLISHER, not of our pipeline** — conflating
+those is exactly why `gsa_leases_snapshot` is about to alert.
+
+**Two rules carried in from what this arc has cost us:** a retirement must be **recorded, not
+deleted** (otherwise B6a's "a skipped step must emit, not vanish" is undone one layer up), and the
+detector must be **seen firing after the change** — *an SLA set so wide nothing can trip it is the
+same failure as no monitor at all* (I11).
+
 ## 2026-08-29 — 🛑 B6b-lead GRADED AND CORRECTLY NOT RESTARTED. My §0 premise was refuted, and it was the whole justification.
 
 `docs/audits/B6b_lead_OWNERSHIP_LEAD_RESTART_2026-08-29.md`. **The right outcome, reached by

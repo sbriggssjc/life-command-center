@@ -11,8 +11,13 @@
 > [`account-based-contact-intelligence.md`](account-based-contact-intelligence.md) (**who** to call
 > and **in what tone** — this page decides *whether the signal fires*, that one decides *the pitch*).
 >
-> **Status: DIAGNOSED, NOT YET BUILT.** Nothing in C4/C5 was written to a live system. The build is
-> **C6**, prompt at `docs/claude-code/prompts/C6-per-asset-band-eligibility-with-reachability.md`.
+> **Status: C6 SHIPPED 2026-08-29** — `gov_owner_props` now gates P1/P2/P3/P8 on *holds a current
+> gov asset* **AND** *is reachable*, replacing the party-level role gate. **P1 74 → 149 · P2 32 → 95 ·
+> P3 61 → 163 · P8 76 → 213; 303 owners, every one callable.** P5, P0.4, P0.5, P-CONTACT, P-BUYER, P4
+> and all of dia unchanged (positive-controlled). Migration
+> `supabase/migrations/20261002110000_lcc_c6_current_holding_seller_bands.sql`; evidence
+> [`C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md`](../audits/C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md).
+> **C4a (the pitch/bucket) and C4b (`user_owner`) remain open and are Scott's.**
 
 ---
 
@@ -35,20 +40,30 @@ refreshed every 5 minutes by cron `lcc-priority-queue-refresh` — falling back 
 ⚠️ **Measure the live view or refresh the cache, and say which.** Comparing a fresh live view to a
 stale cache reads as "the change did nothing."
 
-### The bands, as of 2026-08-28
+### The bands, as of 2026-08-29 (post-C6)
 
-| band | reason | rows | of which resolved owners |
-|---|---|---:|---:|
-| **P0.4** | `resolve_ownership_control` | **552** | 58 |
-| **P-CONTACT** | `select_prospecting_contact` | **231** | 130 |
-| **P0.5** | `open_bd_opportunity_needed` | **148** | 46 |
-| P8 | `agency_active_solicitations` | 76 | 49 |
-| P1 | `lease_expiry_24mo` | 74 | 34 |
-| P3 | `ten_year_window` | 62 | 27 |
-| P5 | `aged_building_value_add` | 58 | 43 |
-| P2 | `firm_term_ending_24mo` | 32 | 18 |
-| P-BUYER | recent buyer activity | 22 | 17 |
-| P4 | `recent_acquisition_streak` | 12 | 9 |
+⚠️ **Two of the 2026-08-28 figures below had already drifted by the next day** — P3 read **61**, not
+62, and P0.4 read **555**, not 552. Ordinary live drift, and it would have been misread as a
+change-induced delta had the baseline not been re-taken in the same session. **Re-measure the
+baseline, not just the blocker.**
+
+| band | reason | rows (pre-C6) | **rows now** | owners now |
+|---|---|---:|---:|---:|
+| **P0.4** | `resolve_ownership_control` | 555 | **555** | 555 |
+| **P8** | `agency_active_solicitations` | 76 | **213** | 118 |
+| **P-CONTACT** | `select_prospecting_contact` | 231 | **231** | 231 |
+| **P3** | `ten_year_window` | 61 | **163** | 127 |
+| **P1** | `lease_expiry_24mo` | 74 | **149** | 100 |
+| **P0.5** | `open_bd_opportunity_needed` | 148 | **148** | 148 |
+| **P2** | `firm_term_ending_24mo` | 32 | **95** | 63 |
+| P5 | `aged_building_value_add` | 58 | 58 | 36 |
+| P-BUYER | recent buyer activity | 22 | 22 | 22 |
+| P4 | `recent_acquisition_streak` | 12 | 12 | 12 |
+
+**The four deal-timing bands went 243 → 620 rows / 497 assets / 303 owners** — the deal-timing share
+of the surface roughly doubles, from ~19% to ~38%. ⚠️ **620 rows, 497 assets and 303 owners are
+three different questions**: the queue emits one row per **(owner, property, band)**, so an asset
+tripping both P1 and P8 emits two rows. Do not use them interchangeably.
 
 **931 of 1,267 rows (73%) are data-completion work, not calls.** ~336 are deal-timing signals.
 **Only 256 of 5,992 resolved owners (4.3%) appear anywhere in the queue.**
@@ -123,21 +138,28 @@ The named callable list (top 25 by top-asset rent) is tabulated in
 ⚠️ **`lcc_property_attributes` carries a DATE, not an OUTCOME** — renewal, extension and holdover
 are indistinguishable in that column. **Read the asset before acting on any expiry date.**
 
-### C6 — the build
+### C6 — SHIPPED 2026-08-29
 
-Replace the role predicate in `gov_owner_props` with *holds a current gov asset* (already joined)
-**AND is reachable**. **P1/P2/P3/P8 only.**
+The role predicate in `gov_owner_props` is replaced by *holds a current gov asset* (the
+`f.is_current = true` join that was already there) **AND is reachable**. **P1/P2/P3/P8 only.**
+All four predicted deltas hit exactly; six bands and all of dia held, positive-controlled at
+1,681/565 (the same P5 shape with its gate dropped). **0 unreachable rows emitted.** Full evidence:
+[`C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md`](../audits/C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md).
 
-| band | today | after |
-|---|---:|---:|
-| P1 `lease_expiry_24mo` | 74 | **149** |
-| P2 `firm_term_ending_24mo` | 32 | **95** |
-| P3 `ten_year_window` | 62 | **163** |
-| P8 `agency_active_solicitations` | 76 | **213** |
-| **total** | **244 rows** | **497 rows / 303 owners** |
+**Reachability = `owner_contact_pivot.active_contact_entity_id IS NOT NULL`** — the fact the Tier 0
+arc (P188/P194) *writes* and `v_owner_contact_enrich_queue` already keys on.
 
-**Must not move:** P5 (58) · P0.4 (552) · P0.5 (148) · P-CONTACT (231) · P-BUYER (22) · P4 (12) ·
-all dia.
+⚠️ **NOT `reachable_hero_qualified`, and `CLAUDE.md`'s instruction to quote it is not wrong.**
+That instruction is about **reporting the reachability metric**; this is a **join predicate**, a
+different job. `v_lcc_owner_reachability` is a **single-row aggregate** with no per-owner membership
+to join to, and its `owners` CTE resolves through `lcc_property_owner` + asset entities — a
+different population (overlap with the pivot: **263 of 1,441 / 495**). Reconstructing it inline
+would be a second copy of a definition. It would also have gated *narrower* than what C5 graded —
+**444 rows / 166 owners** instead of 620 / 303.
+
+⏰ **All 14 owners with a gov lease expiring inside 90 days who were contactable and invisible now
+appear in P1** (17 rows), in both the live view and the refreshed cache. **Boyd Watterson's
+2026-08-31 is two days out.** ⚠️ Date ≠ outcome — read the asset.
 
 ## 5. ⚠️ The four traps, each of which produced a wrong answer first
 
@@ -178,7 +200,8 @@ override id FK-violates on every row. **The bridge is email, resolved once by
 |---|---|
 | ✅ **`buyer` exclusion is a category error** | C4e, answered by C5 §2 on named rows |
 | ✅ **P5 keeps the role gate** | 83% of the flood, weakest signal, cross-domain |
-| ✅ **Reachability gates the widening** | P112; converts 2,719 owners → 303 callable |
+| ✅ **Reachability gates the widening** | P112; converts 2,719 owners → 303 callable. **Shipped as the pivot's `active_contact_entity_id`, not `reachable_hero_qualified`** — the latter is an aggregate with no membership surface and a different population (C6 §4) |
+| ✅ **C6 shipped — the band fires on current holding** | 2026-08-29; four predictions hit exactly, six bands + dia held |
 | 👤 **C4a — what promotes an owner out of `unknown`** | **Scott's, doctrine not code.** Recorded facts available, none adopted: portfolio shape · `purchases` edges (repeat investor vs one-off — his own distinction, already modelled) · `is_operator_not_owner` (P113) · deed/B5 party roles |
 | 👤 **C4b — `user_owner`: fill the arm or remove it** | Leaving it is how C4 stayed invisible |
 | 🔴 **C4d — marketing / deal-execution actions are not inventoried** | The other half of "compared to the balance of the leads or marketing activities." **That inventory does not exist today**; a cross-surface weighting cannot be built until it does |
@@ -198,6 +221,7 @@ bucket is C4a.
 | [`C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md`](../audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md) | the gate; `user_owner` = 0; the exhausted classifier; **§5 carries the 25× self-correction** |
 | [`C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md`](../audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md) | the `buyer` category error; the callable list; **§5b carries the P5/P8 sizing** |
 | Dead-End playbook **Class 22 / 23 / 24** | gate arm that never matches · blast radius belongs to the query · party label vs per-asset question |
-| `docs/claude-code/prompts/C6-...md` | the build, with predicted deltas to assert against |
+| [`C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md`](../audits/C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md) | **the build.** Four exact hits; the deparse-diff verification; why not `reachable_hero_qualified`; **§3 — the predicted "497 rows" is an ASSET count, not a row count** |
+| `docs/claude-code/prompts/C6-...md` | the build brief, with the predicted deltas |
 
-**Canonical section:** `connectivity-and-open-threads.md` **§4o + §4p**.
+**Canonical section:** `connectivity-and-open-threads.md` **§4o + §4p + §4q**.
