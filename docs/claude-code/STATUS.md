@@ -16,6 +16,37 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-29 — C6 SHIPPED: the seller-side bands now gate on current holding + reachability
+
+**LIVE on LCC Opps.** Migration `supabase/migrations/20261002110000_lcc_c6_current_holding_seller_bands.sql`;
+evidence `docs/audits/C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md`; canonical
+`docs/architecture/bd-ranking-and-priority-queue.md` (**§3 rewritten — the old gate is RETIRED**).
+
+**All four predicted deltas hit exactly** (verified live off `v_priority_queue`, cache refreshed):
+**P1 74→149 · P2 32→95 · P3 61→163 · P8 76→213 = 620 rows / 497 assets / 303 owners.**
+P5 58 · P0.4 555 · P0.5 148 · P-CONTACT 231 · P-BUYER 22 · P4 12 and all dia held.
+⏰ **All 14 owners with a gov lease inside 90 days who were contactable-and-invisible now appear.**
+
+**Doc corrections made in this pass** — the canonical page had four passages that went stale the
+moment C6 landed:
+
+- **§3 presented the RETIRED role predicate as the live gate** and still said "observed P1 = 74".
+  Rewritten to show what actually runs, with the old form kept beneath it, labelled retired.
+- **The "73% data work" line used the pre-C6 denominator.** It is **934 of 1,646 (57%)** now —
+  ⚠️ and **both numerator and denominator moved**, so the percentages are not comparable: the
+  data-completion rows did not fall, **the deal-timing rows doubled underneath them.**
+- **"1,924 owners are invisible / 224 contactable" was present tense.** Past-tensed; the reachable
+  half is closed, and ⚠️ **the unreachable ~1,700 remain invisible DELIBERATELY** (P112) — they are
+  a contact-acquisition backlog, not a queue backlog.
+- **Broker denominator** 14 of 1,267 → **14 of 1,646**.
+
+⚠️ **New fact worth acting on: C6 cleared `gov_owner_props` only. Four `effective_owner_role = ANY`
+predicates remain** (counted live off `pg_get_viewdef`) — the two-value form still gates **P0.4 +
+P0.5 + P5 = 761 of 1,646 rows**, P4 uses a three-value form. **A gate arm that has never matched a
+row still governs 46% of the surface** (C4b, re-sized from cosmetic to real).
+
+⚠️ **C6 also made C4c the binding constraint:** +377 deal-timing rows, **none carrying an owner**.
+
 ## 2026-08-28 — CONSOLIDATION: BD ranking gets a canonical page
 
 **Docs only.** New canonical page **`docs/architecture/bd-ranking-and-priority-queue.md`** — one

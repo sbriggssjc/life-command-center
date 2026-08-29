@@ -1758,7 +1758,8 @@ DECLARED irregular feed. Backlog **B6c-feed**.
 
 > 📍 **CONSOLIDATED — this topic now has its own canonical page:
 > [`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md).** §4o + §4p are kept as the
-> dated evidence; **read the canonical page for current state and decisions.**
+> dated evidence **from 2026-08-28, BEFORE C6 shipped on 2026-08-29** — every band count below is
+> pre-C6. **Read the canonical page for current state and decisions.**
 
 > **Audit:** [`docs/audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md`](../audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md).
 > **Diagnosis only, nothing written.** This is the LAST hop of Scott's chain — the ranked call list
