@@ -1,3 +1,16 @@
+> # 🚨 ARCHIVED — ITS ENTIRE PREMISE IS A PLATFORM THAT NO LONGER EXISTS.
+> **This file treats the Vercel Hobby 12-function cap as the operating reality**, edits `vercel.json`
+> (deleted), and **recommends a $20/mo Vercel Pro upgrade.** Vercel was retired **2026-07-20**;
+> Railway + `server.js` is the sole `/api/*` router and **there is no function cap**. Line 112 —
+> *"exactly 12 files with zero headroom… if anything adds a single file we break again"* — `api/`
+> holds **21** and nothing is broken.
+> ⚠️ **Its §159–161 `lcc-gov.vercel.app` / `lcc-dia.vercel.app` URLs are HYPOTHETICAL** (from a
+> proposal it explicitly rejects) and were never provisioned — **not** the P194 retired-host class.
+> ✅ **Its Part 1 SHIPPED and is why the handlers are named as they are** — the three merges that
+> produced `intake.js`, `operations.js`, `entity-hub.js`. **That is the reason to keep this file.**
+> ⚠️ The ≤12 rule survives ONLY as a **structure convention** (`CLAUDE.md` rule 1), never a deploy
+> limit. **The pre-commit hook that enforced it as a hard fail was defused 2026-08-28.**
+
 # LCC Architecture Strategy & Vercel Function Consolidation
 
 **Date:** April 3, 2026
