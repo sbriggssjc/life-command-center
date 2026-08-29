@@ -125,6 +125,53 @@ cadence-gated, not opportunity-gated, not stale — **just the wrong grain** (§
   ⚠️ **That is the N18 view** — whose ranking N18 found was arbitrary, not knowing it sits upstream
   of the ranked call list.
 
+### ⚠️ C8 (2026-08-29) — the role gate is on a SECOND surface, and there it hides the book
+
+`handleProspectingBrief` (`api/operations.js:~4805`) — **the operator call sheet** — gates on
+`owner_role IN ('developer','user_owner','buyer','seller_flipper','operator')`. Of **311** eligible
+cadence rows it shows **80**; of the **231** excluded as `unknown`, **47 are resolved property
+owners carrying $515.2M — more than the $442.8M it shows** — against **3** flagged brokerages.
+**Easterly ($114.9M, 85 properties), NGP Capital, USAA Real Estate, US Fed Properties Trust,
+Gardner Tanenbaum, GI Partners, Trammell Crow, Clarion Partners** are all excluded. Evidence:
+[`C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md`](../audits/C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md);
+build prompt `docs/claude-code/prompts/C8-prospecting-brief-admit-resolved-owners.md`.
+**Same Class 24 defect as C6, different surface. Fix: admit on the per-asset fact (is a resolved
+owner) with an EXPLICIT brokerage guard — 80 → 127 rows.**
+
+### ⚠️ C9 (2026-08-29) — the merge backlog now lands on these surfaces
+
+Three live entities share `canonical_name = 'brandywine realty'`, none merged: **assets + contact on
+one, cadence + 36 edges on another** — the P177/P198 split. **The detector is NOT broken**: it
+surfaced the group at `member_count = 3, auto_mergeable = false` and correctly refused to auto-merge
+genuine name variance. **It has never been reviewed.**
+
+**181 of the 303 C6 callable owners (60%)** share a canonical name with another live entity; 415
+queue entities and 50 brief-eligible entities likewise. ⚠️ **That is EXPOSURE, not confirmed splits**
+— the Brandywine-style split was verified on **one** named row; the population rate is unmeasured.
+
+**C6 is what changed the cost.** Before it, 74 owners reached these bands and duplicates were
+hygiene. Now **303 owners are on a call sheet ranked by a value that lives on whichever twin holds
+the portfolio fact**, while the contact may be on the other. Evidence:
+[`C9_MERGE_BACKLOG_REACHES_THE_OPERATOR_SURFACES_2026-08-29.md`](../audits/C9_MERGE_BACKLOG_REACHES_THE_OPERATOR_SURFACES_2026-08-29.md).
+
+⚠️ **Do not bulk-merge** (P195's hazards stand; `lcc_apply_fuzzy_merges` is deliberately unwired).
+**Winner rule is ownership-first** — the survivor is the asset+contact holder, not the
+more-connected twin.
+
+### ⚠️ C4b RESOLVED — and my earlier sizing of it was wrong
+
+**Removing `user_owner` from the four remaining predicates is a literal no-op** (0 rows). The
+earlier note here — *"a gate arm that has never matched a row still governs 46% of the surface"* —
+**conflated the GATE with the ARM.** The gate on P0.4/P0.5 is load-bearing; the token inside it is
+inert. Both `user_owner` **and `seller_flipper`** are 0 of 66,874, and `unknown` (93.9%) is **not in
+the declared vocabulary at all**.
+
+⚠️ **And the P0.4 gate is genuinely load-bearing — Class 23 in mirror image.** P0.4's universe is
+**703 gated vs 66,167 ungated (94×)**, because unlike `gov_owner_props` the P0.4/P0.5 arms have **no
+bounding JOINs**. **So the 62,554 figure C4 §5 wrongly applied to `gov_owner_props` is CORRECT
+here** — it was the right number attached to the wrong arm. **The same predicate on two arms of one
+view has completely different blast radii; measure each.** P0.4/P0.5/P5 keep their gate.
+
 ⚠️ **C6 removed the role gate from the four gov deal-timing bands ONLY. Four
 `effective_owner_role = ANY (...)` predicates remain in the view** (live-verified 2026-08-29, count
 taken off `pg_get_viewdef`): the two-value `('developer','user_owner')` form still gates **P0.4

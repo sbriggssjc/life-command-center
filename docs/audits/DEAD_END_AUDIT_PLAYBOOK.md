@@ -10,6 +10,14 @@
 
 ---
 
+> ⚠️ **BEFORE ADDING A CLASS, CHECK THE HIGHEST NUMBER IN USE:**
+> `grep -o "^## Class [0-9]*" docs/audits/DEAD_END_AUDIT_PLAYBOOK.md | sort -t' ' -k3 -n | tail -1`
+> and confirm no duplicates with `... | sort | uniq -d`.
+> **Two collisions shipped on 2026-08-29** (a second Class 25 and a second Class 27) because classes
+> are appended to the END of a 2,000-line file while the existing numbers live far above. Appending
+> makes the next number invisible — **this is the file's own Class 11 hazard: a check nobody runs
+> returns nothing and reads as clean.** Renumbered to 28 / 29.
+
 ## Class 1 — an entity FK missing from the merge path
 
 **Symptom:** rows point at a tombstoned entity. Nothing errors; the UI shows a name that no
@@ -2029,7 +2037,7 @@ resolve path key on that positive statement — never on absence, which also cov
 
 ---
 
-## Class 25 — the machinery is correct, the populations are DISJOINT, and a propagator moves zero
+## Class 28 — the machinery is correct, the populations are DISJOINT, and a propagator moves zero
 
 **Found 2026-08-29 (C7), on a build I had recommended the round before.**
 
@@ -2050,7 +2058,7 @@ was built for.**
 ### Why it is its own class
 
 **Class 2** is a producer with no consumer. **P137** is a consumer wired to a producer that does not
-exist. **Class 25 is subtler than both:** producer, consumer *and* the connecting machinery all
+exist. **Class 28 is subtler than both:** producer, consumer *and* the connecting machinery all
 exist, are individually correct, and are individually verifiable — they are simply **populated over
 different sets**. Every component test passes. The integration "works." Nothing moves.
 
@@ -2083,3 +2091,45 @@ downstream surface reads as a real assignment, and it cannot be told apart from 
 Same family as A5's 596 `gap_resolved` auto-closes and B6b-lead's `filtered_multi_tenant`: **a value
 a human never chose, in a column humans are assumed to have chosen.** A UI default or a filter costs
 nothing and is reversible by inspection; a written row is neither.
+
+
+---
+
+## Class 29 — a value that MATCHES a known-bad aggregate is a hypothesis, not a finding
+
+**Found 2026-08-29 (C9), by getting it wrong first and catching it one query later.**
+
+C8 flagged `Brandywine Realty Trust` at **$34,920,891.77 with 0 current properties** as "the N18
+fabricated `attributed_rent` value surfacing as a rank" — because it equals the gov-wide
+`max(annual_rent)` exactly, which is N18's signature. **It was filed as a defect. It is not one:
+Brandywine genuinely owns the highest-rent gov property, and the value is correct.**
+
+### The two checks that settle it, both one query
+
+1. **Who produces the aggregate?** If the row in question *is* the row behind the max/sum, the match
+   is identity, not contamination. Here `max(annual_rent)`'s owner **is** Brandywine.
+2. **How many rows share the value?** `rows_equal_to_gov_max = 1`. **N18's real defect was
+   systematic — 11 distinct values across 277 candidates. A population of one is not a systematic
+   artifact.** A fabrication mechanism repeats; a coincidence does not.
+
+### Why the error is attractive
+
+A documented defect gives you a **signature**, and signatures are cheap to match and feel like
+diagnosis. The more thoroughly a prior defect is written up, the more readily the next similar-looking
+number gets filed under it. ⚠️ **A known failure mode is a hypothesis generator, not a classifier** —
+and the cost is asymmetric: a false match sends the next reader to fix a view that was never broken,
+while the real defect (here a duplicate-entity split) stays open.
+
+### What was actually there
+
+Three live entities with a **byte-identical `canonical_name`**, none merged — assets and contact on
+one, cadence and 36 relationship edges on another. The rank was right; **the entity carrying it was
+wrong**. Same family as **Class 24** (right fact, wrong grain) and the P177/P198 split that left
+Gardner Tanenbaum's 240 relationships off the entity holding its 13 assets.
+
+### The rule
+
+**Before attributing a number to a named prior defect, reproduce that defect's MECHANISM on this
+row** — not its value. Ask what the mechanism would also predict (a population, a distribution, a
+second consumer) and check one of those predictions. If the only evidence is that the number looks
+familiar, say "resembles X, unverified" and go measure.
