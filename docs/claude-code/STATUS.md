@@ -727,6 +727,45 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-29 — B6b-lead drafted. The deflation is measured, and the "no lessor signal" claim is refuted by a probe bug.
+
+**Prompt: `prompts/B6b-lead-restart-ownership-lead-lane-2026-08-29.md`.** The last of the four open
+`feed_stale` alerts that is a genuine restart candidate.
+
+**Why this one earns a restart when most dead producers do not: its consumer is confirmed alive with
+a measured working record** — 7,729 leads, **2,041 worked, 208 pushed to Salesforce, 2,149 touched
+in 30 days.** Dead since 2026-03-31, correctly alerting at 150 days.
+
+**⚠️ The jsonb-string trap, confirmed live and quantified.** `changed_fields` is a jsonb **STRING**
+on **201,212 of 233,666 rows (86%)**, so the naive `changed_fields ? 'lessor_name'` returns **0**
+while the correct `(changed_fields #>> '{}')::jsonb ? 'lessor_name'` returns **16,907**. **B6 and
+B6b's first probe both read that zero and wrote the producer off.** Playbook Class 11; the rule is
+**check `jsonb_typeof` before trusting any containment result.**
+
+**⚠️ And the deflation is now measured, which changes the target substantially:**
+**16,907** → −415 missing a side → **−7,940 PURE RE-SPELLINGS (47.0%)** → **8,552 genuine across
+2,760 properties** → **−3,565 (42% of genuine) carry `property_id IS NULL` and cannot reach a
+property-keyed store at all** → **≈4,987 genuine and property-linked**, still before the A2b
+per-lease fan-out and the P138 oscillation guard.
+
+**The 47.0% re-spelling rate independently corroborates B6's 46.7% on `landlord_change_flag`** —
+two different populations, two different queries, the same answer. That is the kind of agreement
+worth noticing, because most of this arc has been measurements disagreeing.
+
+⚠️ **The backlog's own "10,635 usable pair-events" is PRE-deflation and is now marked as such.** And
+only **995 of them arrived since the lane died** — **9,640 are historical residue**, so *resuming the
+producer* and *backfilling five months* are two decisions the prompt keeps separate.
+
+⚠️ **`is_same_owner` is the only gate and has never been graded.** The prompt grades it head-to-head
+against the normalized comparison before anything writes, and says plainly: **if it cannot separate
+a re-spelling from a sale, STOP** — manufacturing thousands of false ownership leads into a lane a
+human actually works is strictly worse than leaving it dead.
+
+⚠️ **Expect the lane to stay QUIET after a correct restart.** Newest lessor event is **2026-07-01** —
+the same ceiling as the raw GSA feed, because GSA has not published August (pull ledger 2026-08-24,
+`consecutive_unchanged=3`). **A correct restart drains the backlog and then waits**, and that must
+not be read as failure — the mistake B6b nearly made in the other direction.
+
 ## 2026-08-29 — ✅ B6c-dup SHIPPED. The collision was real, the write path did leak, and the orphan count was ZERO — after three wrong answers, two of them mine.
 
 `docs/audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md`. **Decision, in writing:
