@@ -57,6 +57,9 @@ export function normalizeAscAddressToken({ address, city, state, zip } = {}) {
     .replace(/\b(DRIVE|DR)\b/g, 'DR')
     .replace(/\b(LANE|LN)\b/g, 'LN')
     .replace(/\b(CIRCLE|CIR)\b/g, 'CIR')
+    // USPS Publication 28 standardizes COVE as CV. Keep the source address
+    // unchanged in the capture; this token is comparison-only.
+    .replace(/\b(COVE|CV)\b/g, 'CV')
     .replace(/\b(HIGHWAY|HWY)\b/g, 'HWY')
     .replace(/\bNORTH\b/g, 'N')
     .replace(/\bSOUTH\b/g, 'S')
@@ -78,6 +81,20 @@ export function normalizeAscAddressToken({ address, city, state, zip } = {}) {
 function hasAscSublocation(address) {
   return /\b(?:suite|ste|unit|\d+(?:st|nd|rd|th)\s+floor|floor\s+[a-z0-9-]+|fl\s+[a-z0-9-]+)\b/i
     .test(clean(address));
+}
+
+function uspsCoveSuffixEquivalence(targetIdentity = {}, context = {}) {
+  const terminalSuffix = (value) => clean(value)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\b(SUITE|STE|UNIT)\b(?:\s+[A-Z0-9-]+)+\s*$/g, '')
+    .trim()
+    .match(/\b(COVE|CV)$/)?.[1] || null;
+  const frozenSuffix = terminalSuffix(targetIdentity.address);
+  const capturedSuffix = terminalSuffix(context.address);
+  if (!frozenSuffix || !capturedSuffix || frozenSuffix === capturedSuffix) return null;
+  if (new Set([frozenSuffix, capturedSuffix]).size !== 2) return null;
+  return { frozen_suffix: frozenSuffix, captured_suffix: capturedSuffix };
 }
 
 export function normalizeAscBuildingAddressToken(identity = {}) {
@@ -333,8 +350,22 @@ export function buildAscStructuredCapture(target, context = {}) {
     && normalizedStoredToken === normalizedCmsToken
     ? normalizedCmsToken
     : target.address_token;
+  const coveSuffixEquivalence = addressToken === frozenComparisonToken
+    ? uspsCoveSuffixEquivalence(target.cms_identity, context)
+    : null;
   let identityMatch = { mode: 'exact_address_token' };
-  if (addressToken === frozenComparisonToken && frozenComparisonToken !== target.address_token) {
+  if (coveSuffixEquivalence) {
+    identityMatch = {
+      mode: 'usps_cove_suffix_equivalence',
+      frozen_suffix: coveSuffixEquivalence.frozen_suffix,
+      captured_suffix: coveSuffixEquivalence.captured_suffix,
+      cms_address_preserved: clean(target.cms_identity?.address),
+      captured_address_preserved: clean(context.address),
+      frozen_address_token_preserved: target.address_token,
+      normalized_comparison_token: frozenComparisonToken,
+      second_review_required: true,
+    };
+  } else if (addressToken === frozenComparisonToken && frozenComparisonToken !== target.address_token) {
     identityMatch = {
       mode: 'normalized_frozen_identity_address',
       frozen_address_token_preserved: target.address_token,

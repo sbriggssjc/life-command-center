@@ -147,6 +147,47 @@ test('Circle and Cir normalize to the same exact frozen building address', () =>
   }
 });
 
+test('USPS Cove and Cv equivalence preserves raw addresses and requires second review', () => {
+  const target = {
+    candidate_fingerprint: sha('4'),
+    // Reproduce a row frozen before USPS COVE/CV normalization existed.
+    address_token: '4100 CEDAR COVE|TULSA|OK|74103',
+    cms_identity: {
+      facility_name: 'Synthetic Ambulatory Center',
+      address: '4100 Cedar Cove', city: 'Tulsa', state: 'OK', zip: '74103',
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/cedar-cove',
+    address: '4100 Cedar Cv', city: 'Tulsa', state: 'OK', zip: '74103',
+    square_footage: '6,390',
+    tenant_name: 'Synthetic Plastic Surgery and Spa',
+  };
+
+  assert.equal(normalizeAscAddressToken(target.cms_identity), '4100 CEDAR CV|TULSA|OK|74103');
+  assert.equal(normalizeAscAddressToken(context), '4100 CEDAR CV|TULSA|OK|74103');
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'usps_cove_suffix_equivalence');
+  assert.equal(built.identity_match.cms_address_preserved, target.cms_identity.address);
+  assert.equal(built.identity_match.captured_address_preserved, context.address);
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const mismatch of [
+    { address: '4101 Cedar Cv' },
+    { city: 'Oklahoma City' },
+    { state: 'AR' },
+    { zip: '74104' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+});
+
 test('a single compound street split requires exact facility corroboration', () => {
   const target = {
     candidate_fingerprint: sha('5'),
