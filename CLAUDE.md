@@ -492,6 +492,36 @@ The two cheapest and highest-yield: **D1** the provenance producer-set diff (Cla
 B5) and **D2** the link-column type audit (`property_sale_events` link columns are `bigint` against
 `uuid` PKs — the column **cannot hold the value it is named for**).
 
+### ⚠️ A STATUS VALUE IS NOT A HUMAN VERDICT UNTIL YOU NAME ITS WRITER (B6b-lead, 2026-08-29)
+
+`prospect_leads` where `lead_source='ownership_change'` was cited by two successive audits — and by
+the prompt that acted on them — as **"7,729 leads · 2,041 worked · 208 pushed to Salesforce · 2,149
+touched in 30 days"**, and that "confirmed alive consumer" was the entire justification for
+restarting a dead producer. **Every number is real. Every one means something else.**
+
+- **"2,041 worked"** = `pipeline_status = 'filtered_multi_tenant'` — an **automated exclusion
+  filter**. The lane has exactly **two** status values ever, `new` and that one. **No human has ever
+  set a status on it.**
+- **"208 pushed to Salesforce"** = `sf_contact_id IS NOT NULL`, i.e. a **matched EXISTING contact**.
+  ⚠️ **`sf_lead_id` is non-null on 0 of 7,729 and `sf_sync_status='pending'` on ALL 7,729 — nothing
+  has ever been pushed.**
+- **"2,149 touched in 30 days"** = **1,216 of them on ONE day**. A bulk sweep, not use.
+
+**The lane has no human consumer. It is Class 2, which is exactly what it was claimed not to be.**
+
+- **Three questions, one query each:** *who or what SETS this status* (two machine-written values is
+  not a workflow) · *does the "sent" column mean sent* (a destination id means **matched**; an
+  emitted id means **sent** — check the emitted one and the sync status) · *is the activity a
+  distribution or a spike* (`count(distinct updated_at::date)` plus the largest single day).
+- ⚠️ **This is the A5 lesson — 596 `gap_resolved` "completions" that were all a truncated auto-close
+  — repeated four days later by the same author on a different lane. Knowing the rule did not
+  prevent it.** Third instance of the shape overall, with P159a's `drillthrough: 37`.
+  **Playbook Class 26.**
+- ⚠️ **The correction did NOT reverse the decision here — it replaced the reason.** The safety gate
+  (`is_same_owner`, 91.80% agreement, errs conservative) **passed** its stop test; the restart was
+  refused on the **consumer** finding, which the gate grade could never have surfaced.
+  **Grade the gate AND the consumer — either can disqualify.**
+
 ### Dead-end classes are findable on purpose — `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md`
 
 Nine live defects were found in one session on 2026-08-22, all by accident, and every one
