@@ -308,6 +308,38 @@ and the reason is already documented in this repo.**
 `compute_feed_freshness` — so it inherits the privilege vector B6a closed by revoking anon writes on
 `feed_freshness_registry` (**verified still closed 2026-08-29: anon holds SELECT only on gov and
 dia**). It was first granted to `anon` out of habit; nothing cross-DB reads it (the LCC pull reads
-`v_feed_freshness`), so it and `v_feed_expectation_grade` are now **service_role only**. A future
+`v_feed_freshness`), so it and `v_feed_expectation_grade` are **service_role only**. A future
 accidental re-grant of registry writes cannot then be chained through a second definer function.
 Identifiers go through `format()` `%I` and the filter value through `%L`, pinned by the gov guard.
+
+⚠️ **AND THE FIRST ATTEMPT AT THAT NARROWING WAS A NO-OP — THIS SECTION ASSERTED A SECURITY
+PROPERTY WITHOUT POSITIVE-CONTROLLING IT.** `REVOKE EXECUTE ... FROM anon, authenticated` removes
+nothing, because **Postgres grants EXECUTE on a newly created function to PUBLIC by default** and
+both roles still reach it that way. Measured on the live object *after* the "fix" shipped:
+
+```
+proacl = {=X/postgres, postgres=X/postgres, service_role=X/postgres}
+          ^ the leading "=X" IS the PUBLIC grant
+has_function_privilege('anon', oid, 'EXECUTE') = TRUE      -- gov and dia both
+```
+
+So an unauthenticated caller could still invoke a SECURITY DEFINER function that runs dynamic
+full-table scans over every registered source table. Corrected by `REVOKE ... FROM PUBLIC`, verified
+after: `{postgres=X, service_role=X}`, anon and authenticated **false**, service_role **true**.
+
+**Caught by the Codex review bot on [Dialysis#7378](https://github.com/sbriggssjc/Dialysis/pull/7378),
+not by me** — and it is this round's own theme turned on itself. §4 says *point the detector at a
+known positive before trusting its zero*; §7 positive-controls every alerting threshold. The
+privilege claim got neither: it was checkable in one query (`has_function_privilege`) and I checked
+**the REVOKE statement I had just written** instead — reading my own intent as evidence of the
+effect, which is exactly the failure the rest of this document is about.
+
+> **The rule: assert a privilege with `has_function_privilege()` / `has_table_privilege()`, never by
+> reading the GRANT or REVOKE you just wrote.** And know the default: a **function** is granted to
+> PUBLIC on creation, a **view** is not — which is why the view half of the same migration *was*
+> effective (anon SELECT already read false) and the function half was not.
+
+⚠️ **Do NOT generalise this into "revoke PUBLIC from every SECURITY DEFINER function."**
+`compute_feed_freshness` keeps an explicit `anon` grant on purpose — the LCC cross-DB pull reads
+`v_feed_freshness` as anon — and revoking it would silently blind the freshness monitor this whole
+arc exists to repair. The gov guard pins that asymmetry in both directions.

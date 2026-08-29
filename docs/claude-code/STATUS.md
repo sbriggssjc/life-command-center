@@ -75,6 +75,18 @@ function body and all 25 registry rows verified byte-identical to live by md5.
   backlog updated.
 - **NOT done, deliberately:** no producer started, stopped or altered. The two real breaks are filed
   (**B6d-cms**, **B6d-sam**), not fixed — fixing them here would blur which change moved which number.
+- ⚠️ **FOLLOW-UP, and it is this round's own theme turned on itself: a REVIEW BOT caught a security
+  claim B6d asserted without positive-controlling it.** `REVOKE EXECUTE … FROM anon, authenticated`
+  on `compute_feed_cadence` was a **no-op** — Postgres grants EXECUTE on a newly created FUNCTION to
+  **PUBLIC** by default, so both roles still reached the SECURITY DEFINER function that runs dynamic
+  full-table scans. Measured live *after* the "fix" shipped: `proacl = {=X/postgres, …}` (the leading
+  `=X` IS the PUBLIC grant) and `has_function_privilege('anon', oid, 'EXECUTE') = TRUE` on gov and
+  dia. Fixed by `REVOKE … FROM PUBLIC`; verified false after. **A VIEW takes no default PUBLIC
+  grant**, which is why the view half of the same migration WAS effective. **Assert a privilege with
+  `has_function_privilege()`, never by reading the REVOKE you just wrote** — it was one query away,
+  and four artifacts (migration comment, audit doc, backlog row, guard) repeated it unverified.
+  ⚠️ Not generalisable: `compute_feed_freshness` keeps its `anon` grant BY DESIGN (the cross-DB pull
+  reads `v_feed_freshness` as anon); the gov guard now pins that asymmetry in both directions.
 
 ## 2026-08-28 — CONSOLIDATION: BD ranking gets a canonical page
 
