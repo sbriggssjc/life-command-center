@@ -1,3 +1,10 @@
+> # ⚠️ ARCHIVED — 2026-04 rollout summary. Its FILE MAP is pre-consolidation and pre-Railway.
+> Names `api/bridge.js`, `api/workflows.js`, `api/contacts.js`, `api/data-proxy.js` — **all deleted**
+> (→ `operations.js`, `entity-hub.js`, `admin.js`). `schema/018_loop_closure.sql` predates
+> `supabase/migrations/`; its "Recommended Rollout Order" describes a Vercel-era deploy.
+> **The policy it rolled out is still live and canonical — `WRITE_SURFACE_POLICY.md` (repo root),
+> enforced by `test/raw-write-guardrail.test.js`.** Open item → §P14e **AI10**.
+
 # LCC Loop Closure Rollout Summary
 
 ## Scope

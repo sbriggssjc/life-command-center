@@ -34,7 +34,7 @@ or *historical* (kept for history; never edit/wire).
 
 ## B. Reference (stable context; not a rule source)
 - `docs/architecture/lcc_intelligent_operating_system_v2.md` — the founding OS vision (informs the canon).
-- `copilot_authoritative_architecture_plan.md` — LCC-orchestrates / domains-execute pattern.
+- `docs/architecture/copilot_authoritative_architecture_plan.md` — LCC-orchestrates / domains-execute pattern.
 - `docs/architecture/copilot_agent_catalog.md` — the 9 logical agent roles (realized as flows unless tool-heavy).
 - `docs/comps-rollout/*` setup guides, `northmarq-claude-project-setup.md`, `copilot-deal-agent-team-sharing-runbook.md`.
 - `docs/architecture/context_broker_api_spec.md`, `context_packet_schema.md`, `signal_table_schema.sql` — Cortex substrate.

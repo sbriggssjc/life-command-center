@@ -1,3 +1,13 @@
+> # ⚠️ ARCHIVED — the ancestor of the BD spine, which shipped very differently.
+> ⚠️ **It presents `scknotsqkcheojiaewwh` as *the* database.** There are **three** projects, and that
+> ref is **gov** only; `CONTACTS_HUB='ops'` makes LCC Opps the contacts authority.
+> ⚠️ Its `activity_log` / `email_templates` schemas were never built under those names — the shipped
+> forms are `activity_events`, `touchpoint_cadence` and `draft-assist`. Every `src/*.py` path in its
+> File References belongs to the **government-lease** repo, not this one. Row counts are ~5 months
+> stale and contradict `CLAUDE.md`.
+> **Open items recovered → `PLANNED-BACKLOG.md` §P14e AI9** (Phase C's Area Ownership panel is a
+> genuine BD capability that was never built).
+
 # GovLease CRM Workbench — LCC App Build Plan
 
 ## Overview

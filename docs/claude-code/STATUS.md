@@ -546,6 +546,105 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-28 — 🗄️ CLEANUP PASS 4: AI-chat / Copilot / architecture. Root `.md` 70 → 17, and a landmine defused.
+
+**13 files read in full. No secrets — the SEC2 pattern did not repeat here.** Two defects were
+**FIXED rather than filed**, because both were small, unambiguous and actively dangerous:
+
+- 🚨 **`.github/hooks/pre-commit` hard-failed every commit when `api/*.js` > 12, citing *"Vercel will
+  reject this deployment."* `api/` holds 21.** It was **never installed**, so a landmine rather than
+  a fire — but **its own header tells you how to install it**, and doing so would have blocked all
+  work against a platform retired three months ago. **Defused:** it now emits a non-blocking notice
+  and records why, preserving the ≤12 *structure* convention (`CLAUDE.md` rule 1) while dropping the
+  retired-platform hard fail.
+- **`WRITE_SURFACE_POLICY.md`'s exempt-surface list named two DELETED files** (`api/data-proxy.js`,
+  `api/contacts.js`). ⚠️ **This is a canon-integrity defect, not a typo** — `canon/00-INDEX.md`
+  invariant #4 binds to that file **by name** and `REGISTRY.md` §A calls it canonical at a
+  root-anchored path. **Corrected in place and bannered KEEP AT ROOT**: moving it would force a
+  `CANON_VERSION` bump and a paste to every surface, which is exactly the kind of cost a tidy-up
+  should not incur silently.
+
+**10 more unfiled items (`P14e`, AI1–AI10). The one that matters:**
+
+⭐ **AI1 — the AI-chat routing rollout was specified, tooled, and NEVER VALIDATED.**
+`AI_CHAT_ROLLOUT_RESULTS_TEMPLATE.md` is **blank in every field** — no date, no policy, no tester —
+while `AI_CHAT_POLICY` / `AI_CHAT_FEATURE_PROVIDERS` are **live** at `api/_shared/ai.js:181–190` and
+**five assistants route through them.** **Nobody knows which provider `global_copilot` actually
+hits.** ⚠️ And it must be asserted on the dashboard's **observed** provider/model rows, never the
+configured policy — *the doc's own "Routing Mismatches Detected" section exists because those two
+disagree.* ⚠️ **It may also be silently failing the same way as the Anthropic credit-balance
+outage** that kills the cloud Analyst's-Take and capital-markets generation. Unmeasured; `npm run
+ai:status` + filling the template settles it.
+
+**Four contradictions found, and canon/code is right in all four** — hosting (a doc recommending a
+**Vercel Pro upgrade**), the API file topology (**six `api/*.js` files that no longer exist**, named
+across three docs *including the canonical write policy*), the AI chat handler and model (**AI6**:
+a doc asserting *"AI chat logic lives outside this repository"* when `/api/chat` is right here), and
+the database topology (one doc presenting the **gov** project as *the* database). **All bannered in
+place, none deleted.**
+
+**Three path-anchored references were repointed in the same change** (`scripts/ai-rollout-status.mjs`
+×3, `.github/AI_INSTRUCTIONS.md` ×3, `REGISTRY.md`) — §6z step 5 doing its job.
+
+## 2026-08-28 — ✅ B6c ANSWERED: keep the table, retire the columns — and the type defect was never the real finding.
+
+`docs/audits/B6c_PROPERTY_SALE_EVENTS_2026-08-28.md`. **Diagnosis only; no migration shipped**, which
+was the right call: dia holds 52 real `ownership_history_id` values a `DROP` would destroy, and it
+sequences behind the bigger decision below.
+
+**The type question resolved cleanly.** The table **has** a future — six live gov triggers, the LCC
+detail panel's declared canonical write target, read+write allowlisted on both domains. **The two
+link columns do not.** `ownership_history_id` has **ZERO readers anywhere** — 0 hits across 620 gov
+objects, 0 across dia, 0 in `api/`; 0 of 5,208 gov rows; 1.9% on dia after four months; no FK on
+either domain. **Retyping it would satisfy I3 and build a link nobody follows.** The invariant was
+sharpened in place: *I3 says a link column must be type-compatible; it does not say every
+`<table>_id` column deserves to exist.*
+
+### 🚨 The real finding — the two sale stores disagree about which is canonical
+
+**`detail.js` says in its own comments that `property_sale_events` is canonical and
+`sales_transactions` is "legacy, retired for write paths." The database says the exact opposite.**
+Verified independently by Cowork: **76 of 76 gov views that read a sale store read
+`sales_transactions`; ZERO read `property_sale_events`** — including **all 30 `cm_gov*` Capital
+Markets views**. Nothing propagates PSE → `sales_transactions`, though the reverse exists.
+
+**So a sale an operator types into the property panel never reaches the comps spine.** Filed as
+**B6c-dup**, ranked above every column repair. **Both stores are individually correct with coherent
+consumers — nothing errors, and no component test can see it, because it is a property of the
+connection.** That is the P0d thesis with an operator-facing cost attached.
+
+⚠️ **I re-measured the orphan population and got a much bigger number than B6c's six. Both are
+right, about different questions — quote them separately.** Anti-joining priced PSE rows (stubs
+excluded) against `sales_transactions` on (property, exact date): **330 orphaned priced comps, 203
+with a cap rate, 2004-12 → 2025-11, $4.48B, max $379.5M** — **325 `costar_export` + 5
+`excel_master`**, and **321 of those properties have NO sale in `sales_transactions` at all
+($3.92B)**, so it is **not** the A2b date-mismatch class. **Two findings: the ~6 operator entries are
+the ONGOING leak (fix the write path); the ~322 properties are a HISTORICAL bulk-load orphan (a
+backfill decision).** ⚠️ **Neither I nor B6c checked them against `exclude_from_property_linking` /
+`sales_exclusion_reason` — some may be excluded from the comps spine BY DESIGN. The honest number is
+between 6 and 322 and the exclusion check is the first step.**
+
+### D2 swept all three projects — 10 genuine defects, 3 low, 5 accepted false positives
+
+Two refinements it earned while running, both now in the contract: **a declared FK is authoritative
+and Postgres already type-checks it**, so only *unFK'd* columns need examining (that killed a whole
+false-positive class); and **every genuinely mismatched undeclared column found is 0% populated** —
+*a column that cannot hold its value never gets one* — so **triage by populated-ness before reading
+names**, since a *populated* mismatch is nearly always a vendor id or a uuid-stored-as-text.
+
+**Two further findings worth carrying:** gov and dia's `property_sale_events` are broken on
+**different** columns (dia's `broker_id` is `uuid` against an `integer` PK), so **neither domain is a
+safe template for the other** — I2's same-shape invariant failing on TYPES, which I2's provenance
+`group by` structurally cannot see. And **`available_listings.true_owner_id` on dia is `integer`
+against a `uuid` PK, 0 of 5,334, on a live central table.**
+
+**Three limits stated rather than smoothed over** — the kind of honesty that makes the rest
+trustworthy: **LCC Opps' zero is BOUNDED, not clean** (151 of 559 `_id` columns evaluated; **408
+unexamined**); the `property_sale_events` `feed_stale` alert should be **re-scoped, not resolved**
+(its bulk producer was retired on purpose and its only live producer is an operator form with no
+cadence, so a 45-day SLA alerts whenever nobody types a sale for six weeks, then sits open forever);
+and **nothing shipped, so there is no guard** — it ships with B6c-dup.
+
 ## 2026-08-28 — 🚨 CLEANUP PASS 3 FOUND A LIVE CREDENTIAL EXPOSURE. That outranks the cleanup.
 
 **`wave0-config-values.txt` is TRACKED IN GIT at the repo root and holds `LCC_API_KEY` in

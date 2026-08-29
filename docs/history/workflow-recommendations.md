@@ -1,3 +1,10 @@
+> # ⚠️ ARCHIVED — the FOUNDING CONCEPT MEMO. Origin-story value; zero operational value.
+> This describes a **personal/family task-capture app** — Microsoft To Do lists, morning/evening
+> routines, kids' schedules, a React app with JSON export/import as its persistence layer. LCC became
+> a CRE BD platform with three Supabase projects and no bundler (classic `<script>` tags).
+> **Kept because it is where this started.** Its one live descendant — the personal-Outlook
+> flag→To Do capture path — is already filed as backlog **J11**.
+
 # Life Command Center — Workflow & Integration Plan
 
 ## Your System at a Glance
