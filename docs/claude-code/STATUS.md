@@ -16,6 +16,39 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-28 — C4: the ranked call list measured for the first time (diagnosis only)
+
+**NOTHING WRITTEN — no migration, no flag, no cron.** Audit:
+[`docs/audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md`](../audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md);
+canonical **§4o** of `docs/architecture/connectivity-and-open-threads.md`; backlog **C4/C4a–C4d**;
+new Dead-End **Class 22**.
+
+⚠️ **Numbered C4, not C3** — `C3` is already a C1-lane doctrine row in `PLANNED-BACKLOG.md`.
+
+This closes the last hop of Scott's chain (the ranked call list) after the T1 + T2a mints took gov
+asset coverage to 57.8% and resolved owners to 5,992. **Cache freshness was ruled out first.**
+
+- **The gate is one column.** Every gov deal-timing band (P1/P2/P3/P8) reads `gov_owner_props`,
+  filtered `effective_owner_role IN ('developer','user_owner')`. It reconciles **to the row**:
+  1,216 candidate gov facts → **74** after the role predicate = the observed P1 count. Not value-,
+  cadence- or opportunity-gated.
+- ⚠️ **`user_owner` is 0 of 66,874 live entities** — half the gate has never matched anything, and
+  a gate arm that never matches is indistinguishable from one that is absent (**Class 22**).
+  `developer` is 715 (1.07%) from a classifier that is **exhausted, not broken** (285 rows lifetime,
+  2 candidates left). `unknown` is **62,554 (93.5%)**.
+- **Only 256 of 5,992 resolved owners (4.3%)** reach the queue; **931 of 1,267 rows (73%)** are
+  data-completion work rather than calls.
+- ⚠️ That classifier is the **N18 view** — which N18 found was ranked arbitrarily, not knowing it
+  sits upstream of the entire ranked call list.
+- **Broker assignment is 48 of 2,301 cadences (~2%).** The obvious fix is the documented
+  three-user-table FK trap; go through `lcc_cadence_point_person()`.
+- 👤 **C4a is Scott's and it is doctrine, not code:** what recorded evidence promotes an owner out
+  of `unknown`. ⚠️ Widening the gate to `unknown` admits 62,554 entities and is refused;
+  a name-based role classifier is refused (~25%/7% measured precision in this arc).
+
+**Cleanup in this change:** two same-round C3-named drafts deleted; connectivity §0 index, the
+audit evidence trail, and the playbook updated in the same commit.
+
 ## 2026-08-28 — Cross-lane property identity contract and build queue documented (design only)
 
 **DOCUMENTATION ONLY — nothing activated, migrated, promoted, or written to live systems.** Canonical design:

@@ -1681,3 +1681,65 @@ Every avoided disaster this session came from that: 103 individual owners nearly
 successful while changing nothing (P163b) — caught by asking what the worker does *after* the
 guard; an AR Global person nearly attached to Global Net Lease (P170) — caught by reading
 nine rows before a write of nine rows.
+
+---
+
+## Class 22 — a GATE ARM that has never matched a row is indistinguishable from one that is absent
+
+**Found 2026-08-28 (C4), on the surface that decides every BD call in the system.**
+
+`v_priority_queue_live`'s `gov_owner_props` CTE — the single source of P1/P2/P3/P8 — filters
+`effective_owner_role = ANY (ARRAY['developer','user_owner'])`. Fleet-wide, **`user_owner` is 0 of
+66,874 live entities.** Nothing has ever written that value. The arm is named in the gate, named in
+the P0.4/P0.5 arms, and named in the doctrine — and it has **never admitted a single row in the
+life of the system.**
+
+**Why nothing catches it.** The predicate is syntactically valid, references a real column, and the
+view returns rows (the *other* arm works). No test fails, no constraint fires, `EXPLAIN` is clean,
+and the band is populated — just at 1/16th of the population it describes. **Reading the SQL makes
+it look like a two-way gate; reading the DATA shows a one-way gate.**
+
+### The detector
+
+For every enumerated value in a gate — `IN (...)`, `= ANY (ARRAY[...])`, a `CASE` arm, a status
+allowlist — **count the rows that match each value INDIVIDUALLY.** A value at exactly zero is the
+finding. One query per gate:
+
+```sql
+select coalesce(behavioral_override, owner_role, '(null)') as arm, count(*)
+from entities where merged_into_entity_id is null group by 1 order by 2 desc;
+```
+
+The shape generalises: **a gate is a claim about a distribution, so measure the distribution.**
+
+### What it found beside the dead arm
+
+The *live* arm was not broken — it was **exhausted**. `developer` is written by a classifier keyed on
+`properties.developer_name` that has produced **285 rows lifetime** and has **2 candidates left**.
+So the same distribution query separates three states that look identical from the SQL:
+
+| arm state | rows | meaning |
+|---|---|---|
+| **0, ever** | `user_owner` | **no producer exists** |
+| small and static | `developer` 715 | a producer that **ran out of input** — working, not broken |
+| dominant | `unknown` 62,554 (93.5%) | **the population the gate excludes** |
+
+**Distinguishing "no producer" from "exhausted producer" from "correctly excluded" is the whole
+value of the class** — they need three completely different responses, and a single "the band is
+small" observation cannot tell them apart.
+
+### ⚠️ The trap in the fix
+
+The obvious repair — widen the gate to admit `unknown` — admits **62,554 entities**, i.e. every junk
+name, SPE husk, counterparty and person in the system, into an operator-facing surface. **A dead gate
+arm is evidence that a CLASSIFIER is missing, not that the gate is wrong.** Cf. P179 Class 2 (a
+ranked-but-behind population needs a filter, not a re-rank) and the Consumption-Layer rule that no
+producer ships without a value gate.
+
+### Sibling classes
+
+- **Class 11** — a detector structurally unable to match returns a confident zero. Class 22 is the
+  same zero on the *production* path rather than the audit path.
+- **Class 19** — a predicate that constrains nothing. Class 22 is its mirror: a predicate that
+  constrains *everything*.
+- **Class 10** — an exclusion keyed on a state nothing ever clears. Here the state is never *set*.

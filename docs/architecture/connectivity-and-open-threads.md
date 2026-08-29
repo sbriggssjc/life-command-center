@@ -17,7 +17,7 @@ Cross-references the per-topic design docs in `docs/architecture/`.
 
 ## 0. 📇 THE TOPIC INDEX — every document on the ownership→contact chain, and what it is for
 
-**This file is the LIVING DOCUMENT for the chain.** Current state is §4e–§4l (**§4l is the newest**); everything else on the
+**This file is the LIVING DOCUMENT for the chain.** Current state is §4e–§4o (**§4o is the newest — the ranked call list**); everything else on the
 topic is listed here with its scope and status so no one has to guess which of ~20 files to open.
 **Nothing below is deleted — an audit is evidence for a date, and dated evidence stays.**
 
@@ -56,7 +56,9 @@ topic is listed here with its scope and status so no one has to guess which of ~
 
 **Chain/connectivity:** `C2a_ASSET_MINT_RENT_FLOOR_CURVE` · `C2_CONNECTIVITY_STALL_MAP`
 (⚠️ carries a supersession banner — three of its numbers moved) · `BD_PIPELINE_FUNNEL_AUDIT` ·
-`C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE`.
+`C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE` · `C2b_SALESFORCE_BRIDGE_SELF_HEALED` ·
+`C2g_UNRESOLVED_OWNER_ORGS` · `C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT` ·
+**`C4_RANKING_LAYER_ROLE_GATE` (§4o — the last hop: why the BD queue reaches 4% of owners)**.
 **Person↔owner (Tier 0):** P186 · P188 · P194 · P195 · P197 → indexed inside `tier0-owner-contact-system.md`.
 **Ownership history:** A1 · A2 · A3 · A4 · A4b · A5 · B1 → indexed inside `ownership-history-lane.md`.
 **Older, still-valid-for-their-date:** `W3.3_owner_merge_audit` (2026-07-30) ·
@@ -1737,3 +1739,99 @@ nobody types a sale for six weeks and then sits open forever — **the B6a *"exp
 failure, inside the freshness registry.** De-register with the reason recorded, or re-register as a
 DECLARED irregular feed. Backlog **B6c-feed**.
 
+
+---
+
+## 4o. C4 — the ranking layer: the whole BD queue is gated on one unset column
+
+> **Audit:** [`docs/audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md`](../audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md).
+> **Diagnosis only, nothing written.** This is the LAST hop of Scott's chain — the ranked call list
+> — and the first time it has been measured.
+
+Measured **2026-08-28 after the T1 + T2a mints, cache verified fresh** (refreshed 4 min before the
+read; `lcc-priority-queue-refresh` every 5 min). **Staleness ruled out first.**
+
+### The gate
+
+Every gov deal-timing band (P1/P2/P3/P8) reads one CTE in `v_priority_queue_live`:
+
+```sql
+gov_owner_props AS (
+  SELECT ... FROM entity_effective_role eer
+    JOIN lcc_entity_portfolio_facts f  ON f.entity_id = eer.entity_id AND f.is_current AND f.source_domain='gov'
+    JOIN lcc_property_attributes   a  ON a.source_domain=f.source_domain AND a.source_property_id=f.source_property_id
+  WHERE eer.effective_owner_role = ANY (ARRAY['developer','user_owner'])   -- ← the entire gate
+)
+```
+
+**It reconciles to the row:** gov properties with a current owner fact, an attributes row, and a
+lease expiring ≤24 months = **1,216**; add the role predicate = **74**; the observed P1 count is
+**74**. Not value-gated, not cadence-gated, not opportunity-gated. The attributes join passes 1,216
+and is *not* the constraint.
+
+### ⚠️ Half the gate has never matched a row, and the other half is exhausted
+
+| `effective_owner_role` | live entities (66,874) | of the 5,992 resolved owners |
+|---|---:|---:|
+| `unknown` | **62,554 (93.5%)** | **4,314 (72%)** |
+| `buyer` | 3,591 | 1,567 |
+| `developer` | 715 (1.07%) | 111 (1.9%) |
+| **`user_owner`** | **0** | **0** |
+
+- **`user_owner` has no producer anywhere.** Named in the gate, in P0.4/P0.5, and in the doctrine;
+  **written by nothing, ever.** ⚠️ **A gate arm that has never matched a row is indistinguishable
+  from one that is absent** — which is exactly why it survived unnoticed. New detector class.
+- **`developer` has a producer that has run out of input, not broken.**
+  `lcc_developer_classification_log` = **285 rows lifetime**, candidates view down to **2 open**.
+  It keys on `properties.developer_name`, so it can only ever find parties a domain DB already
+  labelled. **Working; exhausted.** (Plus 374 `behavioral_override` rows.)
+
+⚠️ This is the **N18 view** — whose ranking N18 found was arbitrary because `attributed_rent`
+self-compared. That view sits **upstream of the entire ranked call list**, which N18 did not know.
+
+### What the queue contains — 73% is data work
+
+**931 of 1,267 rows (73%)** are P0.4 `resolve_ownership_control` (552), P-CONTACT
+`select_prospecting_contact` (231), P0.5 `open_bd_opportunity_needed` (148). **~336** are genuine
+deal-timing signals. **Only 256 of 5,992 resolved owners (4.3%)** appear anywhere in the queue.
+
+The 73% is **not itself a defect** — those are doctrinal producers with named consumers. But a
+surface three-quarters data-completion trains the operator to skim it: the badge-that-is-noise
+failure, one level up.
+
+### Broker assignment ~2%
+
+2,301 cadences, **48** with `owner_user_id`; **14 of 1,267** queue rows. ⚠️ **Do not re-derive the
+mapping** — `touchpoint_cadence.owner_user_id` FKs `users(id)` while
+`lcc_entity_owner_override.owner_user_id` FKs `lcc_users(lcc_user_id)` and **none of those ids exist
+in `public.users`**. The bridge is email via `lcc_cadence_point_person(uuid)`.
+
+### ⚠️ What NOT to do
+
+- **Do not widen the gate to `unknown`** — that admits **62,554 entities**, every junk name and SPE
+  husk included, into the BD bands. Largest available instance of the producer-without-a-value-gate
+  failure.
+- **Do not write a name-based role classifier.** Every lexical owner classifier measured in this arc
+  landed ~25% precision raw (P189, A3) or 7% (P198), 4-of-6 guarded. A role deciding *whether we
+  call someone* is a worse home for that than a merge candidate.
+- **`lcc_looks_like_person` is not a census** (`CITY OF SALEM`, `USAA Real Estate` — A2a/A3/P196).
+
+### 👤 The open question is Scott's, and it is doctrine
+
+**What recorded evidence should promote an owner out of `unknown`?** It decides who gets prospected
+and in which bucket — his chain's *"correct prospecting style in correct buckets."* Facts already on
+hand, none adopted: **portfolio shape** (`lcc_entity_portfolio_facts` knows asset count/domain/rent);
+**acquisition history** (`entity_relationships` `purchases` edges already separate a repeat investor
+from a one-off owner — his own distinction, already modelled); **`is_operator_not_owner`** (P113, a
+recorded flag); and **deed/B5 sales party roles**, which the developer classifier has never read.
+
+⚠️ Whatever fills it **needs a value gate and an auto-retire predicate before it emits**, or it
+recreates the 931-row data-work flood one band up.
+
+### Not measured
+
+dia's bands (this CTE is gov-only) · whether the 336 deal-timing rows are individually good
+(counted, not read) · **value** — no dollar figure on the 1,216 or the 74, and ⚠️ per §4g there are
+**five distinct $500k floors**, so any floor here must be NAMED · **marketing and deal-execution
+actions**, the other half of *"compared to the balance of the leads or marketing activities"* —
+they live outside `v_priority_queue` and **that inventory does not exist today.**
