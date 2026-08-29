@@ -16,6 +16,31 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-28 — C4 §5 self-correction: widening the BD gate admits 2,521, not 62,554 (diagnosis only)
+
+**NOTHING WRITTEN.** Same-day follow-up to the C4 entry below, sizing the decision it left to Scott.
+New Dead-End **Class 23**. Backlog **C4a** rewritten, **C4e** added.
+
+⚠️ **The C4 audit's own §5 warning was wrong by 25× and is corrected in place.** It said widening
+`gov_owner_props`'s role gate to `unknown` admits **62,554 entities** — "every junk name, every SPE
+husk." The CTE **already joins** `lcc_entity_portfolio_facts` (current, gov) and
+`lcc_property_attributes`, which bound the population to **2,521**, of which **3** are placeholder
+or brokerage names. **The predicted flood does not exist.**
+
+- **Class 23 — a predicate's blast radius belongs to the QUERY, not the column it names.** Reading
+  the `WHERE` and reaching for the column's fleet-wide distribution skips the JOINs above it.
+  ⚠️ An overstated blast radius fails **as a refusal**: it reads as caution, gets written down, and
+  is quoted as a reason not to ship. **Wrong-and-cautious is not a safe default.**
+- **Sizing:** widening produces P1 **74 → 553**, P2 **32 → 242**, P3 **62 → 414**, **997 distinct
+  owners**. The P1 delta is 479 rows / **449 owners / $148.0M**, named rows reading as genuine gov
+  landlords (`1101 WILSON OWNER, LLC`, `131 SOUTH DEARBORN LLC`).
+- ⚠️ **The binding constraint is REACHABILITY, not noise — only 56 of 449 (12.5%) are contactable**,
+  39 have a cadence. Widening alone emits ~393 owners nobody can call: the documented **P112**
+  failure. **Recommendation is sequencing, not refusal** — gate the widening on the reachability
+  precondition the cadence engine already applies; the 56 are actionable day one.
+- **Newly visible:** **`buyer` is 2,432 reachable entities**, excluded deliberately and never
+  re-examined (**C4e**); an `operator` role exists (2 entities).
+
 ## 2026-08-28 — C4: the ranked call list measured for the first time (diagnosis only)
 
 **NOTHING WRITTEN — no migration, no flag, no cron.** Audit:

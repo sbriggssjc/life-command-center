@@ -1806,11 +1806,43 @@ mapping** — `touchpoint_cadence.owner_user_id` FKs `users(id)` while
 `lcc_entity_owner_override.owner_user_id` FKs `lcc_users(lcc_user_id)` and **none of those ids exist
 in `public.users`**. The bridge is email via `lcc_cadence_point_person(uuid)`.
 
-### ⚠️ What NOT to do
+### ⚠️ SELF-CORRECTION (same day) — widening admits 2,521, not 62,554
 
-- **Do not widen the gate to `unknown`** — that admits **62,554 entities**, every junk name and SPE
-  husk included, into the BD bands. Largest available instance of the producer-without-a-value-gate
-  failure.
+**This section first said widening to `unknown` admits 62,554 entities. That is wrong by 25×.**
+`gov_owner_props` **already joins** `lcc_entity_portfolio_facts` (current, gov) **and**
+`lcc_property_attributes` — joins that are a value gate in all but name. 62,554 is the fleet-wide
+`unknown` count; **the count that can reach this CTE is 2,521.**
+
+⚠️ **Quote the population at the point the predicate is APPLIED, not at the table it names.**
+Reading the `WHERE` clause and reaching for the column's fleet-wide distribution skips the JOINs
+directly above it. Class 19's sibling: blast radius is a property of the query, not the column.
+
+| the 2,521 reachable `unknown` entities | |
+|---|---:|
+| organization-typed | 2,438 · person-typed 83 |
+| already a resolved owner | **1,952** |
+| **placeholder or brokerage names** | **3** |
+| ≥2 current assets · `purchases` edge · already contactable | 231 · 383 · 320 |
+
+**Three junk names in 2,521** — the eligible-set joins already removed the flood. Also newly
+visible: **`buyer` is 2,432 reachable entities**, excluded deliberately, and an `operator` role
+exists (2).
+
+**What widening would produce:** P1 **74 → 553**, P2 **32 → 242**, P3 **62 → 414**; **997 distinct
+owners**. The P1 delta alone is 479 rows / **449 owners / $148.0M** (top asset per owner), and the
+named rows are genuine gov landlords — `1101 WILSON OWNER, LLC`, `131 SOUTH DEARBORN LLC`,
+`1515 FLAGLER PROPERTY LP`.
+
+### ⚠️ The real constraint is REACHABILITY, and it is severe
+
+**Only 56 of the 449 new P1 owners (12.5%) are contactable**; 39 have a cadence. Widening alone
+emits **~393 owners nobody can call** — the **P112** failure this repo already documents: *never
+seed a cadence for a party with no contact method, because it can never advance and only ages into
+"overdue."* **So the answer is sequencing, not refusal:** widening is safe and valuable, and it
+should ship gated on the reachability precondition the cadence engine already applies. **The 56
+contactable owners are actionable on day one.**
+
+### ⚠️ What still should NOT be done
 - **Do not write a name-based role classifier.** Every lexical owner classifier measured in this arc
   landed ~25% precision raw (P189, A3) or 7% (P198), 4-of-6 guarded. A role deciding *whether we
   call someone* is a worse home for that than a merge candidate.
