@@ -3600,6 +3600,71 @@ with a competing clinical identity to review). LCC surfaces the review lane:
   deterministic merges only. Self-measure → `v_lcc_property_twin_assist_accuracy`. Migration
   `20260814130000`.
 
+## dia Deals ▸ Ownership — a curated allowlist wearing a detector's clothes (2026-08-29)
+
+The tab rendered 0/0/0/0 with "No canonical clusters yet — run
+`dia_unify_canonical_true_owners` to seed." **It was a statement timeout, not an empty
+view.** dia `edge_logs` carried `GET | 500` on
+`v_recorded_owner_canonical_clusters?select=*&order=canonical_total_properties.desc&limit=500`
+and `postgres_logs` "canceling statement due to statement timeout" **exactly 8 s later** —
+PostgREST connects as `authenticator` (`statement_timeout=8s`) and the view measured
+**13,923 ms**. Fix + full write-up:
+`supabase/migrations/dialysis/20261003120000_dia_ownership_clusters_statement_timeout_fix.sql`,
+`docs/audits/DIA_OWNERSHIP_LANE_COVERAGE_2026-08-29.md`. Backlog **P15 / OWN1–OWN7**.
+
+- **⚠️ `diaQuery()` RETURNS `[]` ON EVERY NON-OK RESPONSE — a 500 and an empty view are the
+  same pixels.** The loader's `catch` never fired, no toast appeared, and the empty state
+  then *recommended a real owner-merge write* (`dia_unify_canonical_true_owners`, which
+  exists, so the advice reads plausible) on the strength of an error. Its dry run today is
+  **0 created / 14 owners / 7 properties** — it would have fixed nothing and moved rows for
+  no reason. `diaQuery` now takes an opt-in `throwOnError` (default false, so the ~70 other
+  callers are byte-identical). **Any surface whose empty state asserts something about the
+  DATA must opt in**, or it is guessing.
+- **⚠️ A PER-ROW plpgsql FUNCTION IS THE WHOLE BUDGET, AND THE VIEW WAS THE WRONG PLACE TO
+  FIX IT.** `dia_canonicalize_owner_name` runs `SELECT canonical FROM
+  owner_canonical_patterns WHERE s ~ match_regex` — 38 regexes — once per row: 7,255 × 38 =
+  **275,618 regex evaluations, of which 72 match**, measured at **8,137 ms** on its own
+  (`is_known_operator`, the other per-row call, is 55 ms). Three read-time rewrites were
+  implemented and **measured before being rejected** — drop the redundant correlated EXISTS
+  13.5 s, LATERAL join the pattern table 7.1 s, drive from the 38 patterns 6.7 s. None
+  clears 8 s. The work moved to write time: `recorded_owners.canonical_name` behind a
+  single-writer `BEFORE INSERT OR UPDATE OF name` trigger → **133 ms, 105×**, 0-row
+  equivalence diff both directions.
+- **⚠️ THE STORED CANONICAL TRACKS `name`, NOT THE PATTERN TABLE.** Editing
+  `owner_canonical_patterns` does NOT retro-fix stored rows — **run
+  `select * from dia_recanonicalize_recorded_owners(false);` after any change to it.**
+  `v_dia_canonical_name_drift` is the standing detector (must be 0, positive-controlled) and
+  is what distinguishes a fixed producer from a one-shot backfill (Class 8).
+- **⚠️ THE LANE IS A READOUT OF 38 HAND-WRITTEN REGEXES, NOT A SURVEY OF DUPLICATE OWNERS.**
+  The canonicalizer returns `btrim(name)` on a miss, and there are **ZERO byte-identical
+  duplicate `recorded_owners.name` values** — so the only way to cluster is for someone to
+  have written a pattern. **72 of 7,255 owners (1.0%)** can ever appear. The panel copy said
+  "biggest leverage first" and read as coverage; it now states its own scope.
+- **⚠️ WIDENING THE GROUPING KEY BUYS GROUPS, NOT PROPERTIES — measured, then rejected.**
+  Case+punct 300 groups / **463 properties**; `dia_norm_owner_name` 385 / **652**; today
+  16 / **500**. ~20× the groups for the same properties, because the patterns already cover
+  the consolidators and the tail is two-row variants holding 1–2 properties. And
+  `dia_norm_owner_name` is the **grouping-for-review, banned-for-identity** class
+  (`dup-pair-planner.ownerCore` / `lcc_normalize_entity_name` / `lcc_owner_strict_core`).
+- **⚠️ "true_owner IS NULL" IS THE WRONG PREMISE — THE SLOT IS OCCUPIED BY THE TENANT.**
+  **0** properties have a recorded owner and a null true owner; the propagation already ran.
+  But of the 500 lane properties, **395 (79%)** carry a **flagged** operator as true owner
+  (Realty Income's 72 read *American Renal*; MassMutual's 47 read *Fresenius*; Elliott Bay's
+  25 all read *DaVita*), plus **4,028 more** properties fleet-wide with no recorded owner and
+  an operator in the slot. That is **P113** at scale, so "link the buyer to the company
+  record" is a **supersession decision, not a fill** — and `dia_unify_canonical_true_owners`
+  correctly refuses it (`is_operator_not_owner IS NOT TRUE` in its plan). The flag is already
+  set on all 395: **reuse it, never write a second name-based operator test.**
+- **⚠️ AND READING THE ROWS FOUND TWO PATTERN PRECISION DEFECTS A RATE WOULD HAVE HIDDEN.**
+  `^healthcare\s+realty(\s+trust)?` has no end anchor → **`HealthCare Realty Solutions`**
+  (a different company) canonicalizes into Healthcare Realty Trust; the Sumitomo alternation
+  matches any `sumitomo mitsui …` → **`Sumitomo Mitsui Trust Bank`** (a different corporate
+  group) is folded into SMBC **and already carries SMBC's `true_owner_id`** — a wrong link
+  written, not merely proposed. Same pattern swallows
+  `SMBC Leasing & Finance Inc, Stanley F & Jane M Banach` (the P158a `&` hazard on a write
+  path). **All three hold 0 properties**, which is why to fix it now; surfaced not applied
+  (OWN1) because it is a judgement about company identity.
+
 ## CM export — a KPI tile and its data tab must read ONE view (Prompt 119, 2026-08-18)
 
 The 2Q-2026 Dialysis book shipped two numbers for the same metric because a KPI-block view and its
