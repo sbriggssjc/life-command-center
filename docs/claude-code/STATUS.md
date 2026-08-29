@@ -92,6 +92,7 @@ annotated correction. `tests/unit/test_b6cdup_pse_propagation.py` (gov, 11 tests
 **Not done, by design:** no backfill (nothing to backfill) · the 376 unlinked events untouched
 (`B6c-orphan` re-scoped) · the 7 quarantined twins untouched · **dia not ported** — it is 72:2, not
 77:0, and has real PSE consumers (`B6c-dup-dia`).
+
 ## 2026-08-28 — C4 §5 self-correction: widening the BD gate admits 2,521, not 62,554 (diagnosis only)
 
 **NOTHING WRITTEN.** Same-day follow-up to the C4 entry below, sizing the decision it left to Scott.
