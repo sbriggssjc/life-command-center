@@ -2846,10 +2846,18 @@ trigger is the sole writer. Writeup: `docs/audits/N15c_CANONICAL_NAME_SINGLE_WRI
   carrying `d8fcfbf` preceded the 20:03 backfill. The sandbox cannot reach the Railway host —
   `http=000` while `api.github.com` returns 200 — so `/version` must be checked from somewhere that
   can.)
-- ✅ **THE PRODUCER IS VERIFIED FIXED (2026-08-28 07:35).** The nightly cron block minted 3 entities;
-  the trigger derived every key correctly, **drift held at 0**, and each new row is the only live
-  entity on its key — **0 duplicate-key groups touched by a new mint.** The trigger and the JS
-  dual-read agree in production. That, not the backfill, is what closed the Class 8 question.
+- ✅ **THE PRODUCER IS VERIFIED FIXED — AND CONFIRMED AT SCALE (2026-08-29).** The first check rested
+  on 3 mints; a bulk sync has since minted **4,618** (live 62,346 → 66,901) and **drift is still 0**.
+- **⚠️ DRIFT = 0 IS NECESSARY AND NOT SUFFICIENT — A DUPLICATE STORM READS DRIFT 0 TOO**, because the
+  trigger dutifully computes a correct key for every duplicate. The gate that matters is *did a new
+  mint land on a key that already had a live entity*: **22 of 4,618 (0.48%)**. And **19 of those are
+  not an LCC defect** — each colliding gov `asset` pair carries a DIFFERENT `gov/asset/<property_id>`,
+  i.e. two rows in gov `properties` for one building, differing only by address punctuation
+  (`303 "H" St` / `303 H St`, `St. Albans` / `St Albans`) which the key strips. The asset path mints
+  one entity per domain property id **by contract**, so LCC is mirroring a DOMAIN-level duplicate the
+  N15c key merely made visible (**N20**) — do not "fix" it by weakening that contract. **The genuine
+  residual is 3 of 4,618 (0.06%)**, from `api/sync.js` / `api/domains.js`, which now compute the right
+  key but still POST `entities` without looking up by it (**N21**).
 - 👤 **One decision remains Scott's, and its size CHANGED:** whether the column becomes an enforced
   **UNIQUE** key. ⚠️ **3,930 was measured on the OLD keys; on the N15c key it is 8,136 groups**
   (`v_duplicate_candidates`). The extra ~4,200 are **not an over-collapse** — read on named rows they

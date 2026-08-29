@@ -290,6 +290,35 @@ key correctly — `JACO SAVANNAH REALTY, INC.` → `jaco savannah realty`, `asse
 were touched by a new mint.** So the trigger and the JS dual-read agree in production, and the
 ~4/day duplicate leak did not recur. This — not the backfill — is the verification the round turns on.
 
+### ✅ 2026-08-29 07:35 — CONFIRMED AT SCALE: 4,618 mints, drift still 0
+
+The 08-28 confirmation rested on 3 mints, which is thin. A bulk sync has since run: **4,618 entities
+minted since the backfill** (live 62,346 → 66,901) and **`v_lcc_canonical_name_drift` is still 0**.
+
+⚠️ **Drift = 0 is necessary and NOT sufficient, and this is exactly where that bites.** A duplicate
+storm would also read drift 0 — the trigger would dutifully compute a correct key for every
+duplicate. The gate that matters is *did a new mint land on a key that already had a live entity*:
+
+| | |
+|---|---:|
+| new live rows | 4,618 |
+| landed on a pre-existing live key (same entity_type) | **22 (0.48%)** |
+| duplicate keys created **within** the batch | 47 |
+
+**19 of the 22 are gov `asset` entities and are NOT an LCC minting defect.** Each colliding pair
+carries a **different** `gov/asset/<property_id>` (`gov/asset/1366` vs `gov/asset/2187` for
+`2003 W Adams Ave, El Centro, CA`), so they are **two rows in gov `properties` for one building**.
+The asset path mints one entity per domain property id by contract, so LCC is faithfully mirroring a
+domain-level duplicate. The names differ only by address punctuation — `5020 W. North Ave` /
+`5020 W North Ave`, `303 "H" St` / `303 H St`, `St. Albans` / `St Albans` — which the N15c key
+strips, so **the key is what made them visible.** Filed as **N20**.
+
+**The genuine residual is 3 of 4,618 (0.06%)**: `Sukhpreet Sidhu`, `Alexander Moore` (person, gov)
+and `Wasa Properties` / `WASA Properties` (organization, dia). These key identically and a dual-read
+lookup would have found them, so they came from a writer that computes the key but does **not** look
+up by it — `api/sync.js` and `api/domains.js` both POST `entities` directly. N15c gave those writers
+the right key; giving them a lookup is a separate small change, filed as **N21**.
+
 ### ⚠️ CORRECTION: enforcing UNIQUE is a BIGGER job than §7 said — 3,930 → 8,136 groups
 
 §7 decision 2 quoted 3,930 violating groups. That was measured on the OLD keys. On the N15c key
