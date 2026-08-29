@@ -16,6 +16,29 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-29 — C7: broker assignment is premature, not broken (diagnosis; recommendation is NOT to build)
+
+**NOTHING WRITTEN.** Audit `docs/audits/C7_BROKER_ASSIGNMENT_IS_PREMATURE_2026-08-29.md`; canonical
+**§6 rewritten**; **C4c moved to ⛔ do-not-build**; **C7a filed**.
+
+C4c was my own recommendation last round — *"a build rather than an investigation, with a documented
+answer and a documented trap."* **Measuring it first refuted that.**
+
+- **The bridge is not broken.** 161 of 161 `lcc_entity_owner_override` rows resolve through
+  `v_lcc_entity_point_person`. The documented three-user-table trap is real **and already solved**.
+- ⚠️ **It is empty, and the two populations are DISJOINT: 0 of the 303 C6 owners has an
+  assignment.** A propagator would move **0 rows** for the population C6 just surfaced — **P137**,
+  a consumer wired to a producer that does not exist, reporting success while moving nothing.
+- ⚠️ **No derivation signal exists.** 263 of 303 C6 owners have a contact email; **13 have ever
+  been emailed; 1 distinct sender.** Only one mailbox has ever been ingested.
+- ⚠️ **The real reason: `lcc_users` has 4 rows and one is active.** The queue belongs to nobody
+  because the team has not started working it, not because the plumbing failed.
+- ⚠️ **Do NOT default-stamp 303 owners to Scott** — the "status nobody earned" failure (A5
+  `gap_resolved`, B6b-lead `filtered_multi_tenant`). A UI default or filter is free; a row is not.
+- 🟢 **C7a filed — mailbox coverage.** One ingested mailbox bounds every relationship signal in the
+  system, not just assignment; `contact-reconciliation-outbound.md` hits the same wall. **It was
+  filed nowhere before.** Sized at zero, deliberately.
+
 ## 2026-08-29 — C6 SHIPPED: the seller-side bands now gate on current holding + reachability
 
 **LIVE on LCC Opps.** Migration `supabase/migrations/20261002110000_lcc_c6_current_holding_seller_bands.sql`;
