@@ -135,6 +135,43 @@ C4 recommended sequencing the widening behind reachability. That still holds, an
    goes into* is doctrine, and §2's caveat matters: firing the band is not the same as choosing the
    pitch.
 
+## 5b. ⚠️ C5b answered — and it corrects §5's "narrower" framing
+
+§5 called the per-asset fix "narrower and better founded than widening to `unknown`." **Better
+founded: yes. Narrower on its own: no.** P5 and P8 were untested when §5 was written; measured, the
+naive per-asset rule is a **20× flood**, not a narrow fix.
+
+| band | today | per-asset, all roles |
+|---|---:|---:|
+| P1 `lease_expiry_24mo` | 74 | 1,215 |
+| P5 `aged_building_value_add` | 58 | **1,681** |
+| P8 `agency_active_solicitations` | 76 | **1,497** |
+| **all five bands** | **226 rows** | **4,506 rows / 3,622 owners** |
+
+⚠️ **`aged_props` is NOT gov-scoped** — it joins `lcc_entity_portfolio_facts` with no
+`source_domain` filter, so **P5 covers dia too** (26 → 565 dia rows). Any change to the role gate
+that touches P5 is a cross-domain change. Nothing else in this arc has been.
+
+**P5 is 83% of the flood and is the weakest signal in the set** — "built 25+ years ago, not
+renovated in 15" describes a large share of the portfolio and implies no timing. It should keep the
+role gate.
+
+### The design that actually works: per-asset **plus** the reachability precondition
+
+| band | today | per-asset + reachable |
+|---|---:|---:|
+| P1 `lease_expiry_24mo` | 74 | **149** |
+| P2 `firm_term_ending_24mo` | 32 | **95** |
+| P3 `ten_year_window` | 62 | **163** |
+| P8 `agency_active_solicitations` | 76 | **213** |
+| **total** | **244 rows** | **497 rows / 303 owners** |
+
+**~2×, not 14× — and every emitted row is callable.** Reachability is not a nice-to-have here; it
+is what converts a flood into a call list. Without it the same change emits 3,235 rows over 2,719
+owners of whom **only 11% can be contacted** — the P112 failure at scale.
+
+**P5 unchanged, dia untouched.** This is the recommended build.
+
 ## 6. What was NOT measured
 
 - **Whether any named lease is actually terminal.** The attributes row carries a date, not an
@@ -146,4 +183,6 @@ C4 recommended sequencing the widening behind reachability. That still holds, an
 - **dia.** gov only — `gov_owner_props` is gov-scoped.
 - **Portfolio rent.** Only top-asset rent per owner was pulled; the $410.4M `buyer` figure is a sum
   over qualifying gov assets, a different basis. **Do not mix the two.**
-- **P5 / P8 / P-BUYER bands.** Only P1/P2/P3 were tested for the invisible population.
+- **P-BUYER.** P5 and P8 are now measured (§5b); P-BUYER is not.
+- **dia's deal-timing equivalent.** P5 is cross-domain but was excluded from the recommendation;
+  no dia band was sized.
