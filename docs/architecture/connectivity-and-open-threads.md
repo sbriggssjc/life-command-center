@@ -17,7 +17,7 @@ Cross-references the per-topic design docs in `docs/architecture/`.
 
 ## 0. 📇 THE TOPIC INDEX — every document on the ownership→contact chain, and what it is for
 
-**This file is the LIVING DOCUMENT for the chain.** Current state is §4e–§4o (**§4o is the newest — the ranked call list**); everything else on the
+**This file is the LIVING DOCUMENT for the chain.** Current state is §4e–§4p (**§4p is the newest — the callable list + the `buyer` exclusion**); everything else on the
 topic is listed here with its scope and status so no one has to guess which of ~20 files to open.
 **Nothing below is deleted — an audit is evidence for a date, and dated evidence stays.**
 
@@ -58,7 +58,8 @@ topic is listed here with its scope and status so no one has to guess which of ~
 (⚠️ carries a supersession banner — three of its numbers moved) · `BD_PIPELINE_FUNNEL_AUDIT` ·
 `C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE` · `C2b_SALESFORCE_BRIDGE_SELF_HEALED` ·
 `C2g_UNRESOLVED_OWNER_ORGS` · `C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT` ·
-**`C4_RANKING_LAYER_ROLE_GATE` (§4o — the last hop: why the BD queue reaches 4% of owners)**.
+`C4_RANKING_LAYER_ROLE_GATE` (§4o — the last hop: why the BD queue reaches 4% of owners) ·
+**`C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION` (§4p — 224 owners callable today; `buyer` is 578 / $410.4M)**.
 **Person↔owner (Tier 0):** P186 · P188 · P194 · P195 · P197 → indexed inside `tier0-owner-contact-system.md`.
 **Ownership history:** A1 · A2 · A3 · A4 · A4b · A5 · B1 → indexed inside `ownership-history-lane.md`.
 **Older, still-valid-for-their-date:** `W3.3_owner_merge_audit` (2026-07-30) ·
@@ -1870,6 +1871,64 @@ they live outside `v_priority_queue` and **that inventory does not exist today.*
 
 ---
 
+## 4p. C5 — the callable list, and the `buyer` exclusion is the larger half
+
+> **Audit:** [`docs/audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md`](../audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md).
+> **Diagnosis only.** Answers **C4e** and produces the list C4a implied.
+
+**1,924 owners hold a current gov property with a P1/P2/P3 deal-timing signal and are invisible to
+the queue** — 1,052 typed `buyer`, 871 `unknown`. **224 are contactable today.**
+
+⚠️ **C4's "56 contactable" was P1-only and `unknown`-only.** Across all three bands and both excluded
+roles it is **224**. Quote 224.
+
+### ⚠️ C4e answered — the `buyer` exclusion is a category error, not a bad label
+
+**578 owners typed `buyer` hold a gov property with a lease expiring inside 24 months, carrying
+$410.4M** — larger than the `unknown` half C4 focused on. And the labels are *correct*:
+
+| owner | role | gov assets | signal | contact |
+|---|---|---:|---|---|
+| **Boyd Watterson Asset Mgmt** | `buyer` | **45** | lease expiry **2026-08-31** | Eric Dowling |
+| Prologis, L.P. | `buyer` | 3 | 2027-07-31 | Jeff Behm |
+| RMR Group | `buyer` | 5 | 2027-04-11 | Jenkin Cagwin |
+| HC Government Realty Trust | `buyer` | 6 | 2027-01-11 | David Lucas |
+
+They **are** buyers. They are **also, right now, the owner of a building whose lease is running
+out.** `entities.owner_role` is a **party-level identity**; the bands ask a **per-asset question**.
+The CTE has already joined `lcc_entity_portfolio_facts` on `is_current = true` — **it is holding the
+per-asset fact and then discarding it in favour of the entity's global label.** A REIT is
+permanently a buyer and permanently ineligible however many gov buildings it owns.
+
+⚠️ **Firing the band is not choosing the pitch.** `account-based-contact-intelligence.md` is explicit
+that acquisitions and disposition are different contacts and different tones, and the buy-side
+relationship is the funnel *into* the disposition conversation. **Which bucket the call lands in is
+C4a's doctrine question, not this one.**
+
+### Urgency
+
+**173 owners have a gov lease expiring within 90 days and are invisible**; **14 contactable**, 28
+within 180 days. ⚠️ **Boyd Watterson: 2026-08-31 — three days from the measurement**, 45 gov assets,
+contact confirmed, on no surface. **Not verified: whether that lease is renewing, extended or
+terminal** — the attributes row carries a date, not an outcome. **Read the asset before acting.**
+
+### The names are the ones already resolved
+
+Boyd Watterson · Easterly · NGP Capital · RMR · Gardner Tanenbaum · GI Partners · USAA Real Estate ·
+Trammell Crow · Prologis. **The Tier 0 arc spent twelve rounds confirming these contacts. The signal
+existed the whole time. The role gate sat between them.**
+
+### What it changes
+
+**The per-asset fix is narrower and better founded than widening to `unknown`** — it needs no new
+classifier and no doctrine call, because the join is already there and already says `is_current`.
+`buyer` alone is 578 owners / $410.4M. **224 owners are callable the day it ships.**
+
+### Not measured
+
+Whether any named lease is terminal (date ≠ outcome) · whether the 224 contacts are the *disposition*
+decision-maker · dia · portfolio rent (only top-asset per owner; the $410.4M is a different basis —
+**do not mix them**) · P5/P8/P-BUYER.
 ## §4p — B6c-dup: the two sale stores disagreed about which is canonical (2026-08-29)
 
 > Full writeup: [`docs/audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md`](../audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md).
