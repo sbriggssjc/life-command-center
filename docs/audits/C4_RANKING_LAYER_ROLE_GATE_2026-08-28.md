@@ -111,11 +111,68 @@ ids exist in `public.users`**, so stamping the override id onto a cadence FK-vio
 The bridge is email, resolved once by `lcc_cadence_point_person(uuid)` / `v_lcc_entity_point_person`.
 Documented footgun, documented answer.
 
-## 5. What NOT to do
+## 5. ⚠️ SELF-CORRECTION — widening this gate admits 2,521 entities, not 62,554
 
-- ⚠️ **Do not simply widen the gate to `unknown`.** That admits **62,554 entities** — every junk
-  name, every SPE husk, every counterparty, every person — into the BD bands. It is the exact
-  producer-without-a-value-gate failure, at the largest scale available in this system.
+**The first version of this audit said widening to `unknown` "admits 62,554 entities — every junk
+name, every SPE husk, every counterparty" and called it the largest producer-without-a-value-gate
+failure available. That was wrong for THIS CTE, by 25×, and it was wrong for a structural reason
+worth recording.**
+
+`gov_owner_props` does not read `entities` alone. It **already joins** `lcc_entity_portfolio_facts`
+(current, gov) **and** `lcc_property_attributes`. Those joins are a value gate in everything but
+name: an entity only reaches the CTE if it currently holds a gov property we hold attributes for.
+**62,554 is the count of `unknown` entities fleet-wide; the count that can reach this CTE is 2,521.**
+
+⚠️ **The lesson generalises: quote the population at the point the predicate is APPLIED, not at the
+table it names.** I read the `WHERE` clause and reached for the column's fleet-wide distribution,
+skipping the two JOINs directly above it. Same family as Class 19 — a predicate's blast radius is a
+property of the query, not of the column.
+
+### The population, measured on the 2,521
+
+| | |
+|---|---:|
+| `unknown` entities reachable by `gov_owner_props` | **2,521** |
+| …organization-typed | 2,438 |
+| …person-typed | 83 |
+| …already a resolved owner in `lcc_property_owner` | **1,952** |
+| …**placeholder or brokerage names** | **3** |
+| …holding ≥2 current assets | 231 |
+| …carrying a `purchases` edge | 383 |
+| …already contactable | 320 |
+
+**Three junk names in 2,521.** The flood this warning predicted does not exist — the eligible-set
+joins already removed it. Also newly visible: **`buyer` is 2,432 reachable entities**, a large
+population the gate excludes deliberately, and an `operator` role exists (2 entities).
+
+### What widening to `unknown` would actually produce
+
+| band | today | + `unknown` |
+|---|---:|---:|
+| P1 `lease_expiry_24mo` | 74 | **553** |
+| P2 `firm_term_ending_24mo` | 32 | **242** |
+| P3 `ten_year_window` | 62 | **414** |
+| distinct owners across the three | — | **997** |
+
+The P1 delta alone is **479 rows over 449 owners carrying $148.0M** of annual rent (top asset per
+owner). Named rows read as genuine gov landlords, not noise: `1101 WILSON OWNER, LLC`,
+`131 SOUTH DEARBORN LLC`, `1515 FLAGLER PROPERTY LP`, `10 Canebrake, LLC` — the SPE shape this
+whole arc has been resolving.
+
+### ⚠️ But the real constraint is REACHABILITY, and it is severe
+
+**Only 56 of those 449 new P1 owners (12.5%) are already contactable**; 39 have a cadence. Widening
+the gate without pairing it to contact acquisition would emit **~393 owners nobody can call**, which
+is precisely the **P112** failure already documented in `CLAUDE.md`: *never seed a cadence for a
+party with no contact method and no named person, because it can never advance and only ages into
+"overdue."*
+
+**So the honest recommendation is sequencing, not refusal:** widening is *safe* (3 junk names) and
+*valuable* ($148M, 449 owners), and it should follow — or ship gated on — the reachability
+precondition the cadence engine already applies. The 56 contactable owners are the slice that is
+actionable the day it ships.
+
+## 5b. What still should NOT be done
 - ⚠️ **Do not write a name-based role classifier.** Every lexical owner classifier measured in this
   arc landed at **~25% precision raw** (P189 domain-keyed merge, A3 sponsor tokens, P198
   co-proposal at 7%), and the guarded versions reached 4-of-6. A role that decides *whether we call
