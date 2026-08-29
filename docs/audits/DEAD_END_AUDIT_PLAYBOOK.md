@@ -1743,3 +1743,56 @@ producer ships without a value gate.
 - **Class 19** — a predicate that constrains nothing. Class 22 is its mirror: a predicate that
   constrains *everything*.
 - **Class 10** — an exclusion keyed on a state nothing ever clears. Here the state is never *set*.
+
+
+---
+
+## Class 23 — a predicate's blast radius belongs to the QUERY, not to the column it names
+
+**Found 2026-08-28 (C4), by making the mistake and catching it before it reached a decision.**
+
+C4 warned that widening `gov_owner_props`'s role gate to `unknown` would admit **62,554 entities**
+— "every junk name, every SPE husk, every counterparty" — and called it the largest available
+producer-without-a-value-gate failure. **The real number is 2,521, and 3 of them are junk.**
+
+The error: the `WHERE` clause names `effective_owner_role`, so the fleet-wide distribution of that
+column looked like the answer. But **two JOINs directly above it had already bounded the
+population** — `lcc_entity_portfolio_facts` (current, gov) and `lcc_property_attributes`. Those
+joins are a value gate in everything but name. Reading the predicate and skipping its context
+overstated the risk **25×**, in the direction of refusing a change that is actually safe.
+
+### The detector
+
+**Before quoting a population for any predicate, COUNT IT at the point the predicate is applied —
+run the query's own FROM/JOIN chain and only then group by the gated column.** Never substitute the
+column's distribution over its base table.
+
+```sql
+-- wrong: the column's fleet-wide distribution
+select role, count(*) from entities group by 1;          -- 62,554 unknown
+
+-- right: the distribution the predicate actually sees
+select coalesce(behavioral_override, owner_role,'unknown') as role, count(*)
+from entities e
+join lcc_entity_portfolio_facts f on ... join lcc_property_attributes a on ...
+group by 1;                                               -- 2,521 unknown
+```
+
+The two numbers differing by an order of magnitude **is itself the signal** that the joins are
+carrying the real gate.
+
+### Why it matters more than a normal arithmetic slip
+
+An overstated blast radius does not fail loudly — **it fails as a refusal.** It reads as caution,
+gets written into a doc as a warning, and is then quoted by the next reader as an established
+reason not to do something. A number that is 25× too large in the *conservative* direction is still
+wrong, and it costs a change that should have shipped. **Wrong-and-cautious is not a safe default.**
+
+### Sibling classes
+
+- **Class 19** — a predicate that constrains nothing. Class 23 is the inverse error in the
+  *observer*: a predicate assumed to constrain far more than it does.
+- **Class 11** — an implausibly clean result is a bug signal. Its mirror: an implausibly *alarming*
+  result deserves the same positive control before it becomes a finding.
+- The **`LIMIT 5` without the `ORDER BY`** footgun in `CLAUDE.md` — same root: measuring a query
+  shape other than the one that actually runs.

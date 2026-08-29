@@ -1806,11 +1806,43 @@ mapping** — `touchpoint_cadence.owner_user_id` FKs `users(id)` while
 `lcc_entity_owner_override.owner_user_id` FKs `lcc_users(lcc_user_id)` and **none of those ids exist
 in `public.users`**. The bridge is email via `lcc_cadence_point_person(uuid)`.
 
-### ⚠️ What NOT to do
+### ⚠️ SELF-CORRECTION (same day) — widening admits 2,521, not 62,554
 
-- **Do not widen the gate to `unknown`** — that admits **62,554 entities**, every junk name and SPE
-  husk included, into the BD bands. Largest available instance of the producer-without-a-value-gate
-  failure.
+**This section first said widening to `unknown` admits 62,554 entities. That is wrong by 25×.**
+`gov_owner_props` **already joins** `lcc_entity_portfolio_facts` (current, gov) **and**
+`lcc_property_attributes` — joins that are a value gate in all but name. 62,554 is the fleet-wide
+`unknown` count; **the count that can reach this CTE is 2,521.**
+
+⚠️ **Quote the population at the point the predicate is APPLIED, not at the table it names.**
+Reading the `WHERE` clause and reaching for the column's fleet-wide distribution skips the JOINs
+directly above it. Class 19's sibling: blast radius is a property of the query, not the column.
+
+| the 2,521 reachable `unknown` entities | |
+|---|---:|
+| organization-typed | 2,438 · person-typed 83 |
+| already a resolved owner | **1,952** |
+| **placeholder or brokerage names** | **3** |
+| ≥2 current assets · `purchases` edge · already contactable | 231 · 383 · 320 |
+
+**Three junk names in 2,521** — the eligible-set joins already removed the flood. Also newly
+visible: **`buyer` is 2,432 reachable entities**, excluded deliberately, and an `operator` role
+exists (2).
+
+**What widening would produce:** P1 **74 → 553**, P2 **32 → 242**, P3 **62 → 414**; **997 distinct
+owners**. The P1 delta alone is 479 rows / **449 owners / $148.0M** (top asset per owner), and the
+named rows are genuine gov landlords — `1101 WILSON OWNER, LLC`, `131 SOUTH DEARBORN LLC`,
+`1515 FLAGLER PROPERTY LP`.
+
+### ⚠️ The real constraint is REACHABILITY, and it is severe
+
+**Only 56 of the 449 new P1 owners (12.5%) are contactable**; 39 have a cadence. Widening alone
+emits **~393 owners nobody can call** — the **P112** failure this repo already documents: *never
+seed a cadence for a party with no contact method, because it can never advance and only ages into
+"overdue."* **So the answer is sequencing, not refusal:** widening is safe and valuable, and it
+should ship gated on the reachability precondition the cadence engine already applies. **The 56
+contactable owners are actionable on day one.**
+
+### ⚠️ What still should NOT be done
 - **Do not write a name-based role classifier.** Every lexical owner classifier measured in this arc
   landed ~25% precision raw (P189, A3) or 7% (P198), 4-of-6 guarded. A role deciding *whether we
   call someone* is a worse home for that than a merge candidate.
@@ -1835,3 +1867,73 @@ dia's bands (this CTE is gov-only) · whether the 336 deal-timing rows are indiv
 **five distinct $500k floors**, so any floor here must be NAMED · **marketing and deal-execution
 actions**, the other half of *"compared to the balance of the leads or marketing activities"* —
 they live outside `v_priority_queue` and **that inventory does not exist today.**
+
+---
+
+## §4p — B6c-dup: the two sale stores disagreed about which is canonical (2026-08-29)
+
+> Full writeup: [`docs/audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md`](../audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md).
+> Follows **§4l** (B6c), which found this behind the type defect it was sent to answer.
+
+**DECISION, recorded: `sales_transactions` is the canonical comps spine. `property_sale_events` is
+a CAPTURE surface that propagates into it.** Measured over 234 gov views/matviews: **77 read the
+spine — all 30 `cm_gov*` Capital Markets views among them — and ZERO read `property_sale_events`**
+(nonsense-token control: 0). `detail.js` asserted the exact opposite in its own comments; corrected
+at four sites, each `B6c-dup`-marked with the old wording quoted.
+
+**The leak was real and was confirmed behaviourally, in a rolled-back transaction:**
+`property_sale_events` +1, `sales_transactions` **+0**, `properties.latest_sale_price` set. Shipped
+`trg_gov_pse_propagate_to_sale` — AFTER INSERT on PSE, the **single owner** of that transition, keyed
+`(property, YEAR-MONTH, price-to-$1k)`, fill-blanks only, ledgered, kill-switched, batch-reversible.
+
+⚠️ **AND THE DAMAGE WAS ZERO, WHICH IS THE POINT.** The operator path had never produced a row: all
+5,208 PSE rows come from bulk importers that wrote the spine *independently* (inserts stopped
+2026-04-06). **A complete downstream store is not evidence that propagation exists** — here it was
+evidence that two importers each wrote two tables. Fix-before-it-bites, so the build stayed small.
+
+### The three wrong numbers, and why they are the transferable part
+
+| figure | source | verdict |
+|---|---|---|
+| 330 orphans / $4.48B | B6c-dup sizing | ❌ artifact |
+| 9 / $558.8M | the brief's own correction | ❌ artifact |
+| 6 / $29.2M | **my first re-measure** | ❌ artifact |
+| **0** | keyed on `(property, YEAR-MONTH)`, control 1,694 | ✅ |
+
+1. **The exact-date join was the wrong key.** `sales_transactions.sale_date` is **month-truncated**
+   for its dominant source — `costar_sidebar` **87.4% day-1** (6,871/7,865), ownership stubs 100%.
+   All six named "orphans" have an **exact price twin 3–21 days apart, every twin on the 1st**.
+   ⚠️ `dedup_natural_key` already encoded that granularity: **the spine had been stating its own join
+   key all along.** *Run the neighbouring key before believing an anti-join* — a ±31-day variant
+   returned 0 for free.
+2. **`property_id IS NULL` is not a dangling reference.** Dangling is **0 and structurally
+   impossible** (`fk_pse_property … ON DELETE SET NULL`). The 321 are **376 NULL-link rows**, 321 of
+   them detached in one bulk property deletion on 2026-04-03. ⚠️ I reproduced the brief's error
+   first: **a `LEFT JOIN … WHERE prop_live = false` lumps NULL in with dangling.**
+3. **`transaction_state` was never read.** The "$529.6M invisible to the spine" is **quarantine** —
+   all three NULL-price twins are `needs_review`/`duplicate_superseded`,
+   `exclude_from_market_metrics = true`. Population: **1,687 live twins · 7 quarantined ($604.1M) ·
+   0 absent · 0 live twins with a NULL price.** The spine is complete and had already judged them.
+
+### ⚠️ The filter that would have resurrected quarantined comps
+
+The first propagator filtered its twin lookup to `transaction_state = 'live'` — the natural thing to
+write. That made a **quarantined** twin invisible, so it fell through to `INSERT` and would have
+minted a fresh **live** comp for a sale somebody deliberately excluded, straight into the Capital
+Markets book. Caught by the live probe one pass before it mattered.
+
+**The general rule: a filter that narrows a lookup to the rows you want to ACT on will hide the rows
+that should STOP you.** Same shape as A5c's mint/probe asymmetry. A dedup probe must see the whole
+population, including the excluded part.
+
+### Also closed / re-scoped here
+
+- **`B6c-feed` DONE** — the 45-day `property_sale_events` expectation is **retired, not resolved**
+  (`is_active=false`, reason recorded). ⚠️ **The expectation moved rather than vanished:** feed
+  `sales_transactions` is registered at 45 days and reads 10 days old, and this trigger is what makes
+  operator sales reach it.
+- **`B6c-orphan` re-scoped** — smaller and a different question: *what should happen to an event
+  whose property was deleted?* Today: nothing, silently, forever.
+- **`B6c-dup-dia` filed, NOT ported.** dia is **72 : 2**, not 77 : 0, and has real PSE consumers
+  (`fn_listing_close_if_sold`). Both of the gov propagator's calibrated decisions — the
+  month-truncation key and the quarantine gate — are **gov measurements** and must be re-derived.
