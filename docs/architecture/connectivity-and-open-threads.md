@@ -1929,3 +1929,70 @@ classifier and no doctrine call, because the join is already there and already s
 Whether any named lease is terminal (date ≠ outcome) · whether the 224 contacts are the *disposition*
 decision-maker · dia · portfolio rent (only top-asset per owner; the $410.4M is a different basis —
 **do not mix them**) · P5/P8/P-BUYER.
+## §4p — B6c-dup: the two sale stores disagreed about which is canonical (2026-08-29)
+
+> Full writeup: [`docs/audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md`](../audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md).
+> Follows **§4l** (B6c), which found this behind the type defect it was sent to answer.
+
+**DECISION, recorded: `sales_transactions` is the canonical comps spine. `property_sale_events` is
+a CAPTURE surface that propagates into it.** Measured over 234 gov views/matviews: **77 read the
+spine — all 30 `cm_gov*` Capital Markets views among them — and ZERO read `property_sale_events`**
+(nonsense-token control: 0). `detail.js` asserted the exact opposite in its own comments; corrected
+at four sites, each `B6c-dup`-marked with the old wording quoted.
+
+**The leak was real and was confirmed behaviourally, in a rolled-back transaction:**
+`property_sale_events` +1, `sales_transactions` **+0**, `properties.latest_sale_price` set. Shipped
+`trg_gov_pse_propagate_to_sale` — AFTER INSERT on PSE, the **single owner** of that transition, keyed
+`(property, YEAR-MONTH, price-to-$1k)`, fill-blanks only, ledgered, kill-switched, batch-reversible.
+
+⚠️ **AND THE DAMAGE WAS ZERO, WHICH IS THE POINT.** The operator path had never produced a row: all
+5,208 PSE rows come from bulk importers that wrote the spine *independently* (inserts stopped
+2026-04-06). **A complete downstream store is not evidence that propagation exists** — here it was
+evidence that two importers each wrote two tables. Fix-before-it-bites, so the build stayed small.
+
+### The three wrong numbers, and why they are the transferable part
+
+| figure | source | verdict |
+|---|---|---|
+| 330 orphans / $4.48B | B6c-dup sizing | ❌ artifact |
+| 9 / $558.8M | the brief's own correction | ❌ artifact |
+| 6 / $29.2M | **my first re-measure** | ❌ artifact |
+| **0** | keyed on `(property, YEAR-MONTH)`, control 1,694 | ✅ |
+
+1. **The exact-date join was the wrong key.** `sales_transactions.sale_date` is **month-truncated**
+   for its dominant source — `costar_sidebar` **87.4% day-1** (6,871/7,865), ownership stubs 100%.
+   All six named "orphans" have an **exact price twin 3–21 days apart, every twin on the 1st**.
+   ⚠️ `dedup_natural_key` already encoded that granularity: **the spine had been stating its own join
+   key all along.** *Run the neighbouring key before believing an anti-join* — a ±31-day variant
+   returned 0 for free.
+2. **`property_id IS NULL` is not a dangling reference.** Dangling is **0 and structurally
+   impossible** (`fk_pse_property … ON DELETE SET NULL`). The 321 are **376 NULL-link rows**, 321 of
+   them detached in one bulk property deletion on 2026-04-03. ⚠️ I reproduced the brief's error
+   first: **a `LEFT JOIN … WHERE prop_live = false` lumps NULL in with dangling.**
+3. **`transaction_state` was never read.** The "$529.6M invisible to the spine" is **quarantine** —
+   all three NULL-price twins are `needs_review`/`duplicate_superseded`,
+   `exclude_from_market_metrics = true`. Population: **1,687 live twins · 7 quarantined ($604.1M) ·
+   0 absent · 0 live twins with a NULL price.** The spine is complete and had already judged them.
+
+### ⚠️ The filter that would have resurrected quarantined comps
+
+The first propagator filtered its twin lookup to `transaction_state = 'live'` — the natural thing to
+write. That made a **quarantined** twin invisible, so it fell through to `INSERT` and would have
+minted a fresh **live** comp for a sale somebody deliberately excluded, straight into the Capital
+Markets book. Caught by the live probe one pass before it mattered.
+
+**The general rule: a filter that narrows a lookup to the rows you want to ACT on will hide the rows
+that should STOP you.** Same shape as A5c's mint/probe asymmetry. A dedup probe must see the whole
+population, including the excluded part.
+
+### Also closed / re-scoped here
+
+- **`B6c-feed` DONE** — the 45-day `property_sale_events` expectation is **retired, not resolved**
+  (`is_active=false`, reason recorded). ⚠️ **The expectation moved rather than vanished:** feed
+  `sales_transactions` is registered at 45 days and reads 10 days old, and this trigger is what makes
+  operator sales reach it.
+- **`B6c-orphan` re-scoped** — smaller and a different question: *what should happen to an event
+  whose property was deleted?* Today: nothing, silently, forever.
+- **`B6c-dup-dia` filed, NOT ported.** dia is **72 : 2**, not 77 : 0, and has real PSE consumers
+  (`fn_listing_close_if_sold`). Both of the gov propagator's calibrated decisions — the
+  month-truncation key and the quarantine gate — are **gov measurements** and must be re-derived.

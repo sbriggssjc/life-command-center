@@ -42,6 +42,56 @@ canonical **§4p**. Answers **C4e**; adds **C5/C5a/C5b**.
   to `unknown` — no new classifier, no doctrine call. Still pair with the P112 reachability
   precondition.
 
+## 2026-08-29 — B6c-dup: the two sale stores disagreed about which is canonical (SHIPPED)
+
+Full writeup: [`docs/audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md`](../audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md) ·
+connectivity **§4p** · contract **I1**.
+
+**Decision, in writing: `sales_transactions` is the canonical comps spine; `property_sale_events` is
+a capture surface that propagates into it.** 77 of 77 gov views that read a sale store read the
+spine (all 30 `cm_gov*` CM views); zero read PSE. `detail.js` said the opposite in its own comments
+— corrected at 4 sites, each `B6c-dup`-marked with the old wording quoted.
+
+**The leak was real, confirmed behaviourally** (one rolled-back INSERT: PSE +1, spine **+0**,
+`latest_sale_price` set). Shipped `trg_gov_pse_propagate_to_sale` — AFTER INSERT on PSE, the single
+owner of that transition, keyed `(property, YEAR-MONTH, price-to-$1k)`, fill-blanks, ledgered
+(`gov_pse_propagation_log`), kill-switched, batch-reversible; `field_source_priority` @5.
+Also: `B6c-feed` **retired** (not resolved) — the expectation moved to feed `sales_transactions`,
+which has an actual cadence.
+
+⚠️ **THE DAMAGE WAS ZERO AND ALL THREE PRIOR ORPHAN FIGURES WERE WRONG — 330/$4.48B, 9/$558.8M, and
+my own first re-measure of 6/$29.2M. The true count is 0.** Three lessons, in order of how much they
+would have cost:
+
+1. **The exact-date join was the wrong key.** `sales_transactions.sale_date` is **month-truncated**
+   for its dominant source (`costar_sidebar` 87.4% day-1). Re-keyed on `(property, YEAR-MONTH)`:
+   **0 of 1,694**, positive-controlled at 1,694. ⚠️ `dedup_natural_key` already stated that
+   granularity. **Run the neighbouring key before believing an anti-join.**
+2. **`property_id IS NULL` ≠ dangling** — dangling is 0 and impossible under
+   `fk_pse_property … ON DELETE SET NULL`. ⚠️ I reproduced the brief's error first: **a
+   `LEFT JOIN … WHERE prop_live=false` lumps NULL in with dangling.**
+3. **`transaction_state` was never read.** The "$529.6M invisible" is **quarantine**
+   (`needs_review` / `duplicate_superseded`, `exclude_from_market_metrics=true`). The spine is
+   complete: 1,687 live twins, 7 quarantined, 0 absent.
+
+⚠️ **The first propagator filtered its twin lookup to `transaction_state='live'` and would have
+resurrected those quarantined comps as live CM rows.** Caught by the live probe, one pass before it
+mattered. **A filter that narrows a lookup to the rows you want to ACT on hides the rows that should
+STOP you** (the A5c mint/probe asymmetry).
+
+⚠️ **A complete downstream store is not evidence that propagation exists** — gov's spine held every
+priced event because both bulk importers wrote both tables independently, not because anything
+connected them.
+
+Guards: `test/b6cdup-sale-store-canonical.test.mjs` (5 tests, 5/5 mutations RED) — ⚠️ **the one guard
+here that cannot strip comments, because the defect IS a comment**; resolved by proximity to an
+annotated correction. `tests/unit/test_b6cdup_pse_propagation.py` (gov, 11 tests, 12/12 RED) —
+⚠️ **one assertion passed its own mutation** (it grepped a predicate that also appears in an
+`ORDER BY`) and was re-anchored on the branch. LCC suite 4,833 pass / 0 fail.
+
+**Not done, by design:** no backfill (nothing to backfill) · the 376 unlinked events untouched
+(`B6c-orphan` re-scoped) · the 7 quarantined twins untouched · **dia not ported** — it is 72:2, not
+77:0, and has real PSE consumers (`B6c-dup-dia`).
 ## 2026-08-28 — C4 §5 self-correction: widening the BD gate admits 2,521, not 62,554 (diagnosis only)
 
 **NOTHING WRITTEN.** Same-day follow-up to the C4 entry below, sizing the decision it left to Scott.
