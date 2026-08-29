@@ -17,17 +17,18 @@ Cross-references the per-topic design docs in `docs/architecture/`.
 
 ## 0. 📇 THE TOPIC INDEX — every document on the ownership→contact chain, and what it is for
 
-**This file is the LIVING DOCUMENT for the chain.** Current state is §4e–§4o (**§4o is the newest — the ranked call list**); everything else on the
+**This file is the LIVING DOCUMENT for the chain.** Current state is §4e–§4r (**§4r is the newest — C6 SHIPPED: the band now fires on a current holding, gated on reachability**); everything else on the
 topic is listed here with its scope and status so no one has to guess which of ~20 files to open.
 **Nothing below is deleted — an audit is evidence for a date, and dated evidence stays.**
 
-### The three canonical pages (read these; they are maintained)
+### The four canonical pages (read these; they are maintained)
 
 | page | owns |
 |---|---|
 | **this file** | the **chain end to end** — property → owner → contact → cadence, current state, and the open threads |
 | [`tier0-owner-contact-system.md`](tier0-owner-contact-system.md) | **person ↔ owner** matching: the Tier 0 lane, sponsor map, owner-entity merges (P186–P198) |
 | [`ownership-history-lane.md`](ownership-history-lane.md) | **ownership history/depth**: `establish_ownership_history`, the five lane actions (A1–A4b, B1) |
+| [`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md) | **the ranked call list** — the chain's LAST hop: `v_priority_queue`, the role gate, broker assignment (C4–C6) |
 
 ### ⚠️ Naming traps — two documents do NOT do what their titles suggest
 
@@ -58,7 +59,10 @@ topic is listed here with its scope and status so no one has to guess which of ~
 (⚠️ carries a supersession banner — three of its numbers moved) · `BD_PIPELINE_FUNNEL_AUDIT` ·
 `C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE` · `C2b_SALESFORCE_BRIDGE_SELF_HEALED` ·
 `C2g_UNRESOLVED_OWNER_ORGS` · `C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT` ·
-**`C4_RANKING_LAYER_ROLE_GATE` (§4o — the last hop: why the BD queue reaches 4% of owners)**.
+`C4_RANKING_LAYER_ROLE_GATE` (§4o — the last hop: why the BD queue reaches 4% of owners) ·
+`C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION` (§4p — 224 owners callable today; `buyer` is 578 / $410.4M) →
+**`C6_CURRENT_HOLDING_SELLER_BANDS` (§4r — SHIPPED; P1/P2/P3/P8 243 → 620 rows / 303 callable owners)** →
+both now indexed inside **[`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md)**.
 **Person↔owner (Tier 0):** P186 · P188 · P194 · P195 · P197 → indexed inside `tier0-owner-contact-system.md`.
 **Ownership history:** A1 · A2 · A3 · A4 · A4b · A5 · B1 → indexed inside `ownership-history-lane.md`.
 **Older, still-valid-for-their-date:** `W3.3_owner_merge_audit` (2026-07-30) ·
@@ -187,6 +191,14 @@ Gov vs dia differ only in: lease economics (gov cap-rate framework vs dia NNN ne
 gate the nuance blocks by `db`/domain.
 
 ---
+
+> ⚠️ **SECTION LABELS IN THIS FILE COLLIDE — `4j` ×3, `4k` ×2, `4l` ×2, `4p` ×2, `4q` ×2 (2026-08-29).**
+> Two parallel windows have been appending to it independently, which is the documented
+> §4a *two-windows-one-file* drift landing on a shared doc instead of shared config. **Cite sections by
+> TITLE, not by letter** — "§4p" is ambiguous between C5 and B6c-dup. C6 took the free `4r` rather than
+> add a sixth collision; renumbering the existing five is left alone deliberately, because other
+> documents cross-reference these letters and a silent renumber would break them. Filed as a
+> documentation chore, not fixed here.
 
 ## 4b. Measured flow breaks — the asset → owner → contact → cadence chain (2026-08-15)
 
@@ -1744,6 +1756,10 @@ DECLARED irregular feed. Backlog **B6c-feed**.
 
 ## 4o. C4 — the ranking layer: the whole BD queue is gated on one unset column
 
+> 📍 **CONSOLIDATED — this topic now has its own canonical page:
+> [`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md).** §4o + §4p are kept as the
+> dated evidence; **read the canonical page for current state and decisions.**
+
 > **Audit:** [`docs/audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md`](../audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md).
 > **Diagnosis only, nothing written.** This is the LAST hop of Scott's chain — the ranked call list
 > — and the first time it has been measured.
@@ -1870,6 +1886,161 @@ they live outside `v_priority_queue` and **that inventory does not exist today.*
 
 ---
 
+## 4p. C5 — the callable list, and the `buyer` exclusion is the larger half
+
+> 📍 **Canonical page: [`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md).**
+
+> **Audit:** [`docs/audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md`](../audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md).
+> **Diagnosis only.** Answers **C4e** and produces the list C4a implied.
+
+**1,924 owners hold a current gov property with a P1/P2/P3 deal-timing signal and are invisible to
+the queue** — 1,052 typed `buyer`, 871 `unknown`. **224 are contactable today.**
+
+⚠️ **C4's "56 contactable" was P1-only and `unknown`-only.** Across all three bands and both excluded
+roles it is **224**. Quote 224.
+
+### ⚠️ C4e answered — the `buyer` exclusion is a category error, not a bad label
+
+**578 owners typed `buyer` hold a gov property with a lease expiring inside 24 months, carrying
+$410.4M** — larger than the `unknown` half C4 focused on. And the labels are *correct*:
+
+| owner | role | gov assets | signal | contact |
+|---|---|---:|---|---|
+| **Boyd Watterson Asset Mgmt** | `buyer` | **45** | lease expiry **2026-08-31** | Eric Dowling |
+| Prologis, L.P. | `buyer` | 3 | 2027-07-31 | Jeff Behm |
+| RMR Group | `buyer` | 5 | 2027-04-11 | Jenkin Cagwin |
+| HC Government Realty Trust | `buyer` | 6 | 2027-01-11 | David Lucas |
+
+They **are** buyers. They are **also, right now, the owner of a building whose lease is running
+out.** `entities.owner_role` is a **party-level identity**; the bands ask a **per-asset question**.
+The CTE has already joined `lcc_entity_portfolio_facts` on `is_current = true` — **it is holding the
+per-asset fact and then discarding it in favour of the entity's global label.** A REIT is
+permanently a buyer and permanently ineligible however many gov buildings it owns.
+
+⚠️ **Firing the band is not choosing the pitch.** `account-based-contact-intelligence.md` is explicit
+that acquisitions and disposition are different contacts and different tones, and the buy-side
+relationship is the funnel *into* the disposition conversation. **Which bucket the call lands in is
+C4a's doctrine question, not this one.**
+
+### Urgency
+
+**173 owners have a gov lease expiring within 90 days and are invisible**; **14 contactable**, 28
+within 180 days. ⚠️ **Boyd Watterson: 2026-08-31 — three days from the measurement**, 45 gov assets,
+contact confirmed, on no surface. **Not verified: whether that lease is renewing, extended or
+terminal** — the attributes row carries a date, not an outcome. **Read the asset before acting.**
+
+### The names are the ones already resolved
+
+Boyd Watterson · Easterly · NGP Capital · RMR · Gardner Tanenbaum · GI Partners · USAA Real Estate ·
+Trammell Crow · Prologis. **The Tier 0 arc spent twelve rounds confirming these contacts. The signal
+existed the whole time. The role gate sat between them.**
+
+### What it changes
+
+**The per-asset fix is narrower and better founded than widening to `unknown`** — it needs no new
+classifier and no doctrine call, because the join is already there and already says `is_current`.
+`buyer` alone is 578 owners / $410.4M. **224 owners are callable the day it ships.**
+
+### ⚠️ C5b answered — and it corrects the "narrower" framing above
+
+The per-asset fix is **better founded** than widening to `unknown`, but **not narrower on its own**.
+P5/P8 were untested when that was written:
+
+| band | today | per-asset, all roles |
+|---|---:|---:|
+| P5 `aged_building_value_add` | 58 | **1,681** |
+| P8 `agency_active_solicitations` | 76 | **1,497** |
+| **all five bands** | **226 rows** | **4,506 rows / 3,622 owners** — a 20× flood |
+
+⚠️ **`aged_props` is NOT gov-scoped** — no `source_domain` filter, so **P5 covers dia** (26 → 565).
+Touching it is a cross-domain change; nothing in this arc has been. **P5 is 83% of the flood and the
+weakest signal in the set** ("built 25+ years ago" implies no timing). **It keeps the role gate.**
+
+**The design that works — per-asset PLUS the P112 reachability precondition, P1/P2/P3/P8 only:**
+
+| band | today | after |
+|---|---:|---:|
+| P1 | 74 | **149** · P2 32 → **95** · P3 62 → **163** · P8 76 → **213** |
+| **total** | **244 rows** | **497 rows / 303 owners — every one callable** |
+
+**~2×, not 14×.** Without reachability the same change emits 3,235 rows over 2,719 owners of whom
+**only 11% are contactable** — P112 at scale. Reachability is what converts a flood into a call
+list. Build prompt: `docs/claude-code/prompts/C6-per-asset-band-eligibility-with-reachability.md`.
+
+### Not measured
+
+Whether any named lease is terminal (date ≠ outcome) · whether the 224 contacts are the *disposition*
+decision-maker · dia · portfolio rent (only top-asset per owner; the $410.4M is a different basis —
+**do not mix them**) · P5/P8/P-BUYER.
+## 4r. C6 — the band now fires on a CURRENT HOLDING, gated on reachability (SHIPPED 2026-08-29)
+
+> 📍 **Canonical page: [`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md).**
+
+> **Audit:** [`docs/audits/C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md`](../audits/C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md).
+> Migration `supabase/migrations/20261002110000_lcc_c6_current_holding_seller_bands.sql`, applied
+> live to LCC Opps. **One view.** No JS, no new cron.
+
+`gov_owner_props`' party-level role gate is replaced by the **P112 reachability precondition**;
+current holding is established by the `f.is_current = true` join that was already there and being
+discarded. **P1/P2/P3/P8 only.**
+
+| band | before | after | predicted |
+|---|---:|---:|---:|
+| P1 `lease_expiry_24mo` | 74 | **149** | 149 ✅ |
+| P2 `firm_term_ending_24mo` | 32 | **95** | 95 ✅ |
+| P3 `ten_year_window` | 61 | **163** | 163 ✅ |
+| P8 `agency_active_solicitations` | 76 | **213** | 213 ✅ |
+| **four bands** | **243 rows** | **620 rows / 497 assets / 303 owners** | 303 owners ✅ |
+
+**Unchanged:** P0.4 555 · P-CONTACT 231 · P0.5 148 · P5 58 · P-BUYER 22 · P4 12 · all dia — with a
+Class 11 positive control (the same P5 shape without its gate returns **1,681 / 565 dia**, so the
+zero-delta is a measurement). **0 unreachable rows emitted; 0 non-gov rows in the gov bands.**
+
+### ⚠️ Three things that had to be got right, each of which had a wrong answer available
+
+**1. The predicted "497 rows" is an ASSET count, not a row count.** The four band predictions and
+the owner count hit exactly, but 149+95+163+213 = **620**. Chased rather than shrugged: **497 is
+`count(distinct (entity_id, source_property_id))`** — the queue emits one row per
+**(owner, property, band)**, so an asset tripping both P1 and P8 emits two rows. 620 / 497 / 303 are
+three different questions. *(C1's "two correct counts that are the same number are probably not the
+same set", one step further along.)*
+
+**2. `reachable_hero_qualified` is the right thing to QUOTE and the wrong thing to JOIN.**
+`v_lcc_owner_reachability` is a **single-row aggregate** — no per-owner membership exists — and its
+`owners` CTE resolves through `lcc_property_owner` + asset entities, a different population from the
+queue's portfolio-facts join (**overlap 263 of 1,441 / 495**). Reconstructing it inline would be a
+second copy of a definition, and it gates *narrower* than what C5 graded (**444 rows / 166 owners**).
+Shipped on `owner_contact_pivot.active_contact_entity_id` — the fact P188/P194 **write**. **The
+hazard travels with the technique: a definition sanctioned for reporting is not thereby sanctioned
+for gating.**
+
+**3. Re-measure the baseline, not just the blocker.** One day after C5, **P3 read 61 not 62** and
+**P0.4 read 555 not 552**. Live drift — and it would have been misread as change-induced had the
+before-figures been taken from the brief.
+
+### Verified by deparse diff, not by eyeballing
+
+The prior definition was captured to `lcc_c6_view_backup` before the replace, then diffed line by
+line against the new `pg_get_viewdef`. **The whole diff is one removed line (the role gate) and
+three added (the reachability `EXISTS`)**; 330 → 332 lines, no column added, removed or reordered.
+Restating a 330-line view by hand is exactly where a silent regression enters — *(P194: a migration
+that changes a view must carry the WHOLE view, and the diff is how you prove the copy is faithful.)*
+
+⏰ **All 14 contactable owners with a gov lease expiring inside 90 days now surface in P1** (17 rows),
+live view and refreshed cache alike. **Boyd Watterson's 2026-08-31 is two days out.**
+⚠️ `lcc_property_attributes` carries a **date, not an outcome** — renewal, extension and holdover are
+indistinguishable. **Nothing asserts any lease is terminal.**
+
+### Still open, and deliberately
+
+**C4a — which bucket the call lands in — is Scott's**, and firing a band is not choosing the pitch
+(`account-based-contact-intelligence.md`: acquisitions and disposition are different contacts and
+tones). No bucket, tone or prospecting column was added. **C4b** (`user_owner`, still 0 entities,
+still gating P0.4/P0.5/P5) · **C4c** (broker assignment) · dia · whether the 303 contacts are the
+*disposition* decision-maker. **Sized not built:** the four bands now emit per-asset, so a
+multi-asset owner occupies several rows; whether the operator surface should collapse to one card
+per owner is a ranking-layer question.
+
 ## §4p — B6c-dup: the two sale stores disagreed about which is canonical (2026-08-29)
 
 > Full writeup: [`docs/audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md`](../audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md).
@@ -1937,3 +2108,65 @@ population, including the excluded part.
 - **`B6c-dup-dia` filed, NOT ported.** dia is **72 : 2**, not 77 : 0, and has real PSE consumers
   (`fn_listing_close_if_sold`). Both of the gov propagator's calibrated decisions — the
   month-truncation key and the quarantine gate — are **gov measurements** and must be re-derived.
+
+---
+
+## 4q. B6b-lead — the lead lane that looked alive because another producer wore its name (2026-08-29)
+
+**Nothing was restarted and nothing was written.** Full measurement:
+`docs/audits/B6b_lead_OWNERSHIP_LEAD_RESTART_2026-08-29.md`. Backlog **B6b-lead**; contract **I4**.
+
+`ingest_ownership` (the `ownership_change` lead lane + the `gsa_lease_diff` ownership feed) has been
+dead since 2026-03-31 and its `feed_stale` alert correctly remains open at 150 days. B6b deferred the
+restart because it needed a graded gate and a credentialed dry run. Both were done. **The restart was
+still not taken, for a reason neither B6b nor the prompt anticipated.**
+
+- **⚠️ THE LANE HAS NO HUMAN CONSUMER, AND EVERY METRIC THAT SAID OTHERWISE WAS MACHINERY.**
+  Across all 7,729 leads: `assigned_to` **0**, `last_contacted_at` **0**, `next_action` **0**,
+  `sf_lead_id` **0**; `sf_sync_status` is `'pending'` for all 7,729; and only two `pipeline_status`
+  values have ever existed — `new` and `filtered_multi_tenant`. The three numbers B6b §9 quoted
+  reproduce **exactly** and are all mislabelled: *worked* = the automated filter, *pushed to
+  Salesforce* = `sf_contact_id` (a matched existing contact, not a push), *touched in 30 days* =
+  **1,216 of 1,217 on one day**. A5 (*check who writes a terminal status before ranking a lane by
+  it*) and P119 (*a bulk-set status is not a per-item decision*) arriving together on the one lane
+  whose liveness nobody re-checked, **because it had already been "verified."**
+- **⚠️ AND THE VERIFICATION WAS 59% ANOTHER LANE'S WORK.** `route_to_pipeline` hard-codes
+  `lead_source = 'ownership_change'` for **every** row it routes, whatever the source
+  `ownership_history.data_source` says. Of the 7,729 leads only **3,199** trace to `gsa_lease_diff`;
+  **4,530** trace to `county_deed`, a producer that was still writing. **That is why the badge never
+  went quiet when the lane died** — a second producer kept feeding it under the same label. Its
+  input today is **4,369 rows containing ZERO `gsa_lease_diff`**, 2,776 of them **B5's sale-derived
+  transitions written the previous day**: running it now mints 4,369 leads under a name none of them
+  earned. **Before trusting a lane's consumption evidence, check what actually produced the rows.**
+- **⚠️ THE LEAD LANE IS DOWNSTREAM OF THE OWNERSHIP-FACT WRITE.** `route_to_pipeline` reads
+  `ownership_history`, not the events, so "restart the leads without writing ownership facts" is —
+  as the code stands — **impossible**. The laundering fix is a prerequisite for scoping the restart
+  at all, not a tidy-up.
+- **The gate PASSED, and that is the less interesting half.** `is_same_owner` agrees with the
+  alnum-key reference **91.80%** over all 16,492 rows and **suppresses more** (9,146 vs 7,940), so it
+  does not manufacture leads wholesale. But **both of the top two would-write rows by value are false
+  acquisitions** — `LCOR` → `LCOR ALEXANDRIA` at **$75.4M** (arm 3's `length > 5` guard blocks a
+  4-character sponsor name) and a `JPMORGAN` → `MORGAN` truncation at $26.3M. **An agreement rate is
+  not a safety property when the errors concentrate at the top of the value ranking.**
+- **Neither name test dominates — the correct rule is their UNION.** The alnum key catches
+  punctuation the ratio arm misses (73 acronym re-spellings like `RGR INC` → `R.G.R, INC.` become
+  acquisitions); the ratio arm catches typos the alnum key misses (`BANDYWINE` → `BRANDYWINE`,
+  `JG HOUSING SOLUTLONS` → `SOLUTIONS`). Same lesson as A2/P189: **a comparator sanctioned for one
+  gate must be re-graded on named rows for the next.**
+- **⚠️ `normalize_entity` MANGLES NAMES IN PRODUCTION.** `n.replace(" CO", "")` is unanchored, and
+  `" CORP"` is applied before `" CORPORATION"`: `ACME CORPORATION` → `ACMEORATION`. Live in the
+  would-write set: `ALACHUA,UNTY OF`, `GRAHAMMPANIES, THE`, `CERRITOSORATE TOWER`, `TRIUNTY BUSINESS
+  CAMPUS`. It is **order-dependent** — `ALACHUA, COUNTY OF` mangles while `COUNTY OF ALACHUA` does
+  not (no leading space at position 0), so the same words in a different order stop comparing equal.
+- **The blast radius is 584, not 10,635 — an 18× overstatement.** Exact chain: 16,907 → 16,492 →
+  **7,346** after the gate → **1,489** not already ingested → **1,136** property-linked → **998**
+  after A2b fan-out collapse → **584** after the P138 oscillation guard, over **568 properties /
+  $433.4M**, of which **158 (27.1%)** clear the $500k floor. **Only 42 arrived since the lane died.**
+  The backlog figure counted usable events without ever applying the gate or the dedup.
+- ✅ **B5a's fill-forward guard is live and was decisive** — `ingest_acquisitions` writes text-only
+  parties with no `recorded_owner_id`, so without it this restart would have nulled recorded owners
+  on up to 568 properties. The text-only population is now **10,343**, up from 7,567 at B5a.
+- **Stated, not fixed:** `ownership_history.data_source` carries ~250 distinct `county_deed:<uuid>`
+  values, so any `GROUP BY data_source` fragments; and `find_matching_sale`'s city+state fallback
+  accepts a sale within 365 days on `buyer[:15] in new_lessor` and stamps price and cap rate onto the
+  ownership row.

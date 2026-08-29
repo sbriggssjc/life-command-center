@@ -1,3 +1,5 @@
+> 📍 **CANONICAL PAGE FOR THIS TOPIC: [`docs/architecture/bd-ranking-and-priority-queue.md`](../architecture/bd-ranking-and-priority-queue.md)** — current state, decisions and traps.
+> This audit is the dated EVIDENCE; the canonical page is what to read first.
 > **📍 CANONICAL PAGE: [`docs/architecture/connectivity-and-open-threads.md`](../architecture/connectivity-and-open-threads.md) §4o.**
 > **Diagnosis only — nothing written, no migration.** This closes the last hop of Scott's chain:
 > *"the relative importance and impact that directs our next best touchpoint or call when compared

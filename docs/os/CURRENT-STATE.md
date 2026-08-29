@@ -304,6 +304,7 @@ from lcc_clean_assist_proposals group by source`:
 | Repeatable defect detectors | `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md` |
 | **Tier 0 owner-contact: person↔owner matching, the confirm lane, the sponsor map, owner merges** | `docs/architecture/tier0-owner-contact-system.md` — **one door into thirteen rounds (P186–P198)**; live state, decisions already made, traps already paid for. **Sibling of the row below — they share `lcc_merge_entity`, `lcc_owner_sponsor_domain` and the owner entities, and now cross-link** |
 | **Ownership-history lane** (the whole subsystem — read this, not the 7 audits) | **`docs/architecture/ownership-history-lane.md`** |
+| **BD ranking / the priority queue** (the chain's LAST hop — read this, not the C4/C5 audits) | **`docs/architecture/bd-ranking-and-priority-queue.md`** — one door into C4→C5→C6: the role gate, the `buyer` category error, broker assignment, and the four traps. ⚠️ **DIAGNOSED, NOT BUILT** — nothing written to a live system; the build is **C6** |
 | **Where operator time actually goes** (lane-by-lane throughput) | `docs/audits/DATA_PROCESS_AUTOMATION_AUDIT_2026-08-26.md` |
 | Intake channel provenance (grade by channel, never fleet-wide) | `docs/audits/W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md` |
 | Wave rollout ledger | `ROLLOUT_STATUS.md` |

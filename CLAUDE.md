@@ -492,6 +492,36 @@ The two cheapest and highest-yield: **D1** the provenance producer-set diff (Cla
 B5) and **D2** the link-column type audit (`property_sale_events` link columns are `bigint` against
 `uuid` PKs — the column **cannot hold the value it is named for**).
 
+### ⚠️ A STATUS VALUE IS NOT A HUMAN VERDICT UNTIL YOU NAME ITS WRITER (B6b-lead, 2026-08-29)
+
+`prospect_leads` where `lead_source='ownership_change'` was cited by two successive audits — and by
+the prompt that acted on them — as **"7,729 leads · 2,041 worked · 208 pushed to Salesforce · 2,149
+touched in 30 days"**, and that "confirmed alive consumer" was the entire justification for
+restarting a dead producer. **Every number is real. Every one means something else.**
+
+- **"2,041 worked"** = `pipeline_status = 'filtered_multi_tenant'` — an **automated exclusion
+  filter**. The lane has exactly **two** status values ever, `new` and that one. **No human has ever
+  set a status on it.**
+- **"208 pushed to Salesforce"** = `sf_contact_id IS NOT NULL`, i.e. a **matched EXISTING contact**.
+  ⚠️ **`sf_lead_id` is non-null on 0 of 7,729 and `sf_sync_status='pending'` on ALL 7,729 — nothing
+  has ever been pushed.**
+- **"2,149 touched in 30 days"** = **1,216 of them on ONE day**. A bulk sweep, not use.
+
+**The lane has no human consumer. It is Class 2, which is exactly what it was claimed not to be.**
+
+- **Three questions, one query each:** *who or what SETS this status* (two machine-written values is
+  not a workflow) · *does the "sent" column mean sent* (a destination id means **matched**; an
+  emitted id means **sent** — check the emitted one and the sync status) · *is the activity a
+  distribution or a spike* (`count(distinct updated_at::date)` plus the largest single day).
+- ⚠️ **This is the A5 lesson — 596 `gap_resolved` "completions" that were all a truncated auto-close
+  — repeated four days later by the same author on a different lane. Knowing the rule did not
+  prevent it.** Third instance of the shape overall, with P159a's `drillthrough: 37`.
+  **Playbook Class 26.**
+- ⚠️ **The correction did NOT reverse the decision here — it replaced the reason.** The safety gate
+  (`is_same_owner`, 91.80% agreement, errs conservative) **passed** its stop test; the restart was
+  refused on the **consumer** finding, which the gate grade could never have surfaced.
+  **Grade the gate AND the consumer — either can disqualify.**
+
 ### Dead-end classes are findable on purpose — `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md`
 
 Nine live defects were found in one session on 2026-08-22, all by accident, and every one
@@ -2846,8 +2876,25 @@ trigger is the sole writer. Writeup: `docs/audits/N15c_CANONICAL_NAME_SINGLE_WRI
   carrying `d8fcfbf` preceded the 20:03 backfill. The sandbox cannot reach the Railway host —
   `http=000` while `api.github.com` returns 200 — so `/version` must be checked from somewhere that
   can.)
-- 👤 **One decision remains Scott's:** whether the column becomes an enforced **UNIQUE** key
-  (3,930 groups violated it before the backfill).
+- ✅ **THE PRODUCER IS VERIFIED FIXED — AND CONFIRMED AT SCALE (2026-08-29).** The first check rested
+  on 3 mints; a bulk sync has since minted **4,618** (live 62,346 → 66,901) and **drift is still 0**.
+- **⚠️ DRIFT = 0 IS NECESSARY AND NOT SUFFICIENT — A DUPLICATE STORM READS DRIFT 0 TOO**, because the
+  trigger dutifully computes a correct key for every duplicate. The gate that matters is *did a new
+  mint land on a key that already had a live entity*: **22 of 4,618 (0.48%)**. And **19 of those are
+  not an LCC defect** — each colliding gov `asset` pair carries a DIFFERENT `gov/asset/<property_id>`,
+  i.e. two rows in gov `properties` for one building, differing only by address punctuation
+  (`303 "H" St` / `303 H St`, `St. Albans` / `St Albans`) which the key strips. The asset path mints
+  one entity per domain property id **by contract**, so LCC is mirroring a DOMAIN-level duplicate the
+  N15c key merely made visible (**N20**) — do not "fix" it by weakening that contract. **The genuine
+  residual is 3 of 4,618 (0.06%)**, from `api/sync.js` / `api/domains.js`, which now compute the right
+  key but still POST `entities` without looking up by it (**N21**).
+- 👤 **One decision remains Scott's, and its size CHANGED:** whether the column becomes an enforced
+  **UNIQUE** key. ⚠️ **3,930 was measured on the OLD keys; on the N15c key it is 8,136 groups**
+  (`v_duplicate_candidates`). The extra ~4,200 are **not an over-collapse** — read on named rows they
+  are pre-existing duplicates the disagreeing keys were hiding (`Office Properties Income` /
+  `…Income Trust` ×8; `AEI Capital` / `Corp` / `Corporation` ×6; `Rainier Companies` /
+  `The Rainier Companies`; **`Realty Income` ×5**, the name N15b showed the old fuzzy comparator
+  reduces to the empty string so it cannot match itself). **Surfacing them is the fix working.**
 - 👤 **Two decisions were left to Scott. ⚠️ BOTH LINES BELOW ARE NOW SUPERSEDED — see the N15d/N15e
   section that follows.** (1) The **537 stale rows** were **recomputed 2026-08-27 (batch `n15e_go`),
   drift 537 → 0**; the "recomputing discards a captured string some preserve" concern measured at

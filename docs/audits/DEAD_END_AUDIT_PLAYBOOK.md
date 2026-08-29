@@ -1796,3 +1796,167 @@ wrong, and it costs a change that should have shipped. **Wrong-and-cautious is n
   result deserves the same positive control before it becomes a finding.
 - The **`LIMIT 5` without the `ORDER BY`** footgun in `CLAUDE.md` — same root: measuring a query
   shape other than the one that actually runs.
+
+---
+
+## Class 24 — a PARTY-LEVEL label answering a PER-ASSET question, when the join already has the answer
+
+**Found 2026-08-28 (C5), worth $410.4M of invisible signal on one surface.**
+
+`gov_owner_props` decides whether a seller-side band fires by reading `entities.owner_role`. That
+column is a **party-level identity** — what this firm mostly is. The bands ask a **per-asset
+question**: *is this party the current owner of a building whose lease is running out?*
+
+**578 owners typed `buyer` hold a gov property with a lease expiring inside 24 months.** They are
+not mislabelled — Boyd Watterson (45 gov assets), Prologis, RMR Group and HC Government Realty Trust
+genuinely are buyers, and that label drives real account-based prospecting. **They are also, right
+now, the owner of an expiring building.** A REIT is permanently a buyer and therefore permanently
+ineligible, however many assets it holds.
+
+### The tell
+
+**The query had already computed the right answer and then threw it away.** The CTE joins
+`lcc_entity_portfolio_facts ON is_current = true` — a per-asset ownership fact, established, in
+scope, two lines above the predicate — and then filters on the entity's global label instead.
+
+```sql
+JOIN lcc_entity_portfolio_facts f ON f.entity_id = eer.entity_id
+     AND f.is_current            -- ← the per-asset answer, already in hand
+WHERE eer.effective_owner_role = ANY (ARRAY['developer','user_owner'])   -- ← a party-level label
+```
+
+### The detector
+
+For any gate on a role, type, status, segment or category column, ask: **is the question this gate
+serves asked of the PARTY, or of the ROW?** If the row, check whether the query already carries a
+row-level fact that answers it. A label describing what something *usually is* cannot answer what it
+*currently holds*.
+
+Two prompts that surface it fast:
+
+- **Can one entity be in two states at once for different rows?** A firm that buys and owns; a
+  clinic that is a tenant here and an owner there; a contact who is a broker on one deal and a
+  principal on another. If yes, a single-valued party column cannot be the gate.
+- **Would the label still be correct if the gate were wrong?** Here every excluded label was
+  *correct*, which is why nothing looked broken. **Class 24 hides behind accurate data.**
+
+### ⚠️ The trap in the fix
+
+Firing the band is **not** choosing the pitch. `account-based-contact-intelligence.md` is explicit
+that acquisitions and disposition are different contacts, tones and buckets, and that the buy-side
+relationship is the funnel *into* the disposition conversation. **Correcting the gate makes the
+signal visible; it does not decide how the call is made.** Collapsing those two decisions is how a
+correct fix produces a wrong outreach.
+
+### Sibling classes
+
+- **Class 22** — a gate arm that never matches. Same surface, same round: 22 is an arm with no
+  producer, 24 is an arm asking the wrong grain.
+- **Class 23** — a predicate's blast radius belongs to the query. All three are failures to read the
+  predicate *in the context of its own FROM clause*.
+- The **P113 operator-in-the-owner-slot** trap is the mirror at the row level: there a per-asset
+  fact (`is_operator_not_owner`) exists and must be consulted; here one exists and is ignored.
+
+---
+
+## Class 25 — an ANTI-JOIN on a key the data does not actually use
+
+**Found:** 2026-08-28/29 (B6c-dup). **It produced THREE successive wrong numbers on one population
+before anyone got it right: 330 / $4.48B, then 9 / $558.8M, then 6 / $29.2M. The true count is
+ZERO.**
+
+**Symptom.** An anti-join returns a plausible, non-zero, alarming population. Nothing errors. Unlike
+**Class 11** (a detector that *cannot fire* and returns a comfortable zero), this detector fires
+enthusiastically and is wrong in the expensive direction — it manufactures a backlog that does not
+exist, and each "correction" can be wrong again in the same way.
+
+**The three ways the key was wrong, all live in one query:**
+
+1. **⚠️ THE JOIN COLUMN'S GRANULARITY DID NOT MATCH THE DATA'S.**
+   `sales_transactions.sale_date` is **month-truncated for its dominant source** — `costar_sidebar`
+   is **87.4% day-1** (6,871/7,865), ownership stubs **100%**. An exact-date anti-join therefore
+   reports as "absent" every row whose twin was recorded on the 1st. Re-keyed on
+   `(property, YEAR-MONTH)`: **0 orphans of 1,694**, with an impossible-price positive control
+   returning **1,694**. Every named "orphan" had an **exact price twin 3–21 days away, every twin on
+   the 1st.**
+   > **⚠️ The table was stating its own join key all along** — `dedup_natural_key` is
+   > `property | round(price/1000)*1000 | YYYY-MM`. **Before writing an anti-join, look for a dedup
+   > key, a natural key, or a unique index: the schema usually already declares the granularity the
+   > data is stored at.** Then **run the NEIGHBOURING key** (±1 month, ±31 days) — it is one query
+   > and it would have caught this three times over.
+
+2. **⚠️ `LEFT JOIN … WHERE target.pk IS NULL` CANNOT TELL "POINTS NOWHERE" FROM "POINTS AT NOTHING."**
+   321 rows were reported as dangling references. **Dangling was 0 and structurally impossible** —
+   the FK is `ON DELETE SET NULL`, so a deleted parent *nulls* the link rather than stranding it.
+   The rows are **NULL-link rows, 321 of them detached in ONE batch on 2026-04-03** by a bulk
+   property deletion. **Decide in SQL which of the two you mean** (`col IS NULL` vs
+   `col IS NOT NULL AND target.pk IS NULL`) before counting either.
+
+3. **⚠️ THE EXCLUSION COLUMNS WERE NEVER READ — and "exclusion" is more than the columns named
+   `exclude_*`.** The "$529.6M invisible to the spine" was **quarantine**: every one carried
+   `transaction_state IN ('needs_review','duplicate_superseded')` with
+   `exclude_from_market_metrics = true`. **The store had already judged that residue.** An exclusion
+   check means **every** column that governs membership — state machines included.
+
+**True population once keyed correctly:** 1,687 live twins · 7 quarantined ($604.1M) · **0 absent** ·
+0 live twins with a null price. **The spine was complete.**
+
+**The durable rule.** An anti-join asserts *"this fact exists in A and nowhere in B."* That is a
+strong claim, and it is only as good as the key. **Positive-control it in BOTH directions:** prove
+the join finds known-present rows (an impossible-value probe returning the full population), and
+prove a neighbouring key does not collapse your result to zero. **A non-zero anti-join result is a
+hypothesis, not a finding.**
+
+⚠️ **Corollary — the finding and its SIZE are separate claims, and getting the size wrong three
+times does not refute the finding.** B6c-dup's collision was real (77 of 77 views read the spine,
+zero read the capture surface, and the write path leaked — confirmed behaviourally in a rolled-back
+transaction). **The orphan count was wrong three times and the fix was still right.** Report them
+separately so a corrected number does not read as a retracted defect.
+
+---
+
+## Class 26 — a STATUS VALUE mistaken for a human verdict
+
+**Found:** 2026-08-29 (B6b-lead). ⚠️ **This is the sharpened form of the A5 lesson, and it was made
+BY THE AUTHOR OF THE A5 LESSON, four days later, on a different lane.** That is the reason it gets
+its own class rather than a footnote: knowing the rule did not prevent the mistake.
+
+**Symptom.** A dead producer looks worth restarting because *"its consumer is alive — look, N leads
+worked, M pushed to Salesforce, K touched last month."* Every number is real and reproducible. **Every
+number means something other than what its column name suggests**, and the lane has no human
+consumer at all.
+
+**The live case.** `prospect_leads` where `lead_source='ownership_change'` was cited — by two
+successive audits and by the prompt that acted on them — as **7,729 leads · 2,041 worked · 208 pushed
+to Salesforce · 2,149 touched in 30 days**. Verified independently:
+
+| quoted as | what it actually is |
+|---|---|
+| **2,041 worked** | `pipeline_status = 'filtered_multi_tenant'` — an **automated exclusion filter**. The lane has exactly **two** status values ever: `new` and that one. **No human has ever set a status.** |
+| **208 pushed to Salesforce** | `sf_contact_id IS NOT NULL` — a **matched EXISTING contact**. ⚠️ **`sf_lead_id` is non-null on 0 of 7,729, and `sf_sync_status = 'pending'` on ALL 7,729. Nothing has ever been pushed.** |
+| **2,149 touched in 30 days** | **1,216 of them on one day** — a bulk sweep, not activity. |
+
+**The detector — three questions, each one query:**
+
+1. **Who or what SETS this status?** Enumerate the distinct values and ask which of them a person
+   could produce. *Two values, both machine-written, is not a workflow.*
+2. **Does the "sent" column mean sent?** A destination id (`sf_contact_id`) means *matched*; an
+   emitted id (`sf_lead_id`) means *sent*. **Check the emitted one and the sync status.**
+3. **Is the activity a distribution or a spike?** `count(distinct updated_at::date)` and the largest
+   single-day count. **A bulk sweep and sustained use render identically in a 30-day total.**
+
+**Why it keeps happening.** These columns are *designed* to look like a workflow, and the honest
+reading requires knowing what writes them — which is one grep away and always feels unnecessary
+because the number is right there. **The same shape has now appeared three times:** A5's 596
+`gap_resolved` "completions" (all a truncated auto-close), P159a's `drillthrough: 37` (a re-scan
+tally), and this.
+
+> **The rule: a count of rows in a state is not a count of work done until you have named the writer
+> of that state.** Quote *"2,041 rows carry `filtered_multi_tenant`, written by the ingest filter"* —
+> never *"2,041 worked."* **If no human-writable path to the state exists, the lane's consumer is
+> automation, and "the consumer is alive" is false.**
+
+⚠️ **Corollary — the correction does not always reverse the decision, and it did not here.** The
+grade of the safety gate (`is_same_owner`, 91.80% agreement, conservative) did **not** fail its stop
+test. **The restart was refused on the CONSUMER finding instead**, which the gate grade could never
+have surfaced. **Grade the gate AND the consumer; either one can be the disqualifier.**

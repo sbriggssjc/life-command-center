@@ -16,6 +16,107 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-28 — CONSOLIDATION: BD ranking gets a canonical page
+
+**Docs only.** New canonical page **`docs/architecture/bd-ranking-and-priority-queue.md`** — one
+door into **C4 → C5 → C6**, following the `tier0-owner-contact-system.md` pattern. It carries: where
+this sits in Scott's chain (hops 6–7), the band table, the gate and its exact reconciliation, the
+role-column distribution, the two defects, the C6 build with predicted deltas, **the four traps**,
+broker assignment, and a decisions table separating what is decided / open / **refused**.
+
+Wired in: `connectivity-and-open-threads.md` §0 canonical-pages table (now **four**, not three) and
+banners on §4o/§4p marking them the dated evidence · `CURRENT-STATE.md` canonical-doc map ·
+`DOCUMENTATION-MAP.md` subsystem example · **a canonical-page banner in both C4 and C5 audits**
+(a trap list is only a guard if it is on the path someone walks).
+
+⚠️ **The page states DIAGNOSED, NOT BUILT** in three places. Nothing in C4/C5 touched a live system.
+
+## 2026-08-28 — C5b answered; C6 build prompt written (still nothing written to live systems)
+
+Closes **C5b** and corrects C5 §5's "narrower" framing. Prompt:
+`docs/claude-code/prompts/C6-per-asset-band-eligibility-with-reachability.md`. Backlog **C6**.
+
+- ⚠️ **The per-asset fix is better founded than widening to `unknown` but NOT narrower on its own:**
+  all five bands, all roles = **4,506 rows / 3,622 owners — a 20× flood.**
+- **P5 `aged_building_value_add` is 83% of it** (58 → 1,681) and is the weakest signal in the set.
+  ⚠️ **`aged_props` is NOT gov-scoped** — no `source_domain` filter, so **P5 covers dia** (26 → 565).
+  Touching it is a cross-domain change; nothing in this arc has been. **P5 keeps the role gate.**
+- **The design that works — per-asset PLUS the P112 reachability precondition, P1/P2/P3/P8 only:**
+  **P1 74→149 · P2 32→95 · P3 62→163 · P8 76→213 = 244 → 497 rows / 303 owners.** ~2×, not 14×,
+  and every emitted row is callable. **Reachability is what converts a flood into a call list.**
+## 2026-08-29 — B6b-lead: the lead lane was graded, funnelled, and deliberately NOT restarted
+
+**Diagnosis only. Nothing written to `ownership_history`, `prospect_leads`, or any gov table.**
+Writeup: `docs/audits/B6b_lead_OWNERSHIP_LEAD_RESTART_2026-08-29.md`. Backlog **B6b-lead**;
+contract **I4**; connectivity **§4q**; gov `CLAUDE.md` **§21a**.
+
+**🛑 The restart was not taken, and the reason is not the one the prompt anticipated.** It set a stop
+condition on the gate (*if `is_same_owner` cannot separate a re-spelling from a sale, stop*). **The
+gate passed** — 91.80% agreement with the alnum-key reference over all 16,492 rows, erring
+conservative (it suppresses 9,146 vs the reference's 7,940). What failed is the premise in §0:
+
+- **⚠️ THE LANE HAS NO HUMAN CONSUMER.** All 7,729 `ownership_change` leads: `assigned_to` **0**,
+  `last_contacted_at` **0**, `next_action` **0**, `sf_lead_id` **0**; `sf_sync_status` `'pending'`
+  for every one; only `new` and `filtered_multi_tenant` have ever appeared in `pipeline_status`.
+  The three numbers that justified the restart reproduce **exactly** and are all mislabelled —
+  *2,041 worked* is an automated exclusion filter, *208 pushed to Salesforce* is `sf_contact_id`
+  (a matched existing contact), *2,149 touched in 30d* is **1,216 of them on one day**. A5 and P119
+  landing together on the one lane whose liveness nobody re-checked because it was already
+  "verified." Per the Consumption-Layer rule, a producer with no consumer does not get restarted.
+- **⚠️ 59% of that evidence is another lane's.** `route_to_pipeline` hard-codes
+  `lead_source='ownership_change'` for every row regardless of `data_source`: only **3,199** leads
+  trace to `gsa_lease_diff`, **4,530** to `county_deed`. **That is why the badge never went quiet
+  when the lane died.** Its input today is 4,369 rows with **zero** `gsa_lease_diff` — 2,776 are
+  B5's sale-derived transitions from the day before. It also reads `ownership_history`, not the
+  events, so **the lead lane is downstream of the ownership-fact write** and "restart the leads
+  without writing facts" is impossible as coded.
+- **⚠️ Both top-2 would-write rows by value are false acquisitions** — `LCOR` → `LCOR ALEXANDRIA`
+  at **$75.4M** (arm 3's `length > 5` guard blocks short sponsor names) and a `JPMORGAN` → `MORGAN`
+  truncation at $26.3M. An agreement rate is not a safety property when errors sit at the top of the
+  ranking. `normalize_entity` also mangles names via unanchored `str.replace` (`ACME CORPORATION` →
+  `ACMEORATION`; live: `ALACHUA,UNTY OF`, `GRAHAMMPANIES`), order-dependently.
+- **Blast radius 584 / 568 properties / $433.4M — the backlog's 10,635 is 18× too high** (it counted
+  usable events without applying the gate or the dedup). Only **42** arrived since the lane died;
+  **158 (27.1%)** clear the $500k floor. ✅ **B5a's fill-forward guard is live and decisive** —
+  without it this restart would have nulled recorded owners on up to 568 properties.
+- **Sequenced recommendation:** 👤 **Scott decides retire-vs-restart first** (nobody has worked one
+  of these 7,729 leads) → fix the provenance laundering → fix the three gate defects → then restart
+  value-gated at 584 rows. **B6e stays a genuine prerequisite.**
+- **Guard shipped (gov):** `tests/unit/test_changed_fields_jsonb_probe.py` — 14 tests, **9 mutations
+  RED**, pinning the Class-11 jsonb-string trap (`changed_fields ? 'k'` → a silent 0 of 233,666)
+  that produced two published wrong findings. ⚠️ One assertion **passed its own mutation** on the
+  first pass and had to be re-anchored on the comment-ONLY case; and `#` cannot be stripped naively
+  in Python because `#>>` is the operator the guard looks for.
+- **Suite:** gov 936 pass / 10 fail — the 10 are **pre-existing** in `test_sos_detail_fetcher.py`
+  (922 pass / same 10 fail without this change) and are sandbox dependency-version artifacts, not
+  touched by this work.
+
+## 2026-08-28 — C5: 224 owners callable today, and the `buyer` exclusion is the larger half (diagnosis only)
+
+**NOTHING WRITTEN.** Audit:
+[`docs/audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md`](../audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md);
+canonical **§4p**. Answers **C4e**; adds **C5/C5a/C5b**.
+
+- **1,924 owners hold a current gov property with a P1/P2/P3 signal and are invisible to the queue**
+  — 1,052 `buyer`, 871 `unknown`. **224 are contactable today.**
+  ⚠️ **C4's "56 contactable" was P1-only and `unknown`-only** — easily misread as the total. **224.**
+- ⚠️ **C4e answered: the `buyer` exclusion is a CATEGORY ERROR, not a bad label. 578 owners /
+  $410.4M** — bigger than the `unknown` half. Boyd Watterson (45 gov assets), Prologis, RMR,
+  HC Government Realty Trust are all correctly typed `buyer` **and** are the current owner of a
+  building whose lease is expiring. `owner_role` is a party-level identity; the bands ask a
+  per-asset question — **and the CTE already joined `is_current=true`, then discarded it.**
+- ⚠️ **Firing the band is not choosing the pitch** — acquisitions vs disposition are different
+  contacts and tones (`account-based-contact-intelligence.md`). The bucket stays C4a.
+- ⏰ **173 owners have a gov lease expiring within 90 days and are on no surface; 14 contactable.**
+  **Boyd Watterson is 2026-08-31 — three days out.** ⚠️ **Not verified whether that lease is
+  renewing, extended or terminal — the attributes row carries a date, not an outcome.**
+- **The names are the ones the Tier 0 arc already resolved** — Boyd, Easterly, NGP, RMR, Gardner
+  Tanenbaum, GI Partners. The contacts were confirmed, the signal existed, and **the role gate sat
+  between them.**
+- **Recommendation shifts:** the **per-asset fix (C5)** is narrower and better founded than widening
+  to `unknown` — no new classifier, no doctrine call. Still pair with the P112 reachability
+  precondition.
+
 ## 2026-08-29 — B6c-dup: the two sale stores disagreed about which is canonical (SHIPPED)
 
 Full writeup: [`docs/audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md`](../audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md) ·
@@ -66,6 +167,7 @@ annotated correction. `tests/unit/test_b6cdup_pse_propagation.py` (gov, 11 tests
 **Not done, by design:** no backfill (nothing to backfill) · the 376 unlinked events untouched
 (`B6c-orphan` re-scoped) · the 7 quarantined twins untouched · **dia not ported** — it is 72:2, not
 77:0, and has real PSE consumers (`B6c-dup-dia`).
+
 ## 2026-08-28 — C4 §5 self-correction: widening the BD gate admits 2,521, not 62,554 (diagnosis only)
 
 **NOTHING WRITTEN.** Same-day follow-up to the C4 entry below, sizing the decision it left to Scott.
@@ -699,6 +801,195 @@ vocabulary — **2,978 distinct values over 14,076 rows**, embedding record ids
 gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `ownership_history`
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
+
+## 2026-08-29 — B6d drafted: grade the feed EXPECTATIONS. Two more alerts fire imminently for non-defect reasons.
+
+**Prompt: `prompts/B6d-grade-the-feed-expectations-2026-08-29.md`.** It closes the
+B6a → B6a-follow-up → B6b arc honestly, **grades expectations only, and writes no data.**
+
+**B6b-lead's refusal is what makes it urgent.** We *decided* not to restart
+`prospect_leads_ownership_change` — so its alert now **describes a decision and will sit open
+forever**. ⚠️ **An alert describing a decision is the badge-that-is-noise failure, inside the
+alerting system we just spent three prompts repairing.**
+
+**Live: 23 feeds · 4 alerting · 19 ok.** The four have three non-defect explanations and one genuine
+hypothesis: retire the ownership-lead expectation (no human consumer); re-scope `property_sale_events`
+(**its only live producer is an operator form with no cadence** — a 45-day SLA alerts whenever nobody
+types a sale for six weeks); re-scope `sam_lease_opportunities` (a 14-day SLA against a documented
+**~10 lookups/day** limit is unachievable); and **measure CMS's actual cadence** for
+`medicare_clinics` before touching it — ⚠️ **that one is still a hypothesis, and widening an SLA to
+silence a real break would bury it.**
+
+🚨 **Two more fire imminently, and neither is a defect:** **`opm_workforce` is age 120 against an SLA
+of 120 — it alerts tomorrow**, and **`gsa_leases_snapshot` (59 vs 65) fires in ~6 days because GSA
+has not published August.** *A publisher that has not published is not a broken pipeline.* Catching
+these before they fire is the difference between a graded surface and a surface people learn to
+ignore.
+
+⚠️ **The tell that these were never graded: `expected_max_age_days = 45` appears on 10 of 23 feeds.**
+A default, not a measurement — which is why the prompt grades **all 23**, not just the six in
+trouble, and requires each to state its **cadence class**: continuous (operator), scheduled (cron),
+or **external publication** (GSA monthly, CMS ~annual, OPM slow, SAM rate-limited). **An
+external-publication feed's SLA is a property of the PUBLISHER, not of our pipeline** — conflating
+those is exactly why `gsa_leases_snapshot` is about to alert.
+
+**Two rules carried in from what this arc has cost us:** a retirement must be **recorded, not
+deleted** (otherwise B6a's "a skipped step must emit, not vanish" is undone one layer up), and the
+detector must be **seen firing after the change** — *an SLA set so wide nothing can trip it is the
+same failure as no monitor at all* (I11).
+
+## 2026-08-29 — 🛑 B6b-lead GRADED AND CORRECTLY NOT RESTARTED. My §0 premise was refuted, and it was the whole justification.
+
+`docs/audits/B6b_lead_OWNERSHIP_LEAD_RESTART_2026-08-29.md`. **The right outcome, reached by
+refuting the prompt that asked for it.**
+
+**I wrote in §0: *"Its consumer is CONFIRMED ALIVE, with a measured working record — 7,729 leads ·
+2,041 worked · 208 pushed to Salesforce · 2,149 touched in 30 days. Most restarts cannot say
+that."*** That was the entire reason this producer was worth restarting. **Every number is real.
+Every one means something else.** Verified independently by Cowork:
+
+| I quoted | it actually is |
+|---|---|
+| **2,041 worked** | `pipeline_status = 'filtered_multi_tenant'` — an **automated exclusion filter**. The lane has exactly **two** status values ever (`new`, that one). **No human has ever set a status.** |
+| **208 pushed to Salesforce** | `sf_contact_id IS NOT NULL` = a **matched EXISTING contact**. ⚠️ **`sf_lead_id` is non-null on 0 of 7,729; `sf_sync_status='pending'` on ALL 7,729. Nothing has ever been pushed.** |
+| **2,149 touched in 30 days** | **1,216 on a single day** — a bulk sweep, not use. |
+
+**The lane has NO human consumer. It is Class 2 — precisely what I claimed it was not.**
+
+⚠️ **This is the A5 lesson, repeated by me, four days after I wrote it up.** A5's 596 `gap_resolved`
+"completions" were all a truncated auto-close; I documented that, then inherited three status counts
+from B6b §9 and repeated them without asking **what writes those values**. Filed as **playbook Class
+26** and `CLAUDE.md`, because *knowing the rule did not prevent the mistake* — which is the only
+reason it earns its own class rather than a footnote.
+
+**The three questions, one query each:** who or what SETS this status · does the "sent" column mean
+sent (a **destination** id means *matched*; an **emitted** id means *sent*) · is the activity a
+distribution or a spike.
+
+⚠️ **The correction did not reverse the decision — it replaced the reason, and that distinction
+matters.** The safety gate I demanded be graded, `is_same_owner`, came back **91.80% agreement and
+errs conservative — it PASSED its stop test.** Had the grade been the only check, this would have
+restarted. **It was refused on the consumer finding, which the gate grade could never have
+surfaced.** *Grade the gate AND the consumer; either can disqualify.*
+
+**Also corrected: the population.** Real figures are **584 total / 42 since the lane died** — far
+below the backlog's 10,635 *and* below my own deflated ≈4,987. ⚠️ **And `normalize_entity` has a real
+defect found on the way**: unanchored `str.replace` mangles names — **`ABC INCOME LLC` → `ABCOME`,
+`ABC CORPORATION` → `ABCORATION`.** The reference comparator that reproduced 7,940 exactly is the
+A2-sanctioned alnum key (`lower()` then strip non-alphanumerics).
+
+**Two things deliberately NOT done, both correctly:** the restart, and **registering it in B6a's
+producer registry** — *registering a producer nobody will restart adds a permanent RED row describing
+a decision*, which is the badge-that-is-noise failure.
+
+## 2026-08-29 — B6b-lead drafted. The deflation is measured, and the "no lessor signal" claim is refuted by a probe bug.
+
+**Prompt: `prompts/B6b-lead-restart-ownership-lead-lane-2026-08-29.md`.** The last of the four open
+`feed_stale` alerts that is a genuine restart candidate.
+
+**Why this one earns a restart when most dead producers do not: its consumer is confirmed alive with
+a measured working record** — 7,729 leads, **2,041 worked, 208 pushed to Salesforce, 2,149 touched
+in 30 days.** Dead since 2026-03-31, correctly alerting at 150 days.
+
+**⚠️ The jsonb-string trap, confirmed live and quantified.** `changed_fields` is a jsonb **STRING**
+on **201,212 of 233,666 rows (86%)**, so the naive `changed_fields ? 'lessor_name'` returns **0**
+while the correct `(changed_fields #>> '{}')::jsonb ? 'lessor_name'` returns **16,907**. **B6 and
+B6b's first probe both read that zero and wrote the producer off.** Playbook Class 11; the rule is
+**check `jsonb_typeof` before trusting any containment result.**
+
+**⚠️ And the deflation is now measured, which changes the target substantially:**
+**16,907** → −415 missing a side → **−7,940 PURE RE-SPELLINGS (47.0%)** → **8,552 genuine across
+2,760 properties** → **−3,565 (42% of genuine) carry `property_id IS NULL` and cannot reach a
+property-keyed store at all** → **≈4,987 genuine and property-linked**, still before the A2b
+per-lease fan-out and the P138 oscillation guard.
+
+**The 47.0% re-spelling rate independently corroborates B6's 46.7% on `landlord_change_flag`** —
+two different populations, two different queries, the same answer. That is the kind of agreement
+worth noticing, because most of this arc has been measurements disagreeing.
+
+⚠️ **The backlog's own "10,635 usable pair-events" is PRE-deflation and is now marked as such.** And
+only **995 of them arrived since the lane died** — **9,640 are historical residue**, so *resuming the
+producer* and *backfilling five months* are two decisions the prompt keeps separate.
+
+⚠️ **`is_same_owner` is the only gate and has never been graded.** The prompt grades it head-to-head
+against the normalized comparison before anything writes, and says plainly: **if it cannot separate
+a re-spelling from a sale, STOP** — manufacturing thousands of false ownership leads into a lane a
+human actually works is strictly worse than leaving it dead.
+
+⚠️ **Expect the lane to stay QUIET after a correct restart.** Newest lessor event is **2026-07-01** —
+the same ceiling as the raw GSA feed, because GSA has not published August (pull ledger 2026-08-24,
+`consecutive_unchanged=3`). **A correct restart drains the backlog and then waits**, and that must
+not be read as failure — the mistake B6b nearly made in the other direction.
+
+## 2026-08-29 — ✅ B6c-dup SHIPPED. The collision was real, the write path did leak, and the orphan count was ZERO — after three wrong answers, two of them mine.
+
+`docs/audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md`. **Decision, in writing:
+`sales_transactions` is the canonical comps spine; `property_sale_events` is a CAPTURE surface that
+propagates into it.** 77 of 77 gov views that read a sale store read the spine (all 30 `cm_gov*` CM
+views); zero read PSE. **`detail.js` said the opposite in its own comments — corrected at 4 sites,
+each marked and quoting the old wording.** Shipped `trg_gov_pse_propagate_to_sale` (AFTER INSERT,
+**the single owner of that transition**), `field_source_priority` @5, ledger + kill switch + batch
+reversal.
+
+**The leak was confirmed BEHAVIOURALLY, in a rolled-back transaction — PSE +1, spine +0,
+`latest_sale_price` set — not by reading the propagation code.** That is the right way to prove a
+gap between two stores.
+
+⚠️ **BLAST RADIUS TODAY IS ZERO, AND THAT IS THE POINT.** The operator path has **never** produced a
+row; all 5,208 PSE rows are bulk importers that wrote the spine independently, and inserts stopped
+2026-04-06. **Fix-before-it-bites, so the build is small** — the right time to close a leak is
+before it has leaked.
+
+### ⛔ ALL THREE ORPHAN FIGURES WERE WRONG. THE TRUE COUNT IS ZERO.
+
+**330 / $4.48B (mine) → 9 / $558.8M (mine, "corrected") → 6 / $29.2M (CC's own first re-measure) →
+ZERO.** Three root causes, all in one anti-join, now **playbook Class 25**:
+
+1. **The exact-date join was the wrong key.** `sales_transactions.sale_date` is **month-truncated
+   for its dominant source** — `costar_sidebar` **87.4% day-1**, ownership stubs **100%**. Re-keyed
+   on `(property, YEAR-MONTH)`: **0 orphans of 1,694**, impossible-price positive control **1,694**.
+   Every named orphan had an **exact price twin 3–21 days away, every twin on the 1st.**
+   ⚠️ **`dedup_natural_key` had been stating that granularity all along** (`property | price | YYYY-MM`).
+   **Look for the dedup/natural key before writing an anti-join, then run the neighbouring key.**
+2. **`property_id IS NULL` ≠ dangling.** Dangling was **0 and structurally impossible** —
+   `ON DELETE SET NULL`. The 321 are **NULL-link rows, 321 detached in ONE batch on 2026-04-03** by a
+   bulk property deletion. **A `LEFT JOIN … WHERE pk IS NULL` cannot tell "points nowhere" from
+   "points at nothing."**
+3. **`transaction_state` was never read.** The "$529.6M invisible to the spine" is **quarantine** —
+   `needs_review` / `duplicate_superseded` with `exclude_from_market_metrics = true`. **The store had
+   already judged its own residue.** An exclusion check means every membership column, **state
+   machines included**, not just the ones named `exclude_*`.
+
+**True population: 1,687 live twins · 7 quarantined ($604.1M) · 0 absent · 0 live twins with a null
+price. The spine was COMPLETE.**
+
+⚠️ **The lesson I most need to carry: the FINDING and its SIZE are separate claims, and I conflated
+them twice.** The collision was real and the fix was right; only the number was wrong — three times.
+Reported separately, a corrected number does not read as a retracted defect. **And this is the third
+time this arc I led with an alarming figure that measurement deflated** (the GSA raw feed, then this
+twice). The checking is working; **my ordering of alarm-before-caution is the part that keeps
+failing.**
+
+⚠️ **Two process notes worth keeping:** the parallel window merged `main` into this branch
+concurrently and **both resolutions of the same `STATUS.md` conflict were correct** — both kept both
+entries, newest-first, no markers (the §4a lesson, resolved well on both sides). And **gov #391
+merged 31 seconds after opening, before CI finished** — no harm, Test & Lint went green 31 seconds
+later, but that is the PR #1793 pattern and it was flagged factually rather than let pass.
+
+## 2026-08-28 — 🗄️ CLEANUP COMPLETE: root `.md` 70 → 10 across five topic passes
+
+**Final pass moved the Dialysis-book copy/emails to `docs/capital-markets/` and the DIA-demographics
++ lease-abstract worklogs to `docs/history/`.**
+
+**The 10 that remain are all defensible:** `CLAUDE.md`, `AGENTS.md`, `LCC-OS.md` (entry points) ·
+`WRITE_SURFACE_POLICY.md` (**canon-bound — `canon/00-INDEX.md` invariant #4 binds to it by name**) ·
+`SALESFORCE_LCC_INGESTION_PLAN.md` (**cited by path in a user-visible runtime error string**) ·
+`BRIGGS-WRITING-VOICE.md` · four `SPEC_*` files (low-risk; a future pass can triage them).
+
+**Across five passes: 62 items recovered that existed in NO tracker** — P14 (M1–M11), P14b (R1–R14),
+P14c (I1–I23), P14d (J1–J14), P14e (AI1–AI10) — **plus SEC2–SEC4 and two defects fixed in flight**
+(the Vercel-era pre-commit hard fail; the canon write-policy naming deleted files).
+**Not one of them would have survived a move-first cleanup.**
 
 ## 2026-08-28 — B6c-dup drafted, and the sizing check I demanded settled it AGAINST ME
 
