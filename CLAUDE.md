@@ -401,6 +401,68 @@ that reads zero while the fix works perfectly.
   60,000 ms — `lcc_cron_post` stops listening at 60s while the handler runs to completion (P123).
   Its markers landed 19 seconds in. **Read the worker's own output, never the caller's patience.**
 
+### ⚠️ A MONITOR'S THRESHOLD IS PART OF THE MONITOR — GRADE IT, OR IT GENERATES NOISE AND HIDES BREAKS (B6d, 2026-08-29)
+
+`feed_freshness_registry` carried **`expected_max_age_days = 45` on 10 of 23 domain feeds** — a
+default, not a measurement. Four `feed_stale` alerts were open. **Two described DECISIONS** (producers
+we had deliberately left dead) and could never close; **two were read as mis-sized SLAs and are
+GENUINE INGESTION OUTAGES.** All 25 feeds now carry a `cadence_class` and either a bound with a
+mandatory `expectation_basis` or **no bound with a mandatory `unwatched_reason`**, CHECK-enforced.
+Full writeup: `docs/audits/B6d_FEED_EXPECTATION_GRADING_2026-08-29.md`.
+
+- **⚠️ "THE SLA MUST BE WRONG" IS THE COMFORTABLE READING, AND IT WAS WRONG BOTH TIMES.** dia
+  `medicare_clinics` reads p50 gap 2d and a **max gap ever of 41d**, so its 45d bound was never the
+  issue — **27 failed + 6 abandoned CMS runs** since the last success 2026-06-25, while
+  `dataset_modified_date` reads **2026-08-25**: the source is publishing and we are not ingesting.
+  gov `sam_lease_opportunities` was re-scoped 14 → 21 **and deliberately left violated at 33d**,
+  because the weekly producer is healthy and the SAM call itself returns **401**. **Before widening a
+  bound, prove the feed's current age is within its own observed range** — above the largest gap it
+  has ever had, the bound is not the problem.
+- **⚠️ A FEED'S OWN GAP DISTRIBUTION IS CIRCULAR ONCE IT HAS BEEN DEAD.** An outage is a **closed**
+  gap and enters the distribution: `gsa_lease_change_facts` has 2 observation dates and one 170-day
+  gap — *the outage B6b repaired* — so a 3×p90 rule derives a **510-day** bound. **B6a's p90 rule is
+  correct for pipeline STEPS and does not transfer to FEEDS** (a dead step's gap never closes; a dead
+  feed's does, the moment it restarts). Lifetime windows also mix REGIMES. Size from the producer's
+  **declared** schedule, corroborate on the current regime, and below three gaps say
+  `cannot_be_sized_from_data` rather than dressing a guess up as a measurement.
+- **⚠️ THE GRADING INSTRUMENT FELL INTO ITS OWN TRAP.** The first cut of `v_feed_expectation_grade`
+  compared the bound to the observed **MAX** gap and flagged **six correctly-sized feeds** — purely
+  because they have broken before. **A gap larger than the bound is exactly what the bound EXISTS to
+  catch.** It keys on the **median** now; the max is reported separately as
+  `observed_silence_exceeds_sla`, meaning *has broken before*, not *is mis-sized*.
+- **⚠️ RETIRE AN EXPECTATION BY REMOVING THE BOUND, NEVER THE ROW.** `lcc_check_feed_freshness`
+  auto-resolves only a feed that is PRESENT and not stale, so dropping a retired feed off the surface
+  (`is_active = false`) makes its open alert **permanent** — live on `property_sale_events` the same
+  day B6c-dup retired it. An unwatched feed now EMITS with `status='unwatched'` and a NULL bound, and
+  the resolve arm keys on **that positive statement, never on ABSENCE** — absence also covers a feed
+  whose query errored or whose mirror went blind. The residual is **counted as `alerts_orphaned`,
+  never auto-resolved**: a decision and a disappearance must not close identically. This is B6a's
+  *"a skipped step must emit, not vanish"* one layer up.
+- **⚠️ FOUR FEEDS FED BY ONE PUBLISHER MUST SHARE A BASIS.** The GSA family carried 65/35/45/45, three
+  of them below the publication cycle's own peak (monthly, 21–51d lag ⇒ ~82d peak data age). One was
+  **6 days from firing on a healthy feed**; another **would have fired 2026-09-10** because its
+  cadence changed three weeks earlier and its bound had not. Keep *"did WE stop pulling"*
+  (`gsa_source_pull`, 21d) separate from *"is the publisher publishing"* (`gsa_leases_snapshot`, 90d).
+- **⚠️ ENUMERATE EVERY REGISTRY THAT FEEDS THE MONITOR.** The population is **25, not 23** — LCC Opps
+  has its own `feed_freshness_registry` (`om_intake`, `salesforce_sync`) evaluated through the check's
+  `lcc_local` arm, invisible to a count taken from the domain databases.
+- **Standing instruments:** `v_feed_expectation_grade` + `compute_feed_cadence()` on gov and dia put
+  the measured distribution beside the configured bound, so this is re-gradeable rather than a
+  one-shot that rots (Class 8). ⚠️ `compute_feed_cadence` is SECURITY DEFINER over registry-derived
+  dynamic SQL — **service_role only**, never anon (the vector B6a closed on its sibling).
+- **⚠️ AND THE FIRST ATTEMPT AT THAT NARROWING WAS A NO-OP: `REVOKE ... FROM anon, authenticated`
+  DOES NOT REMOVE THE **PUBLIC** GRANT.** Postgres grants EXECUTE on a newly created FUNCTION to
+  PUBLIC by default, so both roles still reached the definer function through PUBLIC — measured
+  live *after* the "fix" shipped: `proacl = {=X/postgres, …}` (the leading `=X` IS PUBLIC) and
+  `has_function_privilege('anon', oid, 'EXECUTE') = TRUE` on gov and dia. A **VIEW** gets no default
+  PUBLIC grant, which is why the view half of the same migration WAS effective and the function half
+  was not. **Assert a privilege with `has_function_privilege()` / `has_table_privilege()`, never by
+  reading the GRANT or REVOKE you just wrote** — the claim was checkable in one query, and four
+  artifacts (migration comment, audit doc, backlog row, guard) repeated it unverified until a review
+  bot caught it. ⚠️ **Do not generalise to "revoke PUBLIC from every definer function"**:
+  `compute_feed_freshness` keeps an explicit `anon` grant BY DESIGN (the LCC cross-DB pull reads
+  `v_feed_freshness` as anon), and revoking it would silently blind the freshness monitor.
+
 ### ⚠️ RE-MEASURE A DATED BLOCKER BEFORE QUOTING IT (2026-08-20)
 
 This file and its siblings are full of dated findings — "X is blocked", "Y returns 401", "Z yields
