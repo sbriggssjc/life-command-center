@@ -206,23 +206,53 @@ appear in P1** (17 rows), in both the live view and the refreshed cache. **Boyd 
    age into "overdue", the documented **P112** failure at scale. **Reachability is what converts a
    flood into a call list.**
 
-## 6. Broker assignment — hop 6, barely started
+## 6. Broker assignment — the bridge WORKS, is EMPTY, and building it now is premature
+
+**Measured 2026-08-29 (C7).** Evidence:
+[`C7_BROKER_ASSIGNMENT_IS_PREMATURE_2026-08-29.md`](../audits/C7_BROKER_ASSIGNMENT_IS_PREMATURE_2026-08-29.md).
 
 | | |
 |---|---:|
-| `touchpoint_cadence` rows | 2,301 |
-| …carrying `owner_user_id` | **48 (2%)** |
-| `v_priority_queue` rows carrying `owner_user_id` | **14 of 1,646 (0.9%)** |
+| `lcc_entity_owner_override` rows | **161** |
+| …that resolve through `v_lcc_entity_point_person` | **161 (100%)** |
+| **C6 deal-timing owners (P1/P2/P3/P8)** | **303** |
+| …carrying an override / resolving a point person | **0 / 0** |
+| `touchpoint_cadence` rows with `owner_user_id` | 48 of 2,304 (2%) |
+| `v_priority_queue` rows with `owner_user_id` | 14 of 1,646 (0.9%) |
 
-BREAK-2 measured 7 in August; 48 now — real movement, still ~2%.
+⚠️ **This is NOT a plumbing defect.** The documented three-user-table trap is real **and already
+solved** — the email bridge resolves **100%** of what it is given. **What is missing is
+assignments**, and the 161 that exist are **disjoint** from the 303 C6 owners. A propagation from
+`lcc_entity_owner_override` → `touchpoint_cadence` would move **0 rows** for the population C6 just
+surfaced: the **P137** class, reporting success while moving nothing.
 
-⚠️ **C6 made this worse in relative terms, not better:** the queue grew by 377 deal-timing rows and **none of them carries an owner.** A ranked call list that belongs to nobody is the next constraint — **C4c**.
+⚠️ **Do NOT re-derive the mapping in JS.** `touchpoint_cadence.owner_user_id` FKs `users(id)`;
+`lcc_entity_owner_override.owner_user_id` FKs `lcc_users(lcc_user_id)`; **none of the `lcc_users`
+ids exist in `public.users`**, so stamping the override id FK-violates on every row. Go through
+`lcc_cadence_point_person(uuid)` / `v_lcc_entity_point_person`.
 
-⚠️ **Do NOT re-derive the mapping in JS. Three different user tables:**
-`touchpoint_cadence.owner_user_id` FKs `users(id)`; `lcc_entity_owner_override.owner_user_id` FKs
-`lcc_users(lcc_user_id)`; **none of the `lcc_users` ids exist in `public.users`**, so stamping the
-override id FK-violates on every row. **The bridge is email, resolved once by
-`lcc_cadence_point_person(uuid)` / `v_lcc_entity_point_person`.**
+### ⚠️ And there is no signal to derive an assignment from
+
+*"Whoever corresponded with the contact owns the relationship"* is the obvious rule. Measured:
+**263 of 303** C6 owners have a contact with an email; **13** have ever been emailed by anyone;
+**1 distinct sender** across all of them. **One mailbox has ever been ingested**, so there is no
+correspondence graph to assign from.
+
+### The real reason, stated plainly
+
+`lcc_users` holds **4** rows and one is active. Scott, this arc: *"I have not yet started to use the
+LCC in our BD efforts."* **The queue belongs to nobody because the team has not started working it,
+not because the bridge is broken.** Distributing 303 owners across four people, one active, solves
+a problem nobody has yet.
+
+⚠️ **Do NOT default-stamp all 303 to Scott.** That writes a fact nobody asserted into the column
+every downstream surface reads as a real assignment — the "status nobody earned" failure (A5's
+`gap_resolved`, B6b-lead's `filtered_multi_tenant`). A UI default or a filter is free; a written row
+is not.
+
+**The precondition worth building instead is mailbox coverage** — one ingested mailbox bounds every
+relationship signal in the system, not just assignment (`contact-reconciliation-outbound.md` hits
+the same limit on the outbound side). Filed as **C7a**; it was not filed anywhere before.
 
 ## 7. Decisions — made, open, and refused
 
@@ -235,6 +265,8 @@ override id FK-violates on every row. **The bridge is email, resolved once by
 | 👤 **C4a — what promotes an owner out of `unknown`** | **Scott's, doctrine not code.** Recorded facts available, none adopted: portfolio shape · `purchases` edges (repeat investor vs one-off — his own distinction, already modelled) · `is_operator_not_owner` (P113) · deed/B5 party roles |
 | 👤 **C4b — `user_owner`: fill the arm or remove it** | Leaving it is how C4 stayed invisible |
 | 🔴 **C4d — marketing / deal-execution actions are not inventoried** | The other half of "compared to the balance of the leads or marketing activities." **That inventory does not exist today**; a cross-surface weighting cannot be built until it does |
+| ⛔ **C4c broker assignment — do NOT build yet** | C7: the bridge resolves 161/161; **0 of the 303 C6 owners has an assignment** and the sets are disjoint, so a propagator moves 0 rows (P137). No derivation signal — 13 of 303 ever emailed, 1 sender. 4 users, 1 active |
+| ❌ **Do NOT default-stamp the 303 to Scott** | Writes a fact nobody asserted into the column every surface reads |
 | ❌ **Do NOT widen the gate to `unknown` alone** | Without reachability it is the P112 failure at scale |
 | ❌ **Do NOT write a name-based role classifier** | ~25% raw in this arc (P189, A3), 7% (P198), 4-of-6 guarded. A role deciding *whether we call someone* is a worse home for that than a merge candidate |
 | ❌ **`lcc_looks_like_person` is not a census** | `CITY OF SALEM`, `BROOME COUNTY`, `USAA Real Estate` (A2a/A3/P196) |

@@ -2026,3 +2026,60 @@ auto-resolves by checking that a subject is *present and healthy*, removing the 
 alert **permanent and unexplained**. Retire the **bound**, keep the **row emitting**, and let the
 resolve path key on that positive statement — never on absence, which also covers *errored* and
 *cannot see*. (Class 21, one layer up.)
+
+---
+
+## Class 25 — the machinery is correct, the populations are DISJOINT, and a propagator moves zero
+
+**Found 2026-08-29 (C7), on a build I had recommended the round before.**
+
+C4c was filed as *"a build rather than an investigation — it has a documented answer
+(`lcc_cadence_point_person()`) and a documented trap (three user tables whose ids don't overlap)."*
+Both halves were true. **Measuring before building refuted the recommendation anyway:**
+
+| | |
+|---|---:|
+| `lcc_entity_owner_override` rows resolving through the bridge | **161 of 161 (100%)** |
+| C6 deal-timing owners needing an assignment | **303** |
+| …carrying an assignment | **0** |
+
+**The bridge works perfectly and the two sets do not intersect.** A propagator from the producer
+table to the consumer table would run clean, log success, and move **zero rows for the population it
+was built for.**
+
+### Why it is its own class
+
+**Class 2** is a producer with no consumer. **P137** is a consumer wired to a producer that does not
+exist. **Class 25 is subtler than both:** producer, consumer *and* the connecting machinery all
+exist, are individually correct, and are individually verifiable — they are simply **populated over
+different sets**. Every component test passes. The integration "works." Nothing moves.
+
+### The detector
+
+Before building any propagation, sync, backfill or promotion, **intersect the source population with
+the target population and quote the overlap**:
+
+```sql
+select count(*) from target_needing_it t
+where exists (select 1 from source_that_supplies_it s where s.key = t.key);
+```
+
+**If that number is 0 — or is small relative to the target — the pipe is not the problem.** Ask what
+would put rows in the source, and whether anything ever will.
+
+### The follow-on question that mattered more than the build
+
+Having found the source empty, the next move is *derive it from something else*. **Measure that
+before designing it.** Here the obvious rule — *whoever corresponded with the contact owns the
+relationship* — died on one query: **13 of 303 owners have ever been emailed, by 1 distinct sender**,
+because **one mailbox has ever been ingested**. That single fact bounds assignment, voice corpus,
+deal attribution and draft-assist retrieval simultaneously, and **it was filed nowhere.** The
+diagnosis that kills a build usually names a better one.
+
+### ⚠️ And do not "fix" an empty column by filling it with a default
+
+Stamping every row with the only active user writes **a fact nobody asserted** into a column every
+downstream surface reads as a real assignment, and it cannot be told apart from a real one later.
+Same family as A5's 596 `gap_resolved` auto-closes and B6b-lead's `filtered_multi_tenant`: **a value
+a human never chose, in a column humans are assumed to have chosen.** A UI default or a filter costs
+nothing and is reversible by inspection; a written row is neither.
