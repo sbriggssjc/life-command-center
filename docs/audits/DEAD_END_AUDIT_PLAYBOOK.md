@@ -1960,3 +1960,69 @@ tally), and this.
 grade of the safety gate (`is_same_owner`, 91.80% agreement, conservative) did **not** fail its stop
 test. **The restart was refused on the CONSUMER finding instead**, which the gate grade could never
 have surfaced. **Grade the gate AND the consumer; either one can be the disqualifier.**
+
+---
+
+## Class 27 — a MONITOR whose THRESHOLD was never graded
+
+*Found by B6d, 2026-08-29, across all three databases.
+Writeup: `docs/audits/B6d_FEED_EXPECTATION_GRADING_2026-08-29.md`.*
+
+Every other class here asks whether a detector **exists**. This one asks whether the number it
+compares against was ever **chosen**. A monitor with an ungraded threshold fails in *both*
+directions at once, which is why it survives review: some of its alerts are noise, and some of its
+silences are outages, and neither is visible from the alert list.
+
+**The tell is a repeated round number.** `feed_freshness_registry.expected_max_age_days` read **45 on
+10 of 23 domain feeds** — deed capture, sale comps, federal awards, a lease timeline, a derived
+change layer and three dead producers, all "45". No process produces that; a default does.
+
+**What the ungraded thresholds were doing, measured:**
+
+| symptom | feed | truth |
+|---|---|---|
+| fires every cycle, always closed "expected" | `opm_workforce` @120d | data is **74–75d old at the moment of a successful import** and imports are 119d apart — **120 was unmeetable by the process that feeds it** |
+| 6 days from firing on a **healthy** feed | `gsa_leases_snapshot` @65d | publisher is monthly with a 21–51d lag ⇒ peak data age **~82d** |
+| would fire 2026-09-10 on a healthy feed | `gsa_lease_events` @35d | its **cadence changed three weeks earlier** (fingerprint dedupe began skipping) and its bound did not |
+| alert can never close | 2 retired producers @45d | the bound described a **decision**, not a break |
+| reads like a mis-sized SLA | `medicare_clinics` @45d | **max gap ever = 41d, current age 65d** — a real two-month outage |
+
+**The detector — put the configured bound next to the measured interval:**
+
+```sql
+-- for every monitored thing: the threshold, the median interval, and whether
+-- anyone recorded WHY the threshold is what it is
+SELECT feed_name, sla_days, p50_gap, n_dates_window, grade, expectation_basis
+  FROM v_feed_expectation_grade ORDER BY grade;
+```
+
+**Three traps in building that detector, all hit live:**
+
+1. ⚠️ **Do NOT grade against the observed MAX gap.** The first cut did, and flagged **six correctly
+   sized feeds** — because a gap larger than the bound is *exactly what the bound exists to catch*.
+   Grade on the **median**; report the max separately, named *has been silent past its bound before*.
+2. ⚠️ **A feed's own distribution is CIRCULAR once it has been dead.** An outage is a **closed** gap
+   and enters the distribution: two observation dates and one 170-day gap — the outage a previous
+   round repaired — derives a **510-day** threshold under a 3×p90 rule. **Class 21's p90 rule is
+   correct for pipeline STEPS and does not transfer to FEEDS** (a dead step's gap never closes; a
+   dead feed's does, the moment it restarts).
+3. ⚠️ **A lifetime window mixes REGIMES.** p90 31.8 / max 95 over a feed's life, p50 7 / max 16 since
+   its workflow was scheduled. Size from the producer's **declared** schedule and corroborate on the
+   current regime; below three observed gaps say **cannot be sized** rather than dressing a guess up
+   as a measurement.
+
+> **The rule: a threshold is part of the monitor, and an ungraded threshold is an ungraded monitor.**
+> Require a recorded basis for every bound — and require a recorded *reason* for every deliberate
+> absence of one, so "nobody is watching this" is a decision on the page rather than a gap in it.
+
+⚠️ **Corollary — the comfortable reading is that the threshold is wrong.** It makes the alert go away
+and costs nothing visible. **Before widening a bound, check whether the current age is inside the
+feed's own observed range.** Above the largest gap it has ever had, the threshold is not the problem
+and widening it buries a break. That test caught **two live ingestion outages** in this round, both of
+which the brief had pre-diagnosed as SLA problems.
+
+⚠️ **And retiring a threshold is not the same as deleting the row.** Where the alerting layer
+auto-resolves by checking that a subject is *present and healthy*, removing the subject makes its open
+alert **permanent and unexplained**. Retire the **bound**, keep the **row emitting**, and let the
+resolve path key on that positive statement — never on absence, which also covers *errored* and
+*cannot see*. (Class 21, one layer up.)
