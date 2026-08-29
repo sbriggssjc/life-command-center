@@ -864,6 +864,15 @@ carries a NULL `ownership_source`**, so the detector is structurally blind to it
 
 ## 2026-08-29 — B6d drafted: grade the feed EXPECTATIONS. Two more alerts fire imminently for non-defect reasons.
 
+> ⚠️ **SUPERSEDED THE SAME DAY BY THE SHIPPED ENTRY AT THE TOP OF THIS FILE** (`B6d: the feed
+> expectations are graded…`). The framing held and the two imminent non-defect fires were real, but
+> **three of the four predicted verdicts were refuted by measurement**: `sam_lease_opportunities` is
+> **not** a rate-limit case (that is `SAM_GOV_API_KEY` on a different endpoint — this is a genuine 401
+> on `SAM_API_KEY`, so its bound was tightened and deliberately left violated); `medicare_clinics` is
+> **a real two-month ingestion outage**, not a mis-sized SLA; and the population is **25 feeds, not
+> 23**. Retiring `property_sale_events` was right, but **not by dropping the row** — that is what
+> stranded its alert. **Read the shipped entry, not this one, for what is true.**
+
 **Prompt: `prompts/B6d-grade-the-feed-expectations-2026-08-29.md`.** It closes the
 B6a → B6a-follow-up → B6b arc honestly, **grades expectations only, and writes no data.**
 
