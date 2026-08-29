@@ -774,6 +774,50 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-29 — 🛑 B6b-lead GRADED AND CORRECTLY NOT RESTARTED. My §0 premise was refuted, and it was the whole justification.
+
+`docs/audits/B6b_lead_OWNERSHIP_LEAD_RESTART_2026-08-29.md`. **The right outcome, reached by
+refuting the prompt that asked for it.**
+
+**I wrote in §0: *"Its consumer is CONFIRMED ALIVE, with a measured working record — 7,729 leads ·
+2,041 worked · 208 pushed to Salesforce · 2,149 touched in 30 days. Most restarts cannot say
+that."*** That was the entire reason this producer was worth restarting. **Every number is real.
+Every one means something else.** Verified independently by Cowork:
+
+| I quoted | it actually is |
+|---|---|
+| **2,041 worked** | `pipeline_status = 'filtered_multi_tenant'` — an **automated exclusion filter**. The lane has exactly **two** status values ever (`new`, that one). **No human has ever set a status.** |
+| **208 pushed to Salesforce** | `sf_contact_id IS NOT NULL` = a **matched EXISTING contact**. ⚠️ **`sf_lead_id` is non-null on 0 of 7,729; `sf_sync_status='pending'` on ALL 7,729. Nothing has ever been pushed.** |
+| **2,149 touched in 30 days** | **1,216 on a single day** — a bulk sweep, not use. |
+
+**The lane has NO human consumer. It is Class 2 — precisely what I claimed it was not.**
+
+⚠️ **This is the A5 lesson, repeated by me, four days after I wrote it up.** A5's 596 `gap_resolved`
+"completions" were all a truncated auto-close; I documented that, then inherited three status counts
+from B6b §9 and repeated them without asking **what writes those values**. Filed as **playbook Class
+26** and `CLAUDE.md`, because *knowing the rule did not prevent the mistake* — which is the only
+reason it earns its own class rather than a footnote.
+
+**The three questions, one query each:** who or what SETS this status · does the "sent" column mean
+sent (a **destination** id means *matched*; an **emitted** id means *sent*) · is the activity a
+distribution or a spike.
+
+⚠️ **The correction did not reverse the decision — it replaced the reason, and that distinction
+matters.** The safety gate I demanded be graded, `is_same_owner`, came back **91.80% agreement and
+errs conservative — it PASSED its stop test.** Had the grade been the only check, this would have
+restarted. **It was refused on the consumer finding, which the gate grade could never have
+surfaced.** *Grade the gate AND the consumer; either can disqualify.*
+
+**Also corrected: the population.** Real figures are **584 total / 42 since the lane died** — far
+below the backlog's 10,635 *and* below my own deflated ≈4,987. ⚠️ **And `normalize_entity` has a real
+defect found on the way**: unanchored `str.replace` mangles names — **`ABC INCOME LLC` → `ABCOME`,
+`ABC CORPORATION` → `ABCORATION`.** The reference comparator that reproduced 7,940 exactly is the
+A2-sanctioned alnum key (`lower()` then strip non-alphanumerics).
+
+**Two things deliberately NOT done, both correctly:** the restart, and **registering it in B6a's
+producer registry** — *registering a producer nobody will restart adds a permanent RED row describing
+a decision*, which is the badge-that-is-noise failure.
+
 ## 2026-08-29 — B6b-lead drafted. The deflation is measured, and the "no lessor signal" claim is refuted by a probe bug.
 
 **Prompt: `prompts/B6b-lead-restart-ownership-lead-lane-2026-08-29.md`.** The last of the four open

@@ -90,7 +90,28 @@ from exactly that source. Two more: **`gsa_lease_change_facts`** (336,303 rows; 
   restored five that had been failing silently), both domains synced **today**, and **6 real
   `feed_stale` alerts** are open after 33 days of zero. **The transport was two different causes**
   (gov cold-start timeout, dia missing grant). Invariant **I11** now has a standing detector.
-- ⭐ **NEXT — `B6b`: restart the four dead producers.** They are now visible AND alertable, which is
+> ## 📍 STATE AS OF 2026-08-29 — the B-series is CLOSED. Read this block, not the B6b line below.
+>
+> **`B6b` ✅ shipped** (change layer live, self-healing on the Monday sync, both alerts auto-resolved).
+> **`B6c` ✅ answered** (keep the table, retire the columns). **`B6c-dup` ✅ shipped** —
+> `sales_transactions` is the canonical comps spine, `property_sale_events` is a capture surface that
+> now propagates into it. **`B6b-lead` 🛑 graded and DELIBERATELY NOT RESTARTED.**
+>
+> ⚠️ **Three findings from that arc that will mislead you if you inherit the old numbers:**
+> **(1)** `prospect_leads` `ownership_change` is **NOT** *"2,041 worked / 208 pushed to Salesforce"* —
+> those are an **automated filter** and a **matched existing contact**; `sf_lead_id` is non-null on
+> **0 of 7,729**. **The lane has no human consumer** (Class 26).
+> **(2)** The `property_sale_events` orphan count is **ZERO**, after three wrong answers
+> (330 → 9 → 6). The exact-date anti-join was the wrong key — `sale_date` is **month-truncated**
+> for its dominant source (Class 25).
+> **(3)** `changed_fields` on `gsa_lease_events` is a jsonb **STRING** on 86% of rows, so
+> `changed_fields ? 'key'` returns a plausible **0** against a true **16,907** (Class 11).
+>
+> **Open `feed_stale` alerts are now a DECISION list, not a build list** — see the recommendation in
+> `STATUS.md`. **Root `.md` is 70 → 10; five topic cleanup passes recovered 62 items that existed in
+> no tracker** (P14 · P14b · P14c · P14d · P14e), plus **SEC2–SEC4**.
+
+- ~~⭐ **NEXT — `B6b`: restart the four dead producers.**~~ ✅ **DONE — see the block above.** They are now visible AND alertable, which is
   the precondition B6a-follow-up existed to create. The alerts name them:
   `gsa_lease_change_facts` **170d** (the 336k-row landlord-change source), `gsa_lease_timeline` 170d,
   `prospect_leads_ownership_change` 150d, `property_sale_events` 144d.

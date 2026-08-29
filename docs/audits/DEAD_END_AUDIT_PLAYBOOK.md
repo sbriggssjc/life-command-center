@@ -1912,3 +1912,51 @@ times does not refute the finding.** B6c-dup's collision was real (77 of 77 view
 zero read the capture surface, and the write path leaked — confirmed behaviourally in a rolled-back
 transaction). **The orphan count was wrong three times and the fix was still right.** Report them
 separately so a corrected number does not read as a retracted defect.
+
+---
+
+## Class 26 — a STATUS VALUE mistaken for a human verdict
+
+**Found:** 2026-08-29 (B6b-lead). ⚠️ **This is the sharpened form of the A5 lesson, and it was made
+BY THE AUTHOR OF THE A5 LESSON, four days later, on a different lane.** That is the reason it gets
+its own class rather than a footnote: knowing the rule did not prevent the mistake.
+
+**Symptom.** A dead producer looks worth restarting because *"its consumer is alive — look, N leads
+worked, M pushed to Salesforce, K touched last month."* Every number is real and reproducible. **Every
+number means something other than what its column name suggests**, and the lane has no human
+consumer at all.
+
+**The live case.** `prospect_leads` where `lead_source='ownership_change'` was cited — by two
+successive audits and by the prompt that acted on them — as **7,729 leads · 2,041 worked · 208 pushed
+to Salesforce · 2,149 touched in 30 days**. Verified independently:
+
+| quoted as | what it actually is |
+|---|---|
+| **2,041 worked** | `pipeline_status = 'filtered_multi_tenant'` — an **automated exclusion filter**. The lane has exactly **two** status values ever: `new` and that one. **No human has ever set a status.** |
+| **208 pushed to Salesforce** | `sf_contact_id IS NOT NULL` — a **matched EXISTING contact**. ⚠️ **`sf_lead_id` is non-null on 0 of 7,729, and `sf_sync_status = 'pending'` on ALL 7,729. Nothing has ever been pushed.** |
+| **2,149 touched in 30 days** | **1,216 of them on one day** — a bulk sweep, not activity. |
+
+**The detector — three questions, each one query:**
+
+1. **Who or what SETS this status?** Enumerate the distinct values and ask which of them a person
+   could produce. *Two values, both machine-written, is not a workflow.*
+2. **Does the "sent" column mean sent?** A destination id (`sf_contact_id`) means *matched*; an
+   emitted id (`sf_lead_id`) means *sent*. **Check the emitted one and the sync status.**
+3. **Is the activity a distribution or a spike?** `count(distinct updated_at::date)` and the largest
+   single-day count. **A bulk sweep and sustained use render identically in a 30-day total.**
+
+**Why it keeps happening.** These columns are *designed* to look like a workflow, and the honest
+reading requires knowing what writes them — which is one grep away and always feels unnecessary
+because the number is right there. **The same shape has now appeared three times:** A5's 596
+`gap_resolved` "completions" (all a truncated auto-close), P159a's `drillthrough: 37` (a re-scan
+tally), and this.
+
+> **The rule: a count of rows in a state is not a count of work done until you have named the writer
+> of that state.** Quote *"2,041 rows carry `filtered_multi_tenant`, written by the ingest filter"* —
+> never *"2,041 worked."* **If no human-writable path to the state exists, the lane's consumer is
+> automation, and "the consumer is alive" is false.**
+
+⚠️ **Corollary — the correction does not always reverse the decision, and it did not here.** The
+grade of the safety gate (`is_same_owner`, 91.80% agreement, conservative) did **not** fail its stop
+test. **The restart was refused on the CONSUMER finding instead**, which the gate grade could never
+have surfaced. **Grade the gate AND the consumer; either one can be the disqualifier.**
