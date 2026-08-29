@@ -16,6 +16,37 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-29 — C9: C8b REFUTED; the merge backlog is now on the operator surfaces
+
+**NOTHING WRITTEN.** Audit `docs/audits/C9_MERGE_BACKLOG_REACHES_THE_OPERATOR_SURFACES_2026-08-29.md`;
+canonical **§3**; new Dead-End **Class 29**. **C8b ❌ refuted · C9 🟢 · C9a 🔴 filed.**
+
+⚠️ **I filed C8b wrongly and it is corrected in place in the C8 audit AND the C8 prompt.** I claimed
+`Brandywine Realty Trust` at $34,920,891.77 / 0 properties was the N18 fabricated `attributed_rent`
+value. **Refuted: Brandywine genuinely owns the highest-rent gov property (11504); the value is
+real.** ⚠️ **The tell I skipped was visible at the time — `rows_equal_to_gov_max = 1`.** N18's defect
+was systematic (11 distinct values over 277 candidates); **a population of one is not a systematic
+artifact.** New **Class 29**: *a value that matches a known-bad aggregate is a hypothesis, not a
+finding* — reproduce the MECHANISM, not the number.
+
+**The real defect is worse.** Three live entities share `canonical_name = 'brandywine realty'`, none
+merged: **assets + contact on one, cadence + 36 edges on another** — the P177/P198 split (Gardner
+Tanenbaum's shape). ⚠️ **The detector is NOT broken** — it surfaced the group at `member_count=3,
+auto_mergeable=false` and correctly declined genuine name variance. **It has never been reviewed.**
+
+- **5,194 merge groups, 3,006 auto-mergeable. 181 of the 303 C6 callable owners (60%)** share a
+  canonical name with another live entity; 415 queue entities; 50 brief-eligible.
+- ⚠️ **181 is EXPOSURE, not confirmed splits** — the split was verified on ONE named row; the
+  population rate is **unmeasured**.
+- **C6 changed the cost.** Duplicates were hygiene when 74 owners reached these bands; with 303 on a
+  call sheet **ranked by a value that lives on whichever twin holds the portfolio fact**, a
+  duplicate is a wrong row an operator works.
+- **Recommendation: a value-ranked review lane scoped to the 181 + 50 that are operationally live —
+  NOT a bulk merge.** P195's hazards stand and `lcc_apply_fuzzy_merges` stays unwired. ⚠️ **Winner
+  rule is ownership-first** — the survivor is the asset+contact holder, not the more-connected twin.
+- 🔴 **C9a filed:** should `connected_property_value` feed `rank_value` at all? **146 rows carry a
+  rank value with 0 current properties.** Unexamined design question, not a defect on its face.
+
 ## 2026-08-29 — C8: the prospecting brief hides $515M of resolved owners (C4b resolved as inert)
 
 **NOTHING WRITTEN.** Audit `docs/audits/C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md`;

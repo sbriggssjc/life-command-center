@@ -101,10 +101,12 @@ everything it shows.**
 twelve rounds resolving and P198 merged — **Easterly is the single largest owner in the system and
 it is not on the call sheet.**
 
-⚠️ **`Brandywine Realty Trust` at $34.9M / 0 properties is the N18 fabricated `attributed_rent`
-value** ($34,920,891.77 = the gov-wide `max(annual_rent)`), surfacing here as a rank. **N18 fixed
-the developer-classification view; this is a different consumer of the same shape and was not
-checked.** Filed as **C8b**.
+⚠️ **CORRECTED 2026-08-29 by [C9](C9_MERGE_BACKLOG_REACHES_THE_OPERATOR_SURFACES_2026-08-29.md) —
+this paragraph originally called `Brandywine Realty Trust` at $34.9M / 0 properties "the N18
+fabricated `attributed_rent` value." That is REFUTED.** Brandywine genuinely owns the highest-rent
+gov property (11504) and the value is real. **What is wrong is which entity carries it:** three live
+entities share `canonical_name = 'brandywine realty'`, none merged — the assets and contact on one,
+the cadence and 36 edges on another. **A duplicate-entity split, not a fabrication.** See C9.
 
 ## 3. The fix — C6's rule, on the second surface
 

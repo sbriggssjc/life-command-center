@@ -95,8 +95,11 @@ letting the guard drop it.
 - **The 3 brokerage-flagged names, read individually.**
 - Whether the fallback branch carries the same gate.
 - Which mechanism you used for "is a resolved owner", and why.
-- ⚠️ **One thing to flag, not fix: `Brandywine Realty Trust` appears at $34,920,891.77 with 0
-  current properties. That is the N18 fabricated `attributed_rent` value** (the gov-wide
-  `max(annual_rent)`), surfacing here as a rank. **N18 fixed the developer-classification view; this
-  is a different consumer of the same shape.** Confirm whether `rank_value` shares that defect and
-  report it — it is filed as **C8b** and is **out of scope for this change**.
+- ⚠️ **CORRECTED — do NOT chase the N18 theory.** An earlier draft of this prompt said
+  `Brandywine Realty Trust` at $34,920,891.77 / 0 properties was the N18 fabricated
+  `attributed_rent` value. **C9 refuted that**: Brandywine really does own the highest-rent gov
+  property and the number is correct. The defect is that **three live entities share
+  `canonical_name = 'brandywine realty'`** — the assets and contact on one, the cadence and 36 edges
+  on another — so the brief ranks the asset-less twin via the `connected_property_value` fallback.
+  **That is C9, it is a duplicate-entity split, and it is out of scope here.** Report it if you see
+  it; do not fix it in this change.
