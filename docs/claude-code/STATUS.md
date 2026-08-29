@@ -927,6 +927,52 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-29 — ✅ B6d SHIPPED. The alert surface is graded, and the ONE SLA I guessed was wrong was a REAL two-month outage.
+
+Merged: `life-command-center#1933` · `Dialysis#7378` · `government-lease#393`.
+**Live: 25 registered feeds, every one carrying a graded expectation OR a recorded reason for having
+none. `feed_stale` 4 → 2, and both survivors are genuine outages. 0 alerts describing a decision.
+0 `feed_mirror_stale`. 2 feeds unwatched-by-decision, still emitting their age.**
+
+**⚠️ THE RULE THAT EARNED ITS KEEP WAS THE ONE I WROTE AGAINST MY OWN HYPOTHESIS.** I predicted
+`medicare_clinics` was *"probably the SLA is wrong — CMS publishes slowly"*, and added §3c: **do not
+weaken an SLA to silence a real defect; measure CMS's actual cadence first.** Measured: the feed's own
+history is **p50 gap 2d, p90 18.5d, max 41d** — and the current age is **65d, above the largest gap it
+has ever had.** **The 45-day bound was never the problem.** Widening it would have buried a two-month
+ingestion outage.
+
+**I re-verified it independently and it is WORSE than the audit recorded, because it is still
+accruing:** `ingestion_tracker` for CMS now reads **116 success (newest 2026-06-25) · 40 FAILED
+(newest attempt 2026-08-26) · 16 ABANDONED (newest 2026-08-27)** — and the abandoned rows carry
+**`dataset_modified_date = 2026-08-25`**. **CMS published four days ago, we tried, and the runs
+failed.** The audit's "27 failed + 6 abandoned" was correct when written; **failures accrue daily**.
+
+⚠️ **My first three verification queries were all against the wrong objects** — `ingestion_runs` (empty),
+`ingestion_log`, and `cms_dataset_updates` (which tracks only `cms_patient_counts`, last published
+2026-03-24). I briefly could not reproduce the audit's claim and nearly reported a discrepancy.
+**What resolved it was reading the registry's own `ts_column` — `source_last_seen`, not `updated_at`
+— and its `expectation_basis` field, which records the entire reasoning inline.** *That field is
+B6d's real deliverable: it made a shipped conclusion re-checkable by someone who did not write it,
+which is exactly what the whole cleanup arc is for.*
+
+**Two more caught before they fired**, both non-defects, exactly as predicted: `opm_workforce`
+(age 120 vs SLA 120 — would have alerted the next day) and `gsa_leases_snapshot` (GSA has not
+published August).
+
+### ⚠️ And the round turned its own theme on itself — a security claim that was FALSE when written
+
+`compute_feed_cadence` is SECURITY DEFINER over registry-derived dynamic SQL. The first narrowing —
+`REVOKE EXECUTE ... FROM anon, authenticated` — **was a no-op**, because **Postgres grants EXECUTE on
+a new function to PUBLIC by default**, and both roles still reached it that way. Measured on the live
+object *after* the "fix" shipped: `proacl = {=X/postgres, ...}` (**the leading `=X` IS the PUBLIC
+grant**) and `has_function_privilege('anon', oid, 'EXECUTE') = TRUE` on gov and dia. **An
+unauthenticated caller could invoke a definer function running dynamic full-table scans over every
+registered source table.** Corrected by `REVOKE ... FROM PUBLIC`; verified with
+`has_function_privilege`, **not by reading the grant that was just written.**
+
+**Caught by a review bot, not by its author** — and it is this round's own §3d (*positive-control the
+change*) applied to everything except the security assertion. Already in `CLAUDE.md`.
+
 ## 2026-08-29 — B6d drafted: grade the feed EXPECTATIONS. Two more alerts fire imminently for non-defect reasons.
 
 > ⚠️ **SUPERSEDED THE SAME DAY BY THE SHIPPED ENTRY AT THE TOP OF THIS FILE** (`B6d: the feed
