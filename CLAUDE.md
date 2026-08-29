@@ -450,6 +450,18 @@ Full writeup: `docs/audits/B6d_FEED_EXPECTATION_GRADING_2026-08-29.md`.
   the measured distribution beside the configured bound, so this is re-gradeable rather than a
   one-shot that rots (Class 8). ⚠️ `compute_feed_cadence` is SECURITY DEFINER over registry-derived
   dynamic SQL — **service_role only**, never anon (the vector B6a closed on its sibling).
+- **⚠️ AND THE FIRST ATTEMPT AT THAT NARROWING WAS A NO-OP: `REVOKE ... FROM anon, authenticated`
+  DOES NOT REMOVE THE **PUBLIC** GRANT.** Postgres grants EXECUTE on a newly created FUNCTION to
+  PUBLIC by default, so both roles still reached the definer function through PUBLIC — measured
+  live *after* the "fix" shipped: `proacl = {=X/postgres, …}` (the leading `=X` IS PUBLIC) and
+  `has_function_privilege('anon', oid, 'EXECUTE') = TRUE` on gov and dia. A **VIEW** gets no default
+  PUBLIC grant, which is why the view half of the same migration WAS effective and the function half
+  was not. **Assert a privilege with `has_function_privilege()` / `has_table_privilege()`, never by
+  reading the GRANT or REVOKE you just wrote** — the claim was checkable in one query, and four
+  artifacts (migration comment, audit doc, backlog row, guard) repeated it unverified until a review
+  bot caught it. ⚠️ **Do not generalise to "revoke PUBLIC from every definer function"**:
+  `compute_feed_freshness` keeps an explicit `anon` grant BY DESIGN (the LCC cross-DB pull reads
+  `v_feed_freshness` as anon), and revoking it would silently blind the freshness monitor.
 
 ### ⚠️ RE-MEASURE A DATED BLOCKER BEFORE QUOTING IT (2026-08-20)
 

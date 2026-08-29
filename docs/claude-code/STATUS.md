@@ -75,6 +75,18 @@ function body and all 25 registry rows verified byte-identical to live by md5.
   backlog updated.
 - **NOT done, deliberately:** no producer started, stopped or altered. The two real breaks are filed
   (**B6d-cms**, **B6d-sam**), not fixed — fixing them here would blur which change moved which number.
+- ⚠️ **FOLLOW-UP, and it is this round's own theme turned on itself: a REVIEW BOT caught a security
+  claim B6d asserted without positive-controlling it.** `REVOKE EXECUTE … FROM anon, authenticated`
+  on `compute_feed_cadence` was a **no-op** — Postgres grants EXECUTE on a newly created FUNCTION to
+  **PUBLIC** by default, so both roles still reached the SECURITY DEFINER function that runs dynamic
+  full-table scans. Measured live *after* the "fix" shipped: `proacl = {=X/postgres, …}` (the leading
+  `=X` IS the PUBLIC grant) and `has_function_privilege('anon', oid, 'EXECUTE') = TRUE` on gov and
+  dia. Fixed by `REVOKE … FROM PUBLIC`; verified false after. **A VIEW takes no default PUBLIC
+  grant**, which is why the view half of the same migration WAS effective. **Assert a privilege with
+  `has_function_privilege()`, never by reading the REVOKE you just wrote** — it was one query away,
+  and four artifacts (migration comment, audit doc, backlog row, guard) repeated it unverified.
+  ⚠️ Not generalisable: `compute_feed_freshness` keeps its `anon` grant BY DESIGN (the cross-DB pull
+  reads `v_feed_freshness` as anon); the gov guard now pins that asymmetry in both directions.
 
 ## 2026-08-28 — CONSOLIDATION: BD ranking gets a canonical page
 
@@ -863,6 +875,15 @@ carries a NULL `ownership_source`**, so the detector is structurally blind to it
 
 
 ## 2026-08-29 — B6d drafted: grade the feed EXPECTATIONS. Two more alerts fire imminently for non-defect reasons.
+
+> ⚠️ **SUPERSEDED THE SAME DAY BY THE SHIPPED ENTRY AT THE TOP OF THIS FILE** (`B6d: the feed
+> expectations are graded…`). The framing held and the two imminent non-defect fires were real, but
+> **three of the four predicted verdicts were refuted by measurement**: `sam_lease_opportunities` is
+> **not** a rate-limit case (that is `SAM_GOV_API_KEY` on a different endpoint — this is a genuine 401
+> on `SAM_API_KEY`, so its bound was tightened and deliberately left violated); `medicare_clinics` is
+> **a real two-month ingestion outage**, not a mis-sized SLA; and the population is **25 feeds, not
+> 23**. Retiring `property_sale_events` was right, but **not by dropping the row** — that is what
+> stranded its alert. **Read the shipped entry, not this one, for what is true.**
 
 **Prompt: `prompts/B6d-grade-the-feed-expectations-2026-08-29.md`.** It closes the
 B6a → B6a-follow-up → B6b arc honestly, **grades expectations only, and writes no data.**
