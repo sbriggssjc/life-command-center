@@ -126,6 +126,8 @@ let diaIntakeIdx = 0;
 // one canonical and you fix multiple properties.
 let diaOwnershipBacklog       = null;   // array of cluster rows
 let diaOwnershipBacklogLoading = false;
+let diaOwnershipBacklogError  = null;   // last load failure message; distinguishes
+                                        // "the query failed" from "there are 0 rows"
 let diaOwnershipFilterState   = '';     // optional state filter (e.g. 'TX')
 let diaOwnershipFilterText    = '';     // optional name-substring filter
 
@@ -141,7 +143,17 @@ let diaOwnershipFilterText    = '';     // optional name-substring filter
  */
 async function diaQuery(table, select, params = {}) {
   // Query via serverless proxy — keeps secret key server-side
-  const { filter, filter2, order, limit = 1000, offset = 0, includeCount = false } = params;
+  //
+  // throwOnError (2026-08-29): this helper returns [] on EVERY non-OK response,
+  // which is why the Deals > Ownership tab rendered "no canonical clusters yet —
+  // run dia_unify_canonical_true_owners to seed" while PostgREST was actually
+  // answering HTTP 500 (the view exceeded the 8s statement_timeout). A failed
+  // request and an empty result produced identical pixels, and the empty state
+  // then recommended a write that was not needed. Default stays false so the
+  // ~70 existing callers are byte-identical; callers that render an empty state
+  // asserting something about the DATA should opt in, so their own catch can
+  // tell the operator the query failed.
+  const { filter, filter2, order, limit = 1000, offset = 0, includeCount = false, throwOnError = false } = params;
 
   const url = new URL('/api/dia-query', window.location.origin);
   url.searchParams.set('table', table);
@@ -168,6 +180,7 @@ async function diaQuery(table, select, params = {}) {
     if (!response.ok) {
       const errBody = await response.text();
       console.error(`diaQuery ${table}: HTTP ${response.status}`, errBody);
+      if (throwOnError) throw new Error(`diaQuery ${table}: HTTP ${response.status} ${String(errBody).slice(0, 300)}`);
       return includeCount ? { data: [], count: 0 } : [];
     }
 
@@ -176,8 +189,13 @@ async function diaQuery(table, select, params = {}) {
     return result.data || [];
   } catch (err) {
     clearTimeout(timeout);
-    if (err.name === 'AbortError') { console.warn('diaQuery ' + table + ' timed out (30s)'); return includeCount ? { data: [], count: 0 } : []; }
+    if (err.name === 'AbortError') {
+      console.warn('diaQuery ' + table + ' timed out (30s)');
+      if (throwOnError) throw new Error(`diaQuery ${table}: timed out after 30s`);
+      return includeCount ? { data: [], count: 0 } : [];
+    }
     console.error('diaQuery error:', err);
+    if (throwOnError) throw err;
     return includeCount ? { data: [], count: 0 } : [];
   }
 }
@@ -5089,8 +5107,12 @@ async function loadDiaOwnershipBacklog() {
     // client-side.
     const rows = await diaQuery('v_recorded_owner_canonical_clusters', '*', {
       order: 'canonical_total_properties.desc',
-      limit: 500
+      limit: 500,
+      // Opt in so a 500/timeout reaches the catch below instead of being
+      // laundered into an empty result that reads as "there is no data".
+      throwOnError: true
     });
+    diaOwnershipBacklogError = null;
     const seen = new Set();
     const collapsed = [];
     for (const r of (rows || [])) {
@@ -5111,6 +5133,7 @@ async function loadDiaOwnershipBacklog() {
   } catch (e) {
     console.error('loadDiaOwnershipBacklog error:', e);
     showToast('Ownership backlog load failed', 'error');
+    diaOwnershipBacklogError = e && e.message ? e.message : String(e);
     diaOwnershipBacklog = [];
   }
   diaOwnershipBacklogLoading = false;
@@ -7661,7 +7684,16 @@ function renderDiaOwnershipResearch() {
   if (!filtered.length) {
     html += '<div style="text-align:center;padding:48px;color:var(--text3);background:var(--s2);border:1px dashed var(--border);border-radius:8px">';
     html += rows.length === 0
-      ? 'No canonical clusters yet &mdash; v_recorded_owner_canonical_clusters returned 0 rows. Run dia_unify_canonical_true_owners on the DB to seed.'
+      ? (diaOwnershipBacklogError
+          // The query FAILED — never recommend a DB write on the strength of an
+          // error. dia_unify_canonical_true_owners is a real owner-merge; a
+          // failed read is no evidence that anything needs seeding.
+          ? 'Could not load the ownership backlog &mdash; the query to ' +
+            'v_recorded_owner_canonical_clusters failed. This is not the same as ' +
+            '&ldquo;no clusters exist&rdquo;. Details: ' + esc(diaOwnershipBacklogError)
+          : 'No canonical clusters &mdash; v_recorded_owner_canonical_clusters returned 0 rows. ' +
+            'If recorded_owners genuinely holds no duplicate canonical names this is correct; ' +
+            'if you expect clusters, run dia_unify_canonical_true_owners on the DB to seed.')
       : 'No clusters match your filter.';
     html += '</div></div>';
     return html;

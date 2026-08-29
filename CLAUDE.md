@@ -2846,8 +2846,25 @@ trigger is the sole writer. Writeup: `docs/audits/N15c_CANONICAL_NAME_SINGLE_WRI
   carrying `d8fcfbf` preceded the 20:03 backfill. The sandbox cannot reach the Railway host —
   `http=000` while `api.github.com` returns 200 — so `/version` must be checked from somewhere that
   can.)
-- 👤 **One decision remains Scott's:** whether the column becomes an enforced **UNIQUE** key
-  (3,930 groups violated it before the backfill).
+- ✅ **THE PRODUCER IS VERIFIED FIXED — AND CONFIRMED AT SCALE (2026-08-29).** The first check rested
+  on 3 mints; a bulk sync has since minted **4,618** (live 62,346 → 66,901) and **drift is still 0**.
+- **⚠️ DRIFT = 0 IS NECESSARY AND NOT SUFFICIENT — A DUPLICATE STORM READS DRIFT 0 TOO**, because the
+  trigger dutifully computes a correct key for every duplicate. The gate that matters is *did a new
+  mint land on a key that already had a live entity*: **22 of 4,618 (0.48%)**. And **19 of those are
+  not an LCC defect** — each colliding gov `asset` pair carries a DIFFERENT `gov/asset/<property_id>`,
+  i.e. two rows in gov `properties` for one building, differing only by address punctuation
+  (`303 "H" St` / `303 H St`, `St. Albans` / `St Albans`) which the key strips. The asset path mints
+  one entity per domain property id **by contract**, so LCC is mirroring a DOMAIN-level duplicate the
+  N15c key merely made visible (**N20**) — do not "fix" it by weakening that contract. **The genuine
+  residual is 3 of 4,618 (0.06%)**, from `api/sync.js` / `api/domains.js`, which now compute the right
+  key but still POST `entities` without looking up by it (**N21**).
+- 👤 **One decision remains Scott's, and its size CHANGED:** whether the column becomes an enforced
+  **UNIQUE** key. ⚠️ **3,930 was measured on the OLD keys; on the N15c key it is 8,136 groups**
+  (`v_duplicate_candidates`). The extra ~4,200 are **not an over-collapse** — read on named rows they
+  are pre-existing duplicates the disagreeing keys were hiding (`Office Properties Income` /
+  `…Income Trust` ×8; `AEI Capital` / `Corp` / `Corporation` ×6; `Rainier Companies` /
+  `The Rainier Companies`; **`Realty Income` ×5**, the name N15b showed the old fuzzy comparator
+  reduces to the empty string so it cannot match itself). **Surfacing them is the fix working.**
 - 👤 **Two decisions were left to Scott. ⚠️ BOTH LINES BELOW ARE NOW SUPERSEDED — see the N15d/N15e
   section that follows.** (1) The **537 stale rows** were **recomputed 2026-08-27 (batch `n15e_go`),
   drift 537 → 0**; the "recomputing discards a captured string some preserve" concern measured at
@@ -3418,6 +3435,81 @@ an owner, 0 evidence-less, 0 orphans.** Batch `c2e_gov_eligible_t2a_20260828`, r
   **21.3% → 17.2% → 3.7%**. The graph cost is now measured across 4,570 mints and is not the issue;
   the owner cliff arrived exactly where C2a said. The decision is purely whether *"resolve all
   ownership, rank later"* applies to a population ~96% un-contactable. **No default was taken.**
+
+## B6c-dup — two stores for one fact, each naming ITSELF canonical (2026-08-29)
+
+`detail.js` said in its own comments that `property_sale_events` was **canonical** and
+`sales_transactions` was *"legacy, retired for write paths."* The database said the reverse and
+always had: **77 of 77 gov views that read a sale store read `sales_transactions`** — all 30
+`cm_gov*` Capital Markets views among them — and **ZERO read `property_sale_events`**. Both stores
+were individually correct with coherent consumers, so nothing errored. **The comment is what let it
+survive.** Decision recorded: **the spine is `sales_transactions`; PSE is a CAPTURE surface that
+propagates into it.** Shipped `trg_gov_pse_propagate_to_sale` (gov,
+`sql/20260829_gov_b6cdup_pse_propagate_to_sales_transactions.sql`), the SINGLE owner of that
+transition. Writeup: `docs/audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md`; connectivity **§4p**;
+contract **I1**.
+
+- **⚠️ CONFIRM A LEAK BEHAVIOURALLY, NEVER BY READING THE PROPAGATION CODE.** One rolled-back
+  INSERT settled it: `property_sale_events` +1, `sales_transactions` **+0**,
+  `properties.latest_sale_price` set. Faster and more convincing than reading either half.
+- **⚠️ A COMPLETE DOWNSTREAM STORE IS NOT EVIDENCE THAT PROPAGATION EXISTS.** gov's spine held
+  **every** priced event on a live property — because both bulk importers wrote **both** tables
+  independently, not because anything connected them. The operator path had **never produced a
+  row** (all 5,208 PSE rows are importers; inserts stopped 2026-04-06), so the leak had done zero
+  damage and looked exactly like a working connection. **Ask when a path last ran before reading
+  its output as proof it works** — and size the build accordingly: this was fix-before-it-bites,
+  not a cleanup.
+- **⚠️ THREE SUCCESSIVE ORPHAN COUNTS WERE WRONG — 330/$4.48B, 9/$558.8M, AND MY OWN FIRST
+  RE-MEASURE OF 6/$29.2M. THE TRUE COUNT IS ZERO.** Causes, all transferable:
+  - **The exact-date join was the wrong key.** `sales_transactions.sale_date` is **month-truncated**
+    for its dominant source — `costar_sidebar` **87.4% day-1** (6,871/7,865), ownership stubs 100%.
+    All six named "orphans" carry an **exact price twin 3–21 days apart, every twin on the 1st**.
+    Re-keyed on `(property, YEAR-MONTH)`: **0 of 1,694**, impossible-price control **1,694**.
+    ⚠️ **`dedup_natural_key` already encoded that granularity** (`property | round(price/1000)*1000
+    | YYYY-MM`) — the spine had been stating its own join key all along. **Run the neighbouring key
+    before believing an anti-join**; a ±31-day variant returned 0 for free. Same family as P189's
+    normalizer and A2's `strict_core`: *a comparator structurally unable to express the question
+    returns a plausible number instead of an error.*
+  - **`property_id IS NULL` is NOT a dangling reference**, and dangling was **0 and structurally
+    impossible** — `fk_pse_property … **ON DELETE SET NULL**` nulls the link instead of stranding
+    it. ⚠️ **A `LEFT JOIN target … WHERE target.pk IS NULL` lumps "points nowhere" in with "points
+    at nothing"** — I reproduced the brief's own error that way before catching it. **Decide which
+    one you mean, in SQL, before counting.**
+  - **`transaction_state` was never read.** The "$529.6M invisible to the spine" is **quarantine**:
+    all three NULL-price twins are `needs_review`/`duplicate_superseded` with
+    `exclude_from_market_metrics = true`. Live population: **1,687 live twins · 7 quarantined
+    ($604.1M) · 0 absent · 0 live twins with a NULL price.** **An exclusion check means every
+    exclusion column, `transaction_state` included** — not just the ones named
+    `exclude_*`.
+- **⚠️ A FILTER THAT NARROWS A LOOKUP TO THE ROWS YOU WANT TO *ACT ON* HIDES THE ROWS THAT SHOULD
+  *STOP* YOU.** The first propagator filtered its twin lookup to `transaction_state = 'live'` — the
+  natural thing to write — which made a **quarantined** twin invisible, so it fell through to
+  `INSERT` and would have minted a fresh **live** comp for a sale somebody deliberately excluded,
+  straight into the CM book. Caught by the live probe one pass before it mattered. Same shape as
+  **A5c's mint/probe asymmetry**: one filter cannot serve two different questions.
+- **⚠️ A FAIL-SOFT PATH WITHOUT A LEDGER IS A PERMANENT SILENT NO-OP.** The propagation must not
+  abort the operator's save, so it catches — and the first probe immediately surfaced **22P02
+  `malformed array literal`** (`text[] || <untyped literal>` parses the literal as an array literal;
+  cast `::text`) as a logged `outcome='failed'` with its SQLSTATE. Read
+  `v_gov_pse_propagation_health`'s `inserted`/`filled_blanks`, **never `skipped_already_in_spine`**
+  — a re-discovery tally that reads exactly like throughput (P159a).
+- **⚠️ THE GUARD FOR THIS CLASS CANNOT STRIP COMMENTS, BECAUSE THE DEFECT *IS* A COMMENT.** Every
+  other source detector here strips comments first (A1, A5c, N18, B1) so a fix's own prose cannot
+  satisfy a grep for the bug — but the correction quotes the old wording on purpose, so the naive
+  grep matches the fix. `test/b6cdup-sale-store-canonical.test.mjs` resolves it by **proximity, not
+  presence**: the false claim may appear only within 8 lines of a `B6c-dup` marker, with a separate
+  assertion pinning that the markers still exist so the rule cannot go vacuously true. A fourth test
+  guards the *harm* rather than the wording — `detail.js` must never gain a client-side write to
+  `sales_transactions`.
+- **⚠️ AND ONE ASSERTION PASSED ITS OWN MUTATION.** The gov guard grepped the whole file for
+  `transaction_state IS DISTINCT FROM 'live'` — which **also appears in the twin lookup's
+  `ORDER BY`** — so deleting the gate left it green. **A file-wide grep for a predicate that
+  legitimately appears twice is not a guard; anchor on the branch** (`test_b6cdup_pse_propagation.py`,
+  12/12 mutations RED after re-anchoring).
+- **NOT ported to dia, deliberately.** dia is **72 views : 2**, not 77 : 0, and has real PSE
+  consumers (`fn_listing_close_if_sold` reads `pse.sales_transaction_id` — why dia has that FK and
+  gov does not). **Both of the gov propagator's calibrated decisions are gov measurements** (the
+  month-truncation key; the quarantine vocabulary) and must be re-derived. Backlog **B6c-dup-dia**.
 
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 

@@ -1955,3 +1955,132 @@ list. Build prompt: `docs/claude-code/prompts/C6-per-asset-band-eligibility-with
 Whether any named lease is terminal (date ≠ outcome) · whether the 224 contacts are the *disposition*
 decision-maker · dia · portfolio rent (only top-asset per owner; the $410.4M is a different basis —
 **do not mix them**) · P5/P8/P-BUYER.
+## §4p — B6c-dup: the two sale stores disagreed about which is canonical (2026-08-29)
+
+> Full writeup: [`docs/audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md`](../audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md).
+> Follows **§4l** (B6c), which found this behind the type defect it was sent to answer.
+
+**DECISION, recorded: `sales_transactions` is the canonical comps spine. `property_sale_events` is
+a CAPTURE surface that propagates into it.** Measured over 234 gov views/matviews: **77 read the
+spine — all 30 `cm_gov*` Capital Markets views among them — and ZERO read `property_sale_events`**
+(nonsense-token control: 0). `detail.js` asserted the exact opposite in its own comments; corrected
+at four sites, each `B6c-dup`-marked with the old wording quoted.
+
+**The leak was real and was confirmed behaviourally, in a rolled-back transaction:**
+`property_sale_events` +1, `sales_transactions` **+0**, `properties.latest_sale_price` set. Shipped
+`trg_gov_pse_propagate_to_sale` — AFTER INSERT on PSE, the **single owner** of that transition, keyed
+`(property, YEAR-MONTH, price-to-$1k)`, fill-blanks only, ledgered, kill-switched, batch-reversible.
+
+⚠️ **AND THE DAMAGE WAS ZERO, WHICH IS THE POINT.** The operator path had never produced a row: all
+5,208 PSE rows come from bulk importers that wrote the spine *independently* (inserts stopped
+2026-04-06). **A complete downstream store is not evidence that propagation exists** — here it was
+evidence that two importers each wrote two tables. Fix-before-it-bites, so the build stayed small.
+
+### The three wrong numbers, and why they are the transferable part
+
+| figure | source | verdict |
+|---|---|---|
+| 330 orphans / $4.48B | B6c-dup sizing | ❌ artifact |
+| 9 / $558.8M | the brief's own correction | ❌ artifact |
+| 6 / $29.2M | **my first re-measure** | ❌ artifact |
+| **0** | keyed on `(property, YEAR-MONTH)`, control 1,694 | ✅ |
+
+1. **The exact-date join was the wrong key.** `sales_transactions.sale_date` is **month-truncated**
+   for its dominant source — `costar_sidebar` **87.4% day-1** (6,871/7,865), ownership stubs 100%.
+   All six named "orphans" have an **exact price twin 3–21 days apart, every twin on the 1st**.
+   ⚠️ `dedup_natural_key` already encoded that granularity: **the spine had been stating its own join
+   key all along.** *Run the neighbouring key before believing an anti-join* — a ±31-day variant
+   returned 0 for free.
+2. **`property_id IS NULL` is not a dangling reference.** Dangling is **0 and structurally
+   impossible** (`fk_pse_property … ON DELETE SET NULL`). The 321 are **376 NULL-link rows**, 321 of
+   them detached in one bulk property deletion on 2026-04-03. ⚠️ I reproduced the brief's error
+   first: **a `LEFT JOIN … WHERE prop_live = false` lumps NULL in with dangling.**
+3. **`transaction_state` was never read.** The "$529.6M invisible to the spine" is **quarantine** —
+   all three NULL-price twins are `needs_review`/`duplicate_superseded`,
+   `exclude_from_market_metrics = true`. Population: **1,687 live twins · 7 quarantined ($604.1M) ·
+   0 absent · 0 live twins with a NULL price.** The spine is complete and had already judged them.
+
+### ⚠️ The filter that would have resurrected quarantined comps
+
+The first propagator filtered its twin lookup to `transaction_state = 'live'` — the natural thing to
+write. That made a **quarantined** twin invisible, so it fell through to `INSERT` and would have
+minted a fresh **live** comp for a sale somebody deliberately excluded, straight into the Capital
+Markets book. Caught by the live probe one pass before it mattered.
+
+**The general rule: a filter that narrows a lookup to the rows you want to ACT on will hide the rows
+that should STOP you.** Same shape as A5c's mint/probe asymmetry. A dedup probe must see the whole
+population, including the excluded part.
+
+### Also closed / re-scoped here
+
+- **`B6c-feed` DONE** — the 45-day `property_sale_events` expectation is **retired, not resolved**
+  (`is_active=false`, reason recorded). ⚠️ **The expectation moved rather than vanished:** feed
+  `sales_transactions` is registered at 45 days and reads 10 days old, and this trigger is what makes
+  operator sales reach it.
+- **`B6c-orphan` re-scoped** — smaller and a different question: *what should happen to an event
+  whose property was deleted?* Today: nothing, silently, forever.
+- **`B6c-dup-dia` filed, NOT ported.** dia is **72 : 2**, not 77 : 0, and has real PSE consumers
+  (`fn_listing_close_if_sold`). Both of the gov propagator's calibrated decisions — the
+  month-truncation key and the quarantine gate — are **gov measurements** and must be re-derived.
+
+---
+
+## 4q. B6b-lead — the lead lane that looked alive because another producer wore its name (2026-08-29)
+
+**Nothing was restarted and nothing was written.** Full measurement:
+`docs/audits/B6b_lead_OWNERSHIP_LEAD_RESTART_2026-08-29.md`. Backlog **B6b-lead**; contract **I4**.
+
+`ingest_ownership` (the `ownership_change` lead lane + the `gsa_lease_diff` ownership feed) has been
+dead since 2026-03-31 and its `feed_stale` alert correctly remains open at 150 days. B6b deferred the
+restart because it needed a graded gate and a credentialed dry run. Both were done. **The restart was
+still not taken, for a reason neither B6b nor the prompt anticipated.**
+
+- **⚠️ THE LANE HAS NO HUMAN CONSUMER, AND EVERY METRIC THAT SAID OTHERWISE WAS MACHINERY.**
+  Across all 7,729 leads: `assigned_to` **0**, `last_contacted_at` **0**, `next_action` **0**,
+  `sf_lead_id` **0**; `sf_sync_status` is `'pending'` for all 7,729; and only two `pipeline_status`
+  values have ever existed — `new` and `filtered_multi_tenant`. The three numbers B6b §9 quoted
+  reproduce **exactly** and are all mislabelled: *worked* = the automated filter, *pushed to
+  Salesforce* = `sf_contact_id` (a matched existing contact, not a push), *touched in 30 days* =
+  **1,216 of 1,217 on one day**. A5 (*check who writes a terminal status before ranking a lane by
+  it*) and P119 (*a bulk-set status is not a per-item decision*) arriving together on the one lane
+  whose liveness nobody re-checked, **because it had already been "verified."**
+- **⚠️ AND THE VERIFICATION WAS 59% ANOTHER LANE'S WORK.** `route_to_pipeline` hard-codes
+  `lead_source = 'ownership_change'` for **every** row it routes, whatever the source
+  `ownership_history.data_source` says. Of the 7,729 leads only **3,199** trace to `gsa_lease_diff`;
+  **4,530** trace to `county_deed`, a producer that was still writing. **That is why the badge never
+  went quiet when the lane died** — a second producer kept feeding it under the same label. Its
+  input today is **4,369 rows containing ZERO `gsa_lease_diff`**, 2,776 of them **B5's sale-derived
+  transitions written the previous day**: running it now mints 4,369 leads under a name none of them
+  earned. **Before trusting a lane's consumption evidence, check what actually produced the rows.**
+- **⚠️ THE LEAD LANE IS DOWNSTREAM OF THE OWNERSHIP-FACT WRITE.** `route_to_pipeline` reads
+  `ownership_history`, not the events, so "restart the leads without writing ownership facts" is —
+  as the code stands — **impossible**. The laundering fix is a prerequisite for scoping the restart
+  at all, not a tidy-up.
+- **The gate PASSED, and that is the less interesting half.** `is_same_owner` agrees with the
+  alnum-key reference **91.80%** over all 16,492 rows and **suppresses more** (9,146 vs 7,940), so it
+  does not manufacture leads wholesale. But **both of the top two would-write rows by value are false
+  acquisitions** — `LCOR` → `LCOR ALEXANDRIA` at **$75.4M** (arm 3's `length > 5` guard blocks a
+  4-character sponsor name) and a `JPMORGAN` → `MORGAN` truncation at $26.3M. **An agreement rate is
+  not a safety property when the errors concentrate at the top of the value ranking.**
+- **Neither name test dominates — the correct rule is their UNION.** The alnum key catches
+  punctuation the ratio arm misses (73 acronym re-spellings like `RGR INC` → `R.G.R, INC.` become
+  acquisitions); the ratio arm catches typos the alnum key misses (`BANDYWINE` → `BRANDYWINE`,
+  `JG HOUSING SOLUTLONS` → `SOLUTIONS`). Same lesson as A2/P189: **a comparator sanctioned for one
+  gate must be re-graded on named rows for the next.**
+- **⚠️ `normalize_entity` MANGLES NAMES IN PRODUCTION.** `n.replace(" CO", "")` is unanchored, and
+  `" CORP"` is applied before `" CORPORATION"`: `ACME CORPORATION` → `ACMEORATION`. Live in the
+  would-write set: `ALACHUA,UNTY OF`, `GRAHAMMPANIES, THE`, `CERRITOSORATE TOWER`, `TRIUNTY BUSINESS
+  CAMPUS`. It is **order-dependent** — `ALACHUA, COUNTY OF` mangles while `COUNTY OF ALACHUA` does
+  not (no leading space at position 0), so the same words in a different order stop comparing equal.
+- **The blast radius is 584, not 10,635 — an 18× overstatement.** Exact chain: 16,907 → 16,492 →
+  **7,346** after the gate → **1,489** not already ingested → **1,136** property-linked → **998**
+  after A2b fan-out collapse → **584** after the P138 oscillation guard, over **568 properties /
+  $433.4M**, of which **158 (27.1%)** clear the $500k floor. **Only 42 arrived since the lane died.**
+  The backlog figure counted usable events without ever applying the gate or the dedup.
+- ✅ **B5a's fill-forward guard is live and was decisive** — `ingest_acquisitions` writes text-only
+  parties with no `recorded_owner_id`, so without it this restart would have nulled recorded owners
+  on up to 568 properties. The text-only population is now **10,343**, up from 7,567 at B5a.
+- **Stated, not fixed:** `ownership_history.data_source` carries ~250 distinct `county_deed:<uuid>`
+  values, so any `GROUP BY data_source` fragments; and `find_matching_sale`'s city+state fallback
+  accepts a sale within 365 days on `buyer[:15] in new_lessor` and stamps price and cap rate onto the
+  ownership row.
