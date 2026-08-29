@@ -17,17 +17,18 @@ Cross-references the per-topic design docs in `docs/architecture/`.
 
 ## 0. 📇 THE TOPIC INDEX — every document on the ownership→contact chain, and what it is for
 
-**This file is the LIVING DOCUMENT for the chain.** Current state is §4e–§4p (**§4p is the newest — the callable list + the `buyer` exclusion**); everything else on the
+**This file is the LIVING DOCUMENT for the chain.** Current state is §4e–§4r (**§4r is the newest — C6 SHIPPED: the band now fires on a current holding, gated on reachability**); everything else on the
 topic is listed here with its scope and status so no one has to guess which of ~20 files to open.
 **Nothing below is deleted — an audit is evidence for a date, and dated evidence stays.**
 
-### The three canonical pages (read these; they are maintained)
+### The four canonical pages (read these; they are maintained)
 
 | page | owns |
 |---|---|
 | **this file** | the **chain end to end** — property → owner → contact → cadence, current state, and the open threads |
 | [`tier0-owner-contact-system.md`](tier0-owner-contact-system.md) | **person ↔ owner** matching: the Tier 0 lane, sponsor map, owner-entity merges (P186–P198) |
 | [`ownership-history-lane.md`](ownership-history-lane.md) | **ownership history/depth**: `establish_ownership_history`, the five lane actions (A1–A4b, B1) |
+| [`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md) | **the ranked call list** — the chain's LAST hop: `v_priority_queue`, the role gate, broker assignment (C4–C6) |
 
 ### ⚠️ Naming traps — two documents do NOT do what their titles suggest
 
@@ -59,7 +60,9 @@ topic is listed here with its scope and status so no one has to guess which of ~
 `C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE` · `C2b_SALESFORCE_BRIDGE_SELF_HEALED` ·
 `C2g_UNRESOLVED_OWNER_ORGS` · `C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT` ·
 `C4_RANKING_LAYER_ROLE_GATE` (§4o — the last hop: why the BD queue reaches 4% of owners) ·
-**`C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION` (§4p — 224 owners callable today; `buyer` is 578 / $410.4M)**.
+`C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION` (§4p — 224 owners callable today; `buyer` is 578 / $410.4M) →
+**`C6_CURRENT_HOLDING_SELLER_BANDS` (§4r — SHIPPED; P1/P2/P3/P8 243 → 620 rows / 303 callable owners)** →
+both now indexed inside **[`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md)**.
 **Person↔owner (Tier 0):** P186 · P188 · P194 · P195 · P197 → indexed inside `tier0-owner-contact-system.md`.
 **Ownership history:** A1 · A2 · A3 · A4 · A4b · A5 · B1 → indexed inside `ownership-history-lane.md`.
 **Older, still-valid-for-their-date:** `W3.3_owner_merge_audit` (2026-07-30) ·
@@ -188,6 +191,14 @@ Gov vs dia differ only in: lease economics (gov cap-rate framework vs dia NNN ne
 gate the nuance blocks by `db`/domain.
 
 ---
+
+> ⚠️ **SECTION LABELS IN THIS FILE COLLIDE — `4j` ×3, `4k` ×2, `4l` ×2, `4p` ×2, `4q` ×2 (2026-08-29).**
+> Two parallel windows have been appending to it independently, which is the documented
+> §4a *two-windows-one-file* drift landing on a shared doc instead of shared config. **Cite sections by
+> TITLE, not by letter** — "§4p" is ambiguous between C5 and B6c-dup. C6 took the free `4r` rather than
+> add a sixth collision; renumbering the existing five is left alone deliberately, because other
+> documents cross-reference these letters and a silent renumber would break them. Filed as a
+> documentation chore, not fixed here.
 
 ## 4b. Measured flow breaks — the asset → owner → contact → cadence chain (2026-08-15)
 
@@ -1745,6 +1756,10 @@ DECLARED irregular feed. Backlog **B6c-feed**.
 
 ## 4o. C4 — the ranking layer: the whole BD queue is gated on one unset column
 
+> 📍 **CONSOLIDATED — this topic now has its own canonical page:
+> [`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md).** §4o + §4p are kept as the
+> dated evidence; **read the canonical page for current state and decisions.**
+
 > **Audit:** [`docs/audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md`](../audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md).
 > **Diagnosis only, nothing written.** This is the LAST hop of Scott's chain — the ranked call list
 > — and the first time it has been measured.
@@ -1873,6 +1888,8 @@ they live outside `v_priority_queue` and **that inventory does not exist today.*
 
 ## 4p. C5 — the callable list, and the `buyer` exclusion is the larger half
 
+> 📍 **Canonical page: [`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md).**
+
 > **Audit:** [`docs/audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md`](../audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md).
 > **Diagnosis only.** Answers **C4e** and produces the list C4a implied.
 
@@ -1955,6 +1972,75 @@ list. Build prompt: `docs/claude-code/prompts/C6-per-asset-band-eligibility-with
 Whether any named lease is terminal (date ≠ outcome) · whether the 224 contacts are the *disposition*
 decision-maker · dia · portfolio rent (only top-asset per owner; the $410.4M is a different basis —
 **do not mix them**) · P5/P8/P-BUYER.
+## 4r. C6 — the band now fires on a CURRENT HOLDING, gated on reachability (SHIPPED 2026-08-29)
+
+> 📍 **Canonical page: [`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md).**
+
+> **Audit:** [`docs/audits/C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md`](../audits/C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md).
+> Migration `supabase/migrations/20261002110000_lcc_c6_current_holding_seller_bands.sql`, applied
+> live to LCC Opps. **One view.** No JS, no new cron.
+
+`gov_owner_props`' party-level role gate is replaced by the **P112 reachability precondition**;
+current holding is established by the `f.is_current = true` join that was already there and being
+discarded. **P1/P2/P3/P8 only.**
+
+| band | before | after | predicted |
+|---|---:|---:|---:|
+| P1 `lease_expiry_24mo` | 74 | **149** | 149 ✅ |
+| P2 `firm_term_ending_24mo` | 32 | **95** | 95 ✅ |
+| P3 `ten_year_window` | 61 | **163** | 163 ✅ |
+| P8 `agency_active_solicitations` | 76 | **213** | 213 ✅ |
+| **four bands** | **243 rows** | **620 rows / 497 assets / 303 owners** | 303 owners ✅ |
+
+**Unchanged:** P0.4 555 · P-CONTACT 231 · P0.5 148 · P5 58 · P-BUYER 22 · P4 12 · all dia — with a
+Class 11 positive control (the same P5 shape without its gate returns **1,681 / 565 dia**, so the
+zero-delta is a measurement). **0 unreachable rows emitted; 0 non-gov rows in the gov bands.**
+
+### ⚠️ Three things that had to be got right, each of which had a wrong answer available
+
+**1. The predicted "497 rows" is an ASSET count, not a row count.** The four band predictions and
+the owner count hit exactly, but 149+95+163+213 = **620**. Chased rather than shrugged: **497 is
+`count(distinct (entity_id, source_property_id))`** — the queue emits one row per
+**(owner, property, band)**, so an asset tripping both P1 and P8 emits two rows. 620 / 497 / 303 are
+three different questions. *(C1's "two correct counts that are the same number are probably not the
+same set", one step further along.)*
+
+**2. `reachable_hero_qualified` is the right thing to QUOTE and the wrong thing to JOIN.**
+`v_lcc_owner_reachability` is a **single-row aggregate** — no per-owner membership exists — and its
+`owners` CTE resolves through `lcc_property_owner` + asset entities, a different population from the
+queue's portfolio-facts join (**overlap 263 of 1,441 / 495**). Reconstructing it inline would be a
+second copy of a definition, and it gates *narrower* than what C5 graded (**444 rows / 166 owners**).
+Shipped on `owner_contact_pivot.active_contact_entity_id` — the fact P188/P194 **write**. **The
+hazard travels with the technique: a definition sanctioned for reporting is not thereby sanctioned
+for gating.**
+
+**3. Re-measure the baseline, not just the blocker.** One day after C5, **P3 read 61 not 62** and
+**P0.4 read 555 not 552**. Live drift — and it would have been misread as change-induced had the
+before-figures been taken from the brief.
+
+### Verified by deparse diff, not by eyeballing
+
+The prior definition was captured to `lcc_c6_view_backup` before the replace, then diffed line by
+line against the new `pg_get_viewdef`. **The whole diff is one removed line (the role gate) and
+three added (the reachability `EXISTS`)**; 330 → 332 lines, no column added, removed or reordered.
+Restating a 330-line view by hand is exactly where a silent regression enters — *(P194: a migration
+that changes a view must carry the WHOLE view, and the diff is how you prove the copy is faithful.)*
+
+⏰ **All 14 contactable owners with a gov lease expiring inside 90 days now surface in P1** (17 rows),
+live view and refreshed cache alike. **Boyd Watterson's 2026-08-31 is two days out.**
+⚠️ `lcc_property_attributes` carries a **date, not an outcome** — renewal, extension and holdover are
+indistinguishable. **Nothing asserts any lease is terminal.**
+
+### Still open, and deliberately
+
+**C4a — which bucket the call lands in — is Scott's**, and firing a band is not choosing the pitch
+(`account-based-contact-intelligence.md`: acquisitions and disposition are different contacts and
+tones). No bucket, tone or prospecting column was added. **C4b** (`user_owner`, still 0 entities,
+still gating P0.4/P0.5/P5) · **C4c** (broker assignment) · dia · whether the 303 contacts are the
+*disposition* decision-maker. **Sized not built:** the four bands now emit per-asset, so a
+multi-asset owner occupies several rows; whether the operator surface should collapse to one card
+per owner is a ranking-layer question.
+
 ## §4p — B6c-dup: the two sale stores disagreed about which is canonical (2026-08-29)
 
 > Full writeup: [`docs/audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md`](../audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md).
