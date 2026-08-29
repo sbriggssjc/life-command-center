@@ -8799,9 +8799,20 @@ async function _salesSaveTransaction() {
 
   const db = _udCache.db;
 
-  // Writes land in the canonical property_sale_events table. The DB trigger
+  // Writes land in property_sale_events, the CAPTURE surface. The DB trigger
   // then flips any concurrent active listings to status='Sold' automatically,
   // so the Sales tab filter chips and Ownership History stay in sync.
+  //
+  // ⚠️ property_sale_events is NOT the canonical comps store -- B6c-dup,
+  // 2026-08-29. sales_transactions is the canonical spine: 77 of 77 gov views
+  // that read a sale store read it, including ALL 30 cm_gov* Capital Markets
+  // views, and ZERO read property_sale_events. This comment used to claim the
+  // opposite, and that claim is what let the collision survive.
+  // A save here reaches the spine via the gov DB trigger
+  // trg_gov_pse_propagate_to_sale (dedup keyed on property + YEAR-MONTH +
+  // price-to-$1k, because sales_transactions.sale_date is month-truncated for
+  // its dominant source). DO NOT add a second client-side write to
+  // sales_transactions -- that trigger is the single owner of the transition.
   const payload = {
     property_id: String(propertyId),
     sale_date:  document.getElementById('salesFDate')?.value || null,
@@ -8834,7 +8845,7 @@ async function _salesSaveTransaction() {
 }
 
 // ─── DEAL HISTORY TAB ────────────────────────────────────────────────────────
-// Combines the legacy Sales timeline (property_sale_events + available_listings)
+// Combines the Sales timeline (property_sale_events + available_listings)
 // with the Ownership History chain (v_ownership_chain) into one chronological
 // ribbon. Each row links out to the Owner/Tenant/Broker drawer when relevant.
 
@@ -12044,9 +12055,13 @@ async function _udSaveOwnership(options = {}) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Read-only summary of the most recent sale for this property. Renders into
-// the #intelPriorSaleSummary slot on the Intel tab. Data source is the
-// canonical property_sale_events table (falls back to v_property_latest_sale
-// if the row already got there via a view).
+// the #intelPriorSaleSummary slot on the Intel tab. Reads the capture surface
+// property_sale_events first because that is where this panel writes (falls
+// back to v_property_latest_sale if the row already got there via a view, and
+// then to sales_transactions below).
+// ⚠️ "canonical" here used to mean property_sale_events; it does not (B6c-dup).
+// sales_transactions is the canonical spine -- reading capture-first is a UI
+// freshness choice, not a statement about which store is authoritative.
 async function _intelRenderPriorSaleSummaryAsync() {
   const slot = document.getElementById('intelPriorSaleSummary');
   if (!slot) return;
@@ -12072,7 +12087,8 @@ async function _intelRenderPriorSaleSummaryAsync() {
     console.warn('Prior sale summary fetch error:', e);
   }
 
-  // Fall back to legacy sales_transactions when property_sale_events is empty.
+  // Fall back to the canonical spine, sales_transactions, when the capture
+  // surface property_sale_events is empty. (It is NOT "legacy" -- B6c-dup.)
   // Otherwise the Prior Sale banner reads "No sale recorded for this property
   // yet." while the Deal History timeline directly below it shows SALE cards
   // sourced from sales_transactions. Skip rows marked
@@ -12176,10 +12192,16 @@ async function _intelSavePriorSale(options = {}) {
   if (!_anySaleField) { showToast('Please fill in at least one sale field', 'info'); return; }
 
   try {
-    // Canonical target: property_sale_events. The legacy sales_transactions
-    // sink has been retired for write paths — the backfill migration mirrors
-    // old rows forward and new rows always land in property_sale_events so
-    // the DB trigger can mark concurrent listings Sold.
+    // Write target: property_sale_events, the capture surface -- the DB trigger
+    // there marks concurrent listings Sold.
+    //
+    // ⚠️ CORRECTED B6c-dup, 2026-08-29. This comment used to read "Canonical
+    // target: property_sale_events. The legacy sales_transactions sink has been
+    // retired for write paths." Both halves were false. sales_transactions is
+    // the canonical comps spine and was never retired: it is what the CM book,
+    // the comps engine and every cap-rate chart read. Operator sales now reach
+    // it through the gov trigger trg_gov_pse_propagate_to_sale, not through a
+    // second write from here.
     const payload = {
       property_id: String(propertyId),
       sale_date: saleDate || null,

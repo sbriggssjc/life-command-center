@@ -50,6 +50,34 @@ consumer wired to a producer that does not exist fails **exactly like a consumer
 > C1: a lane's predicate read `unified_contacts.sf_account_id` while its only writer wrote
 > `recorded_owners.sf_account_id`. **1,961 owners already linked, 29 agreeing, and nothing errored.**
 
+> **On adding a SECOND STORE for one fact:** name which is canonical, in writing, and make the code
+> say so. **B6c-dup is I1's cleanest example yet — a consumer and a producer that each named a
+> DIFFERENT store as canonical.** `detail.js` said in its own comments that `property_sale_events`
+> was canonical and `sales_transactions` was *"legacy, retired for write paths"*; the database said
+> the reverse and always had — **77 of 77 gov views that read a sale store read `sales_transactions`,
+> including all 30 `cm_gov*` Capital Markets views, and ZERO read `property_sale_events`.** Both
+> stores were individually correct with coherent consumers, so nothing errored and no component test
+> could see it. **The comment is what let it survive**, which is why the repair is a comment
+> correction plus a propagation path, not a schema change.
+>
+> ⚠️ **A CODE COMMENT ASSERTING THE OPPOSITE OF THE DATABASE IS A DEFECT, AND IT IS THE ONLY DEFECT
+> CLASS HERE THAT NO DETECTOR CAN STRIP COMMENTS TO FIND.** Every other source guard in this repo
+> strips comments first (A1, A5c, N18, B1) so a migration's own prose cannot satisfy a grep for the
+> bug it removed. Here the defect *is* prose. Guard it by **proximity, not presence**: the false
+> claim may appear only adjacent to an annotated correction, and a separate assertion pins that the
+> annotation still exists so the proximity rule cannot go vacuously true.
+>
+> ⚠️ **And check the direction of the leak BEHAVIOURALLY, never by reading the propagation code.**
+> The B6c-dup probe was one rolled-back INSERT: `property_sale_events` +1, `sales_transactions`
+> **+0**, `properties.latest_sale_price` set. Reading the code would have shown the same thing more
+> slowly and less convincingly.
+>
+> ⚠️ **A complete downstream store is NOT evidence that propagation exists.** gov's spine held every
+> single priced event on a live property — because both bulk importers wrote **both** tables
+> independently, not because anything connected them. The operator path had never been used, so the
+> leak had produced zero damage and looked exactly like a working connection. **Ask when the path
+> last ran before reading its output as proof it works.**
+
 ### I2 — A fact store's producer set must be the SAME SHAPE in every domain
 
 **This is the Class 20 detector and it is the highest-yield query in this document.** Group the
@@ -276,7 +304,7 @@ Supabase project"; it is a new set of connections that must be asserted on day o
 | I4 | expected-vs-observed run health | ✅ **B6a, 2026-08-28** — skips emit; `is_overdue` vs the step's own p90 cadence; the four dead producers registered and RED. Mirror repaired by **B6a-follow-up**. ⚠️ **B6b added the first producer to actually exercise it** (`gsa_change_layer`, emitting on both branches, DECLARED skip when GSA has not published) and found a registry defect the instrument could not see: `gsa_lease_timeline` was keyed on `created_at`, which an UPSERT only moves when a NEW row first appears — a **correct** rebuild over a stable roster would have read STALE and re-opened the alert. Corrected to `updated_at`. **Check the ts_column is one the producer always touches, not merely one it sometimes does.** |
 | **I11** | a check that alerts on its own blindness | ✅ **DETECTOR LIVE 2026-08-28 (B6a-follow-up)** — `lcc_check_feed_freshness` keeps the 3-day mirror exclusion and now opens a deduped, auto-resolving **`feed_mirror_stale`** over the set it refuses to evaluate; `lcc_finalize_feed_freshness` counts/records/retries non-200 into `lcc_feed_freshness_sync_status`. `feeds_evaluated` **2 → 25**, excluded **18 → 0**, **6 `feed_stale` opened** (B6a's four among them). Positive-controlled in **both** directions on the live month-old mirror. ⚠️ gov's cold-cache timeout is **mitigated (retry), not cured** — B6a-follow-up-b |
 | I6 | divergence consumer | ⚠️ `parcel_owner_xref.diverges` has none → **B6d** |
-| I1 | producer/consumer registry | ❌ **none** — this is the biggest hole |
+| I1 | producer/consumer registry | ❌ **none** — still the biggest hole. ⚠️ **B6c-dup (2026-08-29) shows the sub-class a registry would have to catch: TWO STORES FOR ONE FACT, each naming itself canonical.** `detail.js` vs 77 gov views. A registry keyed on *tables* would not have caught it — both tables had real consumers; it needs to record **which store is authoritative for a FACT**. Partially guarded now by `test/b6cdup-sale-store-canonical.test.mjs`, which is a one-instance pin, not a detector. |
 | I8 | fill-forward trigger audit | ❌ **none** — one instance fixed (B5), others unaudited |
 | I9 | fact stores lacking `created_at` | ❌ **none** |
 
