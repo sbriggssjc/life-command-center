@@ -1,3 +1,8 @@
+> # ⚠️ ARCHIVED — a `git status` SNAPSHOT from one 2026-04 session.
+> It lists which worktree files to include in a commit that happened months ago, and says so itself
+> (*"reflects the present state of the workspace"*). **No current value; kept only so the worklog
+> that cites it (`LCC_AUDIT_LOOP_CLOSURE_WORKLOG.md:54`) does not dangle.**
+
 # LCC Loop Closure Changeset
 
 ## Purpose
