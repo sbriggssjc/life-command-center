@@ -625,6 +625,38 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-28 — B6c-dup drafted, and the sizing check I demanded settled it AGAINST ME
+
+**Prompt: `prompts/B6c-dup-two-sale-stores-disagree-2026-08-28.md`.**
+
+⛔ **I reported 330 orphaned priced comps / $4.48B this morning. It was inflated ~8× and is now
+corrected in place.** The exclusion check I insisted on as "step one" is what caught it: **321 of the
+330 have a `property_id` that does not exist in `properties` at all.** They are a
+dangling-reference / stale-import defect, **not** missing comps.
+
+**The honest figure is 9 orphaned priced sale events on LIVE properties — 4 `costar_export` + 5
+`excel_master` — $558.8M, 5 with a cap rate.** ⚠️ **And the value is concentrated: one row is
+$379.5M of the $558.8M**, so the nine get inspected individually and the sum is never quoted as a
+portfolio. **B6c's original ~6 was close to right; mine was not.**
+
+**The lesson, and it is mine: check what a row points AT before counting it as absent from somewhere
+else.** This is the **second time this arc** I have led with an alarming number that measurement
+deflated — the first was *"the raw GSA feed is stale too"* (it wasn't; GSA hadn't published August).
+**Both times the guard I had written into my own prompt is what caught it, and both times I put the
+alarm in the headline and the caution in a footnote.** The protocol's step ① is doing its job; my
+ordering of alarm-vs-caution is the part that still needs discipline.
+
+**Filed as its own row — `B6c-orphan`** — with the generalisation stated: **D2/I3 asks whether a link
+column can HOLD its target's key; this asks whether the key it holds still EXISTS.** A repo-wide
+dangling-reference sweep is the natural sibling.
+
+**What did NOT change:** the finding itself. **76 of 76 gov views read `sales_transactions`, zero
+read `property_sale_events`, including all 30 `cm_gov*` Capital Markets views**, and nothing
+propagates PSE → `sales_transactions`. **A sale an operator types into the property panel still
+never reaches the comps spine.** The prompt fixes the write path before any backfill (Class 8), and
+requires `detail.js`'s comment — which asserts the opposite of the database — to be corrected either
+way, *because that comment is how this survived.*
+
 ## 2026-08-28 — 🗄️ CLEANUP PASS 4: AI-chat / Copilot / architecture. Root `.md` 70 → 17, and a landmine defused.
 
 **13 files read in full. No secrets — the SEC2 pattern did not repeat here.** Two defects were
