@@ -22,15 +22,15 @@
 | **Production web app** | **Railway** — `server.js` mounts every `/api/*` handler directly. **Vercel was retired 2026-07-20**; `vercel.json` is deleted; there is **no serverless-function cap**. | `CLAUDE.md` §"PRODUCTION RUNS ON RAILWAY" |
 | **`/api/*` routing** | `server.js` is the **single source of truth**. Sub-routes via `?_route=`. Every new route must be mounted there (guarded by `test/operations-subroutes.test.mjs`). | `.github/AI_INSTRUCTIONS.md` |
 | **Deploy gate** | `npm run verify:deploy` — compares live `/version` to the merge SHA **and** probes that critical routes return JSON (not the SPA HTML) **and** that every local `<script src>` actually ships. `--wait[=sec]` for the push→verify loop. | `CLAUDE.md` |
-| **⛔ Merging to `main`** | **`main` is protected — you cannot push to it.** Branch → PR → both checks green → merge. *"npm test"* became a **required status check** on 2026-08-27, so a direct push is rejected by the rule engine and retrying never works. ⚠️ **`main` is currently BLOCKED** — the required check has never been green (Node-20 pin); a one-file workflow fix must land first. | **`docs/os/GITHUB-WORKFLOW.md`** |
+| **⛔ Merging to `main`** | **`main` is protected — you cannot push to it.** Branch → PR → both checks green → merge. *"npm test"* is a **required status check** (2026-08-27), so a direct push is rejected by the rule engine and retrying never works. ✅ **The Node-version lockout is RESOLVED** — the gate pins Node 24 and has been green on `main`. ⚠️ **Expect a THIRD step:** branch protection requires branches to be up to date, so if `main` moved you must click **"Update branch"** and wait for both checks to re-run — with two audit windows active that is the common path, not the exception. | **`docs/os/GITHUB-WORKFLOW.md`** |
 | **Where documents go** | Root of the repo is code + config; **no new `.md` there.** Five files carry state: CURRENT-STATE · PLANNED-BACKLOG · STATUS · CLAUDE.md · GITHUB-WORKFLOW. | **`docs/os/DOCUMENTATION-MAP.md`** |
-| **⚠️ CI gate (or the lack of one)** | **No workflow runs `npm test` on a PR.** `boot-check.yml` is the only PR check; it runs `npm run check:boot` (a `node --check` sweep + a `server.js` import). The 4,551-test suite **never executes in CI** — which is how #1786 merged green with a red suite. Every `test/*.test.mjs` tripwire this repo documents is a **local** regression detector, not a merge gate. Fix scoped, not built (Scott's call) → backlog **N9**. | `CLAUDE.md` footgun; Prompt 139 |
+| **✅ CI gate** | ~~No workflow runs `npm test`.~~ **FIXED 2026-08-27.** `test-suite.yml` runs the full suite on every PR **and it is a REQUIRED check**, so the `test/*.test.mjs` tripwires this repo documents are now genuine merge gates rather than local detectors. ⚠️ **The lesson that produced it is still live:** the workflow shipped **red on every run including `main`** (a Node-20 pin against Deno `.ts` imports) — **a new CI job is not shipped until it has been green once on `main`**, or it is a badge people learn to merge past. | `CLAUDE.md` footgun; `GITHUB-WORKFLOW.md` §4 |
 | **Two Railway services** | `tranquil-delight-…` = root web app + `/mcp` + OAuth + the 9 bounded read/comps routes (what ChatGPT and Copilot Studio use). A **separate standalone MCP service** (`mcp/server.js`) is what the personal-Claude / Cowork `mcp__lcc__*` tools talk to. `pacific-love-…` = BOV Generator. **A deploy of engine changes = redeploy BOTH.** | `AI-SURFACES-OPERATIONAL-REFERENCE.md` §2 |
 | **Databases (3)** | **LCC Opps** `xengecqvemvfknjvbvrq` (the brain + auth/GoTrue + most crons) · **Dialysis_DB** `zqzrriwuavgrquhisnoa` (dia domain; **hosts `data-query` + `daily-briefing` edge fns**) · **Government** `scknotsqkcheojiaewwh` (gov domain). | `CLAUDE.md` §"Database topology" |
 | **Supabase views/migrations** | **Live immediately** — the CM export reads views per request (`no-store`), so data-layer fixes need no deploy. **DB migration first, JS second** — except a `CHECK` that enforces new writer output, which goes *after* the writer deploy. | `CLAUDE.md` §"Deploy ordering" |
 | **Front end** | **No bundler.** `index.html` loads classic `<script src>` tags sharing ONE global scope. **Load order is the entire dependency mechanism.** Never `type="module"` for a split region; cache-busters move as a SET. | `docs/architecture/w6-5-frontend-decomposition-map.md` |
 | **Client routing** | Hash routing (`#/<slug>[?d=<detail-token>]`) — no catch-all rewrite needed. No PII in the URL. | `CLAUDE.md` §"Client routing" |
-| **Auth** | `LCC_API_KEY` is production-ready but **not enforced**. Enforcing = set `LCC_API_KEY` **then** `LCC_ENV=production`, in that order. Flipping `LCC_ENV` first = total sign-in lockout. Verify with `GET /api/diag?kind=auth-ready`. | `docs/AUTH_ENFORCEMENT_ROLLOUT.md` |
+| **Auth** | ⚠️ **CONTESTED — settle before quoting either side.** This row says `LCC_API_KEY` is production-ready but **not enforced**; `CLAUDE.md`'s B5 section says `/api/*` **IS** auth-enforced, on the strength of a live probe: `GET /api/ownership-chain-draft-tick` returned **`HTTP 401 {"error":"Authentication required…"}`** on 2026-08-28 while `/version` answered normally. **Both cannot be right about the same thing** — most likely one describes the env state and the other a route-level guard. **Resolve with `GET /api/diag?kind=auth-ready`** (`would_pass_in_production` must be true) and correct whichever page is wrong, in place. Enforcing = set `LCC_API_KEY` **then** `LCC_ENV=production`, **in that order**; flipping `LCC_ENV` first = **total sign-in lockout**. | `docs/AUTH_ENFORCEMENT_ROLLOUT.md` |
 
 ## 2. What is LIVE (subsystem → canonical doc)
 
@@ -75,6 +75,21 @@ real branded signature, threading, and deal context; save-to-Outlook-Drafts (sav
 their data tab renders (`checkKpiSeriesConsistency` is the tripwire).
 → `CLAUDE.md` §"CM export", `public/reports/cm-brand.json`
 
+### ⚠️ Salesforce research lanes — RETIRE, do not build a consumer (C1, 2026-08-27)
+`true_owner_needs_salesforce` (dia) and `owner_needs_salesforce` (gov) are a **capture-less second
+copy** of a consumer that has worked since June: the Decision Center lane **`sf_link_candidate`**
+(3,369 candidates with resolved `001…` Account ids; verdict path `api/admin.js:10764` PATCHes the
+exact column whose NULL-ness defines both lanes; **102 decisions, last 2026-08-14**). The research
+lanes have **no capture path** — `completeResearch()` writes nothing and the seeder re-mints.
+⚠️ **Live defect: the gov lane reads `unified_contacts.sf_account_id` while its only writer writes
+`recorded_owners.sf_account_id`** — 1,961 gov owners already linked, 1,292 still read as a gap,
+**29 agree**; working the DC lane does not clear the task, and **96 admitted rows ($314.7M) are
+phantom work.**
+⚠️ **"Link *or create* Salesforce account" was never buildable** — LCC's SF surface is a **read-only
+Power Automate proxy** (no Connected App; no `sobjects` call anywhere).
+**Recommendation: automate 27 · retire 945 · gate 1,702 · repair 1,292 — build no consumer.**
+→ backlog **C1a–C1e**; `docs/audits/C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE_2026-08-27.md`
+
 ### Research-task producer — correct and value-gated (A5a + A5c, 2026-08-27)
 The generator read a 29,643-row feed through a call **PostgREST caps at 1,000** and auto-closed
 everything outside the window as `gap_resolved` — its guard compared the **requested** limit against
@@ -86,6 +101,45 @@ P113), unknown rent gated (P161). First live run minted **343**, `closed: 0`.
 ⚠️ **Every lane it feeds still has ZERO real completions** — the constraint has moved downstream to
 consumption. → backlog **P1a / C1–C3**
 → `docs/audits/A5_TRUE_OWNER_SALESFORCE_STALL_2026-08-27.md`, `A5c_RESEARCH_TASK_VALUE_GATE_2026-08-27.md`
+
+### Ownership-history lane — ✅ WORKING, and now CLOSED as a source of chain DEPTH (2026-08-28)
+
+> **LATEST — read this before the 2026-08-27 block below, which it supersedes on the numbers.**
+> **B1** split the $500k floor by consumer (automated path vs human surface) and **B1a** merged the
+> duplicate entities blocking A2. Live: **completed 314 → 1,302 · open 156 → 579 · gov
+> `any_history` 1,272 → 2,238 · `lcc_entity_portfolio_facts` 12,724 → 14,076** — with
+> **`human_actionable` flat at 55 throughout** (89% of the newly-drafted population routes to
+> automation, which is the design).
+>
+> ⚠️ **B1a REFUTED its own premise and that closes the lane as a DEPTH source.** `chain_2plus`
+> moved **177 → 178** because **64 of B1a's 65 completions carried exactly ONE link**. Duplicates
+> constrained chain **EXISTENCE**, never depth. The entire remaining blocked residue is worth **12**
+> `chain_2plus` properties (8 permanently blocked by design — the placeholder is the GRANTOR), and
+> **99 of 132 remaining open tasks carry one link.** **Stop looking for the next blocker here.**
+>
+> ⚠️ **AND THE FOLLOW-UP CONCLUSION ("we must acquire deeds") WAS WRONG.** gov had **never consumed
+> its own `sales_transactions`** as ownership history. **✅ B5 SHIPPED 2026-08-28** and the premise
+> held: gov `ownership_history` **16,177 → 18,953** (+2,776 / 2,000 properties, **677 with no prior
+> history at all**), transitions view 9,595 → **12,371** rows / 4,698 → **5,555** properties.
+> Deed acquisition is **deferred, not refuted**.
+>
+> 🚨 **THE LCC SIDE HAS NOT MOVED AND WILL NOT UNTIL THE RAILWAY REDEPLOY.** Verified post-B5:
+> facts **14,076**, completed **1,302**, open **579**, `chain_2plus` **178**, `any_history` **2,238**
+> — all identical to pre-B5. **527 of 579 open tasks carry a pre-B5 draft** and the drafter prepares
+> only `fresh = open ∧ undrafted`. `runB5RedraftPass` is **JS**: without the deploy B5 converts on
+> **52** tasks, not 579.
+>
+> ⚠️ **B5 also found and fixed a DESTRUCTIVE trigger** — `trg_propagate_ownership_to_property` nulled
+> `properties.recorded_owner_id` for any row naming parties as text; **7,567 rows already in that
+> shape**, **1,446 of 9,312 would have been destroyed**. Guard verified live; `recorded_owner_id`
+> held at **9,312**. Other propagation triggers are **unaudited** → backlog **D3**.
+>
+> ⛔ **`B6_…md` §6 is SUPERSEDED — do not act on its `~270–370` resizing of B5 or revert it.**
+> Two windows measured one population and disagreed 10×; **2 of 2,776 rows (0.07%)** are the
+> circular class it objected to.
+> → `docs/architecture/ownership-history-lane.md` §3a/§3c · `BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md`
+> §3b/§3c · `connectivity-and-open-threads.md` §4j · **`data-coherence-invariants.md`** (the new
+> standing contract) · playbook **Class 20 / Class 21**
 
 ### Ownership-history lane — the first dead research lane with a working consumer (2026-08-27)
 `establish_ownership_history` produced **545 items and consumed none for 69 days**. A1 split it into
@@ -254,7 +308,7 @@ from lcc_clean_assist_proposals group by source`:
 | Intake channel provenance (grade by channel, never fleet-wide) | `docs/audits/W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md` |
 | Wave rollout ledger | `ROLLOUT_STATUS.md` |
 | Running work log | `docs/claude-code/STATUS.md` |
-| Connectivity map + open threads | `docs/architecture/connectivity-and-open-threads.md` |
+| **Connectivity map + open threads — the property→owner→contact→cadence chain** | `docs/architecture/connectivity-and-open-threads.md` — **§4e is the current chain state (2026-08-28)**; §4b's counts are superseded. ⚠️ **BREAK-2's "cadence has no consumer" verdict is OVERTURNED** (Scott 2026-08-27: the cadence layer is core, it is un-started not orphaned), and **BREAK-3's 49.2% is *of assets*, not properties** (13% on the property denominator) |
 | Cowork session setup | `docs/os/COWORK-SETUP-AND-FUTUREPROOFING.md` |
 | Fresh-chat kickoff | `docs/claude-code/NEW-CHAT-KICKOFF.md` |
 

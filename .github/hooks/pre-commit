@@ -1,20 +1,31 @@
 #!/bin/sh
-# Pre-commit hook: verify Vercel Hobby plan 12-function limit
-# Install: cp .github/hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
-# Or:      ln -sf ../../.github/hooks/pre-commit .git/hooks/pre-commit
+# Pre-commit hook: api/ file-count NOTICE (non-blocking).
+#
+# ⚠️ HISTORY — READ BEFORE CHANGING THIS BACK.
+# This hook used to HARD FAIL any commit when api/*.js exceeded 12, with the message
+# "Vercel will reject this deployment." That was correct until 2026-07-20 and is now false:
+#
+#   * Vercel was RETIRED 2026-07-20. Railway + server.js is the sole /api/* router.
+#   * vercel.json is deleted. There is NO serverless function cap.
+#   * api/ currently holds ~21 .js files, all legitimate.
+#
+# Installing the old version per its own instructions would have blocked EVERY COMMIT
+# against a platform that no longer exists. It was never installed, so it was a landmine
+# rather than a fire — found and defused 2026-08-28 during the AI/architecture cleanup pass.
+#
+# The <=12 convention SURVIVES, but only as a STRUCTURE convention (CLAUDE.md rule 1):
+# prefer sub-routes (?action= / ?_route=) of an existing handler over a brand-new api/*.js,
+# because it keeps related routes in one place. That is a code-review preference, not a
+# deploy constraint — so this hook now NOTICES and never blocks.
 
-LIMIT=12
+SOFT_TARGET=12
 COUNT=$(ls api/*.js 2>/dev/null | wc -l | tr -d ' ')
 
-if [ "$COUNT" -gt "$LIMIT" ]; then
-  echo ""
-  echo "ERROR: api/ has $COUNT .js files — exceeds Vercel Hobby limit of $LIMIT."
-  echo ""
-  echo "  Vercel will reject this deployment. Consolidate functions before committing."
-  echo "  See LCC_ARCHITECTURE_STRATEGY.md and .github/AI_INSTRUCTIONS.md for guidance."
-  echo ""
-  echo "  Current files:"
-  ls api/*.js
-  echo ""
-  exit 1
+if [ "$COUNT" -gt "$SOFT_TARGET" ]; then
+  echo "note: api/ has $COUNT .js files (soft structure target: $SOFT_TARGET)."
+  echo "      Not a deploy limit — Vercel is retired and Railway has no function cap."
+  echo "      Prefer a sub-route (?action= / ?_route=) of an existing handler for new routes."
+  echo "      See CLAUDE.md rule 1. This is a notice; your commit is proceeding."
 fi
+
+exit 0

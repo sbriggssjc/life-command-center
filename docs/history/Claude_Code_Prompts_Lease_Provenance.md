@@ -52,7 +52,7 @@ that emails behind envelope icons are captured in the extraction payload.
 Run these migrations on the Dialysis_DB Supabase project (zqzrriwuavgrquhisnoa).
 This creates the lease data provenance system for tracking field-level source 
 quality. Read the full design doc at:
-/Lease_Data_Provenance_Schema_Design.md
+/docs/architecture/lease-data-provenance.md
 
 MIGRATION 1: expense_structure_canonical table
 

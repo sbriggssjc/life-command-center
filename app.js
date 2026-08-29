@@ -1347,7 +1347,7 @@ window.lccErrorBuffer = () => _lccErrBuffer.slice();
 // LIST SORT + COMPLETENESS CHIPS — Item #6 Phase B-3 + Item #9 Phase B
 // (2026-05-17)
 //
-// Generic helpers for any list tab to adopt. See AUDIT_PROGRESS.md item-6-B-3
+// Generic helpers for any list tab to adopt. See docs/history/worklogs/AUDIT_PROGRESS_2026-05.md item-6-B-3
 // closeout for the per-tab migration pattern.
 // ============================================================================
 

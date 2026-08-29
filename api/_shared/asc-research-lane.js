@@ -56,6 +56,10 @@ export function normalizeAscAddressToken({ address, city, state, zip } = {}) {
     .replace(/\b(ROAD|RD)\b/g, 'RD')
     .replace(/\b(DRIVE|DR)\b/g, 'DR')
     .replace(/\b(LANE|LN)\b/g, 'LN')
+    .replace(/\b(CIRCLE|CIR)\b/g, 'CIR')
+    // USPS Publication 28 standardizes COVE as CV. Keep the source address
+    // unchanged in the capture; this token is comparison-only.
+    .replace(/\b(COVE|CV)\b/g, 'CV')
     .replace(/\b(HIGHWAY|HWY)\b/g, 'HWY')
     .replace(/\bNORTH\b/g, 'N')
     .replace(/\bSOUTH\b/g, 'S')
@@ -77,6 +81,20 @@ export function normalizeAscAddressToken({ address, city, state, zip } = {}) {
 function hasAscSublocation(address) {
   return /\b(?:suite|ste|unit|\d+(?:st|nd|rd|th)\s+floor|floor\s+[a-z0-9-]+|fl\s+[a-z0-9-]+)\b/i
     .test(clean(address));
+}
+
+function uspsCoveSuffixEquivalence(targetIdentity = {}, context = {}) {
+  const terminalSuffix = (value) => clean(value)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\b(SUITE|STE|UNIT)\b(?:\s+[A-Z0-9-]+)+\s*$/g, '')
+    .trim()
+    .match(/\b(COVE|CV)$/)?.[1] || null;
+  const frozenSuffix = terminalSuffix(targetIdentity.address);
+  const capturedSuffix = terminalSuffix(context.address);
+  if (!frozenSuffix || !capturedSuffix || frozenSuffix === capturedSuffix) return null;
+  if (new Set([frozenSuffix, capturedSuffix]).size !== 2) return null;
+  return { frozen_suffix: frozenSuffix, captured_suffix: capturedSuffix };
 }
 
 export function normalizeAscBuildingAddressToken(identity = {}) {
@@ -118,6 +136,16 @@ function corroboratingTenant(target, context) {
     .map(normalizeTenantIdentityName).filter(Boolean);
   const organization = organizations.find((name) => tenants.includes(name));
   return organization ? { basis: 'cms_enrollment_organization', matched_name: organization } : null;
+}
+
+function exactFacilityCorroboration(target, context) {
+  const facility = normalizeTenantIdentityName(target.cms_identity?.facility_name);
+  if (!facility) return null;
+  if (normalizeTenantIdentityName(context.building_name) === facility) {
+    return { basis: 'building_name', matched_name: facility };
+  }
+  const tenant = contextTenantNames(context).find((name) => name === facility);
+  return tenant ? { basis: 'facility_name', matched_name: tenant } : null;
 }
 
 const GENERIC_ORG_FAMILY_TOKENS = new Set([
@@ -162,7 +190,7 @@ function buildingAddressTokensAgree(left, right) {
   const a = left.split('|');
   const b = right.split('|');
   if (a.length !== 4 || b.length !== 4 || a.slice(1).join('|') !== b.slice(1).join('|')) return false;
-  const stripStreetType = (street) => street.replace(/\s+(?:ST|AVE|BLVD|RD|DR|LN|HWY)$/, '');
+  const stripStreetType = (street) => street.replace(/\s+(?:ST|AVE|BLVD|RD|DR|LN|CIR|HWY)$/, '');
   return stripStreetType(a[0]) === stripStreetType(b[0]);
 }
 
@@ -179,6 +207,59 @@ function terminalTownshipMunicipalityAlias(left, right) {
     || stripTerminalTownship(frozen[1]) !== stripTerminalTownship(captured[1])
     || (!/\sTOWNSHIP$/.test(frozen[1]) && !/\sTOWNSHIP$/.test(captured[1]))) return null;
   return { frozen_city: frozen[1], captured_city: captured[1] };
+}
+
+function capturedDirectionalStreetTypeExtension(frozenAddressToken, capturedAddressToken) {
+  if (!frozenAddressToken || !capturedAddressToken) return null;
+  const frozen = frozenAddressToken.split('|');
+  const captured = capturedAddressToken.split('|');
+  if (frozen.length !== 4 || captured.length !== 4
+    || frozen.slice(1).join('|') !== captured.slice(1).join('|')) return null;
+  const frozenStreet = frozen[0].split(' ');
+  const capturedStreet = captured[0].split(' ');
+  if (!/^\d+[A-Z]?$/.test(frozenStreet[0] || '')
+    || frozenStreet[0] !== capturedStreet[0]) return null;
+  const directions = new Set(['N', 'S', 'E', 'W']);
+  const streetTypes = new Set(['ST', 'AVE', 'BLVD', 'RD', 'DR', 'LN', 'CIR', 'HWY']);
+  const comparison = [...capturedStreet];
+  let addedDirectional = null;
+  let addedStreetType = null;
+  if (directions.has(comparison[1]) && !directions.has(frozenStreet[1])) {
+    addedDirectional = comparison.splice(1, 1)[0];
+  }
+  if (streetTypes.has(comparison.at(-1)) && !streetTypes.has(frozenStreet.at(-1))) {
+    addedStreetType = comparison.pop();
+  }
+  if ((!addedDirectional && !addedStreetType)
+    || comparison.join(' ') !== frozenStreet.join(' ')) return null;
+  return { added_directional: addedDirectional, added_street_type: addedStreetType };
+}
+
+function compoundStreetTokenSplit(frozenAddressToken, capturedAddressToken) {
+  if (!frozenAddressToken || !capturedAddressToken) return null;
+  const frozen = frozenAddressToken.split('|');
+  const captured = capturedAddressToken.split('|');
+  if (frozen.length !== 4 || captured.length !== 4
+    || frozen.slice(1).join('|') !== captured.slice(1).join('|')) return null;
+  const frozenStreet = frozen[0].split(' ');
+  const capturedStreet = captured[0].split(' ');
+  if (capturedStreet.length !== frozenStreet.length + 1
+    || frozenStreet[0] !== capturedStreet[0]
+    || frozenStreet.at(-1) !== capturedStreet.at(-1)) return null;
+  for (let index = 1; index < frozenStreet.length - 1; index += 1) {
+    if (capturedStreet[index] + capturedStreet[index + 1] !== frozenStreet[index]) continue;
+    const collapsed = [
+      ...capturedStreet.slice(0, index),
+      frozenStreet[index],
+      ...capturedStreet.slice(index + 2),
+    ];
+    if (collapsed.join(' ') !== frozenStreet.join(' ')) continue;
+    return {
+      compound_token: frozenStreet[index],
+      captured_parts: [capturedStreet[index], capturedStreet[index + 1]],
+    };
+  }
+  return null;
 }
 
 function capturedRangeContainsFrozenEndpoint(frozenAddressToken, capturedAddressToken) {
@@ -253,8 +334,44 @@ export function buildAscStructuredCapture(target, context = {}) {
   if (!ALLOWED_SOURCES.has(source)) throw new Error('ASC capture source must be CoStar, RCA, public records, or Salesforce');
   const addressToken = normalizeAscAddressToken(context);
   if (!addressToken) throw new Error('Captured page requires an address and state');
+  // Frozen rows predate later deterministic normalizer additions. Recompute a
+  // comparison token from the immutable CMS identity so those additions can
+  // apply without rewriting the stored frozen token or weakening location
+  // matching. The original token remains the capture's database binding.
+  const storedTokenParts = clean(target.address_token).split('|');
+  const normalizedStoredToken = storedTokenParts.length === 4
+    ? normalizeAscAddressToken({
+      address: storedTokenParts[0], city: storedTokenParts[1],
+      state: storedTokenParts[2], zip: storedTokenParts[3],
+    })
+    : null;
+  const normalizedCmsToken = normalizeAscAddressToken(target.cms_identity);
+  const frozenComparisonToken = normalizedStoredToken
+    && normalizedStoredToken === normalizedCmsToken
+    ? normalizedCmsToken
+    : target.address_token;
+  const coveSuffixEquivalence = addressToken === frozenComparisonToken
+    ? uspsCoveSuffixEquivalence(target.cms_identity, context)
+    : null;
   let identityMatch = { mode: 'exact_address_token' };
-  if (addressToken !== target.address_token) {
+  if (coveSuffixEquivalence) {
+    identityMatch = {
+      mode: 'usps_cove_suffix_equivalence',
+      frozen_suffix: coveSuffixEquivalence.frozen_suffix,
+      captured_suffix: coveSuffixEquivalence.captured_suffix,
+      cms_address_preserved: clean(target.cms_identity?.address),
+      captured_address_preserved: clean(context.address),
+      frozen_address_token_preserved: target.address_token,
+      normalized_comparison_token: frozenComparisonToken,
+      second_review_required: true,
+    };
+  } else if (addressToken === frozenComparisonToken && frozenComparisonToken !== target.address_token) {
+    identityMatch = {
+      mode: 'normalized_frozen_identity_address',
+      frozen_address_token_preserved: target.address_token,
+      normalized_comparison_token: frozenComparisonToken,
+    };
+  } else if (addressToken !== frozenComparisonToken) {
     const cmsIdentity = target.cms_identity || {};
     const exactTenantCorroboration = corroboratingTenant(target, context);
     const corroboration = exactTenantCorroboration
@@ -267,14 +384,46 @@ export function buildAscStructuredCapture(target, context = {}) {
       )
       && corroboration;
     const aliasMatch = addressAlias && corroboration;
-    const rangeEndpoint = capturedRangeContainsFrozenEndpoint(target.address_token, addressToken);
+    const rangeEndpoint = capturedRangeContainsFrozenEndpoint(frozenComparisonToken, addressToken);
     const rangeEndpointMatch = rangeEndpoint && corroboration;
-    const municipalityAlias = terminalTownshipMunicipalityAlias(target.address_token, addressToken);
+    const municipalityAlias = terminalTownshipMunicipalityAlias(frozenComparisonToken, addressToken);
     const municipalityAliasMatch = municipalityAlias && exactTenantCorroboration;
-    if (!parentBuildingMatch && !aliasMatch && !rangeEndpointMatch && !municipalityAliasMatch) {
+    const directionalStreetTypeExtension = capturedDirectionalStreetTypeExtension(
+      frozenComparisonToken,
+      addressToken,
+    );
+    const directionalStreetTypeMatch = !parentBuildingMatch
+      && hasAscSublocation(cmsIdentity.address)
+      && directionalStreetTypeExtension
+      && exactTenantCorroboration;
+    const compoundStreetSplit = compoundStreetTokenSplit(frozenComparisonToken, addressToken);
+    const facilityCorroboration = exactFacilityCorroboration(target, context);
+    const compoundStreetSplitMatch = compoundStreetSplit && facilityCorroboration;
+    if (!parentBuildingMatch && !aliasMatch && !rangeEndpointMatch
+      && !municipalityAliasMatch && !directionalStreetTypeMatch
+      && !compoundStreetSplitMatch) {
       throw new Error('Captured page does not match the active frozen ASC candidate');
     }
-    identityMatch = municipalityAliasMatch ? {
+    identityMatch = compoundStreetSplitMatch ? {
+      mode: 'facility_corroborated_compound_street_split',
+      frozen_compound_token: compoundStreetSplit.compound_token,
+      captured_street_parts: compoundStreetSplit.captured_parts,
+      corroboration_basis: facilityCorroboration.basis,
+      corroborated_name: facilityCorroboration.matched_name,
+      cms_address_preserved: clean(cmsIdentity.address),
+      captured_building_address: clean(context.address),
+      second_review_required: true,
+    } : directionalStreetTypeMatch ? {
+      mode: 'tenant_corroborated_directional_street_type_extension',
+      added_directional: directionalStreetTypeExtension.added_directional,
+      added_street_type: directionalStreetTypeExtension.added_street_type,
+      corroboration_basis: exactTenantCorroboration.basis,
+      corroborated_name: exactTenantCorroboration.matched_name,
+      cms_sublocation_preserved: clean(cmsIdentity.address),
+      captured_building_address: clean(context.address),
+      facility_name: clean(cmsIdentity.facility_name),
+      second_review_required: true,
+    } : municipalityAliasMatch ? {
       mode: 'tenant_corroborated_municipality_alias',
       cms_city_preserved: clean(cmsIdentity.city),
       captured_city: clean(context.city),

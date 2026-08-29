@@ -31,6 +31,8 @@ bootstraps a fresh chat and points at them.
 | Claude Code's response (.docx) | `docs/claude-code/responses/` | → `responses/done/` once reconciled |
 | **Audit / measurement writeup** | `docs/audits/<TOPIC>_<YYYY-MM-DD>.md` | the finding and its reproduction queries |
 | Architecture / subsystem design | `docs/architecture/<subsystem>.md` | one canonical file per subsystem |
+| **⚠️ A file whose NAME misleads** | leave the file, add a **NAMING TRAP banner** at the top | Live examples: `owner-reconciliation-engine.md` and `sf-owner-capture.md` resolve the **point person** (which broker works the deal), **not the property owner**. That confusion is documented as *"the finding that reframed P0.2."* **A misleading title is a defect even when the contents are correct** — and it is cheaper to fix with a banner than a rename, which breaks every inbound link |
+| **A topic spanning ~20 files** | one **living document** with a **§0 topic index** | Live example: `connectivity-and-open-threads.md` §0 indexes the whole ownership→contact chain — the three canonical pages and what each owns, the naming traps, the supporting designs, and the dated evidence trail. **Nothing is deleted**: an audit is evidence for a date. **If a canonical page disagrees with an audit, the page wins and the audit gets a supersession banner in the same change** |
 | **A subsystem spanning many audits** | one canonical page + a **banner in each audit pointing at it** | Live example: `docs/architecture/tier0-owner-contact-system.md` covers twelve rounds (P186–P197 + A1–A4). The canonical page carries live state, decisions-already-made and traps-paid-for; the audits stay as the EVIDENCE. **A trap list is only a guard if it is on the path someone walks** — so the pointer goes in the audit, not only in the index |
 | Runbook / setup / operator procedure | `docs/setup/` | |
 | Rules that sync to AI surfaces | `docs/os/canon/blocks/*.md` | **bump `CANON_VERSION`, then run the render script.** Never hand-edit a file whose header says GENERATED |
@@ -80,6 +82,45 @@ belongs to the app window.** If it is not obvious which window you are in, ask.
   this repo has a shelf life.
 - Prompts: `<id>-<kebab-topic>-<YYYY-MM-DD>.md`.
 - Architecture/design: lower-kebab, no date — these are living documents, updated in place.
+
+## 6y. 🔁 The build-turn protocol — this map's parent rule
+
+📍 **[`BUILD-TURN-PROTOCOL.md`](BUILD-TURN-PROTOCOL.md) is the definition of done for every change**
+(Scott, 2026-08-28). This map answers *where does a document go*; that page answers *what must be
+true before a turn is finished* — and step ⑤ (**update the canonical docs in the same change**) plus
+step ⑦ (**extract open intent before archiving**) are what keep this map from becoming fiction.
+**§6z below is step ⑦'s full procedure.**
+
+## 6z. 🗄️ Topic-based cleanup — the standing procedure (proven 2026-08-28)
+
+**Cleanup is BY TOPIC CLUSTER, repo-wide — never by folder.** A folder pass leaves the same topic
+contradicting itself from three other directories, which is the confusion this map exists to end.
+
+**The procedure, and it is gated:**
+
+1. **Enumerate the cluster repo-wide** — `docs/`, the repo root, `audit/`, `consolidation/`,
+   everywhere. One `grep -rl` on the topic's vocabulary.
+2. **READ every file before moving any of it.** Non-negotiable.
+3. **Extract UNFILED OPEN INTENT** — anything unbuilt, deferred, "next step", or a design proposed
+   and never confirmed shipped. **Grep `PLANNED-BACKLOG.md` for each** and file what is missing
+   **before** the move. ⚠️ **On 2026-08-28 this recovered 25 items across two folders — including an
+   entire unexecuted Supabase consolidation plan.** A move without this step destroys planned work
+   silently, because nothing errors.
+4. **Identify STALE CLAIMS** — assertions now false. **Banner them; do not silently delete.**
+   The test: *would a future session reading this file first reach a wrong conclusion within one
+   paragraph?* If yes, it needs a 🚨 banner, not a footnote.
+5. **Check inbound references** — `grep` the filename across `.md`, `.sql`, `.mjs`, `.js`. **A
+   path-anchored reference breaks; a bare-name mention does not.** Fix the former in the same change.
+6. **Distinguish ARCHIVE from RELOCATE.** Archive = historical/superseded → `docs/history/`.
+   Relocate = **still-live reference material in the wrong place** → `docs/architecture/` or
+   `docs/audits/`. ⚠️ **Archiving live reference material is the more expensive mistake** — three
+   files in the 2026-08-28 pass described machinery that shipping code still calls.
+7. **Leave a README banner in the archive** and an `INDEX.md` entry, both naming where the open
+   items went.
+
+⚠️ **Watch for LETTER COLLISIONS across campaigns.** The May-2026 remediation's Track A/B/C and the
+Aug-2026 lettered prompts both use A/B/C: *"B4"* is a May sales worker **and** the dia-vs-gov
+chain-depth question. **Always disambiguate by date.**
 
 ## 7. Before you archive anything
 

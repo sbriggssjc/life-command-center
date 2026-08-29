@@ -3,9 +3,11 @@
 > [`N15b`](N15b_CANONICAL_NAME_AUTHORS_2026-08-27.md) (the measurement) →
 > [`N15c`](N15c_CANONICAL_NAME_SINGLE_WRITER_2026-08-27.md) (the single writer).
 > ✅ **N15e APPLIED 2026-08-27 20:38 UTC (batch `n15e_go`): 537 rewritten, drift 0, every one of
-> 62,368 live entities now keys to `lcc_entity_canonical_key(name)`.** ⏳ **N15d's wall-clock arm is
-> still outstanding and is due 2026-08-28 — see §1, it could not be run today and MUST NOT be
-> quoted as passed.**
+> 62,368 live entities now keys to `lcc_entity_canonical_key(name)`.** ✅ **N15d RESOLVED 2026-08-28 02:30 UTC — see §1a, appended.** The wall-clock arm is still
+> weak (6.41 h, 2 entities, both keyed correctly, drift 0) and is reported as weak; the **positive
+> control is decisive**: a writer supplying `century park` had it overridden to
+> `century park partners` on a live insert, 0 residue. §1's refusal to claim a pass off an empty
+> population stands as written and was correct.
 
 # N15d + N15e — the producer proof, and the 537
 
@@ -195,3 +197,46 @@ UPDATE entities e SET canonical_name = b.old_canonical_name
 - **N18** — `v_lcc_developer_classification_candidates.attributed_rent` is a self-comparison
   (`pof.source_property_id = pof.source_property_id`), one distinct value across every row. Unchanged
   by this round.
+
+
+---
+
+## 1a. N15d RESOLVED — 2026-08-28 02:30 UTC (appended)
+
+§1 refused to claim a pass off a 21-minute window with zero entities in it. **That refusal was
+correct and is left standing.** Here is the read that closes it.
+
+**Wall-clock arm — weak, and stated as weak.** 6.41 hours after the trigger: **2 entities created,
+both keyed correctly**, `v_lcc_canonical_name_drift` **0**. `JACO SAVANNAH REALTY, INC.` →
+`jaco savannah realty`; `asset 4477` (the gov mint path) → `asset 4477`. ⚠️ **Neither is a name
+where the old and new normalizations disagree**, so this shows the trigger breaks nothing — not
+that it corrects anything. Two rows is a thin sample.
+
+**Positive-control arm — decisive.** A row was inserted through the real writer path carrying a
+deliberately wrong `canonical_name` of `century park` — exactly what the outgoing aggressive
+normalizer produces — inside a self-rolling-back transaction:
+
+```
+writer supplied "century park"
+trigger stored  "century park partners"
+expected        "century park partners"
+corrected = t          residue after rollback = 0 rows
+```
+
+**The trigger overrides a drifted writer on a live insert.** That is the mechanism proven, rather
+than the absence of failures inferred from an empty population — the distinction §1 drew.
+
+### The control closes the exact hazard `CLAUDE.md` documents
+
+| name | new key (live) | old aggressive normalizer |
+|---|---|---|
+| `Century Park Partners LLC` | `century park partners` | `century park` |
+| `Century Park Properties LLC` | `century park properties` | `century park` |
+
+**`would_falsely_link = false`.** Under `lcc_normalize_entity_name` both collapse to `century park`,
+so `ensureEntityLink` would have linked two different companies **automatically, with no human
+review** — the banned-for-identity failure this repo has warned about for months. Closed, and
+demonstrated side by side.
+
+**Verdict: substantially passed.** A full-day wall-clock read remains worth taking (daily mint
+counts range 0–8), but the risk N15d guarded is materially retired.

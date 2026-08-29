@@ -107,6 +107,128 @@ test('multi-token CMS suite suffixes bind to building-level research pages', () 
   assert.equal(cmsToken, costarToken);
 });
 
+test('Circle and Cir normalize to the same exact frozen building address', () => {
+  const target = {
+    candidate_fingerprint: sha('6'),
+    // This literal reproduces a row frozen before CIRCLE/CIR normalization
+    // existed. Runtime comparison must not require rewriting it.
+    address_token: '1120 RAINTREE CIRCLE|ALLEN|TX|75013',
+    cms_identity: {
+      facility_name: 'Texas Health Spine Surgery Center Allen LLC',
+      address: '1120 Raintree Circle Suite 100', city: 'Allen', state: 'TX', zip: '75013',
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/allen-medical-plaza',
+    address: '1120 Raintree Cir', city: 'Allen', state: 'TX', zip: '75013',
+    square_footage: '44,761',
+    tenants: [{ name: 'Texas Health Spine Surgery Center', occupied_sf: '15,718' }],
+  };
+
+  assert.equal(normalizeAscAddressToken(target.cms_identity), '1120 RAINTREE CIR|ALLEN|TX|75013');
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, '1120 RAINTREE CIRCLE|ALLEN|TX|75013');
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'normalized_frozen_identity_address');
+  assert.equal(built.identity_match.frozen_address_token_preserved, target.address_token);
+  assert.equal(built.identity_match.normalized_comparison_token, '1120 RAINTREE CIR|ALLEN|TX|75013');
+
+  for (const mismatch of [
+    { address: '1122 Raintree Cir' },
+    { city: 'Plano' },
+    { state: 'OK' },
+    { zip: '75002' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+});
+
+test('USPS Cove and Cv equivalence preserves raw addresses and requires second review', () => {
+  const target = {
+    candidate_fingerprint: sha('4'),
+    // Reproduce a row frozen before USPS COVE/CV normalization existed.
+    address_token: '4100 CEDAR COVE|TULSA|OK|74103',
+    cms_identity: {
+      facility_name: 'Synthetic Ambulatory Center',
+      address: '4100 Cedar Cove', city: 'Tulsa', state: 'OK', zip: '74103',
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/cedar-cove',
+    address: '4100 Cedar Cv', city: 'Tulsa', state: 'OK', zip: '74103',
+    square_footage: '6,390',
+    tenant_name: 'Synthetic Plastic Surgery and Spa',
+  };
+
+  assert.equal(normalizeAscAddressToken(target.cms_identity), '4100 CEDAR CV|TULSA|OK|74103');
+  assert.equal(normalizeAscAddressToken(context), '4100 CEDAR CV|TULSA|OK|74103');
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'usps_cove_suffix_equivalence');
+  assert.equal(built.identity_match.cms_address_preserved, target.cms_identity.address);
+  assert.equal(built.identity_match.captured_address_preserved, context.address);
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const mismatch of [
+    { address: '4101 Cedar Cv' },
+    { city: 'Oklahoma City' },
+    { state: 'AR' },
+    { zip: '74104' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+});
+
+test('a single compound street split requires exact facility corroboration', () => {
+  const target = {
+    candidate_fingerprint: sha('5'),
+    address_token: '131 SUMMERPLACE DR|WEST COLUMBIA|SC|29169',
+    cms_identity: {
+      facility_name: 'South Carolina Endoscopy Center',
+      address: '131 Summerplace Drive', city: 'West Columbia', state: 'SC', zip: '29169',
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/south-carolina-endoscopy-center',
+    address: '131 Summer Place Dr', city: 'West Columbia', state: 'SC', zip: '29169',
+    building_name: 'South Carolina Endoscopy Center',
+    square_footage: '20,519',
+    tenant_name: 'Consultants In Gstrntrlgy',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'facility_corroborated_compound_street_split');
+  assert.equal(built.identity_match.frozen_compound_token, 'SUMMERPLACE');
+  assert.deepEqual(built.identity_match.captured_street_parts, ['SUMMER', 'PLACE']);
+  assert.equal(built.identity_match.corroboration_basis, 'building_name');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const mismatch of [
+    { building_name: 'Unrelated Medical Plaza' },
+    { address: '133 Summer Place Dr' },
+    { address: '131 Summer Park Dr' },
+    { city: 'Columbia' },
+    { state: 'NC' },
+    { zip: '29170' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+});
+
 test('shared-address parent buildings require explicit ASC tenant corroboration', () => {
   const target = {
     candidate_fingerprint: sha('f'),
@@ -232,6 +354,59 @@ test('terminal Township municipality aliases require exact location and explicit
   );
   assert.throws(
     () => buildAscStructuredCapture(target, { ...context, zip: '07084' }),
+    /does not match/,
+  );
+});
+
+test('captured directional and street type extensions require a CMS sublocation and exact tenant corroboration', () => {
+  const target = {
+    candidate_fingerprint: sha('7'),
+    address_token: '2704 GALLOWAY|MESQUITE|TX|75150',
+    cms_identity: {
+      facility_name: 'Texas GI Endoscopy Center',
+      address: '2704 Galloway Suite 102', city: 'Mesquite', state: 'TX', zip: '75150',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Mesquite TX Endoscopy ASC LLC'],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/americana-medical-plaza',
+    address: '2704 N Galloway Ave', city: 'Mesquite', state: 'TX', zip: '75150',
+    square_footage: '18,844',
+    tenants: [{ name: 'Texas GI Endoscopy Center', occupied_sf: '4,750' }],
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.identity_match.mode, 'tenant_corroborated_directional_street_type_extension');
+  assert.equal(built.identity_match.added_directional, 'N');
+  assert.equal(built.identity_match.added_street_type, 'AVE');
+  assert.equal(built.identity_match.corroboration_basis, 'facility_name');
+  assert.equal(built.identity_match.cms_sublocation_preserved, '2704 Galloway Suite 102');
+  assert.equal(built.identity_match.captured_building_address, '2704 N Galloway Ave');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const mismatch of [
+    { tenants: [{ name: 'Unrelated Medical Group' }] },
+    { address: '2706 N Galloway Ave' },
+    { address: '2704 N Other Ave' },
+    { address: '2704 N N Galloway Ave' },
+    { city: 'Garland' },
+    { state: 'OK' },
+    { zip: '75149' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_identity: { ...target.cms_identity, address: '2704 Galloway' },
+    }, context),
     /does not match/,
   );
 });

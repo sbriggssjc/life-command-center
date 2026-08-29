@@ -20,7 +20,7 @@ or *historical* (kept for history; never edit/wire).
 | Surface update procedure | `docs/os/SURFACE-SYNC-PROTOCOL.md` |
 | Agent/surface architecture | `docs/os/architecture/connected-agent-architecture.md` + `connected-agent-descriptions.md` |
 | Instruction enforcement (render/parity) | `docs/os/RENDER-AND-PARITY.md`, `docs/os/tools/*`, `docs/os/canon/blocks/*`, `docs/os/render.manifest.json` |
-| Deployment / MCP unification (one URL) | `docs/os/architecture/mcp-server-unification.md` (the decision) + `docs/os/architecture/unification-changeset.md` (ready-to-apply changeset + cutover runbook) + `INFRASTRUCTURE.md` |
+| Deployment / MCP unification (one URL) | `docs/os/architecture/mcp-server-unification.md` (the decision) + `docs/os/architecture/unification-changeset.md` (ready-to-apply changeset + cutover runbook) + `docs/architecture/infrastructure-topology.md` |
 | Build status ("are we done") | `docs/os/BUILD-STATUS.md` |
 | Access & device topology | `docs/os/ACCESS-TOPOLOGY.md` |
 | Office Scripts (workbook edits) | `docs/os/architecture/office-scripts/` |
@@ -30,11 +30,11 @@ or *historical* (kept for history; never edit/wire).
 | Engines / data | `mcp/` + `api/` |
 | Knowledge (voice/frameworks/personal) | `_AI-Context/Copilot-Context/BRIGGS-*` (SharePoint) |
 | Write governance | `WRITE_SURFACE_POLICY.md` |
-| Infra topology | `INFRASTRUCTURE.md` |
+| Infra topology | `docs/architecture/infrastructure-topology.md` |
 
 ## B. Reference (stable context; not a rule source)
 - `docs/architecture/lcc_intelligent_operating_system_v2.md` — the founding OS vision (informs the canon).
-- `copilot_authoritative_architecture_plan.md` — LCC-orchestrates / domains-execute pattern.
+- `docs/architecture/copilot_authoritative_architecture_plan.md` — LCC-orchestrates / domains-execute pattern.
 - `docs/architecture/copilot_agent_catalog.md` — the 9 logical agent roles (realized as flows unless tool-heavy).
 - `docs/comps-rollout/*` setup guides, `northmarq-claude-project-setup.md`, `copilot-deal-agent-team-sharing-runbook.md`.
 - `docs/architecture/context_broker_api_spec.md`, `context_packet_schema.md`, `signal_table_schema.sql` — Cortex substrate.

@@ -18,9 +18,9 @@ Team Briggs lists CRE for sale (primarily single-tenant NNN). Primary revenue = 
 
 ## Canon — shared rules (generated from docs/os/canon; do not hand-edit this region)
 <!-- CANON:BEGIN -->
-<!-- Canon: v1.5.0 — generated; edit docs/os/canon, not here -->
-## Canon — shared rules (v1.5.0)
-The full canon (10 blocks) is in **Knowledge** as `_AI-Context/Copilot-Context/LCC-CANON.md`,
+<!-- Canon: v1.6.0 — generated; edit docs/os/canon, not here -->
+## Canon — shared rules (v1.6.0)
+The full canon (11 blocks) is in **Knowledge** as `_AI-Context/Copilot-Context/LCC-CANON.md`,
 rendered from `docs/os/canon`. **Consult it for every rule — canon overrides anything
 below it on conflict.** Re-upload that file whenever CANON_VERSION changes.
 

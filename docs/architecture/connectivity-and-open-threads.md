@@ -1,8 +1,74 @@
-# LCC — Connectivity Map + Open Threads (state as of 2026-07-31)
+# LCC — Connectivity Map + Open Threads
+
+> **Chain state re-measured 2026-08-28 — see §4e, which SUPERSEDES the §4b numbers.**
+> Route status below is as of 2026-07-31 unless a section says otherwise.
+>
+> ⚠️ **Two corrections a future chat must not miss:**
+> **(1) BREAK-2's verdict is OVERTURNED — the cadence layer is NOT being retired** (see the box in
+> BREAK-2). **(2) §4b's coverage percentages use ASSETS as the denominator, not PROPERTIES**, and
+> the two differ by 6× — see §4e before quoting either.
 
 The pick-up-quickly handoff for future chats. Covers where each ingestion/reconciliation route stands,
 what's live vs connector-gated, and every open gap through the **email / phone / Salesforce** routes.
 Cross-references the per-topic design docs in `docs/architecture/`.
+
+
+---
+
+## 0. 📇 THE TOPIC INDEX — every document on the ownership→contact chain, and what it is for
+
+**This file is the LIVING DOCUMENT for the chain.** Current state is §4e–§4p (**§4p is the newest — the callable list + the `buyer` exclusion**); everything else on the
+topic is listed here with its scope and status so no one has to guess which of ~20 files to open.
+**Nothing below is deleted — an audit is evidence for a date, and dated evidence stays.**
+
+### The three canonical pages (read these; they are maintained)
+
+| page | owns |
+|---|---|
+| **this file** | the **chain end to end** — property → owner → contact → cadence, current state, and the open threads |
+| [`tier0-owner-contact-system.md`](tier0-owner-contact-system.md) | **person ↔ owner** matching: the Tier 0 lane, sponsor map, owner-entity merges (P186–P198) |
+| [`ownership-history-lane.md`](ownership-history-lane.md) | **ownership history/depth**: `establish_ownership_history`, the five lane actions (A1–A4b, B1) |
+
+### ⚠️ Naming traps — two documents do NOT do what their titles suggest
+
+| file | ⚠️ what it actually covers |
+|---|---|
+| `owner-reconciliation-engine.md` | **The POINT PERSON** — which Northmarq broker works the deal (`lcc_entity_owner_override.owner_user_id`). **It does NOT resolve the property owner.** `property-owner-subsystem.md` documents that exact confusion as the finding that reframed P0.2 |
+| `sf-owner-capture.md` | Also **point person**, sourced from the Salesforce Task assignee — not property ownership |
+
+**The property owner lives in `lcc_property_owner`**; the point person lives in
+`lcc_entity_owner_override`. Different tables, different questions, and
+`touchpoint_cadence.owner_user_id` FKs a *third* user table — resolve through
+`lcc_cadence_point_person()`, never re-derive it.
+
+### Supporting design docs — current, narrower scope
+
+| file | scope |
+|---|---|
+| `property-owner-subsystem.md` | how the property owner is resolved (evidence → `lcc_reconcile_property_owner`) |
+| `property-owner-source-authority-and-doctrine.md` | the source-authority ladder for owner fields |
+| `account-based-contact-intelligence.md` | **who to call at a repeat buyer** — the acquisitions-vs-disposition doctrine |
+| `contact-reconciliation-outbound.md` | pushing the contact record back out (Outlook/SF) |
+| `contact-owner-sidebar-design.md` · `property-owner-panel-redesign-2026-08.md` · `property-tab-ux-review.md` | the UI surfaces that render all of it |
+| `touchpoint_cadence_spec.md` (2026-04-13) | the original cadence design. ⚠️ **Read BREAK-2's overturn box below before treating any "no consumer" language as current** |
+
+### Evidence trail — dated audits, newest first
+
+**Chain/connectivity:** `C2a_ASSET_MINT_RENT_FLOOR_CURVE` · `C2_CONNECTIVITY_STALL_MAP`
+(⚠️ carries a supersession banner — three of its numbers moved) · `BD_PIPELINE_FUNNEL_AUDIT` ·
+`C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE` · `C2b_SALESFORCE_BRIDGE_SELF_HEALED` ·
+`C2g_UNRESOLVED_OWNER_ORGS` · `C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT` ·
+`C4_RANKING_LAYER_ROLE_GATE` (§4o — the last hop: why the BD queue reaches 4% of owners) ·
+**`C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION` (§4p — 224 owners callable today; `buyer` is 578 / $410.4M)**.
+**Person↔owner (Tier 0):** P186 · P188 · P194 · P195 · P197 → indexed inside `tier0-owner-contact-system.md`.
+**Ownership history:** A1 · A2 · A3 · A4 · A4b · A5 · B1 → indexed inside `ownership-history-lane.md`.
+**Older, still-valid-for-their-date:** `W3.3_owner_merge_audit` (2026-07-30) ·
+`W9_1_contact_acquisition_dryrun` · `W9_2_reachability_harvest_dryrun` ·
+`W9_6_comms_owner_attribution_dryrun` · `OWNERSHIP_RESEARCH_FREE_FIRST_PLAN`.
+
+**Rule for this topic:** *a dated audit is evidence, not state.* If a number here disagrees with an
+audit, **this file wins and the audit gets a supersession banner in the same change** — the way
+`C2_CONNECTIVITY_STALL_MAP` now carries one.
 
 ---
 
@@ -370,6 +436,22 @@ and OM writers; it is listed here so it stops being invisible.
 person entity is never hard-deleted; the reversal drops the edge.
 
 ### BREAK-2 — cadence is a producer with no consumer (severity: HIGH, doctrine violation)
+
+> ## ⚠️ VERDICT OVERTURNED BY SCOTT, 2026-08-27 — DO NOT RETIRE THE CADENCE LAYER
+>
+> This section concluded that cadence was a producer with no consumer. **Scott's direction:**
+> *"The cadence layer is absolutely a huge part of this build… relative level of importance and
+> impact that directs our next best touchpoint or call when compared to the balance of the leads or
+> marketing activities we could complete."*
+>
+> **The layer is INTENDED and unbuilt-out, not orphaned.** The reason it reads empty is that
+> **Scott has not begun using LCC for BD** — the effort to date has been the build itself. So
+> "1,728 never touched" measures an un-started pipeline, not a broken one, and the Consumption-Layer
+> remedy here is **to finish the consumer, not to gate the producer harder.**
+>
+> The genuine defects this section found still stand and are still worth fixing: the future-dated
+> `last_touch_at` writer, the missing `owner_user_id` on all but 7 rows (broker assignment — backlog
+> **C2c**), and cadences on parties with no contact method.
 Of **1,905** `touchpoint_cadence` rows: **1,728 (91%) never touched**, **1,803** overdue < 90 days (a bulk
 stamp that went stale), 68 overdue > 1 yr (oldest due **2021-09-06**), only **23** due in the future, only
 **7** carrying `owner_user_id` (the documented producer gap → the ROE line on the owner card is blank).
@@ -475,6 +557,11 @@ reversible; runbooks are in the migration header.
   instantly "overdue". **Not yet on a cron** — schedule it alongside the other daily sweeps.
 
 ### BREAK-3 — owner resolution coverage (severity: MEDIUM, **35.9% → 49.2%**, Prompt 113)
+
+> ⚠️ **DENOMINATOR WARNING — this percentage is *of ASSETS*, not of PROPERTIES.** It reads
+> 1,910 of **3,886 assets**. Measured against all **32,289 properties** (gov 20,493 + dia 11,796)
+> the same coverage is **13%**, because only **5,144 properties have an LCC asset entity at all**.
+> Both numbers are correct about different populations. **§4e is the property-denominator view.**
 
 **1,396 → 1,910 of 3,886 assets (35.9% → 49.2%)**; owner entities **690 → 1,118**. Batch tag
 `p113_dom_owner_20260815`, reversible. Against the 2026-07-31 audit baseline (102 of 4,837 ≈ 2%) the
@@ -727,3 +814,1247 @@ measured today it blocks **exactly** the known brokerages and nothing else. All 
 - `correspondence-ingestion-design.md`
 - `property-tab-ux-review.md`
 - **this file** (`connectivity-and-open-threads.md`) — the route-level status index.
+
+
+---
+
+## 4e. Chain re-measured 2026-08-28 (C2) — the gate is ASSET IDENTITY
+
+**Supersedes §4b's counts.** Full evidence: [`docs/audits/C2_CONNECTIVITY_STALL_MAP_2026-08-28.md`](../audits/C2_CONNECTIVITY_STALL_MAP_2026-08-28.md).
+
+| hop | count | of prior |
+|---|---:|---:|
+| properties — **LIVE** (gov 13,837 non-archived + dia 11,796) | **25,633** | — |
+| ~~properties incl. 6,657 ARCHIVED gov shells~~ | ~~32,289~~ | ⚠️ C2a correction — see below |
+| dia `true_owner` rows that are OPERATORS (P113 trap) | 7,941 of 10,293 | — |
+| **LCC asset anchors** | **5,096** | **19.9% of LIVE properties** ⚠️ **THE GATE** |
+| resolved property→owner rows | **4,065** | 13% |
+| distinct owner entities | 2,768 | |
+| **owners with an active contact** | **1,439** | **52% of resolved owners** — healthy |
+| cadences | 2,302 | |
+
+**A property with no asset entity cannot carry owner evidence at all**, so every hop below is
+starved by the first. The owner→contact conversion is *not* the problem.
+
+**⚠️ The Salesforce book is connected to the wrong side.** 9,793 SF-linked people, 9,491 with an
+email, **9,129 (93%) carrying a relationship edge — but only 669 (6.8%) reach a resolved property
+owner.** They attach to their employer org via the `works_at` Salesforce-account edge (the bare-SF
+signal P112 disqualified and P161 gated out of reachability). **The bridge has no far bank.**
+
+**The 16% is a value-gated DECISION, not a defect** — `lcc_mint_gov_asset_entities` refuses to run
+without `--min-rent`. ⚠️ **Do not drop the floor without the measurement**: minting ~27,000
+evidence-less assets re-creates the noise the gate prevents. Backlog **C2a** is that measurement
+(resolve-rate by rent band); **C2b** is the SF bridge; **C2c** is what C2 did *not* measure
+(dia ownership depth, the developer/investor/buyer split, Outlook/WebEx per contact — **WebEx is not
+in the schema at all** — and broker assignment).
+
+### 4e-i. C2a measured the floor curve (2026-08-28) — the rate holds, the OWNERS do not
+
+Full evidence: [`docs/audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md`](../audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md).
+**Measurement only — nothing minted, no floor changed.**
+
+⚠️ **Denominator correction to §4e above: the gate is 20%, not 16%.** `32,289 properties` includes
+**6,657 ARCHIVED gov shells** that both gov portfolio views filter out by design (and that are
+genuinely empty — 2 carry a `true_owner_id`). Non-archived: gov **3,422 / 13,837 = 24.7%**,
+dia **1,674 / 11,796 = 14.2%**, fleet **5,096 / 25,633 = 19.9%**.
+
+**gov: the technical resolve rate does NOT degrade** — 68.5% / 69.0% / 75.9% / 69.0% / 58.5% / 48.9%
+across ≥$500k → unknown. That flatness was treated as an instrument fault until controlled three
+ways: a **mutation control** (same query, identity join on `recorded_owner_id`) returns **0 in every
+band across 6,688 rows**; dia's identical query shape **does** degrade (18.5% → 1.6%); and the
+rejecting arms fire. The rate is real.
+
+**What collapses is the owner.** Net-new owners already carrying an active contact:
+**18.3% / 21.8% / 15.6% / 6.8% / 1.6% / 3.2%**. Known beyond the gov feed: 9.7% → 1.3%. And the
+named rows turn over completely — the top band is LCOR, Centerpoint, Durst, USAA Real Estate; the
+bottom band is **CITY OF SALEM, COUNTY OF DAWSON, Transportation Hawaii Department Of, FedEx, Bank
+of Colorado** and private individuals. ⚠️ **The "small per property, big per owner" defence was
+tested and refuted**: of the 1,549 owners unlocked at $100–250k, **19** reach $500k of gov rent
+across their whole portfolio.
+
+👤 **Recommended to Scott: $250k now (+1,282 properties, +884 resolving, +701 owners, 153 already
+contactable), re-measure, $100k as the hard floor, never below.** And ⚠️ **mint the ELIGIBLE SET,
+not the band** — `lcc_mint_gov_asset_entities` takes its own row list, so a $250k run can be 2,102
+properties that all carry evidence on the same pass instead of 3,061 of which 959 match the retire
+predicate on day one.
+
+**dia: the floor is the wrong knob and no floor helps.** 6,780 of its 10,122 no-asset properties
+(**84% of those carrying an owner**) point at an `is_operator_not_owner` row (P113); only **188 of
+11,796** dia properties are priced ≥$500k at all; and dia prices only 35% of its properties, so
+**75% of dia's would-resolve population sits in `rent unknown`** — a coverage gap wearing a value
+judgement (A5c). dia's lever is the operator flag and rent coverage, not a rent floor.
+
+⚠️ **Two instrument facts worth carrying forward:** `lcc_property_owner_facts` reproduces gov's own
+rent histogram **exactly** but **over-reports dia by 5,519 rows** (twin-merged properties; the apply
+page upserts and never deletes) — a mirror validated on one domain is not validated on the other.
+And the largest gov residue is not a guard: **3,363 properties (54% of non-resolvers) simply have no
+`true_owner_id` in the gov database**, which no floor touches.
+
+
+---
+
+## 4f. C2a — the rent-floor curve, and Scott's decision (2026-08-28)
+
+Evidence: [`docs/audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md`](../audits/C2a_ASSET_MINT_RENT_FLOOR_CURVE_2026-08-28.md).
+**Nothing was minted; no floor was changed.**
+
+### ⚠️ It corrected §4e's own denominator
+
+**32,289 / 16% included 6,657 ARCHIVED gov shells**, which every feeder filters out by design (and
+which are genuinely empty — 2 of 6,657 have a `true_owner_id`). Live: gov **13,837** + dia 11,796 =
+**25,633**, anchors **5,096**, coverage **19.9%**. The conclusion is unchanged; the number quoted
+for it is not. *(The 5,144 headline also counted 49 identities pointing at deleted properties.)*
+
+### The finding: the resolve rate holds; the OWNERS degrade
+
+gov technical resolution stays **58–76%** from $500k down to under $50k — so "does it still
+resolve" is the wrong question. What collapses is owner quality: **already-contactable owners fall
+21.8% → 6.8% → 1.6%**, owners known outside the gov feed fall 9.7% → 1.3%, and the named rows stop
+being landlords and become **cities, counties, state DOTs, FedEx and private individuals**.
+
+| floor (cumulative, gov) | minted | resolve | rate | net-new owners | already contactable |
+|---|---:|---:|---:|---:|---:|
+| ≥ $500k *(today)* | 1,779 | 1,218 | 68.5% | 928 | 170 |
+| **≥ $250k** | 3,061 | 2,102 | 68.7% | **1,629** | **323** |
+| ≥ $100k | 5,606 | 4,034 | 71.9% | 3,178 | 564 |
+| below $100k | — | — | — | — | **collapses** |
+
+**Recommendation (Scott's call): $250k now → re-measure → $100k as the hard floor, never below.**
+⚠️ **Mint the ELIGIBLE SET, not the band** — `lcc_mint_gov_asset_entities` takes its own row list,
+so a $250k run should mint the **2,102 that resolve on the same pass**, not 3,061 of which 959 sit
+evidence-less and match the retire predicate on day one.
+
+**⚠️ dia is a different problem and no floor fixes it** — **84% of its un-minted owner slots hold an
+OPERATOR** (the P113 trap) and 73% of its would-resolve population has no rent on file. Its levers
+are `is_operator_not_owner` and rent coverage (A5e). **Change nothing on dia.**
+
+---
+
+## 4g. ⚠️⚠️ THE "$500k FLOOR" IS FIVE INDEPENDENT KNOBS, AND TWO THREADS ARE MOVING DIFFERENT ONES
+
+`CLAUDE.md` (P161) says these are *"the same $500k knob as the gov asset-mint and
+`CADENCE_SIGNAL_MIN_VALUE` — one number, not three."* **Measured 2026-08-28, that is FALSE as
+implemented.** They are separate objects that happen to share a value:
+
+| # | knob | where | who wants to change it |
+|---|---|---|---|
+| 1 | `lcc_mint_gov_asset_entities --min-rent` | CLI arg, gov asset mint | **C2a → $250k** (this thread) |
+| 2 | `gov_research_gate_value_floor()` / dia twin | gov + dia DBs (A5c) | **B1 → split by consumer** (other thread) |
+| 3 | `lcc_weak_role_value_floor()` | LCC Opps (P161 reachability) | — |
+| 4 | `lcc_chain_human_value_floor()` | LCC Opps (ownership chain) | — |
+| 5 | `CADENCE_SIGNAL_MIN_VALUE` | env (P112 cadence gate) | — |
+
+**Two Cowork threads are proposing to change #1 and #2 in the same week, and the docs say they are
+one number.** They are not. Changing one does **not** move the others, and nobody should assume it
+did. **Before touching any "$500k floor", say WHICH of the five you mean.** Fixing the CLAUDE.md
+sentence is backlog **C2d**.
+
+
+---
+
+## 4h. ⚠️ SCOTT'S FLOOR DECISION (2026-08-28) — the gate is on RENT, and it was mis-framed
+
+**Scott: *"Is that gate a minimum on value or gross rents? My inclination is to have no minimum
+floor… Sometimes that could be someone that owns 20-30 properties with rents below $250k. Bigger
+deals doesn't always mean better… Our sweet spot tends to be single-tenant deals from $2M to $20M,
+through volume with repeat seller clients."***
+
+### The two facts that reframe it
+
+1. **The gate is GROSS ANNUAL RENT, not deal value.** At a ~7% cap, the $2M–$20M sweet spot is
+   **$140k–$1.4M of rent**. **The $500k rent floor ≈ $7.1M of value — it excludes roughly the bottom
+   two-thirds of the stated sweet spot.** A floor calibrated for *"is this worth an entity"* was
+   never calibrated for *"is this our kind of deal."*
+2. **There is no `--min-rent` inside the mint.** `lcc_mint_gov_asset_entities(p_rows jsonb, p_batch
+   text, p_dry_run boolean)` takes a **row list**; the floor is a caller-side convention in the
+   feeder script, not a database constraint. It is far easier to change than "a floor in the mint"
+   suggests — and the row-list shape is what makes eligible-set minting possible.
+
+### ⚠️ The portfolio-owner argument was MEASURED and does not hold in gov
+
+Aggregating rent to the owner instead of the property adds very little (gov, non-archived, owners
+with a `true_owner_id`):
+
+| | owners |
+|---|---:|
+| total | 7,196 |
+| reached by the $500k **per-property** floor | 1,729 |
+| reached by a $250k per-property floor | 2,959 |
+| **missed by $500k but PORTFOLIO clears $500k** | **129** |
+| missed by $250k but portfolio clears $250k | 93 |
+| owners with **20+ properties** | 16 |
+| …with **all** properties under $250k | **0** |
+
+**The owner described — 20–30 properties all under $250k — does not exist in the gov data.** The
+per-owner view is worth 93–129 owners, not thousands. *That mechanism is not the argument; the
+rent-vs-value mis-calibration is.*
+
+### The resolution: the floor decides what to MINT, not who to PURSUE
+
+Resolving ownership broadly is cheap and reversible. Deciding who to call is `v_priority_queue`'s
+job and it already ranks on owner-level value, contactability and signal. **Mint broadly, rank
+narrowly.**
+
+**DECISION — no rent floor, but eligible-set only.** Mint every gov property whose owner **resolves
+on the same pass** (~6,811 of 10,415), and skip the ~3,600 that would resolve nothing and match the
+documented retire predicate on day one. This is *"no minimum on value"* in the sense Scott means,
+while still honouring *"evidence justifies the entity, never the reverse."*
+
+⚠️ **The one real cost, and C2a could not measure it** (there was nothing minted to measure on):
+~6,811 new asset entities is **+11% on a 62,368-entity graph**, landing on
+`v_lcc_merge_candidates`, search and every count surface. **Measure it on the first tranche before
+running the second** — that is the gate's actual purpose, and it has never been quantified.
+> **↳ MEASURED 2026-08-28 in §4i, and the sentence above is now WRONG on its main claim.** Minted
+> assets **cannot land on `v_lcc_merge_candidates` at all** — that view filters
+> `entity_type = 'organization'`. Across a 2,000-entity mint the merge surfaces did not move by a
+> single row. Left in place as the hypothesis that was tested; read §4i for the result.
+
+⚠️ **dia is unaffected and must not be swept in.** No floor helps it: **84% of its un-minted owner
+slots hold an OPERATOR** (P113) and 73% of the would-resolve population has no rent on file.
+
+---
+
+## 4i. C2e — tranche one MINTED; the noise cost measured, and mostly not real (2026-08-28)
+
+Evidence: [`docs/audits/C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md`](../audits/C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md).
+**Tranche one is APPLIED to production (gov only, dia untouched). Tranche two is NOT run — §4i.4
+hands the call back to Scott.**
+
+### What shipped
+
+`v_lcc_c2e_asset_mint_plan` (migration `20260828140000`) is the eligible set: gov properties with no
+asset entity whose owner resolves **ID-to-ID** on the same pass — the candidate view's own CASE arm
+for arm, plus C2a's sixth (brokerage-at-reconcile) guard. **6,811 eligible of a 10,415 no-asset
+slice**, reproducing C2a exactly. Owners taken **whole**, richest gov portfolio first, cut at
+`cum_props <= 2000` → **`owner_rank <= 1145` = 2,000 properties / 1,145 owners**, batch
+`c2e_gov_eligible_t1_20260828`.
+
+| | before | after |
+|---|---:|---:|
+| live entities | 62,356 | 64,356 (+3.21%) |
+| **`lcc_property_owner` rows** | **4,065** | **6,065** |
+| **distinct owner entities** | **2,768** | **3,743** (+975) |
+| minted entities / identities / **orphans** | — | 2,000 / 2,000 / **0** |
+| **minted entities left evidence-less** | — | **0** |
+| gov asset coverage (of 13,837 non-archived) | 24.7% | **39.2%** |
+
+**Every one of the 2,000 carries evidence and a resolved owner.** ⚠️ That required driving
+`lcc_ingest_domain_owner_evidence` explicitly: **cron 225 is capped at 400/run**, so on the schedule
+alone 2,000 entities would have sat matching the retire predicate for ~5 days.
+
+### ⚠️ The floor's stated purpose was largely not real
+
+`v_lcc_merge_candidates` and `v_lcc_merge_candidates_normalizer_blind` filter
+`entity_type = 'organization'`. Minted assets are `entity_type = 'asset'` — **structurally
+incapable** of entering either. Measured across 2,000 mints: merge candidates **5,250 → 5,250**,
+**`auto_mergeable` 3,038 → 3,038**, normalizer-blind **64 → 64**, canonical drift **0 → 0**
+(detector positive-controlled at 64,356). The entire observable cost was **`v_duplicate_candidates`
++20** (predicted +20 before writing) and **+23 Tier 0 cards**.
+
+**Tier 0 moved although the brief said it must not — and it is the pipeline working.** `ask` +9
+matches *exactly* the 9 cards on owners whose only resolved property came from this batch; resolving
+an owner is what makes "who do we call there" askable. **`auto` — the only band that can trigger an
+unattended write — did not grow (9 → 9), and zero `auto` cards landed on any owner C2e made
+resolvable.**
+
+Incidentally this closes **N15d's open item**: the N15c `canonical_name` trigger had never been
+exercised by a real producer. 2,000 entities through a live write path, **all on-key, drift still 0**.
+
+### ⚠️ Tranche one tested the SAFEST population — do not extrapolate linearly
+
+The rank-1145 cut lands at **$543,782 of owner gov rent**, so tranche one sits *entirely above the
+old $500k floor* and exercised none of the low-rent tail the no-floor decision is about.
+
+| | tranche one (1,145 owners) | tranche two (4,354 owners) |
+|---|---:|---:|
+| already contactable | **21.3%** | **10.8%** |
+| known beyond the gov feed | 12.9% | 4.4% |
+| predicted new duplicate groups | 20 (1.00%) | 72 (**1.50%**) |
+
+Duplicate formation is 1.5× — mildly super-linear, **no cliff on graph grounds**.
+
+### 4i.4 👤 Tranche two — recommended in two steps, Scott's call on the second
+
+> ⚠️ **STEP ONE (T2a) IS NOW APPLIED — see §4k. The "4,811 / 4,354 remain" and "run it"
+> below were true when written; live it is 2,241 / 2,054, and T2a is done.** The T2b half of this
+> block still stands and is still Scott's, but §4k re-sized it against the post-T2a graph.
+
+**4,811 properties / 4,354 owners remain**, all still in the plan view (it self-excludes minted rows).
+
+1. **T2a — owner rent ≥ $100k: 2,570 properties / 2,300 owners, 17.2% already contactable** —
+   indistinguishable from tranche one's 21.3%, and it covers the whole $2M–$20M sweet spot
+   ($140k–$1.4M of rent at ~7%). **Recommended: run it.**
+2. **T2b — below $100k + rent-unknown: 2,241 properties / 2,054 owners, ~3% contactable, 17.8%
+   public bodies in the bottom band.** 👤 **Scott's call, and the argument has changed.** C2a said
+   stop here because minting would "manufacture surface noise" — **measured, that premise is largely
+   false.** What remains is not a technical risk but a prospect-quality judgement: these owners are
+   mostly cities, counties, state DOTs, corporate occupiers and private individuals. Against that
+   stands Scott's own rationale that ranking is `v_priority_queue`'s job, not the mint's.
+
+The measured owner cliff (C2a projected 6.8% / 1.6%; live 6.6% / 1.5%):
+
+| slice | properties | owners | contactable | public body (LB) |
+|---|---:|---:|---:|---:|
+| ≥ $100k | 2,570 | 2,300 | 17.2% | 2.7% |
+| $50–100k | 742 | 715 | **6.6%** | 5.7% |
+| < $50k | 821 | 803 | **1.5%** | **17.8%** |
+| unknown | 678 | 536 | 3.2% | — |
+
+⚠️ **Whatever runs, drive the evidence ingest explicitly afterwards** (cron 225's 400/run cap), and
+**dia stays untouched** — 84% operator-blocked (P113); its levers are the flag and rent coverage.
+
+
+---
+
+## 4k. C2e-T2a — tranche two step one MINTED; the prediction missed by 2 and the 2 were the finding (2026-08-28)
+
+Evidence: [`docs/audits/C2e_T2a_TRANCHE_TWO_STEP_ONE_MINT_2026-08-28.md`](../audits/C2e_T2a_TRANCHE_TWO_STEP_ONE_MINT_2026-08-28.md).
+**APPLIED to production, gov only, batches `c2e_gov_eligible_t2a_20260828` (mint) +
+`c2e_t2a_evidence_20260828` (evidence). No dia asset minted. T2b NOT run.**
+
+| | before | after |
+|---|---:|---:|
+| **gov asset anchors** | 5,425 | **7,995** |
+| **gov asset coverage** (of 13,837 non-archived) | 39.2% | **57.8%** |
+| `lcc_property_owner` rows / owners | 6,065 / 3,743 | **8,636 / 5,992** |
+| live entities | 64,304 | **66,874** (+4.00%) |
+| plan view remaining | 4,811 | **2,241** |
+
+**2,570 minted · 2,570 resolved an owner · 0 evidence-less · 0 orphans.** Population reproduced
+C2e §6 exactly before writing (2,570 / 2,300 / 17.2% contactable), and the slice is contiguous with
+tranche one ($543,718 against its $543,782 cut).
+
+### ⚠️ Predict a canonical-key effect with the key the WRITER persists, not the caller's argument
+
+`v_duplicate_candidates` moved **+46** against a predicted **+44**. The gap is not noise:
+`lcc_mint_gov_asset_entities` passes `lcc_normalize_entity_name(name)` as `canonical_name` and the
+**N15c `BEFORE INSERT` trigger overwrites it** with `lcc_entity_canonical_key(name)` — all 2,570 rows
+carry the trigger's key and only **2,497 (97.2%)** equal what the function passed. Re-run against the
+key actually written: **12 + 34 = 46**, exact. The trigger is doing its job (one writer for the dedup
+key); the function's argument is **dead code that reads like the answer**, which is exactly why it
+produced a wrong prediction. Cosmetic cleanup filed as **N15g**.
+
+### The gates, all attributed
+
+Merge surfaces flat and *attributed*: `v_lcc_merge_candidates` 5,194 → 5,194, **`auto_mergeable`
+3,006 → 3,006**, normalizer-blind 64 → 64, drift 0 → 0 (positive-controlled at 64,304).
+⚠️ **`lcc_entity_merge_log` shows 0 merges in the measurement window** (newest 13:27Z, nine hours
+prior), so per §4i.5 the "unchanged" claim carries a timestamp and an attribution.
+
+**Tier 0 +4, not the predicted ~+20** — `auto` **9 → 9 with ZERO cards on any owner T2a made
+resolvable** (the only band that can trigger an unattended write); `ask` +1 and `parked` +3 are
+*exactly* the 1 and 3 cards on T2a owners. The shortfall is a population signal: only **7.0%** of
+these owners carry a second identity against tranche one's 12.9%, so there is less bench for Tier 0
+to match. Resolving an owner makes the question *askable*; it does not manufacture a bench.
+
+### The 7 residual `eligible` candidates are all brokerages
+
+`evidence_written 2578` against a **+2,571** row delta — 7 idempotent re-writes, matching the 7 rows
+still reading `eligible`: `Stan Johnson Co` ×4, `SVN®`, `NAI Pfefferle`, `Bradford Allen Realty
+Services`. `lcc_reconcile_property_owner` filters brokerages *inside* its scoring CTE, so they clear
+the candidate view and score zero forever. **The sixth guard working — not a defect, not a backlog.**
+(3 gov + 4 dia; **1 dia property resolved** because the ingest function takes no domain argument —
+work cron 225 would have done that night.)
+
+### 4k.1 👤 T2b — sized live against the post-T2a graph; still Scott's, no default taken
+
+**2,241 properties / 2,054 owners** (803 under $50k · 715 at $50–100k · 536 rent-unknown).
+
+| | tranche one | **T2a actual** | **T2b predicted** |
+|---|---:|---:|---:|
+| already contactable | 21.3% | **17.2%** | **3.7%** (76) |
+| known beyond gov | 12.9% | 7.0% | **1.9%** (38) |
+| new duplicate groups | +20 (1.00%) | **+46 (1.79%)** | **+26 (1.16%)** |
+| Tier 0 cards | +23 | **+4** | fewer still |
+
+**The two axes moved in opposite directions and that is the whole answer.** The graph cost is now
+measured across 4,570 minted entities and is not the issue — **T2b's predicted duplicate rate is
+LOWER than T2a's actual**, computed with the corrected key against the live graph rather than
+extrapolated. What *did* arrive exactly where C2a said is the **owner cliff**: 21.3% → 17.2% →
+**3.7%** contactable.
+
+**T2b is safe to run and low-value to run.** Nothing measured argues against it on graph grounds; it
+is cheaper than the tranche just completed. The decision is purely whether *"resolve all ownership,
+rank later"* should be applied to a population ~96% un-contactable today. **Not run.**
+
+⚠️ Public-body figures stay **lower bounds** — `lcc_looks_like_person` returns true for `CITY OF
+SALEM` / `BROOME COUNTY` (A3/P196). A pattern floor over T2a's owners is 182 of 2,300 (7.9%); the
+`lcc_looks_like_person` reading of 618 is a **broader and different** measure. No second classifier
+was written, deliberately.
+
+
+---
+
+## 4j. ⚠️ THE UNCONNECTED-SOURCE CLASS — gov never consumed its own sales table (B4→B5→B6, 2026-08-28)
+
+**This page exists to track connectivity, and it had no row for the largest disconnection in the
+system: sources we hold that no consumer reads.** Playbook **Class 20**.
+
+**How it surfaced.** B1a closed `establish_ownership_history` as a source of chain DEPTH (64 of its
+65 completions carried ONE link). The deed layer was then measured — **876 grantor-bearing
+`deed_records` of 5,804; 325 deed documents for 13,835 properties** — and written up as *"depth is
+now an external ACQUISITION problem."* **Both numbers correct, conclusion wrong.** One
+`group by ownership_source` on `lcc_entity_portfolio_facts` overturned it.
+
+| domain | source | historical facts | properties |
+|---|---|---:|---:|
+| **dia** | **`sales_transactions_seller_exit`** | **2,207** | **1,584** |
+| gov | `gov_ownership_chain` (A1→B1a) | 1,356 | 1,302 |
+| gov | `gsa_lease_diff` | 976 | 821 |
+| gov | `county_deed` | 104 | 104 |
+| **gov** | **`sales_transactions_seller_exit`** | **absent** | **0** |
+
+**Three unconsumed gov sources, measured:**
+
+1. **`sales_transactions`** — 14,645 rows / 5,321 properties / 1970→2026; **9,514 named sellers,
+   4,697 dated properties**; `ownership_history` has consumed **169 rows (1.8%)**;
+   **3,080 net-new / 2,114 properties**. → **B5, in flight.**
+2. **`gsa_lease_change_facts`** — **336,303 rows**, `landlord_change_flag` on **38,213 across 8,845
+   leases**, **38,055 with both old and new lessor names**, **2013-02 → 2026-02**. ⚠️ RAW signal:
+   P138 flicker (return leg), A2b per-lease fan-out (**keyed on `lease_number`**), name variants.
+3. **`property_sale_events`** — **5,208 rows carrying `ownership_history_id` AND
+   `sales_transaction_id`; both populated on ZERO rows.** The comps↔ownership join table is
+   **modelled and never wired.**
+
+**Why this page could not see it.** A missing feeder produces **no error, no zero row, no queue** —
+there is nothing to audit but the absence. Every route in §1 tracks a connection that EXISTS and
+might be broken; this class is a connection that was never made.
+
+**Detector (needs no hypothesis):** group the output by its provenance column, split by domain — **a
+source bucket present for one domain and absent for another IS the finding.**
+
+⚠️ **Do not date a feeder off `updated_at` on an upserted table** — `lcc_entity_portfolio_facts`
+has **no creation timestamp** and the nightly re-upsert touches **11,828 of 14,076 rows daily**, so
+every source reads "written today." Find producers in code; **a one-shot means the sibling domain
+has a Class 8 problem too.**
+
+**Scott's spec for the sweep (B6):** every place a change of **owner or lessee** is reported — GSA
+lease inventory, SAM.gov, public records, sales, dia — must reach **both** stores (**transaction
+history / comps** AND **ownership history**), be read **against** each other over time, and
+**direct a next action**. Corroboration rides the **existing** `field_source_priority` ladder and
+supersession tiers; a contradiction goes to a **review lane, never a silent winner** — and note a
+GSA lessor-of-record change and a recorded deed are different KINDS of claim (in a ground lease
+both can be true at once). **B6 is audit + design and builds nothing.**
+
+### 4i.5 — C2e cross-window state notes (verified 2026-08-28)
+
+> ⚠️ **CONSOLIDATED 2026-08-28.** This block and §4i above were written **independently by the two
+> parallel windows on the same day** and both were headed `## 4i` — a duplicate heading, which is
+> the documentation form of the §4a *two-windows-one-file* lesson. **Nothing was deleted**: §4i
+> (above) is the primary record and owns the **tranche-two decision (§4i.4)**; this block is kept
+> for the three things it measured that §4i does not carry — live state, the `auto_mergeable`
+> two-thread warning, and the still-unmeasured list. **Where the two overlap, §4i wins.**
+
+Evidence: [`C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md`](../audits/C2e_ELIGIBLE_SET_ASSET_MINT_2026-08-28.md).
+**Applied to production, gov only, batch `c2e_gov_eligible_t1_20260828`. dia untouched.**
+
+### The finding that changes the doctrine's application
+
+**`v_lcc_merge_candidates` and `v_lcc_merge_candidates_normalizer_blind` filter
+`entity_type = 'organization'`. A minted asset is `entity_type = 'asset'` — structurally incapable
+of entering either surface.** So the merge-noise cost that justified the rent floor **cannot occur
+for asset minting at all**. Measured across the 2,000-entity mint: merge candidates 5,250 → 5,250,
+`auto_mergeable` 3,038 → 3,038, normalizer-blind 64 → 64, canonical drift 0 → 0.
+
+The entire observable cost: **+20 rows on `v_duplicate_candidates`** (+0.25%) and **+23 Tier 0
+cards — with the `auto` band, the only one that can trigger an unattended write, flat at 9.**
+
+⚠️ **This does NOT retire the doctrine.** *"Evidence justifies the entity"* still holds and is why
+the mint was eligible-set only: **2,000 minted, 2,000 resolved an owner, 0 left evidence-less.**
+What is refuted is the specific claim that minting assets pollutes the merge surfaces.
+
+### Live state after tranche one (verified 2026-08-28)
+
+| | before | after |
+|---|---:|---:|
+| LCC asset anchors | 5,096 | **7,145** |
+| `lcc_property_owner` rows | 4,065 | **6,065** |
+| distinct owner entities | 2,768 | **3,743** (+975) |
+| live entities | 62,368 | 64,293 (+3.2%) |
+| Tier 0 ask / auto | 82 / 9 | **91 / 9** |
+| canonical-name drift | 0 | **0** |
+
+### ⚠️ `auto_mergeable` now has TWO threads moving it — timestamp every "unchanged" claim
+
+C2e reported `auto_mergeable` unchanged at **3,038**; a check hours later read **3,005**. The mint
+did not do it: **64 merges landed in that window from the other Cowork thread** (merge log 66 → 130,
+97 entities tombstoned), and `v_lcc_merge_candidates` cannot see assets anyway. **C2e's claim was
+correct at its measurement time.** With parallel windows, *"the gate did not move"* is only
+meaningful with a timestamp and an attribution — check `lcc_entity_merge_log` before treating a
+delta as your own.
+
+### 👤 Tranche two — ⚠️ DOUBLY SUPERSEDED: **T2a is APPLIED (§4k)**, and §4i.4 owned the decision before that. Kept for its detail only; where they differ, **§4k wins, then §4i.4**.
+
+**4,811 properties / 4,354 owners remain** in `v_lcc_c2e_asset_mint_plan`.
+⚠️ **Tranche one tested the SAFEST population** — its cut landed at $543,782 of owner rent, entirely
+*above* the old floor, so it exercised none of the low-rent tail the no-floor decision was about.
+
+- **T2a — owner rent ≥ $100k: 2,570 properties / 2,300 owners, 17.2% already contactable.**
+  Statistically indistinguishable from tranche one's 21.3%, and it covers the whole $2M–$20M sweet
+  spot. **Recommended.**
+- **T2b — below $100k + rent-unknown: 2,241 properties / 2,054 owners, ~3% contactable, 17.8%
+  public bodies in the bottom band.** 👤 **Scott's call — and the argument has changed.** C2a said
+  stop here to avoid manufacturing noise; **that premise is now measured and largely false.** The
+  remaining case against is *prospect quality*, not technical risk: these are mostly cities,
+  counties, DOTs, corporate occupiers and private individuals. Against it stands Scott's own
+  rationale — *resolve all ownership, rank later* — and ranking is `v_priority_queue`'s job.
+
+⚠️ **Whatever is run, drive `lcc_ingest_domain_owner_evidence` explicitly afterwards** — cron 225's
+400/run cap would otherwise leave a 2,570-row tranche evidence-less for most of a week, matching the
+retire predicate.
+
+### Still not measured (C2e §8) — ⚠️ re-read against §4k, which closed part of this list
+
+Whether a resolved owner converts to a call · search/UI cost of +3.2% entities · the **3,362 gov
+properties with no `true_owner_id`** (54% of the non-resolving residue, the largest remaining lever,
+a gov-side capture question) · ⚠️ **public-body counts are LOWER BOUNDS** — `lcc_looks_like_person`
+returns true for `CITY OF SALEM` and `BROOME COUNTY` (the A3/P196 two-capitalised-token false
+positive), and no second classifier was written, deliberately.
+
+---
+
+## §4j — B6: the owner/lessee change-signal matrix (2026-08-28)
+
+Full audit: [`docs/audits/B6_OWNERSHIP_CHANGE_SIGNAL_COVERAGE_2026-08-28.md`](../audits/B6_OWNERSHIP_CHANGE_SIGNAL_COVERAGE_2026-08-28.md).
+Nineteen signals swept across gov + dia. **Most are already consumed** — deeds 98.5%, the CoStar
+sidebar writes both parties, and gov's sales table is ~97% represented in `ownership_history` under
+other provenance labels. The gaps are structural, not acquisition.
+
+- ⚠️ **`property_sale_events` cannot hold its own keys.** `ownership_history_id` and
+  `sales_transaction_id` are **`bigint`** against **`uuid`** PKs, with no FK; 0 of 5,208 populated,
+  and unpopulatable (`22P02`). **dia's identical table has a compatible `integer` PK and 52
+  populated rows** — that is the positive control making gov's zero a type defect rather than
+  neglect. This is the comp↔ownership join Scott's framing names, and it has never existed.
+
+  > **↳ ANSWERED 2026-08-28 in §4l — and the last sentence above is the part that did not survive.**
+  > The type facts all hold. But the comp↔ownership join is **not** what this column would restore:
+  > `ownership_history_id` has **ZERO readers on either domain**, and **56% of the gov rows it would
+  > link are `ownership_change_stub*`**, the retired circular source. **Retiring the column is the
+  > recommendation; the real finding is §4l.** Read §4l before acting on this bullet.
+- ⚠️ **The GSA landlord-change signal deflates 28.6×**: 38,213 flagged → 20,271 after name-key
+  normalization (**46.7% of the flag is a re-spelling**) → 13,225 property-resolved → **4,845
+  distinct conveyances** → **1,338 net-new / 1,202 properties**, spanning 2013→2026. Worth having,
+  and it adds depth; **never quote 38,213**.
+- ⚠️ **Four producers died in March–April 2026 and no health surface shows it.**
+  `gsa_lease_change_facts` + `gsa_lease_timeline` (2026-03-11) have **no scheduled caller** —
+  written only by `src/ingest_gsa_historical.py`, a manual CLI; the live Monday `gsa_auto_sync`
+  writes `gsa_snapshots` + `gsa_lease_events` and **not** the change layer. Four monthly snapshots
+  are undiffed. `prospect_leads.ownership_change` (7,729 leads, 2,041 worked) died 2026-03-31;
+  `property_sale_events` 2026-04-06.
+- ⚠️ **A SKIPPED STEP EMITS NOTHING, AND `v_pipeline_task_health` IS BUILT ON EMITTED ROWS.**
+  `pipeline_runner.py` guards the diff with `if latest_file and not runner.dry_run:`, and
+  `find_latest_gsa()` globs a local folder that is always empty on CI — it returns `None` and is
+  logged **"Task completed"**. The guarded `run_task` is then never invoked, writes no `run_log`
+  row, and has no row in the health view. gov `CLAUDE.md` §16 closed the *failed* case
+  (`completed_with_errors`); **the skipped case is still open, and it is invisible in a different
+  way — a failed step is a red row, a skipped step is no row.**
+- ⚠️ **The corroboration engine exists and its disagreements go nowhere.** `parcel_owner_xref`
+  (cron 21, every 30 min) produces **8,838 corroborates / 561 diverges / 362 properties**. **319 of
+  the 362 already carry the assessor's name as `new_owner` in `ownership_history`** — a propagation
+  gap between the store and `properties.recorded_owner_id`, the cheapest correction in the audit;
+  43 are genuine net-new. `diverges` produces no task, card or lead.
+- ⚠️ **The ladder does not know its biggest sources.** `field_source_priority` has a full
+  `gov.ownership_history` ladder (manual@1 > recorded_deed@3 > county_records@5 > sidebars@50–70)
+  with **no rung for `gsa_lease_diff` (6,648 rows) or `sales_transaction` (169)**.
+  `lcc_property_owner_evidence` is fed by only four sources — no deed, no lease-diff, no
+  seller-exit. **A GSA lessor change and a recorded deed cannot be adjudicated**, and per Scott's
+  Sunflower framing (ground lease: fee vs leasehold) both can be right at once → a review lane,
+  never a silent winner.
+- **Measured and refuted:** `ownership_research_queue` (17,665) is **100% complete**, not a stalled
+  backlog. Deeds are **98.5% consumed** — the gap is EXTRACTION (876 grantors of 5,804), which
+  supports B1a/B5's finding that deed acquisition is the wrong first lever. **gov `CLAUDE.md` §21's
+  "state-lease producer silent 6+ weeks" is SUPERSEDED** — 617 rows, all within 90 days, events to
+  2026-08-05; its `property_id`-is-NULL half still stands.
+- ⚠️ **B5's `3,080 / 2,114` ceiling could not be reproduced and should be re-derived.** The
+  anti-join is scope-sensitive by **26×**: against the `sales_transaction` bucket → 9,517 rows;
+  against the whole store → **366** (exact-date key) or **269 / 215 props** (no date). **3,313 of
+  the 9,686 named-seller rows are `ownership_change_stub*`, a mechanism gov R37 explicitly
+  retired** — minted *from* ownership history, so feeding them back is circular. Honest target:
+  **~270–370 rows / ~215–291 properties**, concentrated in `costar_export`.
+- **dia's seller-exit producer, found in code:** a one-shot backfill
+  (`20260522140200_dia_backfill_oh_seller_exits.sql`, no cron) **plus** a standing writer at
+  `sidebar-pipeline.js:9367` gated `domain === 'dialysis'`. Its comment — *"Gov OH already captures
+  the seller via the prior_owner text field… so no separate seller OH row is needed for gov"* — is
+  **true of the sidebar's own writes and narrower than the conclusion drawn from it**; gov
+  `sales_transactions` holds rows from six other channels. **dia has a Class 8 problem** (2,974
+  seller-exit rows against 3,702 named-seller sales, decaying).
+- ⚠️ **Detector hygiene:** `ownership_source` is **not** a controlled vocabulary — **2,978 distinct
+  values over 14,076 rows**, embedding record ids (`county_deed:<uuid>`,
+  `gov_master_backfill_r71|h=<md5>`). Split on `:` and `|` before grouping, or gov `county_deed`
+  reads as 1 row instead of **1,614**. And **69% of dia's own `ownership_history` carries a NULL
+  `ownership_source`** — the Class-20 detector is blind to it.
+
+---
+
+## 4j. B6b — the GSA landlord-change layer, restarted (2026-08-28)
+
+`gsa_lease_change_facts` **356,291 → 374,257** (max snapshot **2026-02-01 → 2026-07-01**);
+`gsa_lease_timeline` **16,471 → 16,779** (max **2025-12-01 → 2026-07-01**); **both `feed_stale`
+alerts auto-resolved.** Migration
+`government-lease/sql/20260828_gov_b6b_gsa_change_layer_from_snapshots.sql`; caller
+`src/gsa_change_layer.py`, wired into the existing Monday `gsa-sync`. Full writeup:
+`docs/audits/B6b_GSA_LANDLORD_CHANGE_RESTART_2026-08-28.md`.
+
+- **⚠️ THE RAW FEED WAS ALIVE THE WHOLE TIME, AND THE PULL LEDGER SAID SO.** `gsa_snapshots` at 58
+  days old reads exactly like a dead feed from `max(snapshot_date)`. `gsa_source_pull_log` shows the
+  Monday job pulling **2026-08-24**, fingerprinting the file, and recording
+  `action='skipped_duplicate'` / `consecutive_unchanged=3` — GSA has not published past 2026-07-01,
+  and the measured cadence is **monthly (28–31d)**. **A feed early in its publish cycle and a dead
+  feed are indistinguishable from the table alone**; the difference lives in the ledger, and
+  `consecutive_unchanged` is the honest counter. The freshness registry had already separated them
+  (`gsa_source_pull` was *not* among the six open alerts while both derived feeds were) — nobody had
+  read it that way.
+- **⚠️ PRODUCER AND CONSUMER WERE ON TWO COPIES OF ONE PANEL.** `derive_change_facts` reads
+  `gsa_inventory_snapshot_lines` (manual CLI, frozen 2026-02-01); the weekly job writes
+  `gsa_snapshots` (live, 2026-07-01). **Scheduling the existing code unchanged would have derived
+  nothing** — the diagnosis "it has no scheduled caller" was true and insufficient. **When a derived
+  layer is stale behind a live source, diff the table the consumer READS against the table the
+  producer WRITES before concluding anything about schedulers.**
+- **⚠️ AND THE LIVE PANEL IS NOT A CLEAN SUPERSET — A THREE-MONTH SAMPLE SAID IT WAS.** 137 shared
+  dates, 136 byte-identical (positive-controlled: mis-keyed one month → 6,223 diffs), but **10 dates
+  exist ONLY in the manual panel**, two of them serving as `prior_snapshot_date` for 5,029 existing
+  facts. The manual panel is unioned in **per date**, not retired. The full-history digest is what
+  found them; the recent-months sample was clean and wrong.
+- **⚠️ "UNDIFFED" IS NOT "DERIVABLE."** 21 undiffed dates; **15 are already SPANNED** by an existing
+  diff whose prior is before them and whose snapshot is after (2018-06-01 sits inside a
+  `2018-03-01 → 2019-04-01` diff carrying 18,821 facts). Deriving them records a **second
+  observation of conveyances already held** — the A2b per-lease fan-out in the **TIME** dimension.
+  The guard is the whole safety argument. Its cause is an unreported defect in the old writer:
+  `_previous_snapshot_date` resolves the prior from whatever metadata existed at that moment, and
+  the 2026-03-11 run processed files **out of order**, so 2025-12 got prior 2025-08 (4 months) and
+  2026-02 got 2025-12 (2 months). **A fourth inflation source on top of B6's three**, neutralised by
+  B6's `distinct (property, from, to)` stage.
+- **⚠️ THE FAITHFULNESS PROOF FAILED FIRST AND THE STORED DATA WAS THE WRONG ONE.** The port gave
+  35/26/630 against a stored 68/63/1,845 on 2026-02-01 — because the stored rows describe a
+  two-month diff. On dates whose stored prior IS adjacent it is **byte-faithful: 1,409 rows, 1,409
+  matched, 0 differing in any of 13 derived columns.** When a port disagrees with production,
+  establish which is right before adjusting either.
+- **⚠️ A DRY RUN CANNOT CATCH A WRITE-TIME CONSTRAINT.** The apply died `22003` on **one row in
+  17,966** — lease LMT14507's `$1.00` placeholder rent corrected to `$10,418.00`, ratio 10,417
+  against a `numeric(8,4)` column. Five clean dry runs saw nothing, because a dry run proves the
+  SELECTION and never the WRITE. `gov_gsa_pct_or_null` returns **NULL (not representable, not zero —
+  P180)** and the raw rents stay on the row.
+- **⚠️ THE CLIENT TIMED OUT AND THE WORK HAD COMMITTED.** The tick exceeded the 60s PostgREST
+  statement timeout and returned an error; the delta says **+17,966 facts, all 16,779 timeline rows
+  touched**. Verify a batch by the state delta, never the return value (P118 corollary 4). Split
+  into two RPCs since — ⚠️ and adding the defaulted third parameter needs the 2-arg signature
+  **DROPPED first** (42725, N15d/B1).
+- **Deflation, coverage and depth separately (B1):** raw **+1,336** → **+72 net-new conveyances /
+  +63 properties** (18.6× on the increment; 28.1× fleet-wide). The ladder reproduces B6's published
+  stages **exactly** on the pre-B6b subset. ⚠️ **Non-oscillating went DOWN 47** while conveyances rose
+  311 — the new months supplied return legs, so **more data made the P138 flicker guard stricter**.
+- **⚠️ B6's G3 ROW IS REFUTED, BY THE TRAP THAT PRODUCED IT.** `gsa_lease_events` DOES carry old/new
+  lessor pairs — **16,907 rows, 1,176 in 90 days**. `changed_fields` is a jsonb **string** holding
+  JSON text, so `changed_fields ? 'lessor_name'` cannot match and returns a confident **0 of
+  201,212**; the Python consumer parses it and never noticed. Correct probe:
+  `(changed_fields #>> '{}')::jsonb ? 'key'`. **A zero from a JSON/text detector needs a positive
+  control before it becomes a finding** — here the wrong zero had already been published.
+- **Nothing was fed to `ownership_history`, and the lead lane was NOT restarted** — `ingest_ownership`
+  is a different producer over a different source, its blast radius is **10,635 rows**, it cannot be
+  dry-run without credentials, and its only gate is a name heuristic. Its consumer is confirmed
+  alive (**2,041 worked, 208 in Salesforce, 2,149 touched in 30d**), which is why it deserves a
+  measured restart. Backlog **B6b-lead**; its `feed_stale` alert correctly stays open.
+
+
+---
+
+## 4k. C2e-T2a — tranche two step one MINTED. gov asset coverage 39.2% → 57.8%.
+
+Evidence: [`C2e_T2a_TRANCHE_TWO_STEP_ONE_MINT_2026-08-28.md`](../audits/C2e_T2a_TRANCHE_TWO_STEP_ONE_MINT_2026-08-28.md).
+Batches `c2e_gov_eligible_t2a_20260828` (mint) + `c2e_t2a_evidence_20260828` (evidence). gov only.
+
+| | C2a baseline | after T1 | **after T2a** |
+|---|---:|---:|---:|
+| gov asset anchors | 3,422 | 5,425 | **7,995** |
+| **gov asset coverage** (of 13,837 non-archived) | 24.7% | 39.2% | **57.8%** |
+| asset anchors, both domains | 5,096 | 7,147 | **9,717** |
+| `lcc_property_owner` rows | 4,065 | 6,065 | **8,636** |
+| **distinct resolved owner entities** | 2,768 | 3,743 | **5,992** |
+| plan view remaining | 6,811 | 4,811 | **2,241** |
+
+**The eligible-set promise held again: 2,570 minted · 2,570 resolved an owner · 0 evidence-less ·
+0 orphans**, and the population reproduced C2e §6 exactly *before* anything was written (2,570 /
+2,300 / 17.2% contactable). The slice is contiguous with tranche one — its top owner rent
+$543,718 against T1's cut at $543,782.
+
+**Gates held and the claim is ATTRIBUTED** (the §4i rule): `v_lcc_merge_candidates` 5,194 → 5,194,
+`auto_mergeable` **3,006 → 3,006**, normalizer-blind 64 → 64, drift 0 → 0, both readings timestamped
+seven minutes apart. Structural, as C2e established.
+
+### ⚠️ Predicted +44 duplicate groups, measured +46 — and the 2-row gap is a real finding
+
+`lcc_mint_gov_asset_entities` passes **`lcc_normalize_entity_name(m.name)`** as `canonical_name`,
+and the **N15c `BEFORE INSERT` trigger overwrites it** with `lcc_entity_canonical_key(name)`. All
+2,570 rows carry the trigger's key; only **2,497 (97.2%)** equal what the function passed. Re-running
+the prediction against the key actually **persisted** gives 46, exactly.
+
+**This is the trigger working as N15c intended — one writer for the dedup key.** But the argument
+inside the mint function is now **dead code that reads like the answer**, which is what produced the
+wrong prediction. **Durable rule: predict a canonical-key effect with the key the WRITER persists,
+not the one the caller passes** — where a `BEFORE` trigger owns a derived column, the caller's
+argument is a suggestion. Same family as the P157/P182 traps. Filed as **N15g** (cosmetic).
+
+### ⚠️ Tier 0 moved +4, not the predicted ~+20 — a POPULATION signal, not a miss
+
+Only **7.0%** of T2a's owners carry a second identity, against tranche one's 12.9%. **Resolving an
+owner makes "who do we call there" askable; it does not manufacture a bench.**
+
+### 👤 T2b — safe to run, low-value to run. Still Scott's call, no default taken.
+
+**2,241 properties / 2,054 owners** (803 under $50k · 715 at $50–100k · 536 rent-unknown).
+
+| | T1 | T2a actual | **T2b predicted** |
+|---|---:|---:|---:|
+| already contactable | 21.3% | 17.2% | **3.7%** |
+| known beyond gov | 12.9% | 7.0% | **1.9%** |
+| new duplicate groups | 1.00% | **1.79%** | **1.16%** |
+
+**The two axes moved in opposite directions.** T2a ran *hotter* than predicted on duplicates and far
+*colder* on Tier 0 — and **T2b's predicted duplicate rate is LOWER than T2a's actual**, computed with
+the corrected key against the live post-T2a graph rather than extrapolated. **The graph cost is now
+measured across 4,570 minted entities and is not the issue.** The owner cliff, however, is real and
+arrived exactly where C2a said: contactability **21.3% → 17.2% → 3.7%**. That is a *prospect-quality*
+judgement, not a technical risk — cities, counties, state DOTs, corporate occupiers, private
+individuals — set against Scott's own *resolve all ownership, rank later*, with ranking being
+`v_priority_queue`'s job.
+
+⚠️ **Whatever is decided, drive `lcc_ingest_domain_owner_evidence` in the same pass** — cron 225 caps
+at 400/run.
+
+
+---
+
+## 4l. C2b — the Salesforce bridge SELF-HEALED, and the residue is not an owner problem
+
+Evidence: [`C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md`](../audits/C2b_SALESFORCE_BRIDGE_SELF_HEALED_2026-08-28.md).
+Measurement only — nothing written.
+
+**No bridge code was written and the bridge doubled.** SF-linked people reaching a resolved property
+owner: **669 (6.8%) → 1,486 (15.2%), +817**, purely because T1 + T2a built the far bank. **C2's
+diagnosis and remedy are both confirmed** — hop 3 was the binding constraint. **Re-measure a
+downstream gap after fixing an upstream one, before building anything for it.**
+diagnosis and remedy are both confirmed** — hop 3 was the binding constraint.
+
+### ⚠️ The residue is 91.5% NOT-AN-OWNER, and that is correct
+
+Of the 7,646 SF people still unconnected, across **6,816 distinct orgs**:
+
+| | |
+|---|---:|
+| orgs carrying a `dia\|gov` `true_owner` identity | **489 (7.2%)** |
+| people at those orgs | **652 (8.5%)** |
+| **people at orgs that are NOT domain owners** | **6,994 (91.5%)** |
+
+Brokers, vendors, tenants, lenders and counsel, edged to their employer by the `works_at`
+They are brokers, vendors, tenants, lenders and counsel, edged to their employer by the `works_at`
+Salesforce-account edge. **Their employers do not own our properties. No minting or reconcile will
+connect them, and none should.**
+
+⚠️ **This retires the framing that opened the topic.** *"8–10k Salesforce opportunities not yet
+connected"* is, measured, **~652 people at 489 owner-orgs.**
+
+### ⚠️ It also settles T2b independently: minting it would connect **74 orgs**
+
+Only **74 of the 489** appear in `v_lcc_c2e_asset_mint_plan` — **3.6%** of T2b's 2,054 owners.
+With T2a's measured collapse in contactability to **3.7%**, the case is weak on two independent
+axes. It remains *safe* (graph cost settled across 4,570 minted entities). **Do not run T2b now.**
+
+---
+
+## 4m. C2g — why 489 anchored owner-orgs are unresolved. Both leading hypotheses were WRONG.
+
+Evidence: [`C2g_UNRESOLVED_OWNER_ORGS_2026-08-28.md`](../audits/C2g_UNRESOLVED_OWNER_ORGS_2026-08-28.md).
+Diagnosis only — nothing written.
+
+| hypothesis | measured | verdict |
+|---|---|---|
+| the **0.55 confidence gate** (876 assets with evidence read "Unresolved") | **444 of 489 were NEVER a candidate** — only 45 appear in `lcc_property_owner_evidence` | ❌ **refuted** — the gate never saw them |
+| **P113 operator-in-the-owner-slot** | `true_owner_is_operator` = **0** across all 489 | ❌ **refuted** |
+
+**Both were the documented causes closest to hand, and both were wrong.** The residue is three
+populations:
+
+| | orgs | lever |
+|---|---:|---|
+| **dia — no property in the mirror at all** | **248 of 271** | not a resolution gap; they own nothing we track |
+| **gov — property but NO asset entity** | **74 of 222** | minting — **exactly the 74 that overlap the T2b plan** |
+| **gov — property WITH an asset entity, still no evidence** | **79 of 222** | ⚠️ **the genuine feeder defect** |
+| gov — no property in the mirror | 69 of 222 | as dia |
+
+⚠️ **The 74 reconciles exactly with C2b's independent count** of owner-orgs in
+`v_lcc_c2e_asset_mint_plan` — two different queries, same number. And the
+`true_owner_effective_id::text = external_id` join was **controlled before concluding**: 19,851 of
+20,123 facts match a gov or dia anchor, so the zeros are facts, not artifacts.
+
+### ⚠️ T2b — a THIRD independent reading, same answer
+
+T2b mints the 74. It does not touch the 79 (already minted), the 248 (own nothing here) or the 69.
+**Three separate measurements now converge**: contactability 3.7% (T2a) · only 74 of 489 reachable
+(C2b) · those same 74 the only slice of this residue (C2g). **Safe, and low-value.**
+
+### The next question — 79 gov owner-orgs the feeder should have resolved
+
+Property present, asset entity present, owner anchored — and `lcc_property_owner_evidence` names
+them **zero times** (only 17 of 222 gov orgs here were ever a candidate). **Undiagnosed by design.**
+Test in order: the **400/run cap** on cron 225 (both mints had to drive it explicitly); the
+**`lcc_domain_owner_ambiguous`** lane, where a parked row would make these *correct abstentions*;
+then the **brokerage/junk/placeholder guards**. ⚠️ **In this arc every "silent producer" that looked
+like a defect turned out, at least partly, to be a guard doing its job** — read the verdicts first.
+connected"* is, measured, **~652 people at 489 owner-orgs.** The rest are correctly unconnected.
+
+### ⚠️ It also settles T2b independently: minting it would connect **74 orgs**
+
+Only **74 of the 489** unresolved owner-orgs appear in `v_lcc_c2e_asset_mint_plan` — **3.6%** of
+T2b's 2,054 owners. Combined with T2a's finding that contactability collapses to **3.7%** in that
+band, **the case for T2b is weak on two independently measured axes.** It remains *safe* (the graph
+cost is settled across 4,570 minted entities), so it can be revisited if the ranked queue runs dry.
+**Recommendation: do not run T2b now.**
+
+### The actionable slice, and the next question
+
+**489 orgs / 652 people**: companies that **are** domain property owners, **have** Salesforce people
+attached, and whose properties are **not** resolved to them. ⚠️ **415 of the 489 are NOT reachable
+by minting** — they are anchored and unresolved for some other reason. **That is the next thing to
+size, and it is deliberately undiagnosed here.** Candidates in order: the `lcc_reconcile_property_owner`
+0.55 confidence gate (the documented 876-asset supersession class); a dia **operator** in the owner
+slot (P113); or an org anchored in one domain with properties in the other. **Do not assume — this
+arc has three instrument errors on record from assuming.**
+
+
+---
+
+## 4n. C2h — the "silent feeder" resolved every one of them. It is the sponsor↔SPE gap.
+
+Evidence: [`C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT_2026-08-28.md`](../audits/C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT_2026-08-28.md).
+Diagnosis only — nothing written.
+
+**C2g called these 79 "the genuine feeder defect." They are not a defect.** Every one of their
+properties **is** resolved: the feeder resolved the **SPE that holds title** (the correct recorded
+owner) while the Salesforce person works for the **sponsor**. Both sides are right.
+
+| SF person's employer *(a gov `true_owner`)* | LCC resolved owner *(title holder)* |
+|---|---|
+| **Avery Capital** | **AC** ORLANDO SPV LLC |
+| **Ball Ventures** | **BV**GC PARCEL C, LLC |
+| **Browman Development Co.** | **BDC** Livermore L.P. |
+| **Carmel Partners** | **CP** VI Van Gordon, LLC |
+| Corporate Office Properties Trust | REDSTONE GATEWAY 100, LLC |
+
+**The SPE initials are the sponsor's initials.** Split: **69 sponsor↔SPE · 8 true duplicates (same
+canonical key) · 2 probable duplicates.**
+
+⚠️ **One column turned the whole diagnosis around:** `prop_resolved_to_someone` equalled
+`props_with_asset` on all 79. C2g's *"everything the feeder needs is present and it produced
+nothing"* was wrong because it never asked whether the property had resolved **to someone else**.
+**When a producer looks silent, check whether it answered a different question before calling it
+silent.**
+
+### Do NOT build a third sponsor detector
+
+`lcc_owner_sponsor_domain` (P190) and `lcc_ownership_sponsor_family` (A3) both exist and are
+**human-confirm by design** — A3 measured a lexical sponsor detector at **~25% precision** raw, and
+P196 at 4-of-6 even with three guards. Feed these 69 into the existing confirm surfaces as
+candidates; they arrive with **stronger evidence than either surface normally has** (the sponsor is
+independently attested as a gov `true_owner` *and* carries Salesforce people). **Not sized here.**
+
+### Real residue found while reading
+
+**`Casa De Chupita` → `Undisclosed` at confidence 0.57** — a **placeholder won a resolution**, and
+`lcc_is_placeholder_owner_name` does not list `Undisclosed`. **`Chiapelone Trust` →
+`BGC-Havasu Project LLC by Newmark Knight Frank`** — brokerage pollution inside a resolved owner
+name (the P116 class; gov's `gov_strip_brokerage_suffix` exists to strip exactly that suffix).
+Two more (`Consilium → Easterly`, `Carosella → WMC`) are unexplained at confidence 1.00 and want
+reading individually.
+## §4l — B6c: `property_sale_events` — the table has a future, the two link columns do not (2026-08-28)
+
+Full audit: [`docs/audits/B6c_PROPERTY_SALE_EVENTS_2026-08-28.md`](../audits/B6c_PROPERTY_SALE_EVENTS_2026-08-28.md).
+**Diagnosis only — no migration, no column dropped, no type changed.** B6c was briefed to answer
+*"does this table have a consumer"* **before** repairing the `bigint`/`uuid` defect §4j found. It
+does; the columns do not; and the audit found something that outranks both.
+
+### The three verdicts
+
+- **The TABLE is alive — keep it.** 6 live gov triggers, three of them table-specific:
+  `trg_pse_close_listing` (flips a concurrent listing to Sold), `trg_pse_propagate_sale` (writes
+  `properties.latest_sale_price` / `latest_deed_date` / grantor / grantee) and
+  `trg_gov_auto_cap_rate_on_sale_event` (feeds `cap_rate_history`). It is the LCC detail panel's
+  **declared canonical write target** (two write paths) and is read+write allowlisted on both
+  domains. dia has 6 objects on it including `v_property_latest_sale`.
+- **`ownership_history_id` — ZERO readers anywhere. Retire it.** 0 hits across **620 gov objects**,
+  0 across dia, 0 in `api/`; 0 of 5,208 gov rows; **1.9% (52/2,730) on dia after four months**; **no
+  FK on either domain.** ⚠️ **Both gov trigger functions were read in full and neither touches
+  either link column** — they use `property_id`, `sale_date`, `price`, `cap_rate` and the *name*
+  columns. Repairing the type builds a link nobody follows (**Class 2**).
+- **`sales_transaction_id` — one reader, dia-only.** `fn_listing_close_if_sold` uses it to stamp
+  `available_listings.sale_transaction_id`, and that is why dia has the FK. **gov has no reader and
+  gov's own close-listing trigger does not want one.** Held, not retyped: if the two stores
+  consolidate (below) the column disappears rather than getting fixed.
+
+### 🚨 The finding that outranks the type defect — two stores, opposite ideas of "canonical"
+
+`detail.js` states in its own comments that `property_sale_events` is **canonical** and
+`sales_transactions` is *"legacy, retired for write paths."* The database says the reverse:
+
+| | reads `sales_transactions` | reads `property_sale_events` |
+|---|---:|---:|
+| all gov views | **76** | **0** |
+| of which `cm_gov*` (the CM book) | 30 | 0 |
+
+**No trigger or function propagates PSE → `sales_transactions`** (PSE writes to `properties` and
+`available_listings` only), while the reverse direction *does* exist via
+`trg_gov_listing_propagate_to_sale`. **So a sale an operator types into the property panel never
+reaches the comps spine.** Already non-empty and not noise — **6 real priced comps, up to $10.8M
+with cap rates**, exist only in PSE and are invisible to every chart in the book. And PSE is **92.6%
+duplicative** of `sales_transactions` on exact `(property_id, sale_date)` (4,825 of 5,208; **0** PSE
+rows sit on a property with no `sales_transactions` row at all).
+
+⚠️ **Both stores are individually correct and each has a coherent consumer set. Nothing errors and
+no component test can see it, because it is a property of the CONNECTION** — the class the coherence
+contract exists for. Filed as **B6c-dup**, ranked above every column-level repair.
+
+### D2 — the I3 sweep, run on all three projects
+
+**10 genuine defects · 3 low-severity · 5 accepted false positives.** Detector SQL in the audit §7e.
+Two refinements it earned while running, both worth carrying:
+
+- **A declared FK is authoritative and Postgres already type-checks it** — so D2 need only examine
+  *unFK'd* columns. `available_portfolios.portfolio_id` was flagged against a name-derived
+  `portfolios`; its real FK points at `sales_portfolios` (uuid→uuid, correct). **The declaration
+  beat the name guess.**
+- **Every genuinely mismatched undeclared column found is 0% populated** — a column that cannot hold
+  its value never gets one. **Triage by populated-ness first**; a *populated* mismatch is nearly
+  always an external vendor id (Salesforce `00T8W...`) or a uuid stored as text.
+
+⚠️ **LCC Opps returned no mismatches, and that is a BOUNDED zero, not a clean bill** — it evaluated
+**151 of 559** `_id` columns (27%); the other 408 do not resolve to a name-derived target and were
+**not examined**. ⚠️ **And gov and dia's `property_sale_events` are broken on *different* columns**
+(gov's `broker_id` is fine, dia's is `uuid` against an `integer` PK on 2,730 rows) — **neither is a
+safe template for the other**, which is I2's same-shape invariant failing on types.
+
+### The alert is NOT to be resolved — re-scope it
+
+`property_sale_events` is registered in `feed_freshness_registry` on `created_at` at **45 days** and
+reads **`is_stale=true`, age 144**. Its bulk producer was retired **on purpose**; its only live
+producer is an operator form with **no cadence at all**. A 45-day expectation there alerts whenever
+nobody types a sale for six weeks and then sits open forever — **the B6a *"expectation nobody chose"*
+failure, inside the freshness registry.** De-register with the reason recorded, or re-register as a
+DECLARED irregular feed. Backlog **B6c-feed**.
+
+
+---
+
+## 4o. C4 — the ranking layer: the whole BD queue is gated on one unset column
+
+> **Audit:** [`docs/audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md`](../audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md).
+> **Diagnosis only, nothing written.** This is the LAST hop of Scott's chain — the ranked call list
+> — and the first time it has been measured.
+
+Measured **2026-08-28 after the T1 + T2a mints, cache verified fresh** (refreshed 4 min before the
+read; `lcc-priority-queue-refresh` every 5 min). **Staleness ruled out first.**
+
+### The gate
+
+Every gov deal-timing band (P1/P2/P3/P8) reads one CTE in `v_priority_queue_live`:
+
+```sql
+gov_owner_props AS (
+  SELECT ... FROM entity_effective_role eer
+    JOIN lcc_entity_portfolio_facts f  ON f.entity_id = eer.entity_id AND f.is_current AND f.source_domain='gov'
+    JOIN lcc_property_attributes   a  ON a.source_domain=f.source_domain AND a.source_property_id=f.source_property_id
+  WHERE eer.effective_owner_role = ANY (ARRAY['developer','user_owner'])   -- ← the entire gate
+)
+```
+
+**It reconciles to the row:** gov properties with a current owner fact, an attributes row, and a
+lease expiring ≤24 months = **1,216**; add the role predicate = **74**; the observed P1 count is
+**74**. Not value-gated, not cadence-gated, not opportunity-gated. The attributes join passes 1,216
+and is *not* the constraint.
+
+### ⚠️ Half the gate has never matched a row, and the other half is exhausted
+
+| `effective_owner_role` | live entities (66,874) | of the 5,992 resolved owners |
+|---|---:|---:|
+| `unknown` | **62,554 (93.5%)** | **4,314 (72%)** |
+| `buyer` | 3,591 | 1,567 |
+| `developer` | 715 (1.07%) | 111 (1.9%) |
+| **`user_owner`** | **0** | **0** |
+
+- **`user_owner` has no producer anywhere.** Named in the gate, in P0.4/P0.5, and in the doctrine;
+  **written by nothing, ever.** ⚠️ **A gate arm that has never matched a row is indistinguishable
+  from one that is absent** — which is exactly why it survived unnoticed. New detector class.
+- **`developer` has a producer that has run out of input, not broken.**
+  `lcc_developer_classification_log` = **285 rows lifetime**, candidates view down to **2 open**.
+  It keys on `properties.developer_name`, so it can only ever find parties a domain DB already
+  labelled. **Working; exhausted.** (Plus 374 `behavioral_override` rows.)
+
+⚠️ This is the **N18 view** — whose ranking N18 found was arbitrary because `attributed_rent`
+self-compared. That view sits **upstream of the entire ranked call list**, which N18 did not know.
+
+### What the queue contains — 73% is data work
+
+**931 of 1,267 rows (73%)** are P0.4 `resolve_ownership_control` (552), P-CONTACT
+`select_prospecting_contact` (231), P0.5 `open_bd_opportunity_needed` (148). **~336** are genuine
+deal-timing signals. **Only 256 of 5,992 resolved owners (4.3%)** appear anywhere in the queue.
+
+The 73% is **not itself a defect** — those are doctrinal producers with named consumers. But a
+surface three-quarters data-completion trains the operator to skim it: the badge-that-is-noise
+failure, one level up.
+
+### Broker assignment ~2%
+
+2,301 cadences, **48** with `owner_user_id`; **14 of 1,267** queue rows. ⚠️ **Do not re-derive the
+mapping** — `touchpoint_cadence.owner_user_id` FKs `users(id)` while
+`lcc_entity_owner_override.owner_user_id` FKs `lcc_users(lcc_user_id)` and **none of those ids exist
+in `public.users`**. The bridge is email via `lcc_cadence_point_person(uuid)`.
+
+### ⚠️ SELF-CORRECTION (same day) — widening admits 2,521, not 62,554
+
+**This section first said widening to `unknown` admits 62,554 entities. That is wrong by 25×.**
+`gov_owner_props` **already joins** `lcc_entity_portfolio_facts` (current, gov) **and**
+`lcc_property_attributes` — joins that are a value gate in all but name. 62,554 is the fleet-wide
+`unknown` count; **the count that can reach this CTE is 2,521.**
+
+⚠️ **Quote the population at the point the predicate is APPLIED, not at the table it names.**
+Reading the `WHERE` clause and reaching for the column's fleet-wide distribution skips the JOINs
+directly above it. Class 19's sibling: blast radius is a property of the query, not the column.
+
+| the 2,521 reachable `unknown` entities | |
+|---|---:|
+| organization-typed | 2,438 · person-typed 83 |
+| already a resolved owner | **1,952** |
+| **placeholder or brokerage names** | **3** |
+| ≥2 current assets · `purchases` edge · already contactable | 231 · 383 · 320 |
+
+**Three junk names in 2,521** — the eligible-set joins already removed the flood. Also newly
+visible: **`buyer` is 2,432 reachable entities**, excluded deliberately, and an `operator` role
+exists (2).
+
+**What widening would produce:** P1 **74 → 553**, P2 **32 → 242**, P3 **62 → 414**; **997 distinct
+owners**. The P1 delta alone is 479 rows / **449 owners / $148.0M** (top asset per owner), and the
+named rows are genuine gov landlords — `1101 WILSON OWNER, LLC`, `131 SOUTH DEARBORN LLC`,
+`1515 FLAGLER PROPERTY LP`.
+
+### ⚠️ The real constraint is REACHABILITY, and it is severe
+
+**Only 56 of the 449 new P1 owners (12.5%) are contactable**; 39 have a cadence. Widening alone
+emits **~393 owners nobody can call** — the **P112** failure this repo already documents: *never
+seed a cadence for a party with no contact method, because it can never advance and only ages into
+"overdue."* **So the answer is sequencing, not refusal:** widening is safe and valuable, and it
+should ship gated on the reachability precondition the cadence engine already applies. **The 56
+contactable owners are actionable on day one.**
+
+### ⚠️ What still should NOT be done
+- **Do not write a name-based role classifier.** Every lexical owner classifier measured in this arc
+  landed ~25% precision raw (P189, A3) or 7% (P198), 4-of-6 guarded. A role deciding *whether we
+  call someone* is a worse home for that than a merge candidate.
+- **`lcc_looks_like_person` is not a census** (`CITY OF SALEM`, `USAA Real Estate` — A2a/A3/P196).
+
+### 👤 The open question is Scott's, and it is doctrine
+
+**What recorded evidence should promote an owner out of `unknown`?** It decides who gets prospected
+and in which bucket — his chain's *"correct prospecting style in correct buckets."* Facts already on
+hand, none adopted: **portfolio shape** (`lcc_entity_portfolio_facts` knows asset count/domain/rent);
+**acquisition history** (`entity_relationships` `purchases` edges already separate a repeat investor
+from a one-off owner — his own distinction, already modelled); **`is_operator_not_owner`** (P113, a
+recorded flag); and **deed/B5 sales party roles**, which the developer classifier has never read.
+
+⚠️ Whatever fills it **needs a value gate and an auto-retire predicate before it emits**, or it
+recreates the 931-row data-work flood one band up.
+
+### Not measured
+
+dia's bands (this CTE is gov-only) · whether the 336 deal-timing rows are individually good
+(counted, not read) · **value** — no dollar figure on the 1,216 or the 74, and ⚠️ per §4g there are
+**five distinct $500k floors**, so any floor here must be NAMED · **marketing and deal-execution
+actions**, the other half of *"compared to the balance of the leads or marketing activities"* —
+they live outside `v_priority_queue` and **that inventory does not exist today.**
+
+---
+
+## 4p. C5 — the callable list, and the `buyer` exclusion is the larger half
+
+> **Audit:** [`docs/audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md`](../audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md).
+> **Diagnosis only.** Answers **C4e** and produces the list C4a implied.
+
+**1,924 owners hold a current gov property with a P1/P2/P3 deal-timing signal and are invisible to
+the queue** — 1,052 typed `buyer`, 871 `unknown`. **224 are contactable today.**
+
+⚠️ **C4's "56 contactable" was P1-only and `unknown`-only.** Across all three bands and both excluded
+roles it is **224**. Quote 224.
+
+### ⚠️ C4e answered — the `buyer` exclusion is a category error, not a bad label
+
+**578 owners typed `buyer` hold a gov property with a lease expiring inside 24 months, carrying
+$410.4M** — larger than the `unknown` half C4 focused on. And the labels are *correct*:
+
+| owner | role | gov assets | signal | contact |
+|---|---|---:|---|---|
+| **Boyd Watterson Asset Mgmt** | `buyer` | **45** | lease expiry **2026-08-31** | Eric Dowling |
+| Prologis, L.P. | `buyer` | 3 | 2027-07-31 | Jeff Behm |
+| RMR Group | `buyer` | 5 | 2027-04-11 | Jenkin Cagwin |
+| HC Government Realty Trust | `buyer` | 6 | 2027-01-11 | David Lucas |
+
+They **are** buyers. They are **also, right now, the owner of a building whose lease is running
+out.** `entities.owner_role` is a **party-level identity**; the bands ask a **per-asset question**.
+The CTE has already joined `lcc_entity_portfolio_facts` on `is_current = true` — **it is holding the
+per-asset fact and then discarding it in favour of the entity's global label.** A REIT is
+permanently a buyer and permanently ineligible however many gov buildings it owns.
+
+⚠️ **Firing the band is not choosing the pitch.** `account-based-contact-intelligence.md` is explicit
+that acquisitions and disposition are different contacts and different tones, and the buy-side
+relationship is the funnel *into* the disposition conversation. **Which bucket the call lands in is
+C4a's doctrine question, not this one.**
+
+### Urgency
+
+**173 owners have a gov lease expiring within 90 days and are invisible**; **14 contactable**, 28
+within 180 days. ⚠️ **Boyd Watterson: 2026-08-31 — three days from the measurement**, 45 gov assets,
+contact confirmed, on no surface. **Not verified: whether that lease is renewing, extended or
+terminal** — the attributes row carries a date, not an outcome. **Read the asset before acting.**
+
+### The names are the ones already resolved
+
+Boyd Watterson · Easterly · NGP Capital · RMR · Gardner Tanenbaum · GI Partners · USAA Real Estate ·
+Trammell Crow · Prologis. **The Tier 0 arc spent twelve rounds confirming these contacts. The signal
+existed the whole time. The role gate sat between them.**
+
+### What it changes
+
+**The per-asset fix is narrower and better founded than widening to `unknown`** — it needs no new
+classifier and no doctrine call, because the join is already there and already says `is_current`.
+`buyer` alone is 578 owners / $410.4M. **224 owners are callable the day it ships.**
+
+### Not measured
+
+Whether any named lease is terminal (date ≠ outcome) · whether the 224 contacts are the *disposition*
+decision-maker · dia · portfolio rent (only top-asset per owner; the $410.4M is a different basis —
+**do not mix them**) · P5/P8/P-BUYER.
+## §4p — B6c-dup: the two sale stores disagreed about which is canonical (2026-08-29)
+
+> Full writeup: [`docs/audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md`](../audits/B6c_dup_SALE_STORE_CANONICAL_2026-08-28.md).
+> Follows **§4l** (B6c), which found this behind the type defect it was sent to answer.
+
+**DECISION, recorded: `sales_transactions` is the canonical comps spine. `property_sale_events` is
+a CAPTURE surface that propagates into it.** Measured over 234 gov views/matviews: **77 read the
+spine — all 30 `cm_gov*` Capital Markets views among them — and ZERO read `property_sale_events`**
+(nonsense-token control: 0). `detail.js` asserted the exact opposite in its own comments; corrected
+at four sites, each `B6c-dup`-marked with the old wording quoted.
+
+**The leak was real and was confirmed behaviourally, in a rolled-back transaction:**
+`property_sale_events` +1, `sales_transactions` **+0**, `properties.latest_sale_price` set. Shipped
+`trg_gov_pse_propagate_to_sale` — AFTER INSERT on PSE, the **single owner** of that transition, keyed
+`(property, YEAR-MONTH, price-to-$1k)`, fill-blanks only, ledgered, kill-switched, batch-reversible.
+
+⚠️ **AND THE DAMAGE WAS ZERO, WHICH IS THE POINT.** The operator path had never produced a row: all
+5,208 PSE rows come from bulk importers that wrote the spine *independently* (inserts stopped
+2026-04-06). **A complete downstream store is not evidence that propagation exists** — here it was
+evidence that two importers each wrote two tables. Fix-before-it-bites, so the build stayed small.
+
+### The three wrong numbers, and why they are the transferable part
+
+| figure | source | verdict |
+|---|---|---|
+| 330 orphans / $4.48B | B6c-dup sizing | ❌ artifact |
+| 9 / $558.8M | the brief's own correction | ❌ artifact |
+| 6 / $29.2M | **my first re-measure** | ❌ artifact |
+| **0** | keyed on `(property, YEAR-MONTH)`, control 1,694 | ✅ |
+
+1. **The exact-date join was the wrong key.** `sales_transactions.sale_date` is **month-truncated**
+   for its dominant source — `costar_sidebar` **87.4% day-1** (6,871/7,865), ownership stubs 100%.
+   All six named "orphans" have an **exact price twin 3–21 days apart, every twin on the 1st**.
+   ⚠️ `dedup_natural_key` already encoded that granularity: **the spine had been stating its own join
+   key all along.** *Run the neighbouring key before believing an anti-join* — a ±31-day variant
+   returned 0 for free.
+2. **`property_id IS NULL` is not a dangling reference.** Dangling is **0 and structurally
+   impossible** (`fk_pse_property … ON DELETE SET NULL`). The 321 are **376 NULL-link rows**, 321 of
+   them detached in one bulk property deletion on 2026-04-03. ⚠️ I reproduced the brief's error
+   first: **a `LEFT JOIN … WHERE prop_live = false` lumps NULL in with dangling.**
+3. **`transaction_state` was never read.** The "$529.6M invisible to the spine" is **quarantine** —
+   all three NULL-price twins are `needs_review`/`duplicate_superseded`,
+   `exclude_from_market_metrics = true`. Population: **1,687 live twins · 7 quarantined ($604.1M) ·
+   0 absent · 0 live twins with a NULL price.** The spine is complete and had already judged them.
+
+### ⚠️ The filter that would have resurrected quarantined comps
+
+The first propagator filtered its twin lookup to `transaction_state = 'live'` — the natural thing to
+write. That made a **quarantined** twin invisible, so it fell through to `INSERT` and would have
+minted a fresh **live** comp for a sale somebody deliberately excluded, straight into the Capital
+Markets book. Caught by the live probe one pass before it mattered.
+
+**The general rule: a filter that narrows a lookup to the rows you want to ACT on will hide the rows
+that should STOP you.** Same shape as A5c's mint/probe asymmetry. A dedup probe must see the whole
+population, including the excluded part.
+
+### Also closed / re-scoped here
+
+- **`B6c-feed` DONE** — the 45-day `property_sale_events` expectation is **retired, not resolved**
+  (`is_active=false`, reason recorded). ⚠️ **The expectation moved rather than vanished:** feed
+  `sales_transactions` is registered at 45 days and reads 10 days old, and this trigger is what makes
+  operator sales reach it.
+- **`B6c-orphan` re-scoped** — smaller and a different question: *what should happen to an event
+  whose property was deleted?* Today: nothing, silently, forever.
+- **`B6c-dup-dia` filed, NOT ported.** dia is **72 : 2**, not 77 : 0, and has real PSE consumers
+  (`fn_listing_close_if_sold`). Both of the gov propagator's calibrated decisions — the
+  month-truncation key and the quarantine gate — are **gov measurements** and must be re-derived.
+
+---
+
+## 4q. B6b-lead — the lead lane that looked alive because another producer wore its name (2026-08-29)
+
+**Nothing was restarted and nothing was written.** Full measurement:
+`docs/audits/B6b_lead_OWNERSHIP_LEAD_RESTART_2026-08-29.md`. Backlog **B6b-lead**; contract **I4**.
+
+`ingest_ownership` (the `ownership_change` lead lane + the `gsa_lease_diff` ownership feed) has been
+dead since 2026-03-31 and its `feed_stale` alert correctly remains open at 150 days. B6b deferred the
+restart because it needed a graded gate and a credentialed dry run. Both were done. **The restart was
+still not taken, for a reason neither B6b nor the prompt anticipated.**
+
+- **⚠️ THE LANE HAS NO HUMAN CONSUMER, AND EVERY METRIC THAT SAID OTHERWISE WAS MACHINERY.**
+  Across all 7,729 leads: `assigned_to` **0**, `last_contacted_at` **0**, `next_action` **0**,
+  `sf_lead_id` **0**; `sf_sync_status` is `'pending'` for all 7,729; and only two `pipeline_status`
+  values have ever existed — `new` and `filtered_multi_tenant`. The three numbers B6b §9 quoted
+  reproduce **exactly** and are all mislabelled: *worked* = the automated filter, *pushed to
+  Salesforce* = `sf_contact_id` (a matched existing contact, not a push), *touched in 30 days* =
+  **1,216 of 1,217 on one day**. A5 (*check who writes a terminal status before ranking a lane by
+  it*) and P119 (*a bulk-set status is not a per-item decision*) arriving together on the one lane
+  whose liveness nobody re-checked, **because it had already been "verified."**
+- **⚠️ AND THE VERIFICATION WAS 59% ANOTHER LANE'S WORK.** `route_to_pipeline` hard-codes
+  `lead_source = 'ownership_change'` for **every** row it routes, whatever the source
+  `ownership_history.data_source` says. Of the 7,729 leads only **3,199** trace to `gsa_lease_diff`;
+  **4,530** trace to `county_deed`, a producer that was still writing. **That is why the badge never
+  went quiet when the lane died** — a second producer kept feeding it under the same label. Its
+  input today is **4,369 rows containing ZERO `gsa_lease_diff`**, 2,776 of them **B5's sale-derived
+  transitions written the previous day**: running it now mints 4,369 leads under a name none of them
+  earned. **Before trusting a lane's consumption evidence, check what actually produced the rows.**
+- **⚠️ THE LEAD LANE IS DOWNSTREAM OF THE OWNERSHIP-FACT WRITE.** `route_to_pipeline` reads
+  `ownership_history`, not the events, so "restart the leads without writing ownership facts" is —
+  as the code stands — **impossible**. The laundering fix is a prerequisite for scoping the restart
+  at all, not a tidy-up.
+- **The gate PASSED, and that is the less interesting half.** `is_same_owner` agrees with the
+  alnum-key reference **91.80%** over all 16,492 rows and **suppresses more** (9,146 vs 7,940), so it
+  does not manufacture leads wholesale. But **both of the top two would-write rows by value are false
+  acquisitions** — `LCOR` → `LCOR ALEXANDRIA` at **$75.4M** (arm 3's `length > 5` guard blocks a
+  4-character sponsor name) and a `JPMORGAN` → `MORGAN` truncation at $26.3M. **An agreement rate is
+  not a safety property when the errors concentrate at the top of the value ranking.**
+- **Neither name test dominates — the correct rule is their UNION.** The alnum key catches
+  punctuation the ratio arm misses (73 acronym re-spellings like `RGR INC` → `R.G.R, INC.` become
+  acquisitions); the ratio arm catches typos the alnum key misses (`BANDYWINE` → `BRANDYWINE`,
+  `JG HOUSING SOLUTLONS` → `SOLUTIONS`). Same lesson as A2/P189: **a comparator sanctioned for one
+  gate must be re-graded on named rows for the next.**
+- **⚠️ `normalize_entity` MANGLES NAMES IN PRODUCTION.** `n.replace(" CO", "")` is unanchored, and
+  `" CORP"` is applied before `" CORPORATION"`: `ACME CORPORATION` → `ACMEORATION`. Live in the
+  would-write set: `ALACHUA,UNTY OF`, `GRAHAMMPANIES, THE`, `CERRITOSORATE TOWER`, `TRIUNTY BUSINESS
+  CAMPUS`. It is **order-dependent** — `ALACHUA, COUNTY OF` mangles while `COUNTY OF ALACHUA` does
+  not (no leading space at position 0), so the same words in a different order stop comparing equal.
+- **The blast radius is 584, not 10,635 — an 18× overstatement.** Exact chain: 16,907 → 16,492 →
+  **7,346** after the gate → **1,489** not already ingested → **1,136** property-linked → **998**
+  after A2b fan-out collapse → **584** after the P138 oscillation guard, over **568 properties /
+  $433.4M**, of which **158 (27.1%)** clear the $500k floor. **Only 42 arrived since the lane died.**
+  The backlog figure counted usable events without ever applying the gate or the dedup.
+- ✅ **B5a's fill-forward guard is live and was decisive** — `ingest_acquisitions` writes text-only
+  parties with no `recorded_owner_id`, so without it this restart would have nulled recorded owners
+  on up to 568 properties. The text-only population is now **10,343**, up from 7,567 at B5a.
+- **Stated, not fixed:** `ownership_history.data_source` carries ~250 distinct `county_deed:<uuid>`
+  values, so any `GROUP BY data_source` fragments; and `find_matching_sale`'s city+state fallback
+  accepts a sale within 365 days on `buyer[:15] in new_lessor` and stamps price and cap rate onto the
+  ownership row.

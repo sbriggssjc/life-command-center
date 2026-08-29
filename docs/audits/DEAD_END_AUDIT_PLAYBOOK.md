@@ -594,6 +594,23 @@ A live green sync is not evidence that the signal survives.
 
 ## Class 11 — a DETECTOR that cannot fire
 
+> ⚠️ **NEW INSTANCE, and it cost two rounds (B6 → B6b, 2026-08-28): a `jsonb` column holding a
+> JSON *string* rather than a JSON *object*.** `gsa_lease_events.changed_fields` is a jsonb
+> **string**, so **`changed_fields ? 'key'` is structurally unable to match** and returns a clean,
+> plausible **0**. B6 read that zero and wrote up *"this input carries no lessor signal"*; B6b's
+> first probe read it again and agreed. **The truth is 16,907 rows carry one** (16,492 usable,
+> newest 2026-08-05), and a whole producer was written off on the strength of it.
+> **Correct probe: `(changed_fields #>> '{}')::jsonb ? 'key'`.**
+>
+> **Before trusting a zero from ANY containment/key operator, check the stored TYPE**
+> (`jsonb_typeof(col)`): `'string'` means the JSON is nested one level deeper than the operator
+> assumes. Same family as `pg_views.definition` being deparsed (below), `reloptions` storing
+> `security_invoker=on` not `true`, and `IS NOT DISTINCT FROM` treating NULL–NULL as equal —
+> **a predicate that cannot express the question answers confidently anyway.**
+> **And the meta-lesson repeats: an implausibly clean zero is a bug signal, not a finding.**
+
+
+
 **Symptom:** an audit query returns empty, and empty reads as *clean*. The detector is
 subtly unable to match anything, so it certifies health forever — the playbook's own
 failure mode (*a surface that answers confidently instead of erroring*) turned on the
@@ -980,6 +997,85 @@ count is a constant.
   reading a paged query" note in `CLAUDE.md`). 1,000 / 815 / 500 are readings of the instrument.
 
 ---
+
+> 🏛️ **Classes 20 and 21 are both instances of one architectural gap, and it now has a standing
+> contract: [`docs/architecture/data-coherence-invariants.md`](../architecture/data-coherence-invariants.md)
+> (I1–I10, plus the checklist for onboarding a new domain database).** This playbook tells you how
+> to FIND these after the fact; that document states what must be true so they cannot be created.
+> **Backlog `P0d / D1–D5` turns the highest-yield detectors here into scheduled checks** — D1 is the
+> Class 20 query below, run over every shared fact store rather than by hand.
+
+## Class 20 — a SOURCE one domain consumes and a sibling domain never wired up
+
+**Found:** 2026-08-28 (B4 → B5). **First run: gov had never consumed its own `sales_transactions`
+as ownership history — 9,514 named sellers across 4,697 dated properties, 1.8% consumed, ~3,080
+net-new rows / 2,114 properties — while dia derives 2,207 of its 2,757 historical facts from
+exactly that source.**
+
+> ✅ **BUILT AND VERIFIED (B5, same day).** The estimate graded **down** to what shipped: **2,776
+> rows / 2,000 properties**, **677 of which had no ownership history at all beforehand.** gov
+> `ownership_history` 16,177 → 18,953; transitions view 9,595 → 12,371 rows / 4,698 → **5,555**
+> properties. **Quote a ceiling as a ceiling and hand it over to be disproved** — this one was, by
+> 10%, which is the system working.
+>
+> ⚠️ **Two traps this class produced on its first live run, both worth carrying:**
+> **(1)** A parallel window re-measured the same population with a different anti-join key, got
+> **~270–370**, and recommended *"resize before building"* — **after the build had shipped.**
+> Adjudicated by the one check independent of the disputed key (*did this property have ANY history
+> before?* → 677 did not). **When two honest measurements disagree, find the key-independent
+> measurement rather than adjudicating the keys**; and *merged is not running* has a mirror,
+> **in flight is not unbuilt.**
+> **(2)** Wiring a new source exercised a **destructive propagation trigger** nobody had audited —
+> it nulled `properties.recorded_owner_id` for any row naming its parties as text (**7,567 rows
+> already in that shape; 1,446 of 9,312 would have been destroyed**). **Connecting a source runs
+> code paths that have never seen that shape of row. Snapshot and positive-control before the
+> batch.**
+
+**Symptom.** A metric is materially better in one domain than another and everyone has a story for
+why ("dia has better data", "gov's tenant is a federal agency"). The stories are plausible,
+untested, and expensive: they lead to *acquire more data* rather than *wire up what we hold*.
+
+**⚠️ The trap that makes this class invisible.** A missing feeder produces **no error, no zero row,
+and no queue**. There is nothing to audit — the absence has no representation anywhere. Every
+detector in this playbook looks at rows that EXIST; this class is about rows that were never
+created because nobody asked the source for them. **It is the mirror of Class 2 (a producer with no
+consumer): here there is a consumer with an unconnected producer.**
+
+**The detector — group the OUTPUT by its provenance column, split by domain.**
+
+```sql
+-- what actually produces this fact, and does every domain have the same producers?
+select source_domain,
+       split_part(coalesce(ownership_source,'(null)'),':',1) as src_bucket,
+       count(*) filter (where ownership_end_date is not null) as historical,
+       count(distinct source_property_id)                    as props
+from lcc_entity_portfolio_facts
+group by 1,2 order by 1, historical desc;
+```
+
+**A bucket present for one domain and absent for another IS the finding.** One query; it does not
+need a hypothesis first. Then size the unconsumed source and **anti-join it against what the
+consumer already records** — the net-new count, not the raw count, is the number worth quoting.
+
+**⚠️ "The source is exhausted" is a claim about EVERY table that could carry the fact.** This was
+found immediately after concluding the opposite: `deed_records` (876 of 5,804 with a grantor) and
+`property_documents` (325 deed docs) were measured, found thin, and written up as *"this is now an
+external acquisition problem."* **Both numbers were right and the conclusion was wrong** — the
+tables *named after* the answer were not the tables holding it. **Acquisition is the most expensive
+conclusion available and therefore earns the highest burden of proof: enumerate every table that
+could carry the fact before reaching it.**
+
+**⚠️ Do not date a feeder off `updated_at` on an upserted table.** `lcc_entity_portfolio_facts` has
+**no creation timestamp**, and the nightly `lcc_finalize_entity_portfolios` re-upsert touches
+**11,828 of 14,076 rows every day** — so every source reads "written today." Find the producer in
+CODE. **If it turns out to be a one-shot, the sibling domain has a Class 8 problem of its own.**
+
+**Repair shape.** Feed the EXISTING consumer (a new evidence source into the same apply path),
+never a second writer; inherit the guards rather than re-inventing them; and report the **coverage
+delta and the depth delta separately** — they move by very different multiples.
+
+**Where else to point it:** any fact with a provenance/source column and more than one domain —
+owner contacts, listing events, rent, cap rates, documents, broker relationships.
 
 ## Class 17 — a RULE proposed for removal because its false positives are the only part you can see
 
@@ -1469,6 +1565,113 @@ Ordered by expected yield, not by ease:
 
 ---
 
+## Class 21 — a SKIPPED step emits nothing, and a health surface built on emitted rows cannot see it
+
+> ✅ **FIXED for gov (B6a, 2026-08-28)** — producer registry + declared skips; the four dead
+> producers read **RED** (170/170/150/144d vs a 45-day SLA); detector **seen red on a deliberate
+> silence and green after**.
+> ⚠️ **But the RED rows prove the REGISTRY, not the emission fix** — `record_skip` has not yet been
+> exercised by a real run (daily `0 8 * * *`, weekly `0 6 * * 1`). Until one passes through, *no bad
+> rows* and *no rows at all* still read identically **for the emission half**. Class 8 in miniature,
+> inside the fix for Class 21.
+>
+> 🚨 **AND THE CLASS HAS A SECOND STOREY, FOUND IMMEDIATELY ABOVE THIS ONE.** The alert chain that
+> carries gov's verdict to a human **has evaluated nothing since 2026-07-26** and **0 alerts are
+> open**: a fail-soft swallows non-200s and returns `(0,0)` (identical to *nothing to do*), and the
+> consumer **excludes mirror rows it considers stale** — so **when the sync stops, the check stops
+> checking and reports nothing wrong.** Verified: gov 33d / 13 feeds, dia 30d / 5; `feed_stale` last
+> fired **two days before the sync died**. **Fixing a producer's visibility buys nothing while the
+> transport to the alert is silently dead** — always follow the signal all the way to the human.
+> Contract invariant **I11**; backlog **B6a-follow-up**.
+
+**Detector.** Enumerate the steps an orchestrator **declares** and anti-join against the steps that
+**logged an outcome**. A step present in code and absent from the log is the finding. Equivalently:
+for any guarded call site (`if <precondition>: run_task(...)`), ask **what the surface shows when the
+precondition is false**.
+
+**First run (B6, 2026-08-28).** gov `v_pipeline_task_health` reported **one** failing step (SAM, HTTP
+401) and otherwise all green, over a pipeline whose GSA landlord-change detector had not run since
+**2026-03-11**. In `pipeline_runner.py`:
+
+```python
+latest_file = runner.run_task("Find latest GSA inventory", find_latest_gsa)
+if latest_file and not runner.dry_run:
+    runner.run_task("GSA ingest + diff", ingest_and_diff)
+```
+
+`find_latest_gsa()` globs a **local folder** that is always empty on a CI checkout. It returns `None`
+and the task itself **succeeds** — the view shows `find_latest_gsa_inventory` = ok / *"Task
+completed"* / 2026-08-24. The guarded `run_task` on the next line is then **never invoked**, so it
+writes **no `run_log` row**, so it has **no row in the health view at all**. Cost: five months of a
+dead detector, and with it `prospect_leads.lead_source='ownership_change'` (7,729 leads, 2,041 of
+them historically worked).
+
+**⚠️ This is the twin of a fix that already shipped, which is what makes it worth a class.** gov
+`CLAUDE.md` §16 built `v_pipeline_task_health` and `completed_with_errors` precisely so *"the
+orchestrator must NOT report a green `completed` over failed sub-tasks."* That closed the **failed**
+case. **The SKIPPED case was left standing, and it is invisible in a different way: a failed step is
+a RED ROW, a skipped step is NO ROW.** One is a value you can filter on; the other is an absence, and
+absences do not appear in a `GROUP BY`.
+
+**Generalisation.** It is the A5a lesson arriving in a health view rather than a lane — *a producer
+that has never emitted has no row to `GROUP BY`, so enumerate the PRODUCER's population, never the
+consumer's table.* Same family as Class 11 (the zero is the instrument) and Class 2 (a producer with
+no consumer): here the instrument reports **nothing at all**, which reads as silence rather than as
+failure.
+
+**Repair.** Record a `skipped` outcome with a reason at the guarded call site. **Never satisfy the
+guard by widening it** — a precondition that is false on CI and true on a workstation is a hosting
+fact worth surfacing, not a bug to paper over.
+
+### ✅ Repaired 2026-08-28 (B6a) — and the detector above is INCOMPLETE
+
+`docs/audits/B6a_SKIPPED_STEP_HEALTH_BLINDNESS_2026-08-28.md`. Four refinements, each of which
+changed what the class actually looks for:
+
+- **⚠️ "A skipped step is NO row" is only half of it, and the half stated above would have missed
+  the live instance.** `gsa_ingest_+_diff` was **not absent** from the view. It carried a **GREEN
+  row** — `status='ok'`, *"Task completed"*, `last_outcome_at` **2026-06-22, 67 days stale** — on a
+  step whose own history says it ran every 7 days, because `status` was derived purely from the last
+  outcome's `event_type` with nothing comparing it to when that outcome should have been superseded.
+  **The prescribed repair (enumerate declared steps, LEFT JOIN, render `never_ran`) would have
+  returned nothing for it.** A skip leaves no row *for that run*; what survives is a stale historical
+  success, and it sorts below the fresh rows. **So the detector is: for every step, `age_days` against
+  its own cadence — not merely presence.**
+- **The emission point dissolves the enumeration problem.** Once both branches of every guard write
+  (`record_skip` / `run_guarded_task`), the **logged set IS the declared set** — no step registry, no
+  `never_ran` synthetic row, no fourth registry beside the three that already existed.
+- **Cadence can be derived, and the STATISTIC must be measured.** `is_overdue = age_days > 3 × the
+  step's own p90 inter-run gap` over its last 12 outcomes. **p90, not the median** — clustered runs
+  deflate the median and false-positive healthy steps (`census_demographics` fires several times in
+  one monthly window: median 3.99d vs p90 28.78d; at 23 days old the median rule flags it and the p90
+  rule does not). Below 3 observed gaps, **NULL, never false** (Class 11 / P180: *cannot be sized* ≠
+  *fine*).
+- **⚠️ AND THE SIBLING INSTRUMENT HAS THE SAME SHAPE ONE LEVEL UP.** A freshness registry is
+  **TABLE-keyed, and a producer is not a table**: gov `prospect_leads` reads fresh table-wide (other
+  lead sources are live) while its `ownership_change` lane has been dead since 2026-03-31 — so the
+  obvious registry row would have been **green over a dead producer**. And the cross-DB check that
+  carries it to an alert has evaluated **zero** gov/dia feeds since 2026-07-26: the mirror is stale,
+  finalize drops non-200 silently and returns `(0,0)`, and the check **excludes stale mirror rows** —
+  so **when the sync stops, the check stops checking and reports nothing wrong.** *A guard that fails
+  into silence is the class itself, wearing the instrument's clothes.*
+
+**Positive control is mandatory here (P182).** A surface that *would* show a silent producer but has
+never been seen doing so is a claim. Silence a step deliberately — the same step, same cadence, only
+older — watch it go red, restore. B6a's gate does exactly that, self-rolling-back with 0 residue.
+
+**And a legitimate skip must be DECLARABLE, with no default.** Some steps *should* skip (a domain
+with no such source, a flag deliberately off, a local input folder that a sibling job owns). A skip
+with a declared reason is healthy; an **undeclared** skip is the finding. If every skip alerts, the
+surface becomes the noise it replaces. Read `tasks_skipped_undeclared`, never `tasks_skipped`.
+
+**Related trap found in the same sweep.** A link column can be **unpopulatable** rather than
+unpopulated: gov `property_sale_events.ownership_history_id`/`sales_transaction_id` are `bigint`
+against `uuid` PKs with no FK, so a writer raises `22P02` — 0 of 5,208, and no amount of writer work
+would change it. **Before filing an empty FK as neglect, check the column TYPE against its target's
+PK**, and look for a sibling that works (dia's copy has a compatible `integer` PK and 52 populated
+rows — that positive control is what turned "nobody wired it" into "it cannot be wired").
+
+
 ## The habit, in one line
 
 **Read the named rows before you believe the aggregate, and before you write.**
@@ -1478,3 +1681,234 @@ Every avoided disaster this session came from that: 103 individual owners nearly
 successful while changing nothing (P163b) — caught by asking what the worker does *after* the
 guard; an AR Global person nearly attached to Global Net Lease (P170) — caught by reading
 nine rows before a write of nine rows.
+
+---
+
+## Class 22 — a GATE ARM that has never matched a row is indistinguishable from one that is absent
+
+**Found 2026-08-28 (C4), on the surface that decides every BD call in the system.**
+
+`v_priority_queue_live`'s `gov_owner_props` CTE — the single source of P1/P2/P3/P8 — filters
+`effective_owner_role = ANY (ARRAY['developer','user_owner'])`. Fleet-wide, **`user_owner` is 0 of
+66,874 live entities.** Nothing has ever written that value. The arm is named in the gate, named in
+the P0.4/P0.5 arms, and named in the doctrine — and it has **never admitted a single row in the
+life of the system.**
+
+**Why nothing catches it.** The predicate is syntactically valid, references a real column, and the
+view returns rows (the *other* arm works). No test fails, no constraint fires, `EXPLAIN` is clean,
+and the band is populated — just at 1/16th of the population it describes. **Reading the SQL makes
+it look like a two-way gate; reading the DATA shows a one-way gate.**
+
+### The detector
+
+For every enumerated value in a gate — `IN (...)`, `= ANY (ARRAY[...])`, a `CASE` arm, a status
+allowlist — **count the rows that match each value INDIVIDUALLY.** A value at exactly zero is the
+finding. One query per gate:
+
+```sql
+select coalesce(behavioral_override, owner_role, '(null)') as arm, count(*)
+from entities where merged_into_entity_id is null group by 1 order by 2 desc;
+```
+
+The shape generalises: **a gate is a claim about a distribution, so measure the distribution.**
+
+### What it found beside the dead arm
+
+The *live* arm was not broken — it was **exhausted**. `developer` is written by a classifier keyed on
+`properties.developer_name` that has produced **285 rows lifetime** and has **2 candidates left**.
+So the same distribution query separates three states that look identical from the SQL:
+
+| arm state | rows | meaning |
+|---|---|---|
+| **0, ever** | `user_owner` | **no producer exists** |
+| small and static | `developer` 715 | a producer that **ran out of input** — working, not broken |
+| dominant | `unknown` 62,554 (93.5%) | **the population the gate excludes** |
+
+**Distinguishing "no producer" from "exhausted producer" from "correctly excluded" is the whole
+value of the class** — they need three completely different responses, and a single "the band is
+small" observation cannot tell them apart.
+
+### ⚠️ The trap in the fix
+
+The obvious repair — widen the gate to admit `unknown` — admits **62,554 entities**, i.e. every junk
+name, SPE husk, counterparty and person in the system, into an operator-facing surface. **A dead gate
+arm is evidence that a CLASSIFIER is missing, not that the gate is wrong.** Cf. P179 Class 2 (a
+ranked-but-behind population needs a filter, not a re-rank) and the Consumption-Layer rule that no
+producer ships without a value gate.
+
+### Sibling classes
+
+- **Class 11** — a detector structurally unable to match returns a confident zero. Class 22 is the
+  same zero on the *production* path rather than the audit path.
+- **Class 19** — a predicate that constrains nothing. Class 22 is its mirror: a predicate that
+  constrains *everything*.
+- **Class 10** — an exclusion keyed on a state nothing ever clears. Here the state is never *set*.
+
+
+---
+
+## Class 23 — a predicate's blast radius belongs to the QUERY, not to the column it names
+
+**Found 2026-08-28 (C4), by making the mistake and catching it before it reached a decision.**
+
+C4 warned that widening `gov_owner_props`'s role gate to `unknown` would admit **62,554 entities**
+— "every junk name, every SPE husk, every counterparty" — and called it the largest available
+producer-without-a-value-gate failure. **The real number is 2,521, and 3 of them are junk.**
+
+The error: the `WHERE` clause names `effective_owner_role`, so the fleet-wide distribution of that
+column looked like the answer. But **two JOINs directly above it had already bounded the
+population** — `lcc_entity_portfolio_facts` (current, gov) and `lcc_property_attributes`. Those
+joins are a value gate in everything but name. Reading the predicate and skipping its context
+overstated the risk **25×**, in the direction of refusing a change that is actually safe.
+
+### The detector
+
+**Before quoting a population for any predicate, COUNT IT at the point the predicate is applied —
+run the query's own FROM/JOIN chain and only then group by the gated column.** Never substitute the
+column's distribution over its base table.
+
+```sql
+-- wrong: the column's fleet-wide distribution
+select role, count(*) from entities group by 1;          -- 62,554 unknown
+
+-- right: the distribution the predicate actually sees
+select coalesce(behavioral_override, owner_role,'unknown') as role, count(*)
+from entities e
+join lcc_entity_portfolio_facts f on ... join lcc_property_attributes a on ...
+group by 1;                                               -- 2,521 unknown
+```
+
+The two numbers differing by an order of magnitude **is itself the signal** that the joins are
+carrying the real gate.
+
+### Why it matters more than a normal arithmetic slip
+
+An overstated blast radius does not fail loudly — **it fails as a refusal.** It reads as caution,
+gets written into a doc as a warning, and is then quoted by the next reader as an established
+reason not to do something. A number that is 25× too large in the *conservative* direction is still
+wrong, and it costs a change that should have shipped. **Wrong-and-cautious is not a safe default.**
+
+### Sibling classes
+
+- **Class 19** — a predicate that constrains nothing. Class 23 is the inverse error in the
+  *observer*: a predicate assumed to constrain far more than it does.
+- **Class 11** — an implausibly clean result is a bug signal. Its mirror: an implausibly *alarming*
+  result deserves the same positive control before it becomes a finding.
+- The **`LIMIT 5` without the `ORDER BY`** footgun in `CLAUDE.md` — same root: measuring a query
+  shape other than the one that actually runs.
+
+---
+
+## Class 24 — a PARTY-LEVEL label answering a PER-ASSET question, when the join already has the answer
+
+**Found 2026-08-28 (C5), worth $410.4M of invisible signal on one surface.**
+
+`gov_owner_props` decides whether a seller-side band fires by reading `entities.owner_role`. That
+column is a **party-level identity** — what this firm mostly is. The bands ask a **per-asset
+question**: *is this party the current owner of a building whose lease is running out?*
+
+**578 owners typed `buyer` hold a gov property with a lease expiring inside 24 months.** They are
+not mislabelled — Boyd Watterson (45 gov assets), Prologis, RMR Group and HC Government Realty Trust
+genuinely are buyers, and that label drives real account-based prospecting. **They are also, right
+now, the owner of an expiring building.** A REIT is permanently a buyer and therefore permanently
+ineligible, however many assets it holds.
+
+### The tell
+
+**The query had already computed the right answer and then threw it away.** The CTE joins
+`lcc_entity_portfolio_facts ON is_current = true` — a per-asset ownership fact, established, in
+scope, two lines above the predicate — and then filters on the entity's global label instead.
+
+```sql
+JOIN lcc_entity_portfolio_facts f ON f.entity_id = eer.entity_id
+     AND f.is_current            -- ← the per-asset answer, already in hand
+WHERE eer.effective_owner_role = ANY (ARRAY['developer','user_owner'])   -- ← a party-level label
+```
+
+### The detector
+
+For any gate on a role, type, status, segment or category column, ask: **is the question this gate
+serves asked of the PARTY, or of the ROW?** If the row, check whether the query already carries a
+row-level fact that answers it. A label describing what something *usually is* cannot answer what it
+*currently holds*.
+
+Two prompts that surface it fast:
+
+- **Can one entity be in two states at once for different rows?** A firm that buys and owns; a
+  clinic that is a tenant here and an owner there; a contact who is a broker on one deal and a
+  principal on another. If yes, a single-valued party column cannot be the gate.
+- **Would the label still be correct if the gate were wrong?** Here every excluded label was
+  *correct*, which is why nothing looked broken. **Class 24 hides behind accurate data.**
+
+### ⚠️ The trap in the fix
+
+Firing the band is **not** choosing the pitch. `account-based-contact-intelligence.md` is explicit
+that acquisitions and disposition are different contacts, tones and buckets, and that the buy-side
+relationship is the funnel *into* the disposition conversation. **Correcting the gate makes the
+signal visible; it does not decide how the call is made.** Collapsing those two decisions is how a
+correct fix produces a wrong outreach.
+
+### Sibling classes
+
+- **Class 22** — a gate arm that never matches. Same surface, same round: 22 is an arm with no
+  producer, 24 is an arm asking the wrong grain.
+- **Class 23** — a predicate's blast radius belongs to the query. All three are failures to read the
+  predicate *in the context of its own FROM clause*.
+- The **P113 operator-in-the-owner-slot** trap is the mirror at the row level: there a per-asset
+  fact (`is_operator_not_owner`) exists and must be consulted; here one exists and is ignored.
+
+---
+
+## Class 25 — an ANTI-JOIN on a key the data does not actually use
+
+**Found:** 2026-08-28/29 (B6c-dup). **It produced THREE successive wrong numbers on one population
+before anyone got it right: 330 / $4.48B, then 9 / $558.8M, then 6 / $29.2M. The true count is
+ZERO.**
+
+**Symptom.** An anti-join returns a plausible, non-zero, alarming population. Nothing errors. Unlike
+**Class 11** (a detector that *cannot fire* and returns a comfortable zero), this detector fires
+enthusiastically and is wrong in the expensive direction — it manufactures a backlog that does not
+exist, and each "correction" can be wrong again in the same way.
+
+**The three ways the key was wrong, all live in one query:**
+
+1. **⚠️ THE JOIN COLUMN'S GRANULARITY DID NOT MATCH THE DATA'S.**
+   `sales_transactions.sale_date` is **month-truncated for its dominant source** — `costar_sidebar`
+   is **87.4% day-1** (6,871/7,865), ownership stubs **100%**. An exact-date anti-join therefore
+   reports as "absent" every row whose twin was recorded on the 1st. Re-keyed on
+   `(property, YEAR-MONTH)`: **0 orphans of 1,694**, with an impossible-price positive control
+   returning **1,694**. Every named "orphan" had an **exact price twin 3–21 days away, every twin on
+   the 1st.**
+   > **⚠️ The table was stating its own join key all along** — `dedup_natural_key` is
+   > `property | round(price/1000)*1000 | YYYY-MM`. **Before writing an anti-join, look for a dedup
+   > key, a natural key, or a unique index: the schema usually already declares the granularity the
+   > data is stored at.** Then **run the NEIGHBOURING key** (±1 month, ±31 days) — it is one query
+   > and it would have caught this three times over.
+
+2. **⚠️ `LEFT JOIN … WHERE target.pk IS NULL` CANNOT TELL "POINTS NOWHERE" FROM "POINTS AT NOTHING."**
+   321 rows were reported as dangling references. **Dangling was 0 and structurally impossible** —
+   the FK is `ON DELETE SET NULL`, so a deleted parent *nulls* the link rather than stranding it.
+   The rows are **NULL-link rows, 321 of them detached in ONE batch on 2026-04-03** by a bulk
+   property deletion. **Decide in SQL which of the two you mean** (`col IS NULL` vs
+   `col IS NOT NULL AND target.pk IS NULL`) before counting either.
+
+3. **⚠️ THE EXCLUSION COLUMNS WERE NEVER READ — and "exclusion" is more than the columns named
+   `exclude_*`.** The "$529.6M invisible to the spine" was **quarantine**: every one carried
+   `transaction_state IN ('needs_review','duplicate_superseded')` with
+   `exclude_from_market_metrics = true`. **The store had already judged that residue.** An exclusion
+   check means **every** column that governs membership — state machines included.
+
+**True population once keyed correctly:** 1,687 live twins · 7 quarantined ($604.1M) · **0 absent** ·
+0 live twins with a null price. **The spine was complete.**
+
+**The durable rule.** An anti-join asserts *"this fact exists in A and nowhere in B."* That is a
+strong claim, and it is only as good as the key. **Positive-control it in BOTH directions:** prove
+the join finds known-present rows (an impossible-value probe returning the full population), and
+prove a neighbouring key does not collapse your result to zero. **A non-zero anti-join result is a
+hypothesis, not a finding.**
+
+⚠️ **Corollary — the finding and its SIZE are separate claims, and getting the size wrong three
+times does not refute the finding.** B6c-dup's collision was real (77 of 77 views read the spine,
+zero read the capture surface, and the write path leaked — confirmed behaviourally in a rolled-back
+transaction). **The orphan count was wrong three times and the fix was still right.** Report them
+separately so a corrected number does not read as a retracted defect.

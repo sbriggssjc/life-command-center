@@ -57,6 +57,73 @@ Government `scknotsqkcheojiaewwh`.
 
 ---
 
+## ⭐ The live thread if you are the DATA-PROCESS window (2026-08-28)
+
+**The ownership-history lane is BUILT, WORKING and CLOSED as a source of chain depth.**
+A1→B1a: completions **0 → 1,302**, gov `any_history` **1,272 → 2,238**, facts **12,724 → 14,076**,
+`human_actionable` **flat at 55** throughout. **`chain_2plus` is 178** and B1a proved the remaining
+blocked residue is worth **12 more** — 99 of 132 open tasks carry ONE link. **Do not go looking for
+another blocker in this lane.**
+
+**The live finding is Class 20 — sources we hold that nothing consumes.** gov has **never**
+consumed its own `sales_transactions` as ownership history (**9,514 named sellers, 1.8% consumed,
+3,080 net-new rows / 2,114 properties**) while dia derives **2,207 of its 2,757** historical facts
+from exactly that source. Two more: **`gsa_lease_change_facts`** (336,303 rows; landlord change on
+**38,213 / 8,845 leases**, 2013→2026) and **`property_sale_events`** (**5,208 rows whose
+`ownership_history_id` and `sales_transaction_id` are populated on ZERO rows**).
+
+- ✅ **B5 SHIPPED** — gov `ownership_history` **16,177 → 18,953** (+2,776 / 2,000 properties, **677
+  with no prior history at all**); transitions view 4,698 → **5,555** properties.
+- ✅ **B6 AUDITED** — 19 signals swept; ranked gaps **B6a–B6g**; two of seven end in *don't build*.
+- ✅ **Deploy verified live 2026-08-28** — `/version` = `e3a0407d25bc`, and `385023cf`
+  (`runB5RedraftPass`) is an ancestor. **The first conversion night is 2026-08-29, 06:45 → 06:49
+  UTC.** **Baseline to measure the delta against** (post-B5, pre-conversion): facts **14,076** ·
+  lane **1,302 completed / 579 open** · gov `chain_2plus` **178** · `any_history` **2,238** ·
+  `human_actionable` **55**. Read `b5_redraft` / `written_draftable` / `facts_inserted`, **never**
+  `already_drafted` or `links_already_present`. ⚠️ **Expect coverage to move far harder than depth**
+  (B1: +901 vs +28) — that is the population, not a shortfall.
+- ✅ **B6a SHIPPED** — gov producer registry + declared skips; the four producers dead since
+  March–April 2026 read **RED** (170/170/150/144d vs a 45-day SLA); detector **seen red on a
+  deliberate silence**. ⚠️ `record_skip` **not yet exercised by a real run** — the RED rows prove the
+  registry, not the emission.
+- ✅ **B6a-follow-up SHIPPED** — the alert chain is alive. gov **13 → 18 feeds** (the transport fix
+  restored five that had been failing silently), both domains synced **today**, and **6 real
+  `feed_stale` alerts** are open after 33 days of zero. **The transport was two different causes**
+  (gov cold-start timeout, dia missing grant). Invariant **I11** now has a standing detector.
+- ⭐ **NEXT — `B6b`: restart the four dead producers.** They are now visible AND alertable, which is
+  the precondition B6a-follow-up existed to create. The alerts name them:
+  `gsa_lease_change_facts` **170d** (the 336k-row landlord-change source), `gsa_lease_timeline` 170d,
+  `prospect_leads_ownership_change` 150d, `property_sale_events` 144d.
+- **Two residuals, both named, neither closed:** `record_skip` has **still not been exercised by a
+  real run** (the RED rows prove the registry, not the emission); and gov's **cold-cache timeout is
+  mitigated by retry, not cured** (`B6a-follow-up-b`).
+- **Then:** **P0d / D1–D2** (the standing coherence detectors).
+- 🔁 **Every turn now closes the loop — [`docs/os/BUILD-TURN-PROTOCOL.md`](../os/BUILD-TURN-PROTOCOL.md),
+  `CLAUDE.md` Rule 00.** Read it before starting: it is the definition of done, and its eight steps
+  are each earned by a measured failure from this week.
+- **Read:** 🏛️ **`docs/architecture/data-coherence-invariants.md`** (the standing contract — I1–I10
+  + new-database onboarding) · `ownership-history-lane.md` §3a/§3c ·
+  `BD_PIPELINE_FUNNEL_AUDIT_2026-08-28.md` §3b/§3c · `connectivity-and-open-threads.md` §4j ·
+  playbook **Class 20 / Class 21**.
+- ⛔ **`B6_…md` §6 is SUPERSEDED** — do not act on its `~270–370` resizing of B5 or revert it.
+
+⚠️ **Four traps already paid for on this thread — do not repeat them.**
+**(3)** **Connecting a new source runs code paths that have never seen that shape of row.** B5's
+first insert exercised a propagation trigger that **nulled real recorded owners** — 7,567 rows
+already damaged, 1,446 of 9,312 about to be. **Snapshot and positive-control both directions before
+any batch that writes a new row shape.**
+**(4)** **The two windows measured one population and disagreed by 10×, with neither erroring.**
+B6 §6 advised *"resize before building"* about a build that had already shipped. **When two honest
+measurements disagree, find the measurement independent of the disputed key** — here, *did this
+property have any history before?* (677 did not). ***Merged is not running* has a mirror: *in flight
+is not unbuilt*.**
+**(1)** *"We must acquire the data"* was written into the audit as §3b on the strength of gov's thin
+deed layer (876 grantor-bearing records of 5,804), and refuted one query later. **Acquisition is the
+most expensive conclusion available; enumerate every table that could carry the fact first.**
+**(2)** `lcc_entity_portfolio_facts` has **no creation timestamp** and the nightly re-upsert touches
+**11,828 of 14,076 rows daily**, so **every source reads "written today."** Never date a feeder off
+`updated_at` on an upserted table.
+
 ## Where things actually stand (measured 2026-08-26 evening)
 
 **Scott is actively working the Tier 0 owner-contact lane** — 27 confirms logged today, lane
@@ -76,9 +143,21 @@ drafts, sf-link, junk pre-screen, naming hygiene, dup-pairs, match-disambig, nex
 
 **⭐ The biggest thing that happened in this arc: a dead research lane got a working consumer.**
 `establish_ownership_history` sat at **545 open / 0 completed for 69 days** while 545 finished,
-record-cited drafts sat unused. It is now **314 completed / 156 open**, with **+304 historical
-ownership facts** ($579.9M, 280 owners) and every remaining item named and routed rather than
-pooled. **The whole subsystem is one document —
+record-cited drafts sat unused. It is now **1,237 completed / 644 open** (A1→A2→A2a→A2b→A3→A4→A4b→B1),
+with `lcc_entity_portfolio_facts` at **14,010**, and every remaining item named and routed rather
+than pooled.
+
+**The goal metric — a connected ownership history back to the developer — moved:** gov properties
+with **any** ownership history **1,272 → 2,173**; with a **chain (2+ historical links) 149 → 177**.
+⚠️ **`any_history` moved 7× harder than `chain_2plus`, and that is the POPULATION, not a
+shortfall** — only 210 of the 1,501 below-floor properties carry ≥2 guard-passing transitions.
+**The binding constraint on chain DEPTH is now the A2-blocked `ambiguous_entity` residue**
+(126 links / 123 properties — the A2a duplicate-entity class, which applies unaided once merged),
+**not the value floor.**
+
+⚠️ **And the operator's badge did NOT move — `human_actionable` is 55, before and after B1.** That
+is the design: **89% of the newly-drafted population routes to automation.** A value gate belongs
+on what reaches a human, not on what a cron applies. **The whole subsystem is one document —
 [`docs/architecture/ownership-history-lane.md`](../architecture/ownership-history-lane.md)** — read
 that, not the seven dated audits behind it. Its sibling for entity identity is
 `docs/architecture/tier0-owner-contact-system.md`; **the two share `lcc_merge_entity`,
