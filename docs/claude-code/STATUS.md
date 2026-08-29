@@ -16,6 +16,39 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-28 — C4: the ranked call list measured for the first time (diagnosis only)
+
+**NOTHING WRITTEN — no migration, no flag, no cron.** Audit:
+[`docs/audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md`](../audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md);
+canonical **§4o** of `docs/architecture/connectivity-and-open-threads.md`; backlog **C4/C4a–C4d**;
+new Dead-End **Class 22**.
+
+⚠️ **Numbered C4, not C3** — `C3` is already a C1-lane doctrine row in `PLANNED-BACKLOG.md`.
+
+This closes the last hop of Scott's chain (the ranked call list) after the T1 + T2a mints took gov
+asset coverage to 57.8% and resolved owners to 5,992. **Cache freshness was ruled out first.**
+
+- **The gate is one column.** Every gov deal-timing band (P1/P2/P3/P8) reads `gov_owner_props`,
+  filtered `effective_owner_role IN ('developer','user_owner')`. It reconciles **to the row**:
+  1,216 candidate gov facts → **74** after the role predicate = the observed P1 count. Not value-,
+  cadence- or opportunity-gated.
+- ⚠️ **`user_owner` is 0 of 66,874 live entities** — half the gate has never matched anything, and
+  a gate arm that never matches is indistinguishable from one that is absent (**Class 22**).
+  `developer` is 715 (1.07%) from a classifier that is **exhausted, not broken** (285 rows lifetime,
+  2 candidates left). `unknown` is **62,554 (93.5%)**.
+- **Only 256 of 5,992 resolved owners (4.3%)** reach the queue; **931 of 1,267 rows (73%)** are
+  data-completion work rather than calls.
+- ⚠️ That classifier is the **N18 view** — which N18 found was ranked arbitrarily, not knowing it
+  sits upstream of the entire ranked call list.
+- **Broker assignment is 48 of 2,301 cadences (~2%).** The obvious fix is the documented
+  three-user-table FK trap; go through `lcc_cadence_point_person()`.
+- 👤 **C4a is Scott's and it is doctrine, not code:** what recorded evidence promotes an owner out
+  of `unknown`. ⚠️ Widening the gate to `unknown` admits 62,554 entities and is refused;
+  a name-based role classifier is refused (~25%/7% measured precision in this arc).
+
+**Cleanup in this change:** two same-round C3-named drafts deleted; connectivity §0 index, the
+audit evidence trail, and the playbook updated in the same commit.
+
 ## 2026-08-28 — Cross-lane property identity contract and build queue documented (design only)
 
 **DOCUMENTATION ONLY — nothing activated, migrated, promoted, or written to live systems.** Canonical design:
@@ -129,6 +162,52 @@ restarted (**B6b-lead** — 10,635-row blast radius, no credentials to dry-run i
 a name heuristic). ⚠️ **B6's G3 row is REFUTED**: `gsa_lease_events` does carry lessor pairs (16,907
 rows) — B6's zero came from `changed_fields ? 'key'` against a jsonb **string**. Also filed:
 **B6b-june** (2026-06-01 is a merged snapshot of two source files, 7,919 leases vs a 7,348–7,495 norm).
+
+## 2026-08-28 — C2h: the "silent feeder" was answering a different question. It is the sponsor↔SPE gap.
+
+Evidence: [`C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT_2026-08-28.md`](../audits/C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT_2026-08-28.md);
+canonical **§4n**. Diagnosis only — nothing written.
+
+**C2g called these 79 "the genuine feeder defect." They are not a defect.** **All 79 properties are
+resolved.** The feeder resolved the **SPE that holds title** — the correct recorded owner — while
+the Salesforce person works for the **sponsor**. Both sides are right.
+
+| SF person's employer *(a gov `true_owner`)* | LCC resolved owner *(title holder)* |
+|---|---|
+| **Avery Capital** | **AC** ORLANDO SPV LLC |
+| **Ball Ventures** | **BV**GC PARCEL C, LLC |
+| **Browman Development Co.** | **BDC** Livermore L.P. |
+| **Carmel Partners** | **CP** VI Van Gordon, LLC |
+
+**The SPE initials are the sponsor's initials.** Split: **69 sponsor↔SPE · 8 true duplicates · 2
+probable.** Guards explained almost nothing — brokerage 2, placeholder 0, not-prospected 0.
+
+### ⚠️ One column turned the diagnosis around, and the lesson generalises
+
+`prop_resolved_to_someone` equalled `props_with_asset` on **all 79**. C2g's framing —
+*"everything the feeder needs is present and it produced nothing"* — was wrong because it never
+asked whether the property had resolved **to someone else**. **When a producer looks silent, check
+whether it answered a DIFFERENT question before calling it silent.** That is a new variant of the
+family this arc keeps meeting, and the fourth time a "silent producer" turned out to be working.
+
+⚠️ Also: `lcc_looks_like_person` returned true for **40 of 79** and was used for nothing — it
+carries the documented `CITY OF SALEM` / `BROOME COUNTY` false positive (A3/P196).
+
+### The recommendation is to build NOTHING new
+
+Two sponsor surfaces already exist and are **human-confirm by design** —
+`lcc_owner_sponsor_domain` (P190) and `lcc_ownership_sponsor_family` (A3) — because A3 measured a
+lexical sponsor detector at **~25% precision** raw and P196 at 4-of-6 even with three guards.
+**A third detector is the normaliser drift this repo has paid for repeatedly.** Feed the 69 in as
+candidates (**C2i**); they arrive with stronger evidence than either surface normally has, since the
+sponsor is independently attested as a gov `true_owner` *and* carries Salesforce people.
+
+### Real residue found while reading (C2j)
+
+**`Casa De Chupita` → `Undisclosed` at confidence 0.57 — a placeholder won a resolution**, and
+`lcc_is_placeholder_owner_name` does not list `Undisclosed`. **`Chiapelone Trust` → `BGC-Havasu
+Project LLC by Newmark Knight Frank`** — brokerage pollution inside a resolved owner name (P116).
+Two more at confidence 1.00 are unexplained and want individual reading.
 
 ## 2026-08-28 — C2b + C2g: the SF bridge self-healed, and both hypotheses for the residue were wrong
 
