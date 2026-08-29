@@ -21,13 +21,14 @@ Cross-references the per-topic design docs in `docs/architecture/`.
 topic is listed here with its scope and status so no one has to guess which of ~20 files to open.
 **Nothing below is deleted — an audit is evidence for a date, and dated evidence stays.**
 
-### The three canonical pages (read these; they are maintained)
+### The four canonical pages (read these; they are maintained)
 
 | page | owns |
 |---|---|
 | **this file** | the **chain end to end** — property → owner → contact → cadence, current state, and the open threads |
 | [`tier0-owner-contact-system.md`](tier0-owner-contact-system.md) | **person ↔ owner** matching: the Tier 0 lane, sponsor map, owner-entity merges (P186–P198) |
 | [`ownership-history-lane.md`](ownership-history-lane.md) | **ownership history/depth**: `establish_ownership_history`, the five lane actions (A1–A4b, B1) |
+| [`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md) | **the ranked call list** — the chain's LAST hop: `v_priority_queue`, the role gate, broker assignment (C4–C6) |
 
 ### ⚠️ Naming traps — two documents do NOT do what their titles suggest
 
@@ -59,7 +60,8 @@ topic is listed here with its scope and status so no one has to guess which of ~
 `C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE` · `C2b_SALESFORCE_BRIDGE_SELF_HEALED` ·
 `C2g_UNRESOLVED_OWNER_ORGS` · `C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT` ·
 `C4_RANKING_LAYER_ROLE_GATE` (§4o — the last hop: why the BD queue reaches 4% of owners) ·
-**`C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION` (§4p — 224 owners callable today; `buyer` is 578 / $410.4M)**.
+**`C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION` (§4p — 224 owners callable today; `buyer` is 578 / $410.4M)** →
+both now indexed inside **[`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md)**.
 **Person↔owner (Tier 0):** P186 · P188 · P194 · P195 · P197 → indexed inside `tier0-owner-contact-system.md`.
 **Ownership history:** A1 · A2 · A3 · A4 · A4b · A5 · B1 → indexed inside `ownership-history-lane.md`.
 **Older, still-valid-for-their-date:** `W3.3_owner_merge_audit` (2026-07-30) ·
@@ -1745,6 +1747,10 @@ DECLARED irregular feed. Backlog **B6c-feed**.
 
 ## 4o. C4 — the ranking layer: the whole BD queue is gated on one unset column
 
+> 📍 **CONSOLIDATED — this topic now has its own canonical page:
+> [`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md).** §4o + §4p are kept as the
+> dated evidence; **read the canonical page for current state and decisions.**
+
 > **Audit:** [`docs/audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md`](../audits/C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md).
 > **Diagnosis only, nothing written.** This is the LAST hop of Scott's chain — the ranked call list
 > — and the first time it has been measured.
@@ -1872,6 +1878,8 @@ they live outside `v_priority_queue` and **that inventory does not exist today.*
 ---
 
 ## 4p. C5 — the callable list, and the `buyer` exclusion is the larger half
+
+> 📍 **Canonical page: [`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md).**
 
 > **Audit:** [`docs/audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md`](../audits/C5_CALLABLE_TODAY_AND_THE_BUYER_EXCLUSION_2026-08-28.md).
 > **Diagnosis only.** Answers **C4e** and produces the list C4a implied.

@@ -16,6 +16,21 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-28 — CONSOLIDATION: BD ranking gets a canonical page
+
+**Docs only.** New canonical page **`docs/architecture/bd-ranking-and-priority-queue.md`** — one
+door into **C4 → C5 → C6**, following the `tier0-owner-contact-system.md` pattern. It carries: where
+this sits in Scott's chain (hops 6–7), the band table, the gate and its exact reconciliation, the
+role-column distribution, the two defects, the C6 build with predicted deltas, **the four traps**,
+broker assignment, and a decisions table separating what is decided / open / **refused**.
+
+Wired in: `connectivity-and-open-threads.md` §0 canonical-pages table (now **four**, not three) and
+banners on §4o/§4p marking them the dated evidence · `CURRENT-STATE.md` canonical-doc map ·
+`DOCUMENTATION-MAP.md` subsystem example · **a canonical-page banner in both C4 and C5 audits**
+(a trap list is only a guard if it is on the path someone walks).
+
+⚠️ **The page states DIAGNOSED, NOT BUILT** in three places. Nothing in C4/C5 touched a live system.
+
 ## 2026-08-28 — C5b answered; C6 build prompt written (still nothing written to live systems)
 
 Closes **C5b** and corrects C5 §5's "narrower" framing. Prompt:

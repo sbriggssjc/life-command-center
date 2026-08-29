@@ -1,3 +1,5 @@
+> 📍 **CANONICAL PAGE FOR THIS TOPIC: [`docs/architecture/bd-ranking-and-priority-queue.md`](../architecture/bd-ranking-and-priority-queue.md)** — current state, decisions and traps.
+> This audit is the dated EVIDENCE; the canonical page is what to read first.
 > **📍 CANONICAL PAGE: [`docs/architecture/connectivity-and-open-threads.md`](../architecture/connectivity-and-open-threads.md) §4p.**
 > **Diagnosis only — nothing written.** Follows
 > [`C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md`](C4_RANKING_LAYER_ROLE_GATE_2026-08-28.md), which found
