@@ -32,6 +32,15 @@
 > `c.annual_rent` while the view supplies `entity_name` / (none) / `rank_value`, so **every row on
 > the sheet renders "Unknown … rent unknown"** — pre-existing, unaffected by C8, and it blunts C8's
 > entire benefit.
+>
+> ✅ **C8c IS FIXED (2026-08-31) — see `docs/audits/C10_PROSPECTING_BRIEF_COLUMN_MAPPING_2026-08-31.md`.**
+> All 126 rows now render a real name and a real portfolio value; the gate, ordering and limit are
+> untouched and the count held at 126. **C8's benefit is only now visible** — Easterly reads
+> "$114,864,150 across 85 properties" instead of "Unknown … rent unknown". ⚠️ Two of the C10 brief's
+> predictions were wrong and are corrected there (4 rows DO have a null `rank_value`; `[mixed]` was
+> a genuine null domain on 74% of rows, not a mapping defect — and was still dishonest). **C8a
+> remains open and is inert, not mismapped.** New: **C10b**, the cadence contact is mostly not
+> demonstrably at the owner (16 of 113 corroborated) — now the sheet is legible, that is next.
 
 # C8 — the prospecting brief hides $515M of resolved owners to exclude 3 brokerages
 
