@@ -359,6 +359,40 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — C4a definitions CORRECTED by Scott; my `user_owner` draft was wrong by ~3 orders
+
+**NOTHING BUILT.** `docs/architecture/owner-role-classification.md` rewritten §1–§2c.
+
+⚠️ **Scott defined both states and my first draft had `user_owner` badly wrong.** He: *"`user_owner`
+is when a tenant like DaVita acquires the real estate to occupy it… as opposed to leasing it."*
+**I had defined it as "holds ≥1 current portfolio asset" — 6,308 entities, i.e. just *an owner*.**
+It would have labelled every REIT, fund and landlord an owner-occupier. **`user_owner` is about
+OCCUPANCY, not ownership** — the "user" is the user of the space. Same failure this arc keeps
+finding: **I reached for the fact that was easy to compute rather than the one that answers the
+question.**
+
+- **The real signal is owner ≈ tenant ON THE SAME PROPERTY** (`lcc_property_attributes.tenant_short`)
+  — a comparison *within one row*, far more constrained than matching two arbitrary owner names,
+  which is why it survives where this arc's rejected lexical classifiers did not.
+- **Measured over 8,237 held properties carrying a tenant: 13 candidates, ~10 genuine** — Mayo
+  Clinic Dialysis, Sanford Health, Northwest Kidney Centers, Puget Sound, Gundersen Lutheran,
+  Michigan Kidney Consultants, Wake Forest, Atlantis, Centers for Dialysis Care, Concerto Missouri.
+- ⚠️ **The 2 clear misses share ONE shape — an SPE/DST named after its tenant**
+  (`FSC FMC Carbondale IL DST`, `USGBF NIAID LLC`). The sponsor↔SPE pattern from a new direction.
+- ⚠️ **At n=13, human confirmation is cheaper AND more accurate than any name rule.** Scott's
+  ordering is accuracy first, automation second — so **`user_owner` is a human-confirmed lane, not
+  an automated arm.** The automation worth having is surfacing the 13, which is one query.
+- ⚠️ **Wake Forest and Mayo sit in the `not_prospected` guard's territory. They are still correctly
+  `user_owner`** — the role is a fact about them; whether we prospect them is a separate gate.
+  **Do not let a prospecting guard suppress an accurate role.**
+- **`former_owner` confirmed and structurally clean: 3,795 — 2,071 gov + 1,727 dia, ZERO other
+  domains**, so "used to own in our target market" is guaranteed, not assumed. **784 sold ≤3y,
+  1,537 ≤5y, 191 contactable today.** ⚠️ **Carry recency separately — do not bake a cutoff into the
+  label**, or the role starts lying the day the cutoff stops matching how Scott works.
+- ⚠️ **NEW and bigger than the gap I originally reported: under the corrected definitions, NO role
+  describes the ordinary owns-and-leases-out landlord — 6,308 entities.** They would stay `unknown`.
+  A further state (`investor_owner` or similar) is probably what accuracy requires. **§6 Q1.**
+
 ## 2026-08-31 — C4a DESIGNED to Scott's constraints; `former_owner` is the finding
 
 **NOTHING BUILT.** Canonical design: **`docs/architecture/owner-role-classification.md`** — a new

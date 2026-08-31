@@ -21,49 +21,93 @@
 **P0.4's problem is that it has no value gate of its own** — that is a defect in P0.4, and the fix
 belongs there, not in the classifier. See §4.
 
-## 1. ⚠️ The vocabulary cannot express the most valuable state
+## 1. ⚠️ CORRECTION — my first draft had BOTH definitions wrong
 
-`BD_OWNER_ROLES` declares `developer · user_owner · buyer · seller_flipper · operator`. Measured over
-live organizations:
+**Scott, 2026-08-31, defining the two states:**
 
-| state | orgs |
+> *"`user_owner` is when a tenant like DaVita acquires the real estate to occupy it, or a vacating
+> DaVita gets acquired by some tenant intending to operate the real estate as opposed to leasing it.
+> `former_owner` means that we know of no current holdings by that company but they used to own a
+> tenant in our target market."*
+
+⚠️ **My draft defined `user_owner` as "holds ≥1 current portfolio asset" — 6,308 entities. That is
+just *an owner*.** It would have labelled every REIT, fund and landlord in the system an
+owner-occupier. **Wrong by roughly three orders of magnitude**, and it is the same failure this arc
+keeps finding: I reached for the fact that was *easy to compute* rather than the one that *answers
+the question*. **`user_owner` is about OCCUPANCY, not ownership** — the "user" is the user of the
+space.
+
+## 2. `user_owner` — the owner-occupier. ~10 entities, not 6,308.
+
+**The signal: the owner of the property IS its tenant.** `lcc_property_attributes` already carries
+`tenant_short` / `tenant_label`, so this is a comparison **within a single property row** — far more
+constrained than matching two arbitrary owner names, which is why it survives where the lexical
+classifiers this arc rejected did not.
+
+Measured over **8,237 held properties that carry a tenant** (6,105 distinct owners): **6 exact
+core matches, 13 including containment.** Read on named rows:
+
+| owner | tenant | verdict |
+|---|---|---|
+| Atlantis Healthcare Group · Centers for Dialysis Care · Concerto Missouri · Gundersen Lutheran · **Mayo Clinic Dialysis** · Michigan Kidney Consultants · Northwest Kidney Centers · Puget Sound Kidney Centers · Sanford Health · **Wake Forest University** | same | ✅ **genuine owner-occupiers** — health systems and independents operating their own unit |
+| **`FSC FMC Carbondale IL DST`** | `Fmc - Carbondale` | ❌ **a Delaware Statutory Trust named after its tenant** — an investor vehicle, not Fresenius |
+| **`USGBF NIAID LLC`** | `NIAID` | ❌ **US Global Business Fund's SPE named after the federal tenant** |
+| `Mena Dialysis` | `DaVita Mena Dialysis Center` | ⚠️ ambiguous — could be the local operator or a namesake SPE |
+
+**10 of 13 genuine — and the 2 clear misses share ONE shape: an SPE or DST named after the tenant
+it houses.** That is the sponsor↔SPE pattern this arc has met at every turn, arriving from a new
+direction.
+
+### ⚠️ At n = 13, human confirmation IS the accurate option
+
+**A guard against "investor vehicle named after its tenant" would be a name test**, and every name
+test measured in this arc landed at ~25% raw / 7% / 4-of-6 guarded. **With a candidate set of 13,
+reading them is both cheaper and strictly more accurate than any rule** — and Scott's ordering is
+accuracy first, automation second. **So: `user_owner` is a human-confirmed lane, not an automated
+arm.** The automation that matters is *surfacing the candidates*, which is one query.
+
+⚠️ **`Wake Forest University` and `Mayo Clinic Dialysis` sit inside the `not_prospected` guard's
+territory** (the drop-universities decision). **They are still correctly `user_owner`** — the
+classification is a fact about them; whether we *prospect* them is a separate gate. **Do not let the
+prospecting guard suppress an accurate role.**
+
+## 2b. `former_owner` — 3,795, and every one is in the target market
+
+**Definition satisfied exactly.** Entities that held a portfolio fact which ENDED and hold nothing
+now: **3,795 — 2,071 gov, 1,727 dia, and ZERO from any other domain.** Because
+`lcc_entity_portfolio_facts` is fed only from the gov and dia domains, *"used to own in our target
+market"* is structurally guaranteed rather than assumed.
+
+| | entities |
 |---|---:|
-| **currently owns ≥1 asset** | **6,308** |
-| **owned before, owns nothing now** | **3,795** |
-| …still typed `unknown` | **2,784** |
-| both current and past | 316 |
+| **former owners** | **3,795** |
+| …sold within 3 years | **784** |
+| …sold within 5 years | **1,537** |
+| **…already contactable** | **191** |
 
-**There is no role for "sold, and may sell again."** That is not a minor gap — Scott's stated model
-is *"volume with repeat seller clients."* **A party that has sold to us before is the highest-value
-prospect in the business, and the vocabulary types 2,784 of them as `unknown`.**
+**191 are callable today** — a party that has sold to us before, with a contact on file, which is
+precisely the *"volume with repeat seller clients"* model.
 
-**Accuracy therefore requires a sixth state — `former_owner`** (or an equivalent). Without it, a
-derived classifier that keys on *current* holding would take 3,795 real parties and correctly
-conclude "not currently an owner", which is true and useless.
+⚠️ **Recency must be carried, not baked into the label.** Someone who sold in 2015 and someone who
+sold last year are both `former_owner` and are not the same prospect. **Expose `last_ownership_end`
+alongside the role**; do not encode a cutoff into the classification, or the role starts lying the
+day the cutoff stops matching how you work.
 
-## 2. The determination — recorded facts only, in priority order
+## 2c. The corrected arms
 
-Every arm is a **fact already in the database**. None is a name guess. ⚠️ Every lexical owner
-classifier measured in this arc landed at ~25% raw (P189, A3), 7% (P198), 4-of-6 guarded — **this
-design deliberately contains none.**
+| # | arm | evidence | population | automated? |
+|---|---|---|---:|---|
+| 1 | **`operator`** | `is_operator_not_owner` + recorded `owner_type` (P113) | 36 known | ✅ recorded flag |
+| 2 | **`user_owner`** | owner ≈ tenant **on the same property** | **13 candidates, ~10 genuine** | 👤 **human-confirmed** |
+| 3 | **`former_owner`** | held a fact that ended, holds none now | **3,795** | ✅ deterministic |
+| 4 | **`buyer`** | ≥2 `purchases` edges, no current holding | 2,478 have ≥2 edges | ✅ deterministic |
+| 5 | **`developer`** | existing classifier (`properties.developer_name`) | 715, exhausted | ✅ existing |
+| — | **`unknown`** | no qualifying evidence — an honest absence | the remainder | — |
 
-| # | arm | evidence | population |
-|---|---|---|---:|
-| 1 | **`operator`** | `true_owners.is_operator_not_owner` + recorded `owner_type`/`owner_role` (P113) | 36 known |
-| 2 | **`user_owner`** | holds ≥1 **current** `lcc_entity_portfolio_facts` row | **6,308** |
-| 3 | **`former_owner`** ⭐ | held a fact that **ended**, holds none now | **3,795** |
-| 4 | **`buyer`** | ≥2 `purchases` edges and no current holding | 2,478 have ≥2 edges |
-| 5 | **`developer`** | the existing classifier (`properties.developer_name`) | 715, exhausted |
-| — | **`unknown`** | **no qualifying evidence — an honest absence** | the remainder |
-
-**Precedence matters and is a judgement to confirm:** an entity that *currently holds* and *has
-bought repeatedly* is both. **Recommended: `user_owner` wins** — what they hold now is more
-actionable than what they did. ⚠️ **Not measured: the overlap size.** It should be reported before
-this ships, not assumed.
-
-**Guards, applied to every arm** — all existing, none new: `lcc_owner_name_is_brokerage` (6 hits),
-`lcc_is_placeholder_owner_name` (3), `lcc_owner_name_is_not_prospected` (124 — GWU is here, per the
-drop-universities decision).
+⚠️ **There is no longer an arm that classifies the 6,308 current holders as anything.** Most are
+landlords and investors, and **the vocabulary has no word for "owns and leases out"** — which is the
+ordinary case. That is now the open question in §6, and it is a bigger gap than the one I originally
+reported.
 
 ## 3. It must be DERIVED, and the churn measurement says that is safe
 
@@ -121,9 +165,13 @@ existing 555 rows.** Different changes, different consequences.
 
 ## 6. Open questions for Scott
 
-1. **`former_owner` — confirm the sixth state.** 3,795 parties, and repeat sellers are the model.
-2. **Precedence when an entity is both a current holder and a repeat buyer.** Recommended
-   `user_owner`; overlap size unmeasured.
-3. **View vs recomputed column** — accuracy is identical; this is a performance and
+1. ⚠️ **The biggest gap, newly visible: there is no role for "owns and leases out" — the ordinary
+   landlord/investor.** 6,308 organizations currently hold assets and, under the corrected
+   definitions, **none of the five roles describes them.** They would stay `unknown`, which is
+   honest but leaves 93.9% of the fleet unclassified and the queue's 57% data-work share untouched.
+   **A sixth/seventh state — `investor_owner` or similar — is probably what accuracy requires.**
+2. **`former_owner`** — confirm (3,795; 191 contactable; recency carried separately, not baked in).
+3. **`user_owner` as a human-confirmed lane** rather than an automated arm, given n=13.
+4. **View vs recomputed column** — accuracy is identical; this is a performance and
    override-preservation trade.
-4. **P0.4** (§4) — a separate decision, deliberately not bundled.
+5. **P0.4** (§4) — a separate decision, deliberately not bundled.
