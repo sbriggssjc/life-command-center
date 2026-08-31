@@ -239,14 +239,29 @@ connected-property value does not have. The prompt now states that rule to the m
 `contacts[0].name`, so the chip read **"Draft email to Unknown"** and fired `draft_outreach_email`
 with `contact_name: 'Unknown'`.
 
-🔴 **C10b, found while fixing it — now the sheet is legible it will confidently name a person at the
-wrong firm.** Of the 113 rows carrying an email only **16** have a domain corroborating the owner
-name (P197) and **14 are consumer mailboxes**: Boyd Watterson's contact is *@mcwhinney.com*,
-Easterly's is *@centurytel.net*. ⚠️ **16/113 is a LOWER BOUND, not 97 wrong** — a real employee can
-use a personal address (the P188 asymmetry). **121 of 126 do carry a relationship edge** and the
-edge role is on file — `prospecting_contact` 58 · `institution_decision_maker` 35 · `manager` 15 ·
-**`works_at` 12 (the weak SF org edge P161 disqualified)** · `decision_maker` 1 · **no edge at all
-5** — **and the sheet prints none of it.** Surfacing the role needs it on the view.
+✅ **C10b — SHIPPED 2026-08-31 as C11.** *"Now the sheet is legible it will confidently name a
+person at the wrong firm."* The sheet now states the BASIS on which each person is the contact: the
+role recorded on the owner→contact `entity_relationships` edge — `prospecting_contact` 58 ·
+`institution_decision_maker` 35 · `manager` 15 · **`works_at` 12** · `decision_maker` 1 · **no edge
+at all 5** — with `works_at` labelled ***association only (Salesforce org edge), not evidence of
+authority*** (the edge P161 measured and disqualified), and a null edge rendered as *"no
+relationship on file"* rather than blank. Two appended view columns (`20260831140000`, applied) plus
+one JS change; rows held at **126 → 126**. Writeup:
+`docs/audits/C11_CALL_SHEET_CONTACT_BASIS_2026-08-31.md`.
+
+⚠️ **Count the VALUE, not just the rows — it inverts the priority.** `works_at` is 10% of the sheet
+and the **second-largest value block, $130.7M — 2.3× the 35 `institution_decision_maker` rows** —
+and **3 of the current top 10** (USAA Real Estate, Gba Associates, Beacon Capital). The weakest
+evidence sits at the head of the sheet and was rendering identically to `decision_maker`.
+
+⚠️ **The corroboration figure recorded here was wrong: it is 22 of 113, not 16.**
+`lcc_tier0_company_confirms_domain(p_company, p_sldn)` takes the second-level **LABEL**, and passing
+the whole domain kills its reverse arm — losing `truist.com`, `brookfield.com`, `highwoods.com`,
+`beaconcapital.com`, `acquestdevelopment.com` and `tiaa-cref.org`, all genuine on named rows. It is
+**still a LOWER BOUND** (P188: Easterly's own confirmed contact is on `@centurytel.net`), it is
+rendered as an **additive positive only**, and **nothing filters, ranks or demotes on it** —
+doing so would drop ~91 real owners and re-create the Class 24 mistake C8 has just finished undoing
+on this surface.
 
 ⚠️ **Re-measured 2026-08-31: only 12 of the 126 owners are on the Tier 0 confirm lane, so "route it
 to Tier 0" is NOT the answer** — that lane selects on a different basis and does not cover this
@@ -475,7 +490,7 @@ the same limit on the outbound side). Filed as **C7a**; it was not filed anywher
 | ✅ **C8 shipped — the call sheet admits resolved owners** | 2026-08-31; 80 → **126** rows, +$515.2M. Predicted 127, landed 126 — the audit had counted brokerages on one side of the gate only |
 | 🔴 **C8a — the brief's fallback branch is ungated AND structurally dead** | `engagement_score` is 0 on all 30,714 gov `unified_contacts` rows, so `gt.0` returns nothing; it also reads the frozen pre-cutover gov snapshot, not the `CONTACTS_HUB=ops` hub. A latent fail-open, not a live one |
 | ✅ **C8c — every call-sheet row rendered "Unknown"** | **FIXED 2026-08-31 as C10.** Mapped onto the real columns; count held at 126, gate/order/limit untouched. Guard `test/prospecting-brief-column-mapping.test.mjs` (5 mutations RED) |
-| 🔴 **C10b — the cadence contact is mostly not demonstrably at the owner** | 16 of 113 emails corroborate the owner domain, 14 are consumer mailboxes. A **lower bound**, not 97 wrong (P188 asymmetry) — but 121 of 126 carry an edge whose role (`prospecting_contact` 58 · `works_at` 12, the weak P161 edge) the sheet never prints. Next on this surface |
+| ✅ **C10b — FIXED 2026-08-31 as C11** | The sheet now states the BASIS: the role on the recorded owner→contact edge (`prospecting_contact` 58 · `institution_decision_maker` 35 · `manager` 15 · **`works_at` 12, labelled *association only* per P161** · `decision_maker` 1 · **no edge 5**), plus employer corroboration as an ADDITIVE POSITIVE. ⚠️ **Corroboration is 22 of 113, not 16** — the old figure passed a whole domain into `p_sldn`, which wants the second-level LABEL. Rows held at 126; nothing filters or ranks on corroboration. `docs/audits/C11_CALL_SHEET_CONTACT_BASIS_2026-08-31.md` |
 | 🔴 **C10a — `is_cross_vertical` is unread** | The view carries the honest source for "mixed"; the renderer now says `domain not on file` instead of asserting it |
 | 👤 **C4a — what promotes an owner out of `unknown`** | **Scott's, doctrine not code.** Recorded facts available, none adopted: portfolio shape · `purchases` edges (repeat investor vs one-off — his own distinction, already modelled) · `is_operator_not_owner` (P113) · deed/B5 party roles |
 | 👤 **C4b — `user_owner`: fill the arm or remove it** | Leaving it is how C4 stayed invisible |

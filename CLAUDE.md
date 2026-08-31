@@ -3644,13 +3644,98 @@ One JS change, no migration. Writeup:
   survived, read by a template nothing ever set. ⚠️ **It strips comments first, and that is
   load-bearing:** the fix's own comments name every banned column 5 times while explaining the bug,
   so a raw-source detector finds them all present and passes over a regression (A5c / N18).
-- 🔴 **C10b — now that the sheet is legible it will confidently name a person at the WRONG FIRM.**
-  Of 113 rows with an email, **16** have a domain corroborating the owner (P197) and **14 are
-  consumer mailboxes**; Boyd Watterson's contact is `@mcwhinney.com`, Easterly's `@centurytel.net`.
-  ⚠️ **16/113 is a LOWER BOUND, not 97 wrong** — a real employee can use a personal address (the
-  P188 asymmetry). **121 of 126 DO carry a relationship edge** whose role is on file
-  (`prospecting_contact` 58 · `institution_decision_maker` 35 · `manager` 15 · **`works_at` 12, the
-  weak SF org edge P161 disqualified** · `decision_maker` 1) — **and the sheet prints none of it.**
+- ✅ **C10b — SHIPPED 2026-08-31 as C11 (below). The wording here was right and the NUMBER was not:
+  corroboration is 22 of 113, not 16.**
+
+## C11 — the call sheet named a person and never said why (2026-08-31)
+
+**121 of the 126 call-sheet rows carry a recorded owner→contact relationship whose role is on
+file, and the sheet printed none of it.** C10 made the sheet legible; legibility is exactly what
+makes an unjustified contact dangerous, because the sheet now names a person at scale with no
+basis for the operator to weigh. One JS change in `handleProspectingBrief` + two appended view
+columns (`20260831140000`, applied). **Rows served 126 → 126; gate, ordering and limit untouched.**
+Writeup: `docs/audits/C11_CALL_SHEET_CONTACT_BASIS_2026-08-31.md`.
+
+| basis (`metadata->>'role'` on the owner→contact edge) | rows | corroborated | rank value |
+|---|---:|---:|---:|
+| `prospecting_contact` | 58 | 20 | $714.7M |
+| `institution_decision_maker` | 35 | 0 | $56.3M |
+| `manager` | 15 | 0 | $52.4M |
+| ⚠️ `works_at` | **12** | 2 | **$130.7M** |
+| **no edge at all** | 5 | 0 | $3.6M |
+| `decision_maker` | 1 | 0 | — |
+
+- **⚠️ COUNT THE VALUE, NOT JUST THE ROWS — IT INVERTS THE PRIORITY.** `works_at` is the
+  Salesforce org edge **P161 measured and disqualified** as evidence of control. At 10% of rows it
+  looks like a footnote; it carries the **second-largest value block, 2.3× the 35
+  `institution_decision_maker` rows**, and **3 of the top 10** (USAA Real Estate $62.0M, Gba
+  Associates $27.2M, Beacon Capital $23.8M). The weakest evidence sits at the head of the sheet,
+  and it was rendering identically to `decision_maker`. It now says *"association only (Salesforce
+  org edge), not evidence of authority"*, and the prompt says the same so the model cannot promote
+  it in prose.
+- **⚠️ THE CORROBORATION FIGURE WAS AN ARGUMENT-SHAPE ARTIFACT — 22 of 113, NOT 16.**
+  `lcc_tier0_company_confirms_domain(p_company, p_sldn)` does bidirectional substring containment
+  between `lcc_owner_domain_core(company)` and `p_sldn`, and **`p_sldn` is the second-level LABEL,
+  not the domain.** Passing `beaconcapital.com` where it wants `beaconcapital` silently kills the
+  **reverse** arm — an owner core never contains a `.com` — losing every
+  domain-abbreviates-the-owner case. Six rows, all genuine on named rows: `truist.com` /
+  `brookfield.com` / `highwoods.com` / `beaconcapital.com` / `acquestdevelopment.com`, plus
+  **`tiaa-cref.org`**, recovered only by the alphanumeric strip. The view reuses
+  `v_lcc_tier0_owner_contact_candidates`' own `sldn` expression **verbatim** rather than inventing a
+  second one. ⚠️ `lower()` runs BEFORE the `[^a-z0-9]` strip.
+- **⚠️ THE CORROBORATION IS AN ADDITIVE POSITIVE AND THAT IS NOT A STYLE CHOICE.** P188 established
+  the asymmetry on named rows: a real employee can use a personal address, and **Easterly's own
+  confirmed contact sits on `@centurytel.net`**. `false` means *we hold no corroboration*, never
+  *wrong person* — so 22 of 113 is a **LOWER BOUND, not "91 are wrong"**. Nothing filters, ranks or
+  demotes on it; doing so would drop ~91 real owners and re-create the Class 24 mistake **C8 has
+  just finished undoing on this very surface**. Guarded structurally, because an absence cannot be
+  observed from one row's output.
+- **⚠️ ROLE AND CORROBORATION ARE INDEPENDENT, AND ROW 10 PROVES IT.** Beacon Capital Partners'
+  contact is `jbrown@beaconcapital.com` — the domain corroborates the employer perfectly — and the
+  only relationship on file is `works_at`. **Corroborating where someone WORKS says nothing about
+  whether they DECIDE.** Collapsing the two into one confidence score loses exactly that.
+- **⚠️ THE C8 PRE-AGGREGATE PRECEDENT IS THE WRONG SHAPE HERE — MEASURED BEFORE CHOOSING.** C8
+  pre-aggregates specifically to avoid a correlated probe, so copying it was the obvious move.
+  `entity_relationships` holds **115,726 rows** against `lcc_property_owner`'s 8,636, and a
+  `DISTINCT ON (from,to)` pre-aggregate materialises the whole table on every read. On the
+  handler's REAL query shape: baseline **275–282 ms / 99,528 buffers** · `LEFT JOIN LATERAL …
+  LIMIT 1` (shipped) **253–259 ms / 106,126 (+6.6%)** · pre-aggregate **649 ms / 184,857 (2.6×
+  slower)**. **Table size decides which hazard applies; the shape that is right for one join is
+  not automatically right for the next.**
+- **⚠️ `LIMIT 1` IS THE FAN-OUT GUARD, NOT LUCK.** `entity_relationships` has **no unique
+  constraint** on `(from,to,type)` (P177). Today max_edges = 1 and 0 conflicting roles — but under
+  `DISTINCT ON (c.id)` a future fan-out would not change the row count, it would **silently pick
+  one arbitrarily**. The `ORDER BY` (still-effective → newest → id) makes the pick deterministic.
+- **⚠️ COMPUTE AN INDEPENDENT SIGNAL OUTSIDE THE JOIN THAT CARRIES THE OTHER ONE.** Folding the
+  corroboration into the role LATERAL would make it NULL for every edge-less row — and **all 5 of
+  those carry an email**, so *"no relationship on file"* would have silently swallowed a
+  perfectly computable signal.
+- **⚠️ THE ROLE VOCABULARY IS NOT CLOSED.** `MGR`, `broker_of_record` and `economic_owner_contact`
+  each occur fleet-wide. The token prints **verbatim**: an allowlist with a friendly fallback would
+  swallow exactly the tokens worth seeing — a `broker_of_record` on a BD call sheet **is** the
+  signal (`account-based-contact-intelligence.md`: brokers are never prospected as principal-buyer
+  contacts).
+- **⚠️ A LIVE EQUIVALENCE DIFF HAS TO SURVIVE LIVE DATA (P188, again).** The view gate read
+  2,304 → 2,304 rows with **3 rows differing each way** — and all three carry
+  `next_touch_due = 2026-06-21 19:32:4x`, i.e. `now()` crossed the 70→71-day boundary between
+  snapshot and diff. Excluding only the two `now()`-dependent columns the diff is **0 both
+  directions**, positive-controlled at 2,304 on a deliberately mutated name (P182).
+- **NOT done, deliberately:** no filter and no re-rank on corroboration (C9a owns `rank_value`); no
+  corroboration classifier (lexical owner↔person matching measured at ~25% raw / 4-of-6 guarded —
+  the edge role is a RECORDED FACT); no change to the pitch (**C4a**, Scott's); and **not routed to
+  Tier 0** — only **12 of 126** eligible owners are on that lane, which selects on a different basis.
+- **Verify on the basis distribution (58/35/15/12/5/1), never on the row count** — the count is the
+  safety property, the basis is the deliverable. Guard
+  `test/call-sheet-contact-basis.test.mjs` (7 tests, **all 10 mutations RED**, comments stripped —
+  the fix's own comments say `works_at` and "association only" repeatedly). The C10 guard needed
+  the two new columns added to its `VIEW_COLUMNS` and **that is the guard working**: it was verified
+  RED with the additions removed, which is what forces view and handler to move together.
+- 🔴 **Found while shipping, filed not fixed:** **C11a** `institution_decision_maker` is 0-for-35 on
+  corroboration against `prospecting_contact`'s 20-of-58 — two very differently-sourced lanes on one
+  sheet. **C11b** one cadence contact is **Scott himself** (`Edwin K.S. Ryu` →
+  `sabriggs@northmarq.com`). **C11c** 2 of the 5 edge-less rows point at a BROKERAGE mailbox
+  (`@srsre.com`, `@triprop.com`) — `is_brokerage` reads the OWNER name, so it structurally cannot
+  see a broker in the CONTACT slot.
 
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 

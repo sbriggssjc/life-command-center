@@ -4903,7 +4903,27 @@ async function handleProspectingBrief(params, user, workspaceId) {
       // >90 days overdue) -- 7 of the 126 eligible rows carry it.
       next_touch_type: c.next_touch_type || '',
       review_flag:     c.review_flag === true,
-      phase:           c.phase || ''
+      phase:           c.phase || '',
+      // C11 (2026-08-31) -- WHY IS THIS PERSON THE CONTACT? C10 made the sheet
+      // legible; it did not make the contact justified. The sheet gave the
+      // operator a name and a dollar figure and no basis for either, and now
+      // that it is legible it will confidently name a person at the wrong firm.
+      //
+      // The basis is already recorded and was simply never read: 121 of the 126
+      // eligible rows carry an owner->contact `entity_relationships` edge whose
+      // role is on file. Both fields are real view columns (migration
+      // 20260831140000). Audit: docs/audits/C11_CALL_SHEET_CONTACT_BASIS_2026-08-31.md
+      //
+      // NULL means "no relationship on file" -- a DIFFERENT fact from a weak
+      // role, and it is carried as null rather than '' so the renderer can say
+      // so. An empty string here would read as "no role" (P180).
+      contact_basis:   c.contact_owner_role == null ? null : String(c.contact_owner_role),
+      // P197 employer corroboration. ADDITIVE POSITIVE ONLY, and this is not a
+      // style choice: P188 established on named rows that a real employee can
+      // use a personal address -- Easterly's own confirmed contact sits on
+      // @centurytel.net. `false` means "we hold no corroboration", NEVER "wrong
+      // person". Nothing may filter, rank or demote on it.
+      domain_confirms: c.contact_domain_confirms_owner === true
     }));
   } else {
     // Fallback: Outlook/Salesforce engagement scores when LCC queue is empty.
@@ -4975,14 +4995,41 @@ async function handleProspectingBrief(params, user, workspaceId) {
           : '';
         // R34 Unit 3 staleness guard -- surfaced, never auto-expired.
         const stale = c.review_flag ? ' | ⚠ cadence stale >90d, review' : '';
-        return `${i + 1}. ${c.name} — ${c.owner_role || 'role not on file'} [${c.domain || 'domain not on file'}]\n   Email: ${c.email || 'no email on file'}\n   Portfolio value: ${value}${assets} | Days overdue: ${c.days_overdue}\n   Next touch: ${c.next_touch_type || 'not scheduled'}${stale} | Phase: ${c.phase}`;
+        // C11: state the BASIS on which this person is the contact for this
+        // owner. Three cases, and they are three different facts:
+        //   * a recorded role  -> print it VERBATIM. The vocabulary is NOT
+        //     closed (`MGR`, `broker_of_record`, `economic_owner_contact` all
+        //     occur fleet-wide), so nothing here may assume a fixed set -- an
+        //     unexpected token reaching the operator is honest, and a
+        //     `broker_of_record` showing up IS the signal.
+        //   * `works_at`       -> the SALESFORCE ORG EDGE P161 MEASURED AND
+        //     DISQUALIFIED as evidence of control. It proves association, never
+        //     authority, and must not read like `decision_maker`. It is not a
+        //     corner case: 12 of the 126 rows, carrying $130.7M -- more rank
+        //     value than the 35 `institution_decision_maker` rows -- and 3 of
+        //     the current top 10 (USAA Real Estate, Gba Associates, Beacon
+        //     Capital Partners).
+        //   * no edge          -> say "no relationship on file". NOT an empty
+        //     string, which reads as "no role" when the truth is that no
+        //     relationship is recorded at all (P180).
+        const WEAK_ASSOCIATION_ROLE = 'works_at';
+        const basis = c.contact_basis == null
+          ? 'no relationship on file'
+          : (c.contact_basis === WEAK_ASSOCIATION_ROLE
+              ? `${c.contact_basis} — ⚠ association only (Salesforce org edge), not evidence of authority`
+              : c.contact_basis);
+        // Additive positive only -- printed when true, ABSENT otherwise. Never
+        // rendered as a negative: a missing corroboration is not evidence the
+        // person is at the wrong firm (P188).
+        const corroborated = c.domain_confirms ? ' · employer corroborated by email domain' : '';
+        return `${i + 1}. ${c.name} — ${c.owner_role || 'role not on file'} [${c.domain || 'domain not on file'}]\n   Email: ${c.email || 'no email on file'}\n   Contact basis: ${basis}${corroborated}\n   Portfolio value: ${value}${assets} | Days overdue: ${c.days_overdue}\n   Next touch: ${c.next_touch_type || 'not scheduled'}${stale} | Phase: ${c.phase}`;
       }).join('\n\n')
     : contacts.map((c, i) =>
         `${i + 1}. ${c.name} (${c.company}) — ${c.heat} (score: ${c.score})\n   Title: ${c.title}\n   Last call: ${c.last_call} | Last email: ${c.last_email}\n   Calls: ${c.total_calls} | Emails: ${c.total_emails}\n   Phone: ${c.phone} | Email: ${c.email}`
       ).join('\n\n');
 
   const prompt = source === 'lcc_queue'
-    ? `Generate a concise daily BD prospecting call sheet for ${today}.\n\nThese are the top investment sales targets ranked by portfolio value and days overdue. All are property owners — not brokers or intermediaries:\n\n${contactList}\n\nFor each contact provide:\n1. A one-line call prep note (owner role, why to call now based on days overdue)\n2. A talking point. Use the domain for a sector-specific angle (government net-lease, dialysis net-lease) ONLY when a domain is given; where it reads "domain not on file", keep the talking point generic and do NOT assume a sector.\n3. Priority: call today / this week / nurture\n\nGround rules: "Portfolio value" is the relationship value we hold for that owner — annual rent where known, otherwise connected-property value. Do NOT describe it as annual rent or as a valuation. Never restate a field shown as "not on file" as though it were known, and do not invent a company, sector or figure that is not above.\n\nThis is for an investment sales professional (SVP, Investment Sales) at Northmarq. Keep each entry tight — 2-3 lines.`
+    ? `Generate a concise daily BD prospecting call sheet for ${today}.\n\nThese are the top investment sales targets ranked by portfolio value and days overdue. All are property owners — not brokers or intermediaries:\n\n${contactList}\n\nFor each contact provide:\n1. A one-line call prep note (owner role, why to call now based on days overdue)\n2. A talking point. Use the domain for a sector-specific angle (government net-lease, dialysis net-lease) ONLY when a domain is given; where it reads "domain not on file", keep the talking point generic and do NOT assume a sector.\n3. Priority: call today / this week / nurture\n\nGround rules: "Portfolio value" is the relationship value we hold for that owner — annual rent where known, otherwise connected-property value. Do NOT describe it as annual rent or as a valuation. Never restate a field shown as "not on file" as though it were known, and do not invent a company, sector or figure that is not above.\n\n"Contact basis" is the relationship we have on file between the owner and this person, and it bounds what you may claim about them. Where it reads "association only", say only that the person is associated with the owner — do NOT call them a decision-maker, principal, or anyone with authority, and treat confirming who actually holds the decision as part of the call. Where it reads "no relationship on file", say the link is unverified rather than describing a role. "employer corroborated by email domain" is a plus when present; its ABSENCE means we hold no corroboration and never that the person is at the wrong firm, so do not cast doubt on a contact for lacking it.\n\nThis is for an investment sales professional (SVP, Investment Sales) at Northmarq. Keep each entry tight — 2-3 lines.`
     : `Generate a concise daily prospecting call sheet for ${today}.\n\nHere are the top contacts ranked by engagement:\n\n${contactList}\n\nFor each contact, provide:\n1. A one-line call prep note (why to call based on engagement pattern)\n2. A suggested talking point or reason to reach out\n3. Priority level (call today / this week / nurture)\n\nFocus on contacts who haven't been called recently but have high engagement. Flag any that are overdue for a touchpoint.`;
 
   const result = await invokeChatProvider({

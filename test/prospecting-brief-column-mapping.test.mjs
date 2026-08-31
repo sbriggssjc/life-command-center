@@ -47,7 +47,8 @@ const SRC = readFileSync(
 // (xengecqvemvfknjvbvrq), verified against information_schema 2026-08-31.
 // Base view: migration 20260522260000; contact_id/contact_email 20260719124500;
 // rank_value/rank_property_count/review_flag 20260616150000;
-// is_resolved_owner/is_brokerage 20260831120000 (C8).
+// is_resolved_owner/is_brokerage 20260831120000 (C8);
+// contact_owner_role/contact_domain_confirms_owner 20260831140000 (C11).
 const VIEW_COLUMNS = new Set([
   'cadence_id', 'entity_id', 'entity_name', 'owner_role', 'workspace_id',
   'domain', 'phase', 'priority_tier', 'current_touch', 'next_touch_due',
@@ -58,7 +59,7 @@ const VIEW_COLUMNS = new Set([
   'bd_opportunity_id', 'owner_user_id', 'total_property_count',
   'current_property_count', 'is_cross_vertical', 'contact_id', 'contact_email',
   'rank_value', 'rank_property_count', 'review_flag', 'is_resolved_owner',
-  'is_brokerage',
+  'is_brokerage', 'contact_owner_role', 'contact_domain_confirms_owner',
 ]);
 
 function stripComments(js) {
