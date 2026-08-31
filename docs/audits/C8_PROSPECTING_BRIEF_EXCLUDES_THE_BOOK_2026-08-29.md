@@ -1,6 +1,37 @@
 > 📍 **CANONICAL PAGE: [`docs/architecture/bd-ranking-and-priority-queue.md`](../architecture/bd-ranking-and-priority-queue.md) §3.**
 > **Diagnosis only — nothing written.** Started as **C4b** (`user_owner` is 0); C4b resolved as inert,
 > and the same gate on a **second, live, operator-facing surface** did not.
+>
+> ## ✅ SHIPPED 2026-08-31 — and the prediction in §3 was off by one, for a reason
+>
+> Migration `20260831120000` appends `is_resolved_owner` + `is_brokerage` to
+> `v_bd_cadence_dashboard`; `handleProspectingBrief` composes them with `BD_OWNER_ROLES`.
+> Guard `test/c8-prospecting-brief-gate.test.mjs`.
+>
+> **Landed 80 → 126, not 127.** Every other number reproduced exactly (311 / 80 / $442,805,301 /
+> 231 / 47 / $515,176,327.54 / 3 / 181). ⚠️ **§3 predicted 127 because §2 sized the brokerage
+> population by reading only the EXCLUDED half.** There are **4** brokerages among the 311, not 3 —
+> **`Stan Johnson Co` carries `owner_role='buyer'` and was being SHOWN** ($238,700). Making the
+> guard explicit on both arms drops it, so the delta is **+47 − 1**. *A population counted on one
+> side of a gate is not the population.*
+>
+> ⚠️ **The three-row false-positive read §3 asked for, done on all four.**
+> `Coldwell Banker Commercial Realty` ✅ genuine · `Stan Johnson Co` ✅ genuine (the one the guard
+> actually decides) · `Northmarq Support` ✅ our own firm · **`Clark Matthews` ❌ the documented P116
+> false positive** — bare `\mmatthews\M` matched a person's SURNAME. **It costs nothing here:** he
+> is `unknown`, owns no asset, and fails the OR arm regardless. The guard is outcome-bearing for
+> exactly one of the four.
+>
+> ⚠️ **At the default `limit=10`, 9 of 10 call-sheet slots change** — Easterly enters at rank 2,
+> and NGP Capital / USAA / US Fed Properties Trust / Elman / Trammell Crow / Beacon reach page 1 for
+> the first time. **This is a reach fix, not a count fix.**
+>
+> 🔴 **Two defects found while shipping, both filed, neither fixed here:** **C8a** the fallback
+> branch is ungated *and structurally dead* (`engagement_score` is 0 on all 30,714 gov
+> `unified_contacts` rows), and **C8c** the handler maps `c.name` / `c.company_name` /
+> `c.annual_rent` while the view supplies `entity_name` / (none) / `rank_value`, so **every row on
+> the sheet renders "Unknown … rent unknown"** — pre-existing, unaffected by C8, and it blunts C8's
+> entire benefit.
 
 # C8 — the prospecting brief hides $515M of resolved owners to exclude 3 brokerages
 
@@ -117,7 +148,9 @@ fact** rather than the party label:
 > `owner_role IN (BD_OWNER_ROLES)` **OR** *the entity is a resolved owner in `lcc_property_owner`* —
 > and in both arms, **not** `lcc_owner_name_is_brokerage(entity_name)`.
 
-**Predicted: 80 → 127 rows** (+47), adding **$515.2M**, while the 3 brokerages stay out and the 181
+~~**Predicted: 80 → 127 rows**~~ ⚠️ **SHIPPED AT 126** — see the header. +47 resolved owners
+(**$515,176,327.54**, exact) **minus 1**: `Stan Johnson Co`, a brokerage the role arm was admitting,
+which this section did not see because it counted brokerages only among the EXCLUDED rows. The 181
 unclassified stay out. **The brokerage guard becomes explicit rather than a side effect of the role
 label** — which is what the comment always intended.
 
