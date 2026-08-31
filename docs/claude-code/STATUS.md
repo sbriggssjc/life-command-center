@@ -359,6 +359,32 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — C12: C4a sized into a decidable question (decision brief, nothing built)
+
+**NOTHING WRITTEN, nothing recommended for build.** 👤 **This is a decision brief for Scott** —
+`docs/audits/C12_C4a_DECISION_BRIEF_2026-08-31.md`; canonical §7 decisions table updated;
+**C4a 👤 sized · C4b 👤 settled in principle.**
+
+- **The classifier is easy and the signal is clean: 3,217 `unknown` organizations hold a current
+  portfolio asset** — a **recorded fact**, not a name guess. Top 16 by rent read Easterly (85
+  assets / $114.9M), NGP Capital, USAA, US Fed Properties Trust, Government Properties Income
+  Trust, Elman, Piedmont REIT. Guards over the whole set: **brokerage 6 · placeholder 3 ·
+  not-prospected 124** (GWU among them — the drop-universities decision already covers it).
+- ⚠️ **The blast radius IS the decision: 2,949 of the 3,217 would enter P0.4, taking it 555 →
+  ~3,500** — 6× the band that already makes the queue 57% data-completion work, **because P0.4 has
+  no value gate**. ⚠️ **The deal-timing bands are unaffected** (C6 removed the role from them) and
+  the prospecting brief barely moves (C8's resolved-owner arm already admits most).
+- ⚠️ **Worth stating plainly: P0.4's job is *resolve ownership control*, and these 3,217 are exactly
+  owners whose control is unresolved — admitting them is arguably CORRECT. It is also 6× a band
+  nobody is working.** Correct and unusable are not mutually exclusive.
+- **Three options, each with its measured consequence** (A absorb / **B classify + gate P0.4** /
+  C retire `user_owner`). ⚠️ **Which floor B uses is its own question — five distinct $500k floors
+  exist (§4g) and any new one must be NAMED.** At ≥2 assets the set is 292; at ≥5 it is 30.
+- **C4b is settled in principle: `user_owner` is not a mistake to remove — it is a role with an
+  obvious producer nobody built.** Its disposition follows C4a and must not be decided separately.
+- ⚠️ **Named as unmeasured:** whether a P0.4 floor would apply to newcomers only or to its existing
+  555 rows — **different changes, different consequences, and it matters for option B.**
+
 ## 2026-08-31 — C11 SHIPPED; the call-sheet arc is COMPLETE, and C11a is refuted
 
 **C11 is LIVE** — the sheet now states the BASIS on which each person is the contact. **C6 → C8 →
