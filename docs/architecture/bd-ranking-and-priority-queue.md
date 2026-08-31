@@ -11,7 +11,9 @@
 > [`account-based-contact-intelligence.md`](account-based-contact-intelligence.md) (**who** to call
 > and **in what tone** — this page decides *whether the signal fires*, that one decides *the pitch*).
 >
-> **Status: C6 SHIPPED 2026-08-29** — `gov_owner_props` now gates P1/P2/P3/P8 on *holds a current
+> **Status: C6 SHIPPED 2026-08-29 · C8 SHIPPED 2026-08-31 (80 → 126 rows). ⚠️ C8c: the brief
+> renders "Unknown … rent unknown" on every row — fix prompt C10 written, not yet run.**
+> **C6 detail:** — `gov_owner_props` now gates P1/P2/P3/P8 on *holds a current
 > gov asset* **AND** *is reachable*, replacing the party-level role gate. **P1 74 → 149 · P2 32 → 95 ·
 > P3 61 → 163 · P8 76 → 213; 303 owners, every one callable.** P5, P0.4, P0.5, P-CONTACT, P-BUYER, P4
 > and all of dia unchanged (positive-controlled). Migration
@@ -177,6 +179,43 @@ remediation.**
 classified `v_bd_cadence_dashboard` as *selects only* — its gate is in JS. ⚠️ **Limits:**
 `pg_views.definition` is deparsed (P182), and a gate expressed as a JOIN to a role table, inside a
 function, or in an RLS policy would not match. **Views + JS handlers only.**
+
+### ✅ C8 SHIPPED 2026-08-31 — 80 → 126, and two defects found on the way
+
+Migration `20260831120000` appends `is_resolved_owner` + `is_brokerage` to
+`v_bd_cadence_dashboard`; `handleProspectingBrief` composes them with `BD_OWNER_ROLES`. Guard
+`test/c8-prospecting-brief-gate.test.mjs`.
+
+⚠️ **Landed 126, not the predicted 127 — and the miss was informative.** Every other figure
+reproduced exactly. **§2 sized the brokerage population by reading only the EXCLUDED half: there are
+4 brokerages among the 311, not 3.** `Stan Johnson Co` carries `owner_role='buyer'` and **was being
+shown**; making the guard explicit on both arms drops it, so the delta is **+47 − 1**.
+**A population counted on one side of a gate is not the population.**
+
+⚠️ **The P116 false positive appeared and cost nothing:** of the 4 flagged, `Coldwell Banker
+Commercial Realty`, `Stan Johnson Co` and `Northmarq Support` are genuine; **`Clark Matthews` is the
+documented bare-surname false positive** — but he is `unknown`, owns no asset, and fails the OR arm
+anyway. **The guard is outcome-bearing for exactly one of the four.**
+
+**At the default `limit=10`, 9 of 10 slots change** — Easterly enters at rank 2; NGP Capital, USAA,
+US Fed Properties Trust, Elman, Trammell Crow and Beacon reach page 1 for the first time.
+**This is a REACH fix, not a count fix.**
+
+### 🔴 C8c — the brief renders "Unknown … rent unknown" on EVERY row
+
+`handleProspectingBrief` maps `c.name` / `c.company_name` / `c.annual_rent` / `c.priority_signal`;
+the view supplies **`entity_name`** / *(none)* / **`rank_value`** / *(none)*. **Four of six
+meaningful fields are dead on the queue path** — only email, domain, days-overdue and phase survive.
+
+⚠️ **C8 just put Easterly, NGP and 45 other resolved owners on this sheet and every one renders as
+"Unknown".** And it plausibly explains why the role gate went unexamined so long: **a sheet where
+every row reads *"Unknown — unknown [mixed] … rent unknown"* is not one anyone works.** Two defects,
+each making the other harder to see. **Pre-existing, unrelated to C8's gate, and it blunts C8's
+entire benefit.** Fix: `docs/claude-code/prompts/C10-prospecting-brief-field-mapping.md`.
+
+🔴 **C8a — the fallback branch is ungated AND structurally dead** (`engagement_score` = 0 on all
+30,714 gov `unified_contacts` rows). Not a `V2_MAP` gate failure: it is a different source that
+never carried the gate and structurally cannot. **Do not repair it; decide whether to delete it.**
 
 ### ⚠️ C9 (2026-08-29) — the merge backlog now lands on these surfaces
 
