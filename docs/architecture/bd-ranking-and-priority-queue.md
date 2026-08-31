@@ -158,9 +158,22 @@ one, cadence + 36 edges on another** — the P177/P198 split. **The detector is 
 surfaced the group at `member_count = 3, auto_mergeable = false` and correctly refused to auto-merge
 genuine name variance. **It has never been reviewed.**
 
-**181 of the 303 C6 callable owners (60%)** share a canonical name with another live entity; 415
-queue entities and 50 brief-eligible entities likewise. ⚠️ **That is EXPOSURE, not confirmed splits**
-— the Brandywine-style split was verified on **one** named row; the population rate is unmeasured.
+**181 of the 303 C6 callable owners (60%)** share a canonical name with another live entity — but
+⚠️ **that is EXPOSURE, and the measured defect rate is far smaller.** Of **5,131** canonical-name
+groups with ≥2 live organizations:
+
+| | groups |
+|---|---:|
+| **TRUE splits** — facts on one member, cadence/contact on another | **45 (0.9%)** |
+| **edge splits** — the fact-less twin holds MORE relationship edges (P177's shape) | **434** |
+
+**Scope the review lane to the 45.** The 434 **under-rank** rather than misdirect a call (**C9b**).
+
+⚠️ **A metric trap that fired here: `lcc_property_owner` is NOT `lcc_entity_portfolio_facts`.**
+Counting "assets" via the resolved-owner table gave a plausible **33** that meant nothing — reading
+the rows showed case-variant pairs where **both** members hold zero. **The deal-timing bands read
+`lcc_entity_portfolio_facts` on `is_current`;** an entity can hold current facts and be correctly
+queued with no `lcc_property_owner` row. Two ownership tables, two questions.
 
 **C6 is what changed the cost.** Before it, 74 owners reached these bands and duplicates were
 hygiene. Now **303 owners are on a call sheet ranked by a value that lives on whichever twin holds
