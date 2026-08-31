@@ -359,6 +359,37 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — C4f answered: P0.4 needs no gate; the flood was a routing error
+
+**NOTHING BUILT.** `owner-role-classification.md` **§4** rewritten; **C4f ✅ answered**; new Dead-End **Class 31** (*a precondition correct on one surface is wrong on a neighbouring one*). ⚠️ **Numbered 31, not 30 — I collided again**: a parallel window took 30 for C10 hours earlier, and **the guard note I added at the top of the playbook on 2026-08-29 did not stop me, because the workflow appends at the bottom and never scrolls up.** That caveat is now in the note itself. This removes
+the last unmeasured input to Scott's C4a decision — **both fixes I had proposed are refuted.**
+
+**P0.4's existing 555 rows, measured:** **371 (67%) hold no current asset · 469 (85%) have NO KNOWN
+RENT · ZERO are contactable.**
+
+- ⚠️ **A value floor is the wrong instrument — 85% of the band has no known rent**, so it would
+  suppress on **ignorance, not value** (P180 NULL-is-not-zero). **C12's option B is refuted by its
+  own population.**
+- ⚠️ **And C6's reachability precondition is ALSO wrong here — it would take P0.4 to 0 rows.** It
+  looked like the obvious parallel because it worked on the deal-timing bands. **But P0.4 is a
+  RESEARCH band**: you resolve ownership control by reading deeds and SOS filings, not by calling.
+  **Reachability is the right precondition for a call and the wrong one for research** — copying it
+  across would delete 555 rows of legitimate work. *The technique does not transfer just because
+  the surface looks similar.*
+- **The real problem is two kinds of work under one label.** The 555 are **research**; C4a's 2,949
+  newcomers are **BD activation** — we already know who owns it and nobody has started.
+  ⚠️ **An entity C4a has just classified has had its ownership resolved — that is what the
+  classification IS — so it should never enter a band asking to resolve ownership.**
+- ✅ **Route the newcomers to a BD-activation band (P0.5's shape): 290 reachable today**, the rest
+  queue behind contact acquisition. **P0.4 stays at 555 doing research. The "6× flood" was an
+  artifact of routing them into the wrong band, not something to gate down.**
+- 🔴 **Noted separately, and not a defect this design creates: P0.4 does upstream research whose
+  output nobody consumes as a call (0 of 555 contactable).** A Consumption-Layer question of its own.
+
+**C4a is now fully specified and every input measured.** Remaining is Scott's: confirm
+`one_off_owner` + `investor_owner`; `former_owner`; `user_owner` as a human-confirmed lane (n=13);
+view vs recomputed column; and the newcomer routing above.
+
 ## 2026-08-31 — C4a §2d: the landlord gap sized, and it needs TWO states
 
 **NOTHING BUILT.** `docs/architecture/owner-role-classification.md` **§2d**; backlog C4a updated.

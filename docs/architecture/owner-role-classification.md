@@ -176,23 +176,51 @@ Two shapes, both acceptable:
 "status nobody earned" failure this repo has hit three times (A5's `gap_resolved`, B6b-lead's
 `filtered_multi_tenant`, C7's proposed default-stamp).
 
-## 4. ⚠️ P0.4 is a separate defect and must not be solved here
+## 4. ✅ P0.4 — measured 2026-08-31, and the flood dissolves rather than needing a gate
 
-Classifying accurately puts **~2,949 entities** into `P0.4 resolve_ownership_control`, taking it
-**555 → ~3,500**. **That is real and it is not a reason to classify less accurately.**
+C12 said classifying accurately would take P0.4 from **555 → ~3,500** and that P0.4 needed a value
+gate. **Measured, both the diagnosis and the proposed fix were wrong.**
 
-**P0.4 has no value gate**, which is a standing violation of the Consumption-Layer doctrine every
-other producer in this system obeys. **The fix belongs to P0.4.** Options — unmeasured, and a
-separate decision:
+### What P0.4's existing 555 rows actually are
 
-- give P0.4 a floor of its own (⚠️ **which floor must be NAMED — five distinct $500k floors already
-  exist**, §4g);
-- or narrow its predicate, since an entity we have just *positively classified* as a `user_owner`
-  arguably no longer needs "resolve ownership control" at all;
-- or accept the growth on a band that is explicitly a work queue, not a call list.
+| | rows |
+|---|---:|
+| P0.4 today | **555** |
+| …**hold no current asset at all** | **371 (67%)** |
+| …**have no known rent** | **469 (85%)** |
+| …rent ≥ $500k | 28 |
+| **…contactable** | **0** |
 
-⚠️ **Unmeasured and it matters: whether a P0.4 floor would apply to newcomers only or to its
-existing 555 rows.** Different changes, different consequences.
+⚠️ **A value floor is the wrong instrument: 85% of the band has no known rent.** Gating on it would
+suppress on **ignorance**, not on value — the P180 NULL-is-not-zero failure. **C12's option B is
+refuted by its own population.**
+
+⚠️ **And C6's reachability precondition is ALSO wrong here, for a different reason.** It looks like
+the obvious parallel — it worked on the deal-timing bands — and applying it would take P0.4 to
+**0 rows**, because **not one of the 555 is contactable.** But **P0.4 is a RESEARCH band, not a call
+band**: you resolve ownership control by reading deeds and SOS filings, not by phoning someone.
+**Reachability is the right precondition for a call and the wrong one for research.** Copying it
+across would delete 555 rows of legitimate work.
+
+### The actual problem: two different kinds of work under one label
+
+| | rows | reachable | what the work IS |
+|---|---:|---:|---|
+| **P0.4 today** | 555 | **0** | research — go find out who controls this |
+| **C4a's newcomers** | **2,949** | **290** | **BD activation** — we KNOW who owns it; nobody has started |
+
+**These are not the same band.** An entity C4a has just positively classified as `one_off_owner` or
+`investor_owner` **has had its ownership resolved — that is what the classification is.** Putting it
+in a queue that asks *"resolve ownership control"* is asking a question already answered.
+
+**So the newcomers do not belong in P0.4 at all**, and the "6× flood" is an artifact of routing them
+into the wrong band — not something to be gated down. **Route them to a distinct BD-activation band**
+(P0.5's shape: classified, no open opportunity, no cadence), where **290 are reachable today** and
+the rest queue behind contact acquisition.
+
+**P0.4 stays at 555 and keeps doing research.** ⚠️ **Its zero-contactable population is worth
+noting separately** — it is doing upstream work whose output nobody currently consumes as a call,
+which is a Consumption-Layer question for another day, **not a defect this design creates.**
 
 ## 5. What this design does NOT do
 
@@ -218,4 +246,4 @@ existing 555 rows.** Different changes, different consequences.
 3. **`user_owner` as a human-confirmed lane** rather than an automated arm, given n=13.
 4. **View vs recomputed column** — accuracy is identical; this is a performance and
    override-preservation trade.
-5. **P0.4** (§4) — a separate decision, deliberately not bundled.
+5. ✅ **P0.4 — ANSWERED in §4: no gate needed.** The newcomers belong in a BD-activation band, not in a research band; P0.4 stays at 555. **Confirm the routing.**
