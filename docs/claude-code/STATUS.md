@@ -16,6 +16,46 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-31 — B6d-cms-step + B6d-pri-reason: the error channel works; the audit read a decoy column
+
+**The premise was refuted, and the correction is the deliverable.** `ingestion_tracker` has **two**
+error columns. **`error_summary` has ZERO writers repo-wide** (no migration; the only hits store a
+value in a `notes`/`details` dict under that *key*) — so 47/47 NULL is correct and expected — while
+**`error_log` is populated on 18 of 18 `cms_ingestion` failures.** The capture the row asked to be
+built **already exists**: `traceback.format_exc()` on the exception path, a SIGTERM handler, and the
+step heartbeat, **all writing `error_log`**. They did not fire because every row was still `started`
+at reclaim time: **the process is hard-KILLED, so there is no exception to capture.** Every populated
+`error_log` is a **janitor artifact** that overwrote the diagnostic slot — the newest reads
+`(force)` with a heartbeat **2 s before** it was declared failed and a new lock row **0.4 s after**,
+i.e. the documented `FORCE_RUN=true` self-sabotage, recorded in the DB and read as a crash.
+
+Three further corrections: the two `started`+NULL rows are **`ingestion_lock`** rows, not pipeline
+runs (the lump-the-lock footgun); **none of the "6 success runs" is `cms_ingestion`** — that pipeline
+has *never* reported success in the window, so §2's "success on a no-op" defect does not exist; and
+**every "failed" run is a PAIR of rows 27–61 ms apart**, so the failure count itself is inflated by
+the instrumentation.
+
+**Shipped — B6d-pri-reason.** 437 → **2,148 rows** (growing ~78/min), and **the reason was never
+missing**: every row carried `payload.fields.reason='address_change'` / `medicare_clinics` /
+`address`, **100% recoverable**. `sanitize_pending_update` runs **twice**; pass 1 stamps its own
+`unknown_reason`, and pass 2's `if not p.get("reason")` sees a non-empty string and **refuses to
+correct it** — *a value the function invented blocked the real one it could now see*. Reproduced
+byte-identically via the stored `file_name='auto:medicare_clinics:unknown_reason:noid'`. Fixed
+(placeholders are treated as ABSENT; one owner for the vocabulary; nothing fabricated) **+ 2,148 rows
+backfilled reversibly** (`20260831190000`). Guard: 9 tests, **7/7 mutations RED**. ⚠️ Two guard
+defects were found in this session's own tests — a stripper that deleted the declaration it asserted
+on, and a source assertion whose pattern contained a literal and so **passed its own mutation**.
+
+🔴 **The live finding that outranks both rows (`B6d-cms-divert`):** a process wrote those 2,148 rows
+**with no `ingestion_tracker` row at all** while `max(medicare_clinics.source_last_seen)` stayed
+**2026-06-25** and `refreshed_today = 0`. **It reads CMS, queues a change per clinic, and never
+writes the clinic.** New rows: `B6d-cms-divert`, `B6d-pri-address-noise`, `B6d-cms-doublerow`,
+`B6d-cms-orphan-scope`.
+
+⚠️ **`source_last_seen` did not move and was not expected to.** ⚠️ The full suite cannot run in this
+sandbox (`flask` absent, pre-existing) — 35 tests green on the affected surface; **not a clean-suite
+claim.** Writeup: [`docs/audits/B6d_cms_step_ERROR_CHANNEL_2026-08-31.md`](../audits/B6d_cms_step_ERROR_CHANNEL_2026-08-31.md).
+
 ## 2026-08-31 — B6d-pri: four defects, ~1,950 failures a day, exit code 0
 
 **Repo: Dialysis.** Writeup `docs/audits/B6d_pri_PUBLIC_RECORD_INGEST_REPAIR_2026-08-31.md`;
