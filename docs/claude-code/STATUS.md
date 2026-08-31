@@ -16,6 +16,59 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-29 — D1: the cross-database provenance diff, standing (and mostly good news)
+
+**NOTHING BUILT** — no feeder, no backfill, no migration. Shipped a detector, a ledger and a guard.
+Writeup `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`; **I2**, **Class 20**, backlog
+**D1** + **D1a'–D1i** updated.
+
+- **The honest headline: the two domains are substantially coherent.** **69 producer-set differences
+  over 23 two-sided fact stores — 58 legitimate, 5 unexplained, 6 unwired, and NONE B5-sized.** The
+  largest is 1,021 rows of broker market intelligence against B5's 2,776 ownership rows over 2,000
+  properties. ⚠️ **That is a real result and it is what the prompt named as valuable — the detector's
+  value is now preventing the next divergence, not closing a current one. Manufacturing a finding to
+  justify the query was the failure mode here.**
+- ⚠️ **THE BIGGER FINDING IS A PRECONDITION NOBODY HAD STATED: 12 tables exist in BOTH domains and
+  record provenance in only ONE**, so I2 cannot be evaluated on them at all. The one that matters is
+  **dia `ownership_history` — 10,037 rows, no provenance column**, i.e. the very store B5 was a
+  finding about is un-diffable on dia's side. **A store with no provenance column is not clean, it is
+  UNMEASURABLE — and it reads identically to clean.** Backlog **D1g**.
+- ⚠️ **Positive control: 2 of 3, and I am not claiming the third.** B5 fires (dia
+  `sales_transactions_seller_exit` 2,310 facts / 1,554 entities, gov absent); B6c-dup fires (dia PSE
+  carries `sales_transactions` 2,646, gov carries none). **B6b is structurally out of reach —
+  `gsa_lease_change_facts` has no provenance column at all**; it was found by B6a's skipped-step
+  instrument, a different detector answering a different question.
+- ⚠️ **B5's control still fires even though B5 SHIPPED** — gov's equivalent work landed under
+  different bucket labels, so a naive reading re-reports a closed finding as open. That is exactly
+  why the mechanism is **acknowledgement-with-a-reason**: `legitimate` silences a row,
+  `unexplained`/`unwired` keep it **rendering** as known and tracked. Every entry, synonym and
+  exclusion **requires a reason** or the detector rejects it.
+- ⚠️ **I corrected my own reading twice, and both corrections shrank the finding.** The raw diff said
+  *"gov harvests sale contacts, dia does not — wire dia up"*; the parser diagnostics said dia has
+  **6x** the raw material and writes nothing, which looked bigger; **reading the rows** showed every
+  row on **both** sides is a **BROKER**, which the account doctrine never prospects — so it is Tier-4
+  market intelligence, not a BD gap. The genuinely valuable thing found en route is **symmetric and
+  therefore invisible to this detector**: buyer/seller sale-role contacts have **never** been
+  persisted in **either** domain, though dia's parser reports one on **540 of 942** captures
+  (**D1a'**, Class 2 not Class 20).
+- ⚠️ **Five ways this query returns a confident wrong answer, all hit live, all now guarded:**
+  per-domain column NAMES (`properties` = `data_source`/`source`); a **dead** second column (gov
+  `property_financials.source`, **0 of 98,510 populated**) so resolve by POPULATION not name;
+  per-row suffixes; a provenance column holding a **data value at modest cardinality**
+  (`ingestion_tracker.source` = temp paths, ~41 buckets, under any sane cardinality guard) — excluded
+  by **recorded decision with a reason, emitted and counted**, never by a name pattern (P182); and one
+  producer wearing two labels, folded by synonym **stingily** (dia carries BOTH `costar_import` and
+  `costar_sidebar`, so folding those would have hidden a real difference).
+- ⚠️ **The ledger-completeness gate caught 5 differences I had missed by eye.** Verifying the ledger
+  against the measured population, rather than assuming it complete, is what made it complete.
+- **Guard:** `test/d1-cross-db-provenance-diff.test.mjs` — 18 tests, **19 mutations verified RED**,
+  comments stripped before source matching.
+- 👤 **NOT scheduled, deliberately (D1h), and the script has never run.** The sandbox holds no
+  `GOV_/DIA_SUPABASE_*` credentials, so **every number above was measured through the Supabase MCP
+  seam and the runner's I/O path is unexercised.** A job that has never been green once is the badge
+  people learn to merge past. **First credentialed run is an operator step.**
+- Also fixed in passing: the backlog's **D1 row had 5 cells in a 4-column table and an unescaped `|`
+  inside a code span**, so GFM was silently dropping its status cell.
 ## 2026-08-31 — 📋 BASELINE captured before the CMS force-run and the DSN fix land
 
 **Three things are in flight at once**, so the baseline is recorded *before* any of them lands —

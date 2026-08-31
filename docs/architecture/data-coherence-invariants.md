@@ -97,7 +97,9 @@ from <fact_store> group by 1,2 order by 1, 3 desc;
 >
 > **The form that generalises is a CROSS-DATABASE diff of PARALLEL tables (gov vs dia)** — which is
 > how B5 was actually found, and how B6c found dia's `property_sale_events` differs from gov's.
-> Twelve parallel pairs carry a provenance column; see `docs/audits/D1_*`.
+> **28 parallel pairs carry a provenance column on both sides** (23 diffable after the
+> out-of-scope and cardinality exclusions below); see
+> `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`.
 >
 > ⚠️ **And a naive cross-DB query breaks on the first pair it meets:** `properties` uses
 > **`data_source` in gov and `source` in dia**. **Resolve the provenance column per table from the
@@ -112,6 +114,46 @@ from <fact_store> group by 1,2 order by 1, 3 desc;
 **A difference is not automatically a defect** — a domain may legitimately lack a source (dia has no
 GSA lease inventory; gov's tenant is a federal agency so it has no operator-vs-owner conflation).
 **But it must be an explained difference, not an unnoticed one.**
+
+> ✅ **SHIPPED 2026-08-29 as a standing detector** —
+> `scripts/d1-cross-db-provenance-diff.mjs` over `api/_shared/provenance-diff-planner.js`, with the
+> acknowledgement ledger `scripts/d1-provenance-acknowledgements.json` and the guard
+> `test/d1-cross-db-provenance-diff.test.mjs`. **Re-run MONTHLY**, and on adding any ingestion
+> source or domain database. Writeup: `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`.
+> **First run: 69 differences across 23 two-sided stores — 58 legitimate, 5 unexplained, 6 unwired,
+> and none B5-sized.** The two domains are substantially coherent; the detector's value is now
+> preventing the next divergence rather than closing a current one.
+>
+> ⚠️ **THE DIFF HAS A PRECONDITION NOBODY STATED: THE STORE MUST RECORD ITS PRODUCER, AND 12 DO NOT.**
+> Twelve tables exist in BOTH domains and carry a provenance column in only one — so I2 **cannot be
+> evaluated on them at all**. The one that matters is **dia `ownership_history`: 10,037 rows, no
+> provenance column**, i.e. the very store B5 was a finding about is un-diffable on the dia side.
+> Also gov `recorded_owners` (17,242) and gov `available_listings` (3,131). **A store with no
+> provenance column is not "clean" — it is unmeasurable**, and it reads identically to clean.
+> Backlog **D1g**.
+>
+> ⚠️ **RESOLVING THE COLUMN BY NAME IS NOT ENOUGH — RESOLVE IT BY POPULATION.** gov
+> `property_financials` carries BOTH `data_source` and `source`, and **`source` is populated on 0 of
+> 98,510 rows**. Name-order precedence picks the dead column and reports an empty producer set.
+>
+> ⚠️ **A PROVENANCE COLUMN CAN HOLD A DATA VALUE, AND A CARDINALITY GUARD DOES NOT CATCH ALL OF
+> THEM.** `entity_match_candidates.source_name` holds **1,276 entity names** (caught by cardinality);
+> `ingestion_tracker.source` holds script names, dataset filenames **and temp paths**
+> (`/tmp/tmpuab4ll9g.json`) across only ~41 buckets (**not** caught). Excluding those by a name
+> pattern is how a detector starts returning comfortable zeros (P182) — so each exclusion is a
+> **recorded decision with a reason**, and is still **emitted and counted**.
+>
+> ⚠️ **FOLD VOCABULARY DRIFT BY SYNONYM, AND BE STINGY ABOUT IT.** `om_extraction` (gov) vs
+> `om_intake` (dia) is one pipeline; `connectivity4_` vs `connectivity2_recorded_resolution` is one
+> resolver. Only two groups qualified: **dia carries BOTH `costar_import` (2,832) and `costar_sidebar`
+> (596) on leases**, so those are different routes and folding them would have hidden a real
+> difference.
+>
+> ⚠️ **ACKNOWLEDGING IS NOT SILENCING, AND EVERY ENTRY NEEDS A REASON.** `legitimate` silences a row;
+> `unexplained`/`unwired` keep it rendering as known and tracked. An entry, synonym or exclusion with
+> no reason is REJECTED by the detector — the guard against becoming the badge of noise that B6d
+> fixed one layer up. And **verify the ledger against the measured population**: the completeness
+> gate caught 5 differences that had been missed by eye.
 
 ### I3 — A cross-store link column must be type-compatible with its target and carry an FK
 
