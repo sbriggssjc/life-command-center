@@ -113,3 +113,46 @@ choice because that entity looks "more connected."
 - **Whether `connected_property_value` should feed `rank_value` at all.** It is the fallback that
   put a real number on the wrong entity. That is a design question about the view, not a defect —
   **unexamined.**
+
+
+---
+
+## 7. ✅ The split rate — measured 2026-08-29, and it corrects §3's framing
+
+§3 left the split rate unmeasured and flagged 181 as **exposure, not defect**. Measured:
+
+| | groups |
+|---|---:|
+| canonical-name groups with ≥2 live organizations | **5,131** |
+| …**TRUE splits** — facts on one member, cadence/contact on a **different** member | **45** |
+| …**edge splits** — the fact-less twin holds MORE relationship edges (the Brandywine/Gardner shape) | **434** |
+
+**45, not 181.** The operationally damaging shape — the one where the call lands on an entity that
+holds nothing while its twin holds the portfolio — is **45 groups**, 0.9% of all groups. **A review
+lane scoped to 45 is a morning's work; one scoped to 181 was never justified by this measurement.**
+
+Separately, **434 groups have their relationship history on the twin that does NOT hold the facts.**
+That is the **P177** defect (a survivor under-reporting the deal history prospecting ranks on), and
+it is **an order of magnitude larger than the true-split count**. It does not misdirect a call the
+way a true split does — it under-ranks. **Sized here, not addressed.**
+
+### ⚠️ The metric I used first was wrong, and the named rows caught it
+
+My first pass counted C6 owners with **`lcc_property_owner` assets = 0** and got **33**, which I was
+about to report as the defect set. **Reading the 33 refuted it:** they are case-variant pairs like
+`10668 SIERRA, LLC` / `10668 Sierra Llc` and `1300 LAFAYETTE PKWY, LLC` / `1300 LAFAYETTE PKWY, LLC`
+(byte-identical) — **where BOTH members hold zero.** Nothing is split; the twin holds nothing either.
+
+⚠️ **`lcc_property_owner` and `lcc_entity_portfolio_facts` answer different questions and I
+substituted one for the other.** `lcc_property_owner` is the **resolved-owner** table; the
+deal-timing bands read **`lcc_entity_portfolio_facts` on `is_current`**. An entity can legitimately
+hold current portfolio facts — and be correctly queued — while having no `lcc_property_owner` row.
+**Measuring "does this entity hold anything" against the wrong ownership table produced a plausible
+33 that meant nothing.** The rule this repo already carries — *verify on named rows before
+concluding* — is what caught it, and it caught a defect in the **instrument**, not in the data.
+
+### What this changes
+
+**Recommendation revised: scope the review lane to the 45 true splits**, value-ranked, human-confirm,
+reversible (P196). The 434 edge splits are a separate, larger, and less urgent question — they cost
+ranking accuracy, not misdirected calls. ⚠️ **Do not bulk-merge either set** (P195's hazards stand).

@@ -16,6 +16,27 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-29 — C9 split rate measured: 45 groups, not 181 (and my first metric was wrong)
+
+**NOTHING WRITTEN.** Folded into `C9_...md` **§7**, canonical **§3**, backlog **C9** revised,
+**C9b** filed. Measured before building the lane C9 recommended — which changed its scope 4×.
+
+- Of **5,131** canonical-name groups with ≥2 live organizations: **45 are TRUE splits** (facts on
+  one member, cadence/contact on another) — 0.9%. ⚠️ **C9's headline "181 of 303 (60%)" was
+  EXPOSURE and reads alarming.** **A lane scoped to 45 is a morning's work; 181 was never
+  justified by the measurement.**
+- 🔴 **C9b filed: 434 groups hold their relationship history on the twin that does NOT hold the
+  facts** — an order of magnitude larger, and it is **P177**'s defect (Gardner Tanenbaum's 240
+  relationships sat off the entity holding its 13 assets). It **under-ranks** rather than
+  misdirecting a call. **Sized, not addressed.**
+- ⚠️ **My first defect metric was WRONG and the named rows caught it.** Counting C6 owners with
+  `lcc_property_owner` assets = 0 gave **33**, which I was about to report as the defect set.
+  Reading them showed case-variant pairs — `10668 SIERRA, LLC` / `10668 Sierra Llc`,
+  `1300 LAFAYETTE PKWY, LLC` twice byte-identical — **where BOTH members hold zero.** Nothing split.
+  **`lcc_property_owner` (resolved owner) is not `lcc_entity_portfolio_facts` (what the bands
+  read).** Two ownership tables, two questions; substituting one produced a plausible number that
+  meant nothing. *Verify on named rows* caught a defect in the **instrument**, not the data.
+
 ## 2026-08-29 — the role-gate sweep: there is no third surface (C8's open gap, closed)
 
 **NOTHING WRITTEN.** Folded into `docs/audits/C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md`
