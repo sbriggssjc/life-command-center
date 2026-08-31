@@ -16,6 +16,26 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-29 — the role-gate sweep: there is no third surface (C8's open gap, closed)
+
+**NOTHING WRITTEN.** Folded into `docs/audits/C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md`
+**§5** and canonical **§3** rather than opening a new audit.
+
+C8 left *"whether any other handler carries an equivalent gate"* unmeasured. **Leaving it unswept is
+exactly how the prospecting brief survived C6**, so it was closed the same day.
+
+- **JS:** 22 `owner_role` hits across `api/` + the SPA; **exactly one is a FILTER**
+  (`api/operations.js:4807`). The rest are display projections, `select=` lists, or writes.
+- **DB:** of **14** `public` views mentioning `owner_role`, **exactly one FILTERS** on it —
+  `v_priority_queue_live`. The other 13 select only.
+- **So the entire system contains TWO role gates: one view, one handler.** C6 fixed the first;
+  **C8 completes the Class 24 remediation.** The problem is now bounded.
+- ⚠️ **Positive-controlled** (Class 11) — the detector fired on the known true positive and
+  correctly called `v_bd_cadence_dashboard` *selects only* (its gate is in JS).
+- ⚠️ **Limits stated, not glossed:** `pg_views.definition` is **deparsed** (P182), and a gate via a
+  JOIN to a role table, inside a function, or in an RLS policy would not match. Matviews not
+  separately enumerated.
+
 ## 2026-08-29 — B6d-cms: a 30-day throttle on a daily cron, latched by its own crashes
 
 **FIXED IN CODE (Dialysis `fc342b3`); the restart ships on the next Railway run.** Audit

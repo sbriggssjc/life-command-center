@@ -131,7 +131,41 @@ readable; **read all 3 before shipping.**
   C4a's question, not this one.
 - **Whether the 80 currently shown are correct.** They were counted, not read.
 - **The `seller_flipper` arm** — 0 rows, same status as `user_owner`, not separately investigated.
-- **Whether any other handler carries `BD_OWNER_ROLES` or an equivalent.** ⚠️ A repo grep found
-  `user_owner` in **exactly one JS file** (`api/operations.js`), but an equivalent gate written a
-  different way would not match that grep. **Not swept.**
+- ~~**Whether any other handler carries `BD_OWNER_ROLES` or an equivalent.** Not swept.~~
+  ✅ **SWEPT 2026-08-29 — see §5 below. The result bounds the whole problem.**
 - **dia.** The named rows are gov-dominant; no dia-specific measurement was made.
+
+
+## 5. ✅ The sweep — there is no third surface
+
+This audit originally left *"whether any other handler carries an equivalent gate"* unmeasured.
+**Leaving it unswept is exactly how the prospecting brief survived C6**, so it was closed the same
+day.
+
+**JS side** — `grep -rn "owner_role"` across `api/` and the root SPA files returns 22 hits. **Exactly
+one is a FILTER**: `api/operations.js:4807-4808` (this audit's subject). Every other hit is either a
+**display projection** (`owner_role: row.effective_owner_role`, the dossier/detail renderers), a
+**`select=` column list**, or a **write** (`sidebar-pipeline.js` seeding `owner_type`). None gates a
+population.
+
+**DB side** — over all 14 `public` views whose definition mentions `owner_role`, testing for a
+predicate form (`= ANY`, `IN (`, `<>`, `!=`, `IS NULL`, `IS NOT NULL`, `IS DISTINCT FROM`):
+
+| view | filters on `owner_role`? |
+|---|:--:|
+| **`v_priority_queue_live`** | ✅ **yes** (C6 cleared the four gov deal-timing arms; P0.4/P0.5/P5/P4 keep theirs, correctly) |
+| `v_bd_cadence_dashboard` · `v_priority_queue` · `v_priority_queue_enriched` · `v_entities_effective_role` · `v_entity_portfolio_all` · `v_lcc_merge_candidates` · `v_lcc_developer_classification_candidates` · `v_lcc_canonical_twin_candidates` · `v_lcc_listing_event_queue` · `v_lcc_operator_affiliates` · `v_lcc_operator_effective_portfolio` · `v_lcc_ownership_chain_completeness` · `v_lcc_trigger_band_properties` | selects only |
+
+**So the entire system contains exactly TWO role gates: one view and one handler.** C6 fixed the
+first; **C8 completes the Class 24 remediation.**
+
+⚠️ **Positive control (Class 11):** the detector fired on the known true positive
+(`v_priority_queue_live`, `set_form = true`) and correctly classified `v_bd_cadence_dashboard` as
+*selects only* — its gate lives in JS, which matches reading the handler directly. **The zeros are
+believable because the detector demonstrably can fire.**
+
+⚠️ **Stated limits.** `pg_views.definition` is **deparsed**, not what was written (P182) — `NOT IN`
+renders as `<> ALL`, which this regex does catch, but a gate expressed as a **JOIN to a role table**,
+inside a **function**, or in an **RLS policy** would not match. Materialized views were not
+separately enumerated. **The sweep covers views and the JS handlers; it is not a proof over every
+possible expression.**

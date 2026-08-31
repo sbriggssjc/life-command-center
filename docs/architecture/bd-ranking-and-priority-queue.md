@@ -138,6 +138,19 @@ build prompt `docs/claude-code/prompts/C8-prospecting-brief-admit-resolved-owner
 **Same Class 24 defect as C6, different surface. Fix: admit on the per-asset fact (is a resolved
 owner) with an EXPLICIT brokerage guard — 80 → 127 rows.**
 
+### ✅ The role-gate sweep — there is no third surface (2026-08-29)
+
+Over **all 14** `public` views mentioning `owner_role` and every JS hit in `api/` + the SPA:
+**exactly TWO gates exist in the whole system** — `v_priority_queue_live` (the view) and
+`api/operations.js:4807` (the prospecting brief). Everything else **selects** the column for
+display, a `select=` list, or a write. **C6 fixed the first; C8 completes the Class 24
+remediation.**
+
+⚠️ **Positive-controlled** (Class 11): the detector fired on the known true positive and correctly
+classified `v_bd_cadence_dashboard` as *selects only* — its gate is in JS. ⚠️ **Limits:**
+`pg_views.definition` is deparsed (P182), and a gate expressed as a JOIN to a role table, inside a
+function, or in an RLS policy would not match. **Views + JS handlers only.**
+
 ### ⚠️ C9 (2026-08-29) — the merge backlog now lands on these surfaces
 
 Three live entities share `canonical_name = 'brandywine realty'`, none merged: **assets + contact on
