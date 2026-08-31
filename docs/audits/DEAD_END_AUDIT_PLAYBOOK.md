@@ -17,6 +17,12 @@
 > are appended to the END of a 2,000-line file while the existing numbers live far above. Appending
 > makes the next number invisible — **this is the file's own Class 11 hazard: a check nobody runs
 > returns nothing and reads as clean.** Renumbered to 28 / 29.
+>
+> ⚠️ **AND IT HAPPENED AGAIN ON 2026-08-31, WITH THIS NOTE ALREADY IN THE FILE** — a second Class 30
+> was appended without running the check above (a parallel window had taken 30 for C10 hours
+> earlier). Renumbered to 31. **A guard written at the top of a file is not a guard if the workflow
+> appends at the bottom and never scrolls up.** Run the two commands; do not trust that you
+> remember the highest number.
 
 ## Class 1 — an entity FK missing from the merge path
 
@@ -2230,3 +2236,57 @@ question, asked of the RENDERER rather than the query.
 **Where else to run it.** Any handler that maps a domain view onto display fields, and especially
 any that gained columns later: `v_bd_cadence_dashboard`, `v_priority_queue_enriched`,
 `v_lcc_research_lane_summary`, `v_next_best_research`, the federated Decision Center lanes.
+
+---
+
+## Class 31 — a precondition that is correct on one surface is WRONG on a neighbouring one
+
+**Found 2026-08-31 (C4f), by nearly copying a fix that had just worked.**
+
+C6 gated the gov deal-timing bands on **reachability** — an owner with no contact cannot be called,
+so emitting one produces a cadence that can never advance (P112). It worked: 244 → 497 rows, every
+one callable.
+
+**P0.4 `resolve_ownership_control` looked like the same shape** — an operator-facing band, ungated,
+about to flood. Applying reachability there would take it to **0 rows: not one of its 555 is
+contactable.** And that would have been a **defect, not a cleanup** — because **P0.4 is a RESEARCH
+band.** You resolve ownership control by reading deeds and SOS filings. **Reachability is the right
+precondition for a call and the wrong one for research.**
+
+The value floor was equally wrong for its own reason: **469 of the 555 (85%) have no known rent**, so
+a rent floor would have suppressed on **ignorance rather than value** — the P180 NULL-is-not-zero
+failure wearing a gate's clothes.
+
+### The detector
+
+Before transplanting a gate, guard or precondition from one surface to another, ask **what the work
+on the receiving surface actually IS** — not what the surface looks like.
+
+- **A call needs a person.** Reachability applies.
+- **Research needs a record.** Reachability does not; a rent floor may not either if the rent is
+  what the research would establish.
+- **A gate keyed on a field that is mostly NULL on the receiving population is gating on ignorance**
+  — measure the field's coverage there before adopting the gate.
+
+**Two surfaces being adjacent, similar-looking, and both ungated is not evidence they need the same
+gate.** ⚠️ And the tell is cheap: **run the candidate gate against the receiving population and read
+the survivor count.** A gate that leaves 0 rows is either deleting real work or revealing that the
+population never belonged there.
+
+### What it actually revealed
+
+The "flood" was never a gating problem. **Two different kinds of work were about to share one
+label** — 555 research rows and 2,949 newly-classified owners whose ownership was, by definition,
+already resolved. **Routing fixed it; no gate was needed anywhere.**
+
+⚠️ **Generalisation worth keeping: when a population about to enter a band contradicts that band's
+own question, the answer is routing, not suppression.** An entity classified as an owner should
+never enter a queue asking *"who owns this?"*
+
+### Sibling classes
+
+- **Class 24** — right fact, wrong grain. Class 30 is right *precondition*, wrong *surface*.
+- **Class 23** — a predicate's blast radius belongs to the query. Both are failures to re-measure a
+  rule in its new context.
+- The P195/A2 lesson stated generally: **the hazard travels with the technique**, so a comparator —
+  or a gate — sanctioned for one population must be re-graded on the next.
