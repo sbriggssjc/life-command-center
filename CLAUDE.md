@@ -3603,6 +3603,55 @@ contract **I1**.
   gov does not). **Both of the gov propagator's calibrated decisions are gov measurements** (the
   month-truncation key; the quarantine vocabulary) and must be re-derived. Backlog **B6c-dup-dia**.
 
+## C10 — a CONSUMER can read columns its source has never had, and nothing errors (2026-08-31)
+
+`handleProspectingBrief` (the operator call sheet) mapped `v_bd_cadence_dashboard` onto display
+fields using **six names the view has never had** — `name`, `contact_name`, `company_name`,
+`org_name`, `annual_rent`, `priority_signal` — while the view supplies **`entity_name`** and
+**`rank_value`**. PostgREST returned its 37 real columns, JS read `undefined` off the rest, and
+**every one of the 126 rows rendered `Unknown — unknown [mixed] … rent unknown … Signal: none`.**
+One JS change, no migration. Writeup:
+`docs/audits/C10_PROSPECTING_BRIEF_COLUMN_MAPPING_2026-08-31.md`; playbook **Class 30**.
+
+- **⚠️ THE `||` FALLBACK IS WHAT HID IT — THE MORE POLITE THE DEFAULT, THE LONGER IT SURVIVES.**
+  `|| 'Unknown'`, `|| ''`, `|| 'none'`, `|| 'rent unknown'` each render as *plausible absence of
+  data*, so a WIRING bug presents as a DATA-QUALITY impression, with no error, no null, and **a
+  correct row count throughout**. A field that threw would have been reported in a day. It is
+  P137 (*a consumer wired to a producer that does not exist*) at the COLUMN grain, and P134's
+  *diff the view's columns against the handler's `select=`* asked of the RENDERER instead of the
+  query.
+- **⚠️ TWO DEFECTS ON ONE SURFACE HIDE EACH OTHER.** C8 had just put Easterly ($114.9M / 85
+  properties), NGP Capital and USAA Real Estate onto this sheet **and every one rendered as
+  "Unknown"** — and that is plausibly why the role gate C8 fixed went unexamined for months: **a
+  sheet where every row is anonymous is not a sheet anyone works.** On finding a legibility defect,
+  re-ask whether that surface's SELECTION was ever really reviewed, and vice versa.
+- **⚠️ A CORRECT MAPPING WITH A DISHONEST DEFAULT IS THE SAME P180 FAILURE ONE STEP LATER.** Two
+  fields mapped correctly and still lied: `[mixed]` for a NULL `domain` (**93 of 126, 74%**)
+  asserts the owner spans verticals — and the view carries a real `is_cross_vertical` nothing reads
+  — while a `/yr` suffix on `rank_value` asserts an annual basis that
+  `COALESCE(NULLIF(current_annual_rent_total,0), connected_property_value)` does not have for a
+  relationship-derived row (C9a). **Fix the fallback text, not only the mapping**, and say the same
+  rule to the model in the prompt so it cannot re-introduce the mislabel in prose.
+- **⚠️ CHECK WHETHER A DEAD DISPLAY FIELD REACHES A WRITE.** `getFollowUpSuggestions` reads
+  `contacts[0].name`, so the chip read *"Draft email to Unknown"* and fired `draft_outreach_email`
+  with `contact_name: 'Unknown'`.
+- **⚠️ THE BRIEF'S OWN PREDICTIONS NEEDED RE-MEASURING — assert on the population, not the plan.**
+  *"Every row has a `rank_value`"* is false (**4 of 126 NULL**), so the renderer tests
+  `Number.isFinite`, **never truthiness**, and a genuine **$0** stays `$0`.
+- **Guard: `test/prospecting-brief-column-mapping.test.mjs` (3 tests, all 5 mutations RED).** Two
+  layers, because column-checking the query cannot catch the second: *map reads ⊆ the view's
+  columns*, and *renderer reads ⊆ the keys the map produces* — the latter is how `priority_signal`
+  survived, read by a template nothing ever set. ⚠️ **It strips comments first, and that is
+  load-bearing:** the fix's own comments name every banned column 5 times while explaining the bug,
+  so a raw-source detector finds them all present and passes over a regression (A5c / N18).
+- 🔴 **C10b — now that the sheet is legible it will confidently name a person at the WRONG FIRM.**
+  Of 113 rows with an email, **16** have a domain corroborating the owner (P197) and **14 are
+  consumer mailboxes**; Boyd Watterson's contact is `@mcwhinney.com`, Easterly's `@centurytel.net`.
+  ⚠️ **16/113 is a LOWER BOUND, not 97 wrong** — a real employee can use a personal address (the
+  P188 asymmetry). **121 of 126 DO carry a relationship edge** whose role is on file
+  (`prospecting_contact` 58 · `institution_decision_maker` 35 · `manager` 15 · **`works_at` 12, the
+  weak SF org edge P161 disqualified** · `decision_maker` 1) — **and the sheet prints none of it.**
+
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
 Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration

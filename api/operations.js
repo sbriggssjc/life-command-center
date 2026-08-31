@@ -4795,17 +4795,62 @@ async function handleProspectingBrief(params, user, workspaceId) {
   const limit = Math.min(parseInt(params?.limit) || 10, 25);
   const domainFilter = params?.domain || null;
 
-  // BD-target gate: require a classified owner_role for ALL contacts.
-  // Brokers and unclassified intermediaries have owner_role='unknown' and
-  // must be excluded regardless of domain. The previous implementation queried
-  // unified_contacts (GOV Supabase) which has no owner_role classification —
-  // it returned brokers alongside property owners, polluting the call sheet.
-  // This version queries v_bd_cadence_dashboard (LCC production) which joins
-  // entities (owner_role, domain) with touchpoint_cadence (rank_value, days_overdue).
+  // BD-target gate: keep brokers and unclassified intermediaries off the call
+  // sheet. The previous implementation queried unified_contacts (GOV Supabase)
+  // which has no owner_role classification — it returned brokers alongside
+  // property owners, polluting the sheet. This version queries
+  // v_bd_cadence_dashboard (LCC production), which joins entities (owner_role,
+  // domain) with touchpoint_cadence (rank_value, days_overdue).
+  //
+  // C8 (2026-08-31) — THE INTENT ABOVE IS RIGHT; `owner_role` ALONE WAS THE
+  // WRONG INSTRUMENT FOR IT. `unknown` covers 93.9% of entities and is not in
+  // the vocabulary at all, so the role list excluded the book to exclude the
+  // brokers. Measured live over the 311 eligible cadence rows: the role gate
+  // showed 80 ($442.8M) and hid 231, of which 47 are RESOLVED PROPERTY OWNERS
+  // carrying $515.2M — more rank value than everything it showed — against 3
+  // brokerages. Easterly Gov Properties ($114.9M / 85 properties), NGP Capital,
+  // USAA Real Estate, US Fed Properties Trust and Trammell Crow were all off
+  // the sheet. Audit: docs/audits/C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md
+  //
+  // The rule is C6's, on a second surface: admit on the PER-ASSET FACT the
+  // system already holds, not on the party-level label —
+  //   (a classified owner_role) OR (a resolved owner in lcc_property_owner)
+  //   AND NOT a brokerage, on BOTH arms.
+  // The brokerage guard is now EXPLICIT rather than a side effect of the role
+  // label, which is what the comment always intended: it removes one row the
+  // role arm was admitting today (Stan Johnson Co, owner_role='buyer').
+  //
+  // Both new predicates are COLUMNS on the view (migration 20260831120000) so
+  // the gate stays in the SELECTION and `order=rank_value.desc&limit=N` stays
+  // server-side. Filtering after the read would leave the ranked head full of
+  // rows nobody can work, which is the failure this is fixing.
+  //
+  // ⚠️ `user_owner` and `seller_flipper` have NEVER been written to any entity
+  // (0 rows each) — they are inert tokens kept here deliberately so this change
+  // moves exactly one thing. Removing them is a literal no-op (backlog C4b).
+  // Whether an owner should leave `unknown` at all is C4a, not this gate.
   const BD_OWNER_ROLES = 'developer,user_owner,buyer,seller_flipper,operator';
-  const bdGate = domainFilter
-    ? `&domain=eq.${pgFilterVal(domainFilter)}&owner_role=in.(${BD_OWNER_ROLES})`
-    : `&owner_role=in.(${BD_OWNER_ROLES})`;
+
+  // ⚠️ The role arm is spelled as one `owner_role.eq.<role>` alternative per
+  // role, NOT as `owner_role.in.(a,b,c)` nested inside the `or=` group. The two
+  // are semantically identical (asserted on this population: both select the
+  // same 80 rows), but the `in.(...)` form puts a comma-separated list inside a
+  // group whose own separator is a comma. PostgREST parses that correctly, and
+  // NOTHING IN THIS REPO EXERCISES IT — there is not one `or=(...in.(...))` on
+  // the whole API surface, whereas `or=(a.eq.x,b.eq.y[,and(...)])` is used in a
+  // dozen places (see api/queue.js). A 400 here would not raise: the handler
+  // treats `!queueResult.ok` as "queue empty" and falls through to the dead
+  // fallback branch below, so a mis-parsed filter would surface as the
+  // perfectly calm sentence "No BD contacts found." Given the endpoint could
+  // not be probed from the build sandbox (Supabase egress is blocked by network
+  // policy, 403 CONNECT), use the construct that is already proven in
+  // production over the one that would be taken on faith.
+  const roleArm = BD_OWNER_ROLES.split(',')
+    .map(r => `owner_role.eq.${r}`)
+    .join(',');
+  const bdGate = (domainFilter ? `&domain=eq.${pgFilterVal(domainFilter)}` : '')
+    + `&or=(${roleArm},is_resolved_owner.is.true)`
+    + `&is_brokerage=is.false`;
 
   // Primary: LCC queue ranked by portfolio value (rank_value) and urgency (days_overdue)
   const queueResult = await opsQuery('GET',
@@ -4816,21 +4861,72 @@ async function handleProspectingBrief(params, user, workspaceId) {
   let source = 'lcc_queue';
 
   if (queueResult.ok && (queueResult.data || []).length > 0) {
+    // C10 (2026-08-31) — MAP ONTO THE COLUMNS THE VIEW ACTUALLY SUPPLIES.
+    // Four of the six meaningful fields were read under names
+    // `v_bd_cadence_dashboard` has never had, so every row on the call sheet
+    // rendered `Unknown - unknown [mixed] ... rent unknown ... Signal: none`.
+    // The view supplies `entity_name` (not `name`/`contact_name`) and
+    // `rank_value` (not `annual_rent`); it has no company column and no
+    // `priority_signal` column at all. Nothing errored -- PostgREST returns the
+    // 37 columns it has and JS reads `undefined` off the rest.
+    //
+    // This mattered more than a cosmetic defect: C8 had just put Easterly
+    // ($114.9M / 85 properties), NGP Capital and USAA Real Estate onto this
+    // sheet, and every one of them rendered as "Unknown". A sheet where every
+    // line is anonymous is not a sheet anyone works, which is plausibly why the
+    // role gate C8 fixed survived unexamined for so long -- two defects, each
+    // making the other harder to see.
+    //
+    // Audit: docs/audits/C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md
+    // Dead-End playbook Class 24.
+    //
+    // ⚠️ RENDERING ONLY. The gate, the ordering and the limit are untouched --
+    // if the row count moves, something is wrong.
     contacts = queueResult.data.map(c => ({
       contact_id:      c.contact_id || null,
-      name:            c.name || c.contact_name || 'Unknown',
-      company:         c.company_name || c.org_name || '',
-      email:           c.contact_email || c.email || '',
+      name:            c.entity_name || 'Unknown',
+      email:           c.contact_email || '',
       domain:          c.domain || '',
       owner_role:      c.owner_role || '',
-      annual_rent:     c.annual_rent || null,
-      rank_value:      c.rank_value || null,
+      // ⚠️ `rank_value` is COALESCE(NULLIF(current_annual_rent_total,0),
+      // connected_property_value) -- for a substantial minority of rows it is
+      // RELATIONSHIP-DERIVED value, not owned annual rent (backlog C9a). It is
+      // named and rendered as portfolio value, never as rent, and carries no
+      // `/yr` suffix, because a connected-property value is not an annual
+      // figure. PostgREST returns numeric as a string; coerce once here so the
+      // renderer can tell a real 0 from an absent value (P180).
+      rank_value:      c.rank_value == null ? null : Number(c.rank_value),
+      property_count:  c.rank_property_count == null ? null : Number(c.rank_property_count),
       days_overdue:    c.days_overdue || 0,
-      priority_signal: c.priority_signal || '',
+      // Replaces the invented `priority_signal`. Both of these are real columns.
+      // `review_flag` is R34 Unit 3's staleness guard (an active cadence silently
+      // >90 days overdue) -- 7 of the 126 eligible rows carry it.
+      next_touch_type: c.next_touch_type || '',
+      review_flag:     c.review_flag === true,
       phase:           c.phase || ''
     }));
   } else {
-    // Fallback: Outlook/Salesforce engagement scores when LCC queue is empty
+    // Fallback: Outlook/Salesforce engagement scores when LCC queue is empty.
+    //
+    // ⚠️ C8 checked this branch for the A1 `V2_MAP` failure — a gate fixed in
+    // one branch that silently stops filtering in the other. It is NOT a second
+    // implementation of the BD-target gate; it is a different source that has
+    // never carried one, and structurally cannot carry this one:
+    // `unified_contacts` has no `owner_role`, no link to `lcc_property_owner`,
+    // and lives on the GOV project (govContactQuery -> GOV_URL), not the hub
+    // that `CONTACTS_HUB=ops` made live. Re-implementing the brokerage guard
+    // here in JS would be the normaliser drift this codebase keeps paying for.
+    //
+    // ⚠️ AND THE BRANCH IS STRUCTURALLY DEAD, MEASURED 2026-08-31:
+    // `engagement_score` is 0 on ALL 30,714 gov `unified_contacts` rows (max 0,
+    // 0 non-null above zero), so `engagement_score=gt.0` returns nothing and
+    // this path can only ever fall through to the "No BD contacts found"
+    // return below. It is ungated AND inert — the fail-open is latent, not
+    // live. It goes live the day anyone backfills that column, or repoints
+    // this query at the live hub. Filed as C8a; deliberately not restructured
+    // here, because rewiring it is a behaviour change nobody has graded and
+    // would reintroduce exactly the broker pollution the comment above
+    // describes.
     source = 'outlook_engagement';
     const hotResult = await govContactQuery(
       `unified_contacts?contact_class=eq.business&engagement_score=gt.0&order=engagement_score.desc&limit=${limit}&select=unified_id,full_name,email,phone,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent`
@@ -4865,15 +4961,28 @@ async function handleProspectingBrief(params, user, workspaceId) {
 
   const contactList = source === 'lcc_queue'
     ? contacts.map((c, i) => {
-        const rent = c.annual_rent ? `$${Math.round(c.annual_rent).toLocaleString()}/yr` : 'rent unknown';
-        return `${i + 1}. ${c.name}${c.company ? ` (${c.company})` : ''} — ${c.owner_role} [${c.domain || 'mixed'}]\n   Email: ${c.email || 'no email on file'}\n   Portfolio value: ${rent} | Days overdue: ${c.days_overdue}\n   Signal: ${c.priority_signal || 'none'} | Phase: ${c.phase}`;
+        // C10: every token below comes from a column the view actually has.
+        // A null is stated as "not on file", never rendered as a measured
+        // value -- `[mixed]` for a null domain asserted the owner spans
+        // verticals (it is null on 93 of 126 eligible rows), and `Signal: none`
+        // asserted a measured absence of a field that never existed. Both are
+        // the P180 NULL-is-not-zero failure in prose.
+        const value = Number.isFinite(c.rank_value)
+          ? `$${Math.round(c.rank_value).toLocaleString()}`
+          : 'not on file';
+        const assets = Number.isFinite(c.property_count) && c.property_count > 0
+          ? ` across ${c.property_count} propert${c.property_count === 1 ? 'y' : 'ies'}`
+          : '';
+        // R34 Unit 3 staleness guard -- surfaced, never auto-expired.
+        const stale = c.review_flag ? ' | ⚠ cadence stale >90d, review' : '';
+        return `${i + 1}. ${c.name} — ${c.owner_role || 'role not on file'} [${c.domain || 'domain not on file'}]\n   Email: ${c.email || 'no email on file'}\n   Portfolio value: ${value}${assets} | Days overdue: ${c.days_overdue}\n   Next touch: ${c.next_touch_type || 'not scheduled'}${stale} | Phase: ${c.phase}`;
       }).join('\n\n')
     : contacts.map((c, i) =>
         `${i + 1}. ${c.name} (${c.company}) — ${c.heat} (score: ${c.score})\n   Title: ${c.title}\n   Last call: ${c.last_call} | Last email: ${c.last_email}\n   Calls: ${c.total_calls} | Emails: ${c.total_emails}\n   Phone: ${c.phone} | Email: ${c.email}`
       ).join('\n\n');
 
   const prompt = source === 'lcc_queue'
-    ? `Generate a concise daily BD prospecting call sheet for ${today}.\n\nThese are the top investment sales targets ranked by portfolio value and days overdue. All are property owners — not brokers or intermediaries:\n\n${contactList}\n\nFor each contact provide:\n1. A one-line call prep note (owner role, why to call now based on days overdue)\n2. A domain-specific talking point (government net-lease, dialysis net-lease, etc.)\n3. Priority: call today / this week / nurture\n\nThis is for an investment sales professional (SVP, Investment Sales) at Northmarq. Keep each entry tight — 2-3 lines.`
+    ? `Generate a concise daily BD prospecting call sheet for ${today}.\n\nThese are the top investment sales targets ranked by portfolio value and days overdue. All are property owners — not brokers or intermediaries:\n\n${contactList}\n\nFor each contact provide:\n1. A one-line call prep note (owner role, why to call now based on days overdue)\n2. A talking point. Use the domain for a sector-specific angle (government net-lease, dialysis net-lease) ONLY when a domain is given; where it reads "domain not on file", keep the talking point generic and do NOT assume a sector.\n3. Priority: call today / this week / nurture\n\nGround rules: "Portfolio value" is the relationship value we hold for that owner — annual rent where known, otherwise connected-property value. Do NOT describe it as annual rent or as a valuation. Never restate a field shown as "not on file" as though it were known, and do not invent a company, sector or figure that is not above.\n\nThis is for an investment sales professional (SVP, Investment Sales) at Northmarq. Keep each entry tight — 2-3 lines.`
     : `Generate a concise daily prospecting call sheet for ${today}.\n\nHere are the top contacts ranked by engagement:\n\n${contactList}\n\nFor each contact, provide:\n1. A one-line call prep note (why to call based on engagement pattern)\n2. A suggested talking point or reason to reach out\n3. Priority level (call today / this week / nurture)\n\nFocus on contacts who haven't been called recently but have high engagement. Flag any that are overdue for a touchpoint.`;
 
   const result = await invokeChatProvider({

@@ -1085,6 +1085,47 @@ delta and the depth delta separately** — they move by very different multiples
 **Where else to point it:** any fact with a provenance/source column and more than one domain —
 owner contacts, listing events, rent, cap rates, documents, broker relationships.
 
+> ✅ **STANDING SINCE 2026-08-29 (D1).** `scripts/d1-cross-db-provenance-diff.mjs`, ledger
+> `scripts/d1-provenance-acknowledgements.json`, guard `test/d1-cross-db-provenance-diff.test.mjs`.
+> **Re-run monthly** and on adding any source or domain DB.
+> Writeup: `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`.
+>
+> ⚠️ **THE SQL ABOVE IS THE INTRA-TABLE FORM AND IT HAS A POPULATION OF ONE.** It needs a table with
+> BOTH a domain column and a provenance column; on LCC Opps only `lcc_entity_portfolio_facts` has
+> both — **the very table it was written from.** It is retained here as the **B5 positive control**,
+> not as the general query. **The form that generalises is a CROSS-DATABASE diff of parallel tables
+> (gov vs dia).**
+>
+> **First standing run: 69 differences over 23 two-sided stores — 58 legitimate, 5 unexplained, 6
+> unwired, none B5-sized.** ⚠️ **That is a real result, not a failed hunt.** Two domains that are
+> already coherent are what this class is supposed to produce most of the time; **manufacturing a
+> finding to justify the query is the failure mode here.**
+>
+> ⚠️ **THE CLASS HAS A PRECONDITION NOBODY HAD STATED: the store must RECORD its producer.** 12
+> tables exist in both domains and carry a provenance column in only one — **dia `ownership_history`
+> (10,037 rows) among them, i.e. the store B5 was about.** A store with no provenance column is not
+> clean, it is **unmeasurable**, and it reads exactly like clean.
+>
+> ⚠️ **FIVE WAYS THIS DETECTOR RETURNS A CONFIDENT WRONG ANSWER**, all hit live:
+> **(1)** the provenance column is named differently per domain (`properties`: `data_source` in gov,
+> `source` in dia) — resolve from the catalogue, never hard-code;
+> **(2)** a table carries TWO provenance columns and the better-named one is dead (gov
+> `property_financials.source`: **0 of 98,510 populated**) — resolve by POPULATION;
+> **(3)** the value carries a per-row suffix (`county_deed:<uuid>`) — `split_part` first or the diff
+> drowns in one-row buckets;
+> **(4)** the column holds a DATA VALUE, sometimes at modest cardinality that a cardinality guard
+> misses (`ingestion_tracker.source` = temp paths, ~41 buckets) — exclude by **recorded decision with
+> a reason, emitted and counted**, never by a name pattern (P182);
+> **(5)** the same producer wears different labels per domain (`om_extraction`/`om_intake`) — fold by
+> synonym, but **stingily**: dia carries BOTH `costar_import` and `costar_sidebar`, so those are two
+> real routes and folding them would hide a difference.
+>
+> ⚠️ **AND THE POSITIVE CONTROL STILL FIRES FOR B5 EVEN THOUGH B5 SHIPPED** — gov's equivalent work
+> landed under different bucket names, so the labels still differ. **A naive reading re-reports a
+> closed finding as open.** That is exactly why the mechanism is acknowledgement-with-a-reason rather
+> than a pass/fail count, and why `legitimate` silences a row while `unexplained`/`unwired` keep it
+> rendering.
+
 ## Class 17 — a RULE proposed for removal because its false positives are the only part you can see
 
 **Symptom:** a matching or admission rule produces a handful of obviously-wrong outputs. They are
@@ -2133,3 +2174,59 @@ Gardner Tanenbaum's 240 relationships off the entity holding its 13 assets.
 row** — not its value. Ask what the mechanism would also predict (a population, a distribution, a
 second consumer) and check one of those predictions. If the only evidence is that the number looks
 familiar, say "resembles X, unverified" and go measure.
+
+---
+
+## Class 30 — a CONSUMER reads a field its source has never supplied
+
+**Detector.** For every handler that maps a view/table onto display or downstream fields, diff the
+field names it READS against the source's actual column list:
+
+```sql
+select column_name from information_schema.columns
+where table_schema='public' and table_name='<the view the handler queries>';
+```
+
+Then grep the handler for `<row>.<name>` and subtract. **Anything left is dead on every row.**
+
+**First run (C10, 2026-08-31).** `handleProspectingBrief` read six names
+`v_bd_cadence_dashboard` has never had — `name`, `contact_name`, `company_name`, `org_name`,
+`annual_rent`, `priority_signal` — against a view supplying `entity_name` and `rank_value`. **Four
+of the six meaningful fields on the operator call sheet were dead on all 126 rows**, which rendered
+`Unknown — unknown [mixed] … rent unknown … Signal: none`.
+
+**Why nothing catches it.** PostgREST returns the columns it has and says nothing about the ones you
+asked for by mistake; JS reads `undefined` and the `||` fallback fires. There is no error, no log,
+no null, and **the row COUNT is correct throughout** — the failure presents as a working surface
+with thin data. It is the mirror of P137 (*a consumer wired to a producer that does not exist*) at
+the column grain, and of P134's *diff the view's columns against the handler's `select=`*: same
+question, asked of the RENDERER rather than the query.
+
+- **⚠️ THE FALLBACK IS WHAT HIDES IT, AND THE MORE POLITE THE FALLBACK THE LONGER IT SURVIVES.**
+  `|| 'Unknown'`, `|| ''`, `|| 'none'`, `|| 'rent unknown'` all render as *plausible absence of
+  data*. A field that threw, or rendered blank, would have been reported in a day. **A defensive
+  default on a field you believe is usually present converts a wiring bug into a data-quality
+  impression.**
+- **⚠️ TWO DEFECTS ON ONE SURFACE HIDE EACH OTHER, AND THIS IS THE MECHANISM.** The role gate C8
+  fixed had excluded $515M of resolved owners from this same sheet for months. **A sheet on which
+  every row reads "Unknown … rent unknown" is not a sheet anyone works** — so nobody was positioned
+  to notice what was missing from it. When you find a legibility defect on a surface, **re-ask
+  whether the surface's SELECTION was ever really reviewed**, and vice versa.
+- **⚠️ CHECK WHETHER THE DEAD FIELD REACHES A WRITE.** Here `getFollowUpSuggestions` read
+  `contacts[0].name` and fired `draft_outreach_email` with `contact_name: 'Unknown'`. A rendering
+  defect had reached an action surface.
+- **⚠️ FIX THE FALLBACK TEXT, NOT ONLY THE MAPPING.** Two of the surviving fields were mapped
+  correctly and still lied: `[mixed]` for a NULL domain (93 of 126) asserts the owner spans
+  verticals, and a `/yr` suffix on a value that is relationship-derived for many rows asserts an
+  annual basis. **A correct mapping with a dishonest default is the same P180 failure one step
+  later.**
+- **⚠️ AND GUARD IT WITH THE COMMENTS STRIPPED.** The fix's own comments necessarily name every
+  banned column while explaining the bug — 5 times here — so a detector reading raw source finds
+  them all present and passes over a regression (the A5c / N18 lesson). Guard the two layers
+  separately: *map reads ⊆ source columns*, and *renderer reads ⊆ map keys*. The second is how
+  `priority_signal` survived — the renderer read a field nothing ever set, which no amount of
+  column-checking on the query would catch.
+
+**Where else to run it.** Any handler that maps a domain view onto display fields, and especially
+any that gained columns later: `v_bd_cadence_dashboard`, `v_priority_queue_enriched`,
+`v_lcc_research_lane_summary`, `v_next_best_research`, the federated Decision Center lanes.

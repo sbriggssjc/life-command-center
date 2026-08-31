@@ -57,6 +57,127 @@ backlog **B6d-pri** ✅, **B6d-cms-restart** re-scoped, **B6d-pri-metrics** file
 - 👤 **Nothing here ingests.** The restart is a Railway **Redeploy** (not `FORCE_RUN=true`).
   Verify on `max(medicare_clinics.source_last_seen)` past 2026-06-25 + the `feed_stale` alert
   auto-resolving — never `updated_at`, never the log line.
+## 2026-08-29 — D1: the cross-database provenance diff, standing (and mostly good news)
+
+**NOTHING BUILT** — no feeder, no backfill, no migration. Shipped a detector, a ledger and a guard.
+Writeup `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`; **I2**, **Class 20**, backlog
+**D1** + **D1a'–D1i** updated.
+
+- **The honest headline: the two domains are substantially coherent.** **69 producer-set differences
+  over 23 two-sided fact stores — 58 legitimate, 5 unexplained, 6 unwired, and NONE B5-sized.** The
+  largest is 1,021 rows of broker market intelligence against B5's 2,776 ownership rows over 2,000
+  properties. ⚠️ **That is a real result and it is what the prompt named as valuable — the detector's
+  value is now preventing the next divergence, not closing a current one. Manufacturing a finding to
+  justify the query was the failure mode here.**
+- ⚠️ **THE BIGGER FINDING IS A PRECONDITION NOBODY HAD STATED: 12 tables exist in BOTH domains and
+  record provenance in only ONE**, so I2 cannot be evaluated on them at all. The one that matters is
+  **dia `ownership_history` — 10,037 rows, no provenance column**, i.e. the very store B5 was a
+  finding about is un-diffable on dia's side. **A store with no provenance column is not clean, it is
+  UNMEASURABLE — and it reads identically to clean.** Backlog **D1g**.
+- ⚠️ **Positive control: 2 of 3, and I am not claiming the third.** B5 fires (dia
+  `sales_transactions_seller_exit` 2,310 facts / 1,554 entities, gov absent); B6c-dup fires (dia PSE
+  carries `sales_transactions` 2,646, gov carries none). **B6b is structurally out of reach —
+  `gsa_lease_change_facts` has no provenance column at all**; it was found by B6a's skipped-step
+  instrument, a different detector answering a different question.
+- ⚠️ **B5's control still fires even though B5 SHIPPED** — gov's equivalent work landed under
+  different bucket labels, so a naive reading re-reports a closed finding as open. That is exactly
+  why the mechanism is **acknowledgement-with-a-reason**: `legitimate` silences a row,
+  `unexplained`/`unwired` keep it **rendering** as known and tracked. Every entry, synonym and
+  exclusion **requires a reason** or the detector rejects it.
+- ⚠️ **I corrected my own reading twice, and both corrections shrank the finding.** The raw diff said
+  *"gov harvests sale contacts, dia does not — wire dia up"*; the parser diagnostics said dia has
+  **6x** the raw material and writes nothing, which looked bigger; **reading the rows** showed every
+  row on **both** sides is a **BROKER**, which the account doctrine never prospects — so it is Tier-4
+  market intelligence, not a BD gap. The genuinely valuable thing found en route is **symmetric and
+  therefore invisible to this detector**: buyer/seller sale-role contacts have **never** been
+  persisted in **either** domain, though dia's parser reports one on **540 of 942** captures
+  (**D1a'**, Class 2 not Class 20).
+- ⚠️ **Five ways this query returns a confident wrong answer, all hit live, all now guarded:**
+  per-domain column NAMES (`properties` = `data_source`/`source`); a **dead** second column (gov
+  `property_financials.source`, **0 of 98,510 populated**) so resolve by POPULATION not name;
+  per-row suffixes; a provenance column holding a **data value at modest cardinality**
+  (`ingestion_tracker.source` = temp paths, ~41 buckets, under any sane cardinality guard) — excluded
+  by **recorded decision with a reason, emitted and counted**, never by a name pattern (P182); and one
+  producer wearing two labels, folded by synonym **stingily** (dia carries BOTH `costar_import` and
+  `costar_sidebar`, so folding those would have hidden a real difference).
+- ⚠️ **The ledger-completeness gate caught 5 differences I had missed by eye.** Verifying the ledger
+  against the measured population, rather than assuming it complete, is what made it complete.
+- **Guard:** `test/d1-cross-db-provenance-diff.test.mjs` — 18 tests, **19 mutations verified RED**,
+  comments stripped before source matching.
+- 👤 **NOT scheduled, deliberately (D1h), and the script has never run.** The sandbox holds no
+  `GOV_/DIA_SUPABASE_*` credentials, so **every number above was measured through the Supabase MCP
+  seam and the runner's I/O path is unexercised.** A job that has never been green once is the badge
+  people learn to merge past. **First credentialed run is an operator step.**
+- Also fixed in passing: the backlog's **D1 row had 5 cells in a 4-column table and an unescaped `|`
+  inside a code span**, so GFM was silently dropping its status cell.
+## 2026-08-31 — 📋 BASELINE captured before the CMS force-run and the DSN fix land
+
+**Three things are in flight at once**, so the baseline is recorded *before* any of them lands —
+otherwise tomorrow we compare against memory.
+
+**In flight:** (1) Scott running the CMS ingestion locally with `--force-run`; (2) `SUPABASE_DB_DSN`
+set on the Railway `public-record-ingest` service and redeployed; (3) `B6d-pri` and `D1` both with
+Claude Code.
+
+**Baseline — dia `zqzrriwuavgrquhisnoa`, 2026-08-31:**
+
+| metric | value |
+|---|---|
+| `max(medicare_clinics.source_last_seen)` | **2026-06-25** |
+| `medicare_clinics` rows | 8,535 |
+| clinics refreshed since 2026-06-25 | **0** |
+| newest CMS attempt / status | **2026-08-27 · `abandoned`** |
+| `pending_updates` rows | **1,959** (newest 2026-08-26) |
+| open `feed_stale` alerts | **2** — `medicare_clinics` (dia), `sam_lease_opportunities` (gov) |
+
+**What each fix should move — and what it should NOT:**
+
+- **The force-run** → `source_last_seen` advances past **2026-06-25**, `clinics_refreshed_since`
+  rises above **0**. ⚠️ **The confirmation is the `feed_stale` alert AUTO-RESOLVING, not the run
+  finishing** — read the alert ledger, not the console.
+- **The DSN fix** → the next `public-record-ingest` run stops emitting the **486** `Failed to mark
+  stale … DSN not configured` lines. ⚠️ **It should NOT move `pending_updates` on its own** — those
+  writes fail on the separate **23502 `reason` NOT NULL** defect, which is a code fix in `B6d-pri`.
+  **If the row count moves after the DSN change alone, my read of the two defects as independent is
+  wrong, and that is worth knowing.**
+- ⚠️ **A redeploy is not a run.** The DSN change proves nothing until the service's next scheduled
+  execution; **the evidence is a clean log, not a green deploy.**
+
+⚠️ **The decisive question the force-run answers:** if it **completes**, the throttle was the last
+obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
+hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
+
+## 2026-08-31 — C6 + C8 both SHIPPED; C10 prompt written for the defect C8 exposed
+
+**C6 and C8 are LIVE.** C8: migration `20260831120000` (+`is_resolved_owner`, `is_brokerage` on
+`v_bd_cadence_dashboard`), gate composed in `handleProspectingBrief`, guard
+`test/c8-prospecting-brief-gate.test.mjs`. Canonical `bd-ranking-and-priority-queue.md` §3 updated;
+backlog **C8 ✅ · C8a 🔴 · C8c 🟢 build-ready**.
+
+- **C8 landed 80 → 126, not the predicted 127, and the miss was informative.** Every other figure
+  reproduced exactly. ⚠️ **§2 sized the brokerage population by reading only the EXCLUDED half —
+  there are 4 of 311, not 3.** `Stan Johnson Co` carries `owner_role='buyer'` and **was being
+  shown**; the explicit guard drops it, so the delta is **+47 − 1**. **A population counted on one
+  side of a gate is not the population.**
+- ⚠️ **P116's false positive appeared and costs nothing.** Of the 4 flagged, three are genuine;
+  **`Clark Matthews` is the bare-surname false positive** — but he is `unknown`, owns no asset and
+  fails the OR arm anyway. **The guard is outcome-bearing for exactly 1 of 4.**
+- **At `limit=10`, 9 of 10 slots change** — Easterly enters at rank 2; NGP, USAA, US Fed Properties
+  Trust, Elman, Trammell Crow, Beacon reach page 1 for the first time. **A REACH fix, not a count
+  fix** — which is the right way to judge it.
+- 🟢 **C8c is the next build and it is the important one:** the handler maps `c.name` /
+  `c.company_name` / `c.annual_rent` / `c.priority_signal` while the view supplies **`entity_name`**
+  / *(none)* / **`rank_value`** / *(none)*. **Four of six meaningful fields are dead on the queue
+  path.** ⚠️ **C8 just put Easterly and 45 more on the sheet and every one renders "Unknown".**
+  ⚠️ **It plausibly explains why the role gate went unexamined for so long — an illegible sheet is
+  not one anyone works. Two defects, each making the other harder to see.**
+  Prompt: `docs/claude-code/prompts/C10-prospecting-brief-field-mapping.md`.
+- 🔴 **C8a:** the fallback branch is ungated **and structurally dead** (`engagement_score` = 0 on all
+  30,714 gov rows). **Not a `V2_MAP` failure** — a different source that never carried the gate and
+  cannot. **Do not re-implement the guard there; decide whether to delete the branch.**
+
+**Repo hygiene this pass:** CC had already filed C8a/C8c in the backlog and I added duplicates —
+**merged to one row each**, keeping CC's richer detail and adding the build pointer.
 
 ## 2026-08-29 — C9 split rate measured: 45 groups, not 181 (and my first metric was wrong)
 
@@ -1106,6 +1227,93 @@ vocabulary — **2,978 distinct values over 14,076 rows**, embedding record ids
 gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `ownership_history`
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
+
+## 2026-08-31 — 🎯 THE CMS OUTAGE IS ROOT-CAUSED. It was never a hang — it is a 30-day throttle keyed on the last ATTEMPT.
+
+**From the Railway logs Scott pulled (1,001 lines, 2026-08-31 06:03 → 16:42, one deployment).** The
+decisive three lines, from **today's** run:
+
+```
+06:03:21  WARNING:__main__:CMS ingestion recently run (3 days ago < 30); skipping. Use --force-run to override.
+06:03:21  CMS ingestion recently run; skipping.
+06:03:21  [2026-08-31T06:03:21Z] Cron complete
+```
+
+**The cron fires daily, decides it ran recently, exits CLEANLY with zero errors, and ingests
+nothing.**
+
+⚠️ **The mechanism is the whole outage: "3 days ago" is measured from the last ATTEMPT — 2026-08-27,
+which was `abandoned` — not from the last SUCCESS, 2026-06-25.** So **a failed run buys 30 days of
+silence**, and the next failure buys another 30. That is exactly how a two-month gap forms without
+anything erroring.
+
+⚠️ **AND THIS IS THE THROTTLE B6d-cms REPORTED REMOVING.** The log is from **2026-08-31, after that
+PR merged** — so either the Dialysis PR is not deployed to this Railway service, or the fix did not
+cover this path. **Verify the DEPLOYED code, not the merge** (*merged is not running*, a fourth time).
+
+✅ **Immediate unblock: run it with `--force-run`.**
+
+⚠️ **A correction to my own framing, and it is the useful lesson.** I reported *"no attempts since
+08-27, against a daily schedule"* and read that as the cron having stopped. **It had not. The cron
+ran every day — a SKIP writes no `ingestion_tracker` row, so it leaves no trace.** *"No rows" and
+"no runs" are different facts*, which is **Class 21 one layer up**: B6a made a skipped step visible
+inside the pipeline runner, and here a skipped step is invisible *to the tracker itself*.
+
+### 🚨 And the same service is failing ~1,000 times a day while reporting success — filed as `B6d-pri`
+
+The `public-record-ingest` service produced **502 error lines and 499 info lines in one day**, from
+**three distinct live defects**:
+
+1. **496× `null value in column "reason" of relation "pending_updates" violates not-null
+   constraint`** (23502) — the writer omits a NOT NULL field, so **every** pending-update write fails.
+2. **486× `Failed to mark stale <uuid>: Supabase Postgres DSN not configured`** (`SUPABASE_DB_DSN` /
+   `SUPABASE_DB_POSTGRES_URL` / `SUPABASE_DB_URL`) — **a missing env var on the Railway service.**
+   The entire mark-stale path is dead.
+3. **10× `column properties._new_property does not exist`** (42703) — a stale column reference in the
+   comparison step.
+
+⚠️ **And it logs `Pending updates cleanup complete` immediately after ~500 consecutive failures.**
+That is the honest-count failure this whole arc has been about, in a single line — **and none of it
+alerted, because the service exits 0.**
+
+## 2026-08-29 — AUTH contradiction SETTLED, and B6d-cms was pointed at the wrong producer
+
+### ✅ Auth: enforced. `CURRENT-STATE.md` was wrong; `CLAUDE.md` was right.
+
+`GET /api/diag?kind=auth-ready` → **`lcc_env: production`, `enforcing: true`,
+`api_key_configured: true`**. One command, contradiction closed, and the wrong page corrected in
+place.
+
+⚠️ **`would_pass_in_production: false` in that same response is NOT a failure, and the docs invite
+misreading it.** It describes **the calling request** — that curl sent no key, so rejection is
+correct behaviour and is itself the proof. **`CLAUDE.md` rule 0 tells you to verify readiness with
+`would_pass_in_production == true`, which is guidance for BEFORE the flip.** Post-enforcement, an
+unauthenticated probe returning `false` is expected. Noted on the row so nobody reads it as a break.
+
+### 🚨 B6d-cms: I named the wrong producer, and this failure was already diagnosed in June
+
+**(1) The producer is a RAILWAY CRON, not the GitHub workflow.**
+`audit/data-flow-2026-05-30/DIA_OVERVIEW_TILE_AUDIT_2026-06-23.md` says it outright: the live path
+is **Railway cron → `scripts/cron/cms-ingestion.sh` → `python -m src.run_cms_ingestion`**, and
+**`cms-ingestion-daily.yml` is a `workflow_dispatch` MANUAL FALLBACK ONLY.** **My B6d-cms prompt
+named the workflow as the producer.** A fix landing there would not touch the daily run — **which is
+exactly consistent with zero attempts since 2026-08-27.**
+
+**(2) This exact failure was diagnosed on 2026-06-23 and the write-up is still in the repo.**
+`CLAUDECODE_PROMPT_CMS_INGEST_hangguard.md`: *"The cron FIRES, but runs HANG… stuck in `'started'`
+for 9-24h and marked `abandoned`… each daily tick reclaims the prior orphan, starts, hangs, dies."*
+Root cause named there: **no per-step timeout in `run_cms_ingestion`'s steps loop**
+(`src/run_cms_ingestion.py` ~679-746). **The symptom then — last success 2026-05-13 — is
+byte-for-byte the symptom now, last success 2026-06-25.**
+
+**So this is a RECURRENCE or a never-applied fix, not a new defect.** ⚠️ **Check whether the
+hangguard ever shipped before diagnosing from scratch** — that is the *re-measure a dated blocker*
+rule, and I skipped it: I drafted B6d-cms without grepping for prior work on the same producer.
+
+⚠️ **And the prior fix as specified would not have been sufficient anyway.** The hangguard proposes
+**SIGALRM**, which `CLAUDE.md` later established is **not enough**: *SIGALRM does not bound a blocked
+C-level socket read — every network call in the Python pipelines MUST carry its own `timeout=`.*
+**A SIGALRM-only fix would look applied and still hang**, which may be precisely what happened.
 
 ## 2026-08-29 — 👤 DECISION: credential rotation DEFERRED until a second LCC user
 
