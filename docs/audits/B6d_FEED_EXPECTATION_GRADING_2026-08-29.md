@@ -68,6 +68,21 @@ as roughly annual, so the SLA is probably wrong. Measured:
 **Widening this bound would have buried a two-month ingestion outage against a live source.** Filed
 as backlog **B6d-cms**; the producer is not fixed here.
 
+> ✅ **ROOT-CAUSED SAME DAY — `docs/audits/B6d_cms_INGESTION_REPAIR_2026-08-29.md`.** The bound was
+> right and the break was real. Two coupled code defects: `run_cms_ingestion.main` gated a **daily**
+> cron behind `if days_ago >= 30`, and `get_last_ingestion_meta` counted **crashed** runs as the
+> watermark, so each killed run suppressed its own retry. Both fixed; the restart ships on the next
+> Railway run.
+>
+> ⚠️ **Two things this section states are wrong and are corrected there.** The producer is **not**
+> `cms-ingestion-daily.yml` — that workflow was deleted 2026-07-29 (`5d54fd7`); it is the **Railway
+> `cms-ingestion` cron**, and this file's wording propagated into the live
+> `feed_freshness_registry.expectation_basis` (since corrected in place). And the **27 failed + 6
+> abandoned** counts are `cms_ingestion` rows only — `ingestion_tracker` also carries
+> `source='ingestion_lock'` janitor rows under the same `dataset_id`, so **always split by
+> `source`** before quoting a failure count. The runs were also never daily: **7 attempt-days in
+> 100**, spaced 31 days apart — which was the throttle, visible in the calendar alone.
+
 ### 3b. `sam_lease_opportunities` (gov) — 33d, re-scoped 14 → 21, **still violated on purpose**
 
 Re-scoping a bound and leaving it violated is the test that the re-scope is not silencing a defect.

@@ -36,6 +36,45 @@ exactly how the prospecting brief survived C6**, so it was closed the same day.
   JOIN to a role table, inside a function, or in an RLS policy would not match. Matviews not
   separately enumerated.
 
+## 2026-08-29 — B6d-cms: a 30-day throttle on a daily cron, latched by its own crashes
+
+**FIXED IN CODE (Dialysis `fc342b3`); the restart ships on the next Railway run.** Audit
+`docs/audits/B6d_cms_INGESTION_REPAIR_2026-08-29.md`; backlog **B6d-cms ✅**, three follow-ups filed
+(**B6d-cms-restart** 👤, **-escalation**, **-lock**); parent B6d §3a corrected; live
+`feed_freshness_registry.expectation_basis` corrected in place. **SLA untouched at 45d.**
+
+`medicare_clinics` unfed since **2026-06-25** (65d stale) while CMS published **2026-08-25**. Two
+coupled defects, **neither of which ever recorded an error**: `main()` gated on **`if days_ago >= 30`**
+— a calendar throttle capping a **daily** (`0 6 * * *`) cron at ~one ingest/month against a p50 2-day
+republish cadence — and `get_last_ingestion_meta()` took the newest tracker row **of any status**, so
+a run killed mid-flight recorded CMS's new publish date and **suppressed its own retry**. A latch.
+⚠️ **Removing the throttle alone would have fixed nothing.**
+
+⚠️ **Three premises in the brief were wrong.** `cms-ingestion-daily.yml` **does not exist** (deleted
+2026-07-29, `5d54fd7`; it is the Railway `cms-ingestion` cron) — so the Actions logs it pointed at
+hold nothing, and that stale name had already propagated into the live registry basis. The
+"40 failed + 16 abandoned" totals **lump `source='ingestion_lock'` janitor rows in with pipeline
+runs**, and the runs were **never daily**: **7 attempt-days in 100, spaced 31 days** — the throttle
+was visible in the calendar before any code was read. And **no failure carries a CMS error**; every
+`error_log` is a janitor artifact. Since the code writes a real traceback on an exception, **the
+absence of one is the evidence: the process is killed, not failing.**
+
+⚠️ **The measurement that reframed it — find what the job writes on EVERY run.**
+`cms_dataset_updates` shows **99 of the last 100 days, including 06:02 that morning**, so the cron is
+healthy and CMS egress works. That killed a well-fitting "Railway credit exhaustion" hypothesis (the
+month-end clustering matched it) and turned *"the cron isn't running"* into *"it runs and skips"*.
+
+**Still open and honestly handed off:** *why* each attempt died. No traceback ⇒ a hard kill (suspect
+container OOM on the ~45-min `medicare_ingestion` step); **Railway deploy logs are the check and the
+sandbox cannot reach them** (proxy denies `data.cms.gov` too, so nothing was re-run live). ⚠️ **Do
+not retry with `FORCE_RUN=true`** — it propagates `force=True` into the lock, which force-reclaims the
+run's own tracker rows; a plain Redeploy suffices. **Verify on `source_last_seen` advancing past
+2026-06-25 and the `feed_stale` alert auto-resolving — never on `medicare_clinics.updated_at`**, which
+the econ denorm keeps fresh and which read healthy straight through the outage.
+
+Guard `test_b6d_cms_ingestion_throttle.py`: 8 tests, **4/4 mutations RED**, comments stripped first
+(the fix's own comments quote `days_ago >= 30`). Suite **2919 passed / 52 failed, failure set
+byte-identical to the pre-change baseline**.
 ## 2026-08-29 — C9: C8b REFUTED; the merge backlog is now on the operator surfaces
 
 **NOTHING WRITTEN.** Audit `docs/audits/C9_MERGE_BACKLOG_REACHES_THE_OPERATOR_SURFACES_2026-08-29.md`;
