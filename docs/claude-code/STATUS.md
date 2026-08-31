@@ -110,6 +110,33 @@ Writeup `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`; **I2**, **Class
   people learn to merge past. **First credentialed run is an operator step.**
 - Also fixed in passing: the backlog's **D1 row had 5 cells in a 4-column table and an unescaped `|`
   inside a code span**, so GFM was silently dropping its status cell.
+## 2026-08-31 — B6d-cms-step drafted, and measuring it found the defect is 47× bigger than one run
+
+**Prompt: `prompts/B6d-cms-step-capture-the-error-2026-08-31.md`**, bundled with **`B6d-pri-reason`** —
+same file, same class: *a field that exists to carry meaning, written with nothing in it.*
+
+⚠️ **I set out to "capture the exception on the `medicare_ingestion` step" and the measurement
+reframed it: `error_summary` is NULL on 47 of 47 runs since 2026-06-01.** `abandoned` 24 · **`failed`
+10** · `success` 6 · `recorded` 3 · `started` 2 · `partial` 2 — **every one NULL.** **The column has
+never been written, not once, across ten explicit failures. The error CHANNEL has never worked**,
+which is a different and much cheaper problem than instrumenting one step.
+
+⚠️ **And a third defect surfaced while measuring: six runs report `success` — newest 2026-07-30 —
+while `max(source_last_seen)` stayed at 2026-06-25 and 0 clinics were refreshed.** **`success` can
+be returned on a no-op.** That is **Class 26** (*two different facts sharing one status value*) in a
+new table, and it means the last three months of "successes" cannot be read as data movement.
+
+**What DOES work is the instrumentation B6d-pri added** — the failed run carries
+`notes: {"current_step": "medicare_ingestion", "heartbeat_at": …}`. **We now know WHERE it dies and
+have never once known WHY.** That asymmetry is the whole prompt.
+
+**Three guardrails carried in, each earned:** ⚠️ **do not widen a `try` to make the error appear** —
+that is exactly how the swallowed 42703 made 65 rows silently read as *"no change"*, a **data**
+defect B6d-pri caught; **a terminal status must be reachable** (2 rows are still `started` with
+`finished_at` NULL, the orphan shape re-forming); and ⚠️ **the prompt says plainly that it does NOT
+fix the hang — expect the run to still fail, and that is SUCCESS for this change.** The captured
+exception text is the deliverable, because two months of silence have been about not having it.
+
 ## 2026-08-31 — ✅ D1 SHIPPED: the two domains are already coherent, and the real gap is in the INSTRUMENT
 
 `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`. **The honest result I asked for, and it is
