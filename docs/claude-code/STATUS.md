@@ -1044,6 +1044,42 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-29 — B6d-cms root-caused and fixed IN CODE. ⚠️ Verified: the outage is NOT yet fixed, and that distinction is the whole point.
+
+Merged: `Dialysis#7379` (the code fix — removes a **throttle** and a **crashed-run latch**) plus the
+LCC half (audit doc, backlog, **I4**). **The cross-repo link is no longer dangling** — the Dialysis
+`CLAUDE.md` points at `docs/audits/B6d_cms_INGESTION_REPAIR_2026-08-29.md`, which is now on `main`.
+
+**⚠️ I measured the only metric that counts, and it has not moved:**
+
+| check | result |
+|---|---|
+| `max(medicare_clinics.source_last_seen)` | **still `2026-06-25`** |
+| clinics refreshed since | **0** |
+| newest CMS attempt | **`2026-08-27 06:12` — `abandoned`, `rows_upserted` NULL** |
+| attempts on 08-28 / 08-29 | **NONE**, against a daily `0 6 * * *` schedule |
+
+**That silence is itself evidence the fix targets a real mechanism** — a crashed-run latch left set
+by an abandoned run would stop everything after it, which is exactly the pattern. **But it is
+unproven until a run completes.**
+
+⚠️ **"Root-caused and fixed in code" is not "fixed", and CC said so explicitly rather than letting
+the merge read as success** — *"the PR does not fix the outage on its own… the state delta to check
+is `max(source_last_seen)` moving past 2026-06-25, not CI going green."* **That is the doctrine
+working at the moment it is least convenient**, and it is the third layer of the same rule this arc
+keeps re-learning: *merged is not running · running is not working · a green check is not a state
+delta.*
+
+**The verification is the next 06:00 UTC execution.** Check `source_last_seen` advancing and the
+`feed_stale` alert auto-resolving — **not the merge, not the redeploy, not CI.**
+
+⚠️ **And the deeper cause is still open.** The runs were **abandoned** — killed mid-flight, no
+terminal status — and **nothing yet explains what was killing them.** Removing the latch clears the
+*consequence*; if the next run also abandons, **the latch was never the cause.** Filed as
+**`B6d-cms-restart`**, and it needs **Railway deploy logs no agent can reach** (👤 Scott). Candidates:
+an OOM/timeout on the runner, a CMS API or schema change dated ~2026-06-25, an expired credential
+(⚠️ **check whether one rotation also took out SAM — B6d-sam**), or a changed dataset id.
+
 ## 2026-08-29 — ✅ B6d SHIPPED. The alert surface is graded, and the ONE SLA I guessed was wrong was a REAL two-month outage.
 
 Merged: `life-command-center#1933` · `Dialysis#7378` · `government-lease#393`.
