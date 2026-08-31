@@ -1085,6 +1085,47 @@ delta and the depth delta separately** — they move by very different multiples
 **Where else to point it:** any fact with a provenance/source column and more than one domain —
 owner contacts, listing events, rent, cap rates, documents, broker relationships.
 
+> ✅ **STANDING SINCE 2026-08-29 (D1).** `scripts/d1-cross-db-provenance-diff.mjs`, ledger
+> `scripts/d1-provenance-acknowledgements.json`, guard `test/d1-cross-db-provenance-diff.test.mjs`.
+> **Re-run monthly** and on adding any source or domain DB.
+> Writeup: `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`.
+>
+> ⚠️ **THE SQL ABOVE IS THE INTRA-TABLE FORM AND IT HAS A POPULATION OF ONE.** It needs a table with
+> BOTH a domain column and a provenance column; on LCC Opps only `lcc_entity_portfolio_facts` has
+> both — **the very table it was written from.** It is retained here as the **B5 positive control**,
+> not as the general query. **The form that generalises is a CROSS-DATABASE diff of parallel tables
+> (gov vs dia).**
+>
+> **First standing run: 69 differences over 23 two-sided stores — 58 legitimate, 5 unexplained, 6
+> unwired, none B5-sized.** ⚠️ **That is a real result, not a failed hunt.** Two domains that are
+> already coherent are what this class is supposed to produce most of the time; **manufacturing a
+> finding to justify the query is the failure mode here.**
+>
+> ⚠️ **THE CLASS HAS A PRECONDITION NOBODY HAD STATED: the store must RECORD its producer.** 12
+> tables exist in both domains and carry a provenance column in only one — **dia `ownership_history`
+> (10,037 rows) among them, i.e. the store B5 was about.** A store with no provenance column is not
+> clean, it is **unmeasurable**, and it reads exactly like clean.
+>
+> ⚠️ **FIVE WAYS THIS DETECTOR RETURNS A CONFIDENT WRONG ANSWER**, all hit live:
+> **(1)** the provenance column is named differently per domain (`properties`: `data_source` in gov,
+> `source` in dia) — resolve from the catalogue, never hard-code;
+> **(2)** a table carries TWO provenance columns and the better-named one is dead (gov
+> `property_financials.source`: **0 of 98,510 populated**) — resolve by POPULATION;
+> **(3)** the value carries a per-row suffix (`county_deed:<uuid>`) — `split_part` first or the diff
+> drowns in one-row buckets;
+> **(4)** the column holds a DATA VALUE, sometimes at modest cardinality that a cardinality guard
+> misses (`ingestion_tracker.source` = temp paths, ~41 buckets) — exclude by **recorded decision with
+> a reason, emitted and counted**, never by a name pattern (P182);
+> **(5)** the same producer wears different labels per domain (`om_extraction`/`om_intake`) — fold by
+> synonym, but **stingily**: dia carries BOTH `costar_import` and `costar_sidebar`, so those are two
+> real routes and folding them would hide a difference.
+>
+> ⚠️ **AND THE POSITIVE CONTROL STILL FIRES FOR B5 EVEN THOUGH B5 SHIPPED** — gov's equivalent work
+> landed under different bucket names, so the labels still differ. **A naive reading re-reports a
+> closed finding as open.** That is exactly why the mechanism is acknowledgement-with-a-reason rather
+> than a pass/fail count, and why `legitimate` silences a row while `unexplained`/`unwired` keep it
+> rendering.
+
 ## Class 17 — a RULE proposed for removal because its false positives are the only part you can see
 
 **Symptom:** a matching or admission rule produces a handful of obviously-wrong outputs. They are

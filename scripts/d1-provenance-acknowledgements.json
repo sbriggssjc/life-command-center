@@ -1,0 +1,600 @@
+{
+  "version": 1,
+  "purpose": "D1 acknowledgement ledger for the cross-database provenance producer-set diff.",
+  "measured_on": "2026-08-29",
+  "rules": [
+    "A difference is not a defect -- but it must be an EXPLAINED difference, not an unnoticed one.",
+    "Every entry needs a verdict from {legitimate, unexplained, unwired} AND a non-empty reason. The detector rejects an entry missing either.",
+    "verdict=legitimate SILENCES the row. verdict=unexplained/unwired keeps it RENDERING as a known, tracked difference -- acknowledging is not the same as silencing.",
+    "A new, unacknowledged difference fails the run. That is the whole point."
+  ],
+  "synonyms": [
+    {
+      "canonical": "om_intake",
+      "aliases": [
+        "om_extraction"
+      ],
+      "reason": "One OM extraction pipeline, two labels: gov property_financials stamps `om_extraction`, dia stamps `om_intake`. Same producer (api/_shared/intake-om-pipeline.js). Folding it here stops the diff reporting one producer as two one-sided ones."
+    },
+    {
+      "canonical": "connectivity_recorded_resolution",
+      "aliases": [
+        "connectivity2_recorded_resolution",
+        "connectivity4_recorded_resolution"
+      ],
+      "reason": "The same recorded-owner -> true-owner resolver, labelled with each domain's own connectivity ROUND number (dia ran it at connectivity2, gov at connectivity4). The generation number is not a different producer."
+    }
+  ],
+  "out_of_scope": [
+    {
+      "table": "ingestion_tracker",
+      "reason": "`source` holds the RUNNER, not a data producer: script names (`pipeline_runner.py`), dataset filenames (`frpp_fy2024.xlsx`) and even temp paths (`/tmp/tmpuab4ll9g.json`), across ~41 buckets on gov alone. It is a data value at modest cardinality, so MAX_PRODUCER_CARDINALITY does not catch it. Diffing it answers 'which scripts has each domain run', which is a real question but not this one."
+    },
+    {
+      "table": "ingestion_log",
+      "reason": "`source` holds the TARGET TABLE being ingested (`properties`, `sales_transactions`), not the producer. Diffing it compares which tables each domain has ingested into, which the catalogue already answers directly."
+    },
+    {
+      "table": "lcc_health_alerts",
+      "reason": "`source` holds the emitting CRON JOB name (`lcc-gov-sales-dedup-tick`, `monthly-gsa-diff`). Cron rosters differ per domain by design and are governed by the cron-health surface, not by provenance coherence."
+    },
+    {
+      "table": "entity_match_candidates",
+      "reason": "`source_name` holds the candidate ENTITY NAME -- 1,276 distinct values on gov. Caught by MAX_PRODUCER_CARDINALITY as well, and named here so the exclusion is a recorded decision rather than a threshold accident."
+    }
+  ],
+  "acknowledged": [
+    {
+      "table": "cm_nm_track_record_import",
+      "bucket": "dialysis",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "This column records which vertical's Northmarq track-record book the row belongs to, not a producer. One value per domain is the correct and only possible shape.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "cm_nm_track_record_import",
+      "bucket": "gov",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "This column records which vertical's Northmarq track-record book the row belongs to, not a producer. One value per domain is the correct and only possible shape.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "contacts",
+      "bucket": "comms_observed",
+      "present_in": "gov",
+      "verdict": "unexplained",
+      "reason": "2 rows, gov only. Far below any action threshold. Acknowledged rather than silenced so that if this producer starts writing at volume in one domain only, it is already on the surface instead of appearing as a new difference nobody sized.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "contacts",
+      "bucket": "costar_sale_contacts",
+      "present_in": "gov",
+      "verdict": "unexplained",
+      "reason": "FINDING (D1a). gov holds 1,021 rows stamped `costar_sale_contacts`; dia holds ZERO. dia is not empty of sale-linked contacts -- it has 46 -- but they are stamped `costar_sidebar`, i.e. written by a different path. `persistSaleContacts` (api/_handlers/sidebar-pipeline.js:6972) is domain-agnostic, called from one shared site (:6930), and dia `contacts` accepts every column in the payload, so neither the code nor the schema explains the gap. \u26a0\ufe0f DEFLATED: every row on BOTH sides is a BROKER role (gov 1,187 broker_listing + 264 broker_buyer; zero buyer, zero seller). Per the account-based-contact-intelligence doctrine brokers are never prospected as principals, so the value here is Tier-4 market intelligence, not a BD contact gap. NOT root-caused here by design.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "contacts",
+      "bucket": "sam",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "Domain-exclusive source with no sibling analogue by construction: SAM.gov federal entity registry (gov CLAUDE.md sec.18). Federal contracting data does not describe dialysis operators.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "contacts",
+      "bucket": "tfc_state_inventory",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "Domain-exclusive source with no sibling analogue by construction: the Texas Facilities Commission state-lease inventory. A state government lease registry has no dialysis analogue.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "leases",
+      "bucket": "costar_import",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "dia labels its bulk CoStar lease import `costar_import` and its per-page sidebar capture `costar_sidebar`, and carries BOTH (2,832 / 596). gov has only the sidebar path. Two genuinely different CoStar ingest routes, not a renamed one -- which is why this is acknowledged rather than folded as a synonym.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "leases",
+      "bucket": "costar_verified",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "A dia-only verification stamp on one lease row. Not a producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "leases",
+      "bucket": "davita_subledger",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "Domain-exclusive source with no sibling analogue by construction: the DaVita rent subledger. gov's tenant is a federal agency, so there is no operator subledger to consume.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "leases",
+      "bucket": "email_intake",
+      "present_in": "dia",
+      "verdict": "unwired",
+      "reason": "FINDING (D1b). dia has 285 leases from the OM/email intake pipeline; gov has 0 of 17,668. gov DOES receive OM intake -- it writes 224 properties (`om_intake`) and 369 contacts (`lcc_intake_om`) -- so the intake arrives and only the LEASE half never lands.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "leases",
+      "bucket": "excel_master",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "gov's master workbook import. dia's equivalent arrives under its own labels (`master_import`, `historical_csv_import`, `master_xlsx_backfill_r*`). Deliberately NOT folded as a synonym: dia carries several of those labels simultaneously, so they are distinct rounds rather than one renamed producer.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "leases",
+      "bucket": "frpp_inventory_gap_backfill_propagation",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "Domain-exclusive source with no sibling analogue by construction: FRPP gap backfill propagation. Federal-only inventory.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "leases",
+      "bucket": "listing_seed_backfill",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "leases",
+      "bucket": "master_import",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "dia's master workbook import; gov's equivalent is `excel_master`. See the `excel_master` entry for why this is not folded into a synonym.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "leases",
+      "bucket": "prospect_lead_backfill",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "leases",
+      "bucket": "round_76eo_e_recovered_from_anchor_rent",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "leases",
+      "bucket": "sales_property_backfill",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "leases",
+      "bucket": "tfc_state_inventory",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "Domain-exclusive source with no sibling analogue by construction: the Texas Facilities Commission state-lease inventory. A state government lease registry has no dialysis analogue.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "listing_status_history",
+      "bucket": "sale_imported",
+      "present_in": "dia",
+      "verdict": "unwired",
+      "reason": "FINDING (D1e), LOW VALUE and stated as such. dia records a `sale_imported` status event when a listing closes (31 rows); gov records none. gov is NOT mishandling the close -- 2,081 of its 3,131 listings carry `sale_transaction_id` -- so what is absent is the status-history LEDGER of the transition, not the transition. Fixing it buys auditability, not correctness.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "loans",
+      "bucket": "sec_edgar",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "gov ingests CMBS loans from SEC EDGAR into `loans`; dia holds the same class of fact in a separate `cmbs_loans` table (which has its own `source`). A second store by design, not a missing feeder -- see I1.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "auto_stub_from_clinic",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "Domain-exclusive source with no sibling analogue by construction: a CMS clinic record auto-stubs a property. CMS publishes no federal-lease equivalent.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "cmbs_edgar",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "Domain-exclusive source with no sibling analogue by construction: SEC EDGAR CMBS ingest writes gov properties directly; dia keeps CMBS in its own `cmbs_loans` table, which carries its own provenance column.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "comps_import",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "costar_import",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "See the leases `costar_import` entry: dia's bulk CoStar import is a distinct route from the sidebar capture, and dia carries both.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "costar_sidebar",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "On PROPERTIES gov labels the CoStar write `costar_sidebar` and dia labels it `costar_import`; on LEASES dia carries BOTH labels. The mapping is therefore not one-to-one across tables, so this is acknowledged per table rather than folded into a global synonym -- a synonym that is right for one table and wrong for another would hide a real difference elsewhere.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "dashboard",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "davita_subledger",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "Domain-exclusive source with no sibling analogue by construction: the DaVita rent subledger. gov's tenant is a federal agency, so there is no operator subledger to consume.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "excel_master",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "gov's master workbook import. dia's equivalent arrives under its own labels (`master_import`, `historical_csv_import`, `master_xlsx_backfill_r*`). Deliberately NOT folded as a synonym: dia carries several of those labels simultaneously, so they are distinct rounds rather than one renamed producer.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "frpp_inventory_gap_backfill",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "Domain-exclusive source with no sibling analogue by construction: FRPP gap backfill. Federal-only inventory.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "frpp_single_facility_backfill",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "Domain-exclusive source with no sibling analogue by construction: the Federal Real Property Profile. Federal-only inventory.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "gov_master_backfill_r71_anchored",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "gov_master_backfill_r71_singleton",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "junk_backfill_archived_2026-06-09",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "listing_seed_backfill",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "master_xlsx_backfill_r2_stub",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "prospect_lead_backfill",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "scrub_cache",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "tfc_state_inventory",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "Domain-exclusive source with no sibling analogue by construction: the Texas Facilities Commission state-lease inventory. A state government lease registry has no dialysis analogue.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "tier0_unarchived_genuine_2026-06-16",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "properties",
+      "bucket": "unknown_writer",
+      "present_in": "gov",
+      "verdict": "unexplained",
+      "reason": "gov stamps 225 properties `unknown_writer` -- a literal admission that the writer was not identified. This is not a cross-domain gap; it is recorded here because a provenance value meaning 'unknown' defeats every downstream provenance question, and nothing else surfaces it.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "property_financials",
+      "bucket": "confirmed_sale",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "See the `estimated_comp_ratio` entry: gov's derived-financials tiers have no dia counterpart because dia's economics are reconciled in `clinic_econ_reconciled`.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "property_financials",
+      "bucket": "estimated_comp_ratio",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "gov derives NOI/expense ratios into `property_financials` (9,861 rows); dia's reconciled economics live in `clinic_econ_reconciled` (the dialysis_econ_reconciled_v1 model), not here. A second store by design and documented as such -- this is exactly the case the prompt names: row-count disparity (98,510 vs 676) is not the signal.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "property_financials",
+      "bucket": "estimated_sale_ratio",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "See the `estimated_comp_ratio` entry: gov's derived-financials tiers have no dia counterpart because dia's economics are reconciled in `clinic_econ_reconciled`.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "property_sale_events",
+      "bucket": "costar_export",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "gov's bulk CoStar export load. dia's equivalent bulk historical load arrives as `historical_csv_import`. Both are one-shot bulk imports named after the file each domain received.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "property_sale_events",
+      "bucket": "costar_sidebar",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "dia writes sale events directly from the sidebar capture; gov's sidebar writes `sales_transactions` and its PSE rows come from `excel_master`/`costar_export`. Consistent with B6c-dup, which established that gov's PSE is a CAPTURE surface propagating into the spine rather than a parallel ingest target.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "property_sale_events",
+      "bucket": "county_deed",
+      "present_in": "gov",
+      "verdict": "unwired",
+      "reason": "FINDING (D1d). gov derives 4 rows from county deed records; dia derives none, although dia HAS a `deed_records` table and a `deed_extraction` producer on its own contacts and loans. Small, and listed for completeness rather than as a priority.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "property_sale_events",
+      "bucket": "excel_master",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "gov's master workbook import. dia's equivalent arrives under its own labels (`master_import`, `historical_csv_import`, `master_xlsx_backfill_r*`). Deliberately NOT folded as a synonym: dia carries several of those labels simultaneously, so they are distinct rounds rather than one renamed producer.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "property_sale_events",
+      "bucket": "ownership_change_stub",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "Domain-exclusive source with no sibling analogue by construction: `gsa_lease_diff` emits a stub whenever the GSA lessor-of-record changes. It is a GSA-inventory artifact (see the P138 oscillating-pair guard); there is no GSA lease inventory for dialysis.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "property_sale_events",
+      "bucket": "ownership_change_stub_spe_rename",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "Domain-exclusive source with no sibling analogue by construction: `gsa_lease_diff` emits a stub whenever the GSA lessor-of-record changes. It is a GSA-inventory artifact (see the P138 oscillating-pair guard); there is no GSA lease inventory for dialysis.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "property_sale_events",
+      "bucket": "ownership_history",
+      "present_in": "dia",
+      "verdict": "unwired",
+      "reason": "FINDING (D1c). dia derives 52 sale events from `ownership_history`; gov derives none, despite holding 18,969 ownership_history rows to dia's 10,037. Small in absolute terms; listed because it is the same shape as B5 (a fact store one domain feeds from and the other does not).",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "property_sale_events",
+      "bucket": "sales_transactions",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "This is B6c-dup's signature and it is the POSITIVE CONTROL for this detector, not an open finding. dia propagates spine -> property_sale_events (2,646 rows); gov never did. B6c-dup (2026-08-29) settled the direction the other way: gov's `trg_gov_pse_propagate_to_sale` propagates PSE -> spine, because gov's 77 sale-reading views all read `sales_transactions`. Kept acknowledged-and-visible so a regression in either direction still renders.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "provenance_event_log",
+      "bucket": "agency_classifier",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "The federal-agency classifier (17,276 events). Classifying a GSA tenant agency has no dialysis analogue.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "provenance_event_log",
+      "bucket": "qa22_davita_brand_canonicalize",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "A one-shot DaVita brand canonicalization QA round; operator-specific to dialysis.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "provenance_event_log",
+      "bucket": "qa24_canonicalize_agency",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "provenance_event_log",
+      "bucket": "qa30_canonicalize_agency",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "provenance_event_log",
+      "bucket": "sf_account_contact_expansion",
+      "present_in": "gov",
+      "verdict": "unwired",
+      "reason": "FINDING (D1f), LOW VALUE. gov logs 131 Salesforce account->contact expansion events; dia logs none, although both domains run the same Salesforce contact surface. Small; listed for completeness.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "sales_transactions",
+      "bucket": "costar_export",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "gov's bulk CoStar export load. dia's equivalent bulk historical load arrives as `historical_csv_import`. Both are one-shot bulk imports named after the file each domain received.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "sales_transactions",
+      "bucket": "county_deed",
+      "present_in": "gov",
+      "verdict": "unwired",
+      "reason": "FINDING (D1d). gov derives 19 rows from county deed records; dia derives none, although dia HAS a `deed_records` table and a `deed_extraction` producer on its own contacts and loans. Small, and listed for completeness rather than as a priority.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "sales_transactions",
+      "bucket": "excel_master",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "gov's master workbook import. dia's equivalent arrives under its own labels (`master_import`, `historical_csv_import`, `master_xlsx_backfill_r*`). Deliberately NOT folded as a synonym: dia carries several of those labels simultaneously, so they are distinct rounds rather than one renamed producer.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "sales_transactions",
+      "bucket": "gov_master_backfill_r71",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "sales_transactions",
+      "bucket": "gov_master_backfill_r71b",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "sales_transactions",
+      "bucket": "historical_csv_import",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "sales_transactions",
+      "bucket": "master_xlsx_backfill_r2",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "sales_transactions",
+      "bucket": "master_xlsx_backfill_r72",
+      "present_in": "dia",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "sales_transactions",
+      "bucket": "ownership_change_stub",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "Domain-exclusive source with no sibling analogue by construction: `gsa_lease_diff` emits a stub whenever the GSA lessor-of-record changes. It is a GSA-inventory artifact (see the P138 oscillating-pair guard); there is no GSA lease inventory for dialysis.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "sales_transactions",
+      "bucket": "ownership_change_stub_spe_rename",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "Domain-exclusive source with no sibling analogue by construction: `gsa_lease_diff` emits a stub whenever the GSA lessor-of-record changes. It is a GSA-inventory artifact (see the P138 oscillating-pair guard); there is no GSA lease inventory for dialysis.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "sales_transactions",
+      "bucket": "rca_sidebar_manual_bootstrap",
+      "present_in": "gov",
+      "verdict": "legitimate",
+      "reason": "A one-shot historical/backfill round belonging to one domain's own import history; it describes work that happened once in that domain, not a standing producer the sibling lacks.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "sales_transactions",
+      "bucket": "salesforce_deal",
+      "present_in": "dia",
+      "verdict": "unexplained",
+      "reason": "1 row, dia only. gov carries `salesforce_comp` and `sf_internal_comp_r74e` on both sides, so the Salesforce comp route is wired in both domains; this single row is a different SF object type. Below any action threshold.",
+      "acknowledged_on": "2026-08-29"
+    },
+    {
+      "table": "true_owners",
+      "bucket": "h3_canonical_resolver",
+      "present_in": "dia",
+      "verdict": "unexplained",
+      "reason": "4 rows, dia only. Below any action threshold; acknowledged for the same reason as `comms_observed`.",
+      "acknowledged_on": "2026-08-29"
+    }
+  ]
+}
