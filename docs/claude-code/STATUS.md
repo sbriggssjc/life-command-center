@@ -106,6 +106,38 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — C6 + C8 both SHIPPED; C10 prompt written for the defect C8 exposed
+
+**C6 and C8 are LIVE.** C8: migration `20260831120000` (+`is_resolved_owner`, `is_brokerage` on
+`v_bd_cadence_dashboard`), gate composed in `handleProspectingBrief`, guard
+`test/c8-prospecting-brief-gate.test.mjs`. Canonical `bd-ranking-and-priority-queue.md` §3 updated;
+backlog **C8 ✅ · C8a 🔴 · C8c 🟢 build-ready**.
+
+- **C8 landed 80 → 126, not the predicted 127, and the miss was informative.** Every other figure
+  reproduced exactly. ⚠️ **§2 sized the brokerage population by reading only the EXCLUDED half —
+  there are 4 of 311, not 3.** `Stan Johnson Co` carries `owner_role='buyer'` and **was being
+  shown**; the explicit guard drops it, so the delta is **+47 − 1**. **A population counted on one
+  side of a gate is not the population.**
+- ⚠️ **P116's false positive appeared and costs nothing.** Of the 4 flagged, three are genuine;
+  **`Clark Matthews` is the bare-surname false positive** — but he is `unknown`, owns no asset and
+  fails the OR arm anyway. **The guard is outcome-bearing for exactly 1 of 4.**
+- **At `limit=10`, 9 of 10 slots change** — Easterly enters at rank 2; NGP, USAA, US Fed Properties
+  Trust, Elman, Trammell Crow, Beacon reach page 1 for the first time. **A REACH fix, not a count
+  fix** — which is the right way to judge it.
+- 🟢 **C8c is the next build and it is the important one:** the handler maps `c.name` /
+  `c.company_name` / `c.annual_rent` / `c.priority_signal` while the view supplies **`entity_name`**
+  / *(none)* / **`rank_value`** / *(none)*. **Four of six meaningful fields are dead on the queue
+  path.** ⚠️ **C8 just put Easterly and 45 more on the sheet and every one renders "Unknown".**
+  ⚠️ **It plausibly explains why the role gate went unexamined for so long — an illegible sheet is
+  not one anyone works. Two defects, each making the other harder to see.**
+  Prompt: `docs/claude-code/prompts/C10-prospecting-brief-field-mapping.md`.
+- 🔴 **C8a:** the fallback branch is ungated **and structurally dead** (`engagement_score` = 0 on all
+  30,714 gov rows). **Not a `V2_MAP` failure** — a different source that never carried the gate and
+  cannot. **Do not re-implement the guard there; decide whether to delete the branch.**
+
+**Repo hygiene this pass:** CC had already filed C8a/C8c in the backlog and I added duplicates —
+**merged to one row each**, keeping CC's richer detail and adding the build pointer.
+
 ## 2026-08-29 — C9 split rate measured: 45 groups, not 181 (and my first metric was wrong)
 
 **NOTHING WRITTEN.** Folded into `C9_...md` **§7**, canonical **§3**, backlog **C9** revised,
