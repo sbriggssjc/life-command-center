@@ -16,6 +16,47 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-31 — B6d-pri: four defects, ~1,950 failures a day, exit code 0
+
+**Repo: Dialysis.** Writeup `docs/audits/B6d_pri_PUBLIC_RECORD_INGEST_REPAIR_2026-08-31.md`;
+backlog **B6d-pri** ✅, **B6d-cms-restart** re-scoped, **B6d-pri-metrics** filed.
+
+- 🎯 **The biggest item was settled by the FIRST check, and it is a deploy gap.** The 2026-08-31
+  log emits `"CMS ingestion recently run (3 days ago < 30); skipping."` — a format string
+  `fc342b3` **deleted on 2026-08-29** and present nowhere in `main`. Arithmetic corroborates to
+  the day (pre-fix watermark → the **abandoned** 08-27 row → 3.99d → `.days` = 3). **So no second
+  throttle fix was written**: keying on last SUCCESS is already `INGESTED_RUN_STATUSES =
+  ("success",)`. *Merged is not running*, fourth time in this arc.
+- **It also explains B6d-cms-restart's "no attempt on 08-28/29/30":** the pre-fix throttle
+  **returns before writing any tracker row**, so a skip and a cron that never fired are the same
+  absence. Fixed — a skip now emits with a reason (B6a's rule inside the ingester), under
+  `status='recorded'`, which is deliberately not in `INGESTED_RUN_STATUSES` so it cannot re-arm
+  the watermark. **Why the earlier runs were KILLED is still open and still needs Railway logs.**
+- **`reason` was dropped from a SELECT and written back** → 23502 on every stale row
+  (`pending_updates.reason` is NOT NULL; live 1,959 rows / 0 nulls / 1,952 past the 7d threshold).
+- ⚠️ **THE MISSING DSN WAS A SYMPTOM MASKING THE REAL ERROR.** A bare `except: pass` swallowed the
+  23502 and let the fallback's *"DSN not configured"* be the only visible message. **Setting the
+  DSN would have fixed nothing** — the fallback INSERTs and the table is NOT NULL on four more
+  columns; it would have failed differently, and a fallback that satisfied them would mint fresh
+  queue rows for a status flip. Fixing the reason bug is what makes the DSN symptom disappear.
+- ⚠️ **The fix nearly landed on dead code.** `logging_helpers` defines `upsert_pending_update`
+  twice and rebinds the name to `upsert_pending_update_v2`; `inspect` says the live body is line
+  **4528**. Two definitions of one name in one Python module — the later silently wins.
+- **`properties._new_property` is a pseudo-field** (0 columns, 65 rows): the 42703 was swallowed
+  and the row **silently read as "no change"**.
+- ⚠️ **The 1,001 log lines are a viewer cap, not a run boundary.** 496+486+10+~9 = 1,001 against
+  1,952 stale rows — the brief's counts are **floors**; the true per-run figure is **~1,950**.
+- **`public-record-ingest` and `cms-ingestion` are in NO producer registry** — `feed_freshness_registry`
+  is table-keyed (5 dia rows) and `ingestion_tracker` has no health consumer; B6a's
+  `v_pipeline_task_health` is gov-side only. **B6d-cms-escalation stands, unbuilt by design.**
+- Guards: 21 tests, **20/20 mutations RED**. ⚠️ One guard **passed its own mutation** first
+  (`"wholesale_failure" in body` matched the local `drain_wholesale_failure` — the N15c lesson);
+  it asserts the AST attribute access now. A second sliced **past** the function it named into a
+  module-level `try/except: pass`; the slicer uses `ast` line spans now. Suite **2,957 / 44
+  failed, failure set byte-identical to the same-session baseline**.
+- 👤 **Nothing here ingests.** The restart is a Railway **Redeploy** (not `FORCE_RUN=true`).
+  Verify on `max(medicare_clinics.source_last_seen)` past 2026-06-25 + the `feed_stale` alert
+  auto-resolving — never `updated_at`, never the log line.
 ## 2026-08-29 — D1: the cross-database provenance diff, standing (and mostly good news)
 
 **NOTHING BUILT** — no feeder, no backfill, no migration. Shipped a detector, a ledger and a guard.
