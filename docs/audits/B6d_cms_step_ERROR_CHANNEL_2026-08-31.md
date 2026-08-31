@@ -410,3 +410,36 @@ min. Filed **`B6d-cms-freshness-max`**.
 
 **Do not read the alert auto-resolving as the outage being fixed.** Verify on the coverage
 percentage and on a `cms_ingestion` run row appearing in `ingestion_tracker`.
+
+### 7a. ⚠️ CONFIRMED 23:25 — the pass DIED at 2.91% and the monitor now reads `ok`
+
+The §7 hazard is no longer a projection. Measured 23:25:
+
+```
+v_feed_freshness where feed_name='medicare_clinics'
+  latest    2026-08-31 22:51:07     age_days 0     is_stale FALSE     status 'ok'
+```
+
+against:
+
+| | |
+|---|---:|
+| clinics total | 8,547 |
+| touched by the pass | **249 (2.91%)** |
+| **beyond the feed's own 45-day SLA** | **7,445 (87.1%)** |
+| `ingestion_tracker` rows for the pass | **0** |
+
+**The monitor reports `ok` over an outage that is 87.1% unresolved.**
+
+And the pass did not finish — it ran 20:33:51 → **22:51:07** at a steady 1–4 clinics/min and then
+stopped dead, **34 minutes of silence** with no taper, no terminal status, and no run row anywhere.
+That is the **same abrupt-stop signature** as the killed runs this whole audit is about (§2): work
+ceases mid-flight and nothing records why. The difference is that this time it left the freshness
+surface green on the way out.
+
+So the two defects compose into the worst case: **a run that dies at 2.91% is now indistinguishable
+from a healthy feed**, because the only instrument watching it takes a `max()`. Before this pass the
+outage was at least visible as 65 days stale. It is now invisible.
+
+**Verification from here is coverage, never `status`:**
+`count(*) filter (where source_last_seen >= now() - interval '45 days') / count(*)` — today 12.9%.
