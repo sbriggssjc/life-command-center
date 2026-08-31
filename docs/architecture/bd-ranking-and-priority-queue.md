@@ -8,6 +8,8 @@
 > (the chain end to end — this page owns its **last hop**) ·
 > [`tier0-owner-contact-system.md`](tier0-owner-contact-system.md) (person ↔ owner) ·
 > [`ownership-history-lane.md`](ownership-history-lane.md) (ownership depth) ·
+> [`owner-role-classification.md`](owner-role-classification.md) (**how an owner gets its role** —
+> C4a's design, written to Scott's accuracy-first constraints) ·
 > [`account-based-contact-intelligence.md`](account-based-contact-intelligence.md) (**who** to call
 > and **in what tone** — this page decides *whether the signal fires*, that one decides *the pitch*).
 >
@@ -19,9 +21,10 @@
 > and all of dia unchanged (positive-controlled). Migration
 > `supabase/migrations/20261002110000_lcc_c6_current_holding_seller_bands.sql`; evidence
 > [`C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md`](../audits/C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md).
-> **NEXT: C11** — the sheet names a person and gives no basis; 121 of 126 carry a contact↔owner edge
-> whose role we already hold and never print. Prompt
-> `docs/claude-code/prompts/C11-prospecting-brief-show-the-relationship.md`.
+> ✅ **C11 SHIPPED 2026-08-31 — the call-sheet arc (C6 → C8 → C10 → C11) is COMPLETE.** See **§4b**
+> for the state of this surface: 126 rows, gated, legible, each stating its basis; **~4 defective
+> rows remain** (C11b, C11c, one C9 split). ⚠️ **C11a is REFUTED** (sponsor↔SPE, not a defect) and
+> **C9's 45 splits touch exactly 1 sheet row** — neither is a call-sheet priority.
 > **Open and Scott's: C4a** (the pitch/bucket). **C4b** (`user_owner`) is resolved as inert.
 > **Open, sized, unbuilt: C9** (45 true-split merge groups), **C9b** (434 edge splits), **C9a** /
 > **C10a** / **C8a** (design + dead-branch decisions), **C7a** (mailbox coverage — the precondition
@@ -414,6 +417,53 @@ would be a second copy of a definition. It would also have gated *narrower* than
 appear in P1** (17 rows), in both the live view and the refreshed cache. **Boyd Watterson's
 2026-08-31 is two days out.** ⚠️ Date ≠ outcome — read the asset.
 
+## 4b. ✅ The call-sheet arc is COMPLETE — state as of 2026-08-31
+
+C6 (gate) → C8 (admit resolved owners) → C10 (legibility) → C11 (contact basis) are all live.
+**The sheet serves 126 rows, correctly gated, legible, each stating why that person is the contact.**
+
+### ⚠️ C11a is REFUTED — `institution_decision_maker` 0-for-35 is the sponsor↔SPE pattern
+
+It reads like a broken lane. Read on named rows it is the arc's most recurrent pattern:
+
+| contact domain | rows | the owners using it |
+|---|---:|---|
+| **`ar-global.com`** | **6** | six `ARC GS…001, LLC` SPEs — **AR Global / American Realty Capital, the sponsor** |
+| `princetonholdingsllc.com` | 2 | `HOUSTON TX I FGF` · `San Diego CA I FGF` |
+| `usrealco.com` | 2 | `US Global Business Fund` · `US Union Square DC 999` |
+| `hpitx.com` | 2 | `Hpi/Gsa - 1a` · `TEP Houston DHS` |
+| gmail / aol | 7 | individual owners (`Pool Edwin J`, `Ronald J Rossiter`, `Crockett Ranch LP`) |
+
+**34 contacts across 20 domains — they cluster because a sponsor's people serve its SPE family.**
+The contacts are right; **`lcc_tier0_company_confirms_domain` structurally cannot confirm a
+sponsor's domain against an SPE's name** (`ARC GSFFDME001` vs `ar-global`). Compare
+`prospecting_contact`: 58 rows / 55 domains / 15 corroborated — near 1:1, a different provenance.
+
+⚠️ **And the tempting fix was measured and rejected: wiring `lcc_owner_sponsor_domain` into the
+corroboration signal rescues 1 of 34.** The map holds **8 confirmed rows**; only **4 sheet rows
+fleet-wide** sit on a known sponsor domain, and `hpitx.com` — already confirmed — still fails
+because `TEP Houston DHS` does not contain the `hpi` token. **Populate the map first (C2i); wiring
+it is worthless until then.**
+
+### ⚠️ C9's 45 true splits touch exactly ONE sheet row
+
+**35 of the 126 rows sit in some canonical-name group; only 1 is a true split.** C9 remains a real
+defect worth fixing on its own terms — but **it is not a call-sheet problem**, and this page should
+not be read as saying it is.
+
+### What is actually left on this surface — about 4 rows of 126
+
+| | rows |
+|---|---:|
+| **C11b** — a cadence contact is **Scott himself** | 1 |
+| **C11c** — brokerage guard is blind to a broker in the **contact** slot | 2 |
+| **C9** — a true-split duplicate | 1 |
+
+**The surface is in good shape. Further polishing here has sharply diminishing returns** — the
+remaining leverage is upstream: **C4a** (what promotes an owner out of `unknown`, which still
+governs the 57% data-work share) and **C7a** (mailbox coverage, the precondition under assignment,
+voice, deal attribution and draft-assist alike).
+
 ## 5. ⚠️ The four traps, each of which produced a wrong answer first
 
 1. **Class 23 — a predicate's blast radius belongs to the QUERY, not the column it names.** C4 first
@@ -492,8 +542,8 @@ the same limit on the outbound side). Filed as **C7a**; it was not filed anywher
 | ✅ **C8c — every call-sheet row rendered "Unknown"** | **FIXED 2026-08-31 as C10.** Mapped onto the real columns; count held at 126, gate/order/limit untouched. Guard `test/prospecting-brief-column-mapping.test.mjs` (5 mutations RED) |
 | ✅ **C10b — FIXED 2026-08-31 as C11** | The sheet now states the BASIS: the role on the recorded owner→contact edge (`prospecting_contact` 58 · `institution_decision_maker` 35 · `manager` 15 · **`works_at` 12, labelled *association only* per P161** · `decision_maker` 1 · **no edge 5**), plus employer corroboration as an ADDITIVE POSITIVE. ⚠️ **Corroboration is 22 of 113, not 16** — the old figure passed a whole domain into `p_sldn`, which wants the second-level LABEL. Rows held at 126; nothing filters or ranks on corroboration. `docs/audits/C11_CALL_SHEET_CONTACT_BASIS_2026-08-31.md` |
 | 🔴 **C10a — `is_cross_vertical` is unread** | The view carries the honest source for "mixed"; the renderer now says `domain not on file` instead of asserting it |
-| 👤 **C4a — what promotes an owner out of `unknown`** | **Scott's, doctrine not code.** Recorded facts available, none adopted: portfolio shape · `purchases` edges (repeat investor vs one-off — his own distinction, already modelled) · `is_operator_not_owner` (P113) · deed/B5 party roles |
-| 👤 **C4b — `user_owner`: fill the arm or remove it** | Leaving it is how C4 stayed invisible |
+| 👤 **C4a — what promotes an owner out of `unknown`** | ✅ **DESIGNED + CORRECTED 2026-08-31 — [`owner-role-classification.md`](owner-role-classification.md).** ⚠️ **Scott corrected both definitions.** **`user_owner` is the owner-OCCUPIER** (tenant acquires the fee to occupy) — **not "holds an asset", which was my draft and would have mislabelled 6,308 landlords.** Signal is **owner ≈ tenant on the same property**: **13 candidates, ~10 genuine**, and at that size **human confirmation beats any name rule** (accuracy first). **`former_owner`** = 3,795, all gov/dia, **191 contactable** — repeat sellers are the model. ⚠️ **Newly visible and bigger: no role describes the ordinary owns-and-leases-out landlord (6,308).** Five open questions in §6. |
+| 👤 **C4b — `user_owner`: fill the arm or remove it** | ✅ **Settled in principle by C12: it is not a mistake to remove — it is a role with an obvious producer nobody built.** *Holds a current asset* is exactly what the token means (3,217 candidates). **Its disposition follows C4a's decision and should not be decided separately.** |
 | 🔴 **C4d — marketing / deal-execution actions are not inventoried** | The other half of "compared to the balance of the leads or marketing activities." **That inventory does not exist today**; a cross-surface weighting cannot be built until it does |
 | ⛔ **C4c broker assignment — do NOT build yet** | C7: the bridge resolves 161/161; **0 of the 303 C6 owners has an assignment** and the sets are disjoint, so a propagator moves 0 rows (P137). No derivation signal — 13 of 303 ever emailed, 1 sender. 4 users, 1 active |
 | ❌ **Do NOT default-stamp the 303 to Scott** | Writes a fact nobody asserted into the column every surface reads |

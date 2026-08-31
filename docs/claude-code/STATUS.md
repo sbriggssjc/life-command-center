@@ -418,6 +418,159 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — C4a §2d: the landlord gap sized, and it needs TWO states
+
+**NOTHING BUILT.** `docs/architecture/owner-role-classification.md` **§2d**; backlog C4a updated.
+This closes §6 Q1, which I had flagged as the biggest remaining gap.
+
+The 6,308 current holders are **not one population** — they split along the distinction Scott
+stated at the outset (*"developers treated differently than one-off owners, who are treated
+differently than buyers"*). Of the **3,217 that are currently `unknown`**:
+
+| proposed state | entities | current rent | contactable |
+|---|---:|---:|---:|
+| **`investor_owner`** — 2+ current assets | **292** | **$583.9M** | 54 |
+| **`one_off_owner`** — 1 asset, no buying activity | **2,448** | **$523.1M** | **279** |
+| single-asset but active | 477 | — | — |
+| SPE-shell-named | 35 | — | — |
+
+⚠️ **The one-off owners are the finding and they invert the intuition: they carry nearly as much
+rent as the investors ($523.1M vs $583.9M) and are FIVE TIMES more contactable (279 vs 54).**
+Scott's sweet spot is single-tenant deals at $2M–$20M reached through volume with repeat sellers —
+**the one-off owner of a single net-leased building IS that market.** A vocabulary with only
+`investor_owner` would name the smaller, less reachable half and leave the core of the business in
+`unknown`. **Two states are required, not one.**
+
+- **Both are deterministic from recorded facts** — a count of current portfolio rows and a count of
+  `purchases` edges. **No name test, no inference.**
+- ⚠️ **The 477 single-but-active and 35 SPE-shell-named are surfaced separately, not forced into
+  either bucket.** Accuracy-first: an honest `unknown` beats a guess.
+- 👤 **Remaining for Scott:** confirm the two names and that they are prospected differently;
+  `former_owner`; `user_owner` as a human-confirmed lane (n=13); view vs recomputed column; and
+  **P0.4 (C4f)**, still deliberately unbundled.
+
+## 2026-08-31 — C4a definitions CORRECTED by Scott; my `user_owner` draft was wrong by ~3 orders
+
+**NOTHING BUILT.** `docs/architecture/owner-role-classification.md` rewritten §1–§2c.
+
+⚠️ **Scott defined both states and my first draft had `user_owner` badly wrong.** He: *"`user_owner`
+is when a tenant like DaVita acquires the real estate to occupy it… as opposed to leasing it."*
+**I had defined it as "holds ≥1 current portfolio asset" — 6,308 entities, i.e. just *an owner*.**
+It would have labelled every REIT, fund and landlord an owner-occupier. **`user_owner` is about
+OCCUPANCY, not ownership** — the "user" is the user of the space. Same failure this arc keeps
+finding: **I reached for the fact that was easy to compute rather than the one that answers the
+question.**
+
+- **The real signal is owner ≈ tenant ON THE SAME PROPERTY** (`lcc_property_attributes.tenant_short`)
+  — a comparison *within one row*, far more constrained than matching two arbitrary owner names,
+  which is why it survives where this arc's rejected lexical classifiers did not.
+- **Measured over 8,237 held properties carrying a tenant: 13 candidates, ~10 genuine** — Mayo
+  Clinic Dialysis, Sanford Health, Northwest Kidney Centers, Puget Sound, Gundersen Lutheran,
+  Michigan Kidney Consultants, Wake Forest, Atlantis, Centers for Dialysis Care, Concerto Missouri.
+- ⚠️ **The 2 clear misses share ONE shape — an SPE/DST named after its tenant**
+  (`FSC FMC Carbondale IL DST`, `USGBF NIAID LLC`). The sponsor↔SPE pattern from a new direction.
+- ⚠️ **At n=13, human confirmation is cheaper AND more accurate than any name rule.** Scott's
+  ordering is accuracy first, automation second — so **`user_owner` is a human-confirmed lane, not
+  an automated arm.** The automation worth having is surfacing the 13, which is one query.
+- ⚠️ **Wake Forest and Mayo sit in the `not_prospected` guard's territory. They are still correctly
+  `user_owner`** — the role is a fact about them; whether we prospect them is a separate gate.
+  **Do not let a prospecting guard suppress an accurate role.**
+- **`former_owner` confirmed and structurally clean: 3,795 — 2,071 gov + 1,727 dia, ZERO other
+  domains**, so "used to own in our target market" is guaranteed, not assumed. **784 sold ≤3y,
+  1,537 ≤5y, 191 contactable today.** ⚠️ **Carry recency separately — do not bake a cutoff into the
+  label**, or the role starts lying the day the cutoff stops matching how Scott works.
+- ⚠️ **NEW and bigger than the gap I originally reported: under the corrected definitions, NO role
+  describes the ordinary owns-and-leases-out landlord — 6,308 entities.** They would stay `unknown`.
+  A further state (`investor_owner` or similar) is probably what accuracy requires. **§6 Q1.**
+
+## 2026-08-31 — C4a DESIGNED to Scott's constraints; `former_owner` is the finding
+
+**NOTHING BUILT.** Canonical design: **`docs/architecture/owner-role-classification.md`** — a new
+sibling page, linked from `bd-ranking-and-priority-queue.md`, `CURRENT-STATE.md` and the backlog.
+**C4a 👤 designed · C4f 🔴 filed.**
+
+Scott's four constraints, and what each settled:
+
+- *"most accurate determination possible as the guiding principle"* → ⚠️ **RETIRES C12's option B**
+  (classify + gate P0.4 to hold the flood down). **Suppressing an accurate determination to protect
+  an ungated band is the wrong trade.** P0.4's missing value gate is P0.4's defect — filed **C4f**.
+- *"can change over time, isn't a one-time determination"* → ⛔ **no one-shot stamped column**
+  (Class 8). **Derived and re-computed.** ✅ **And that is safe: churn is 3 holdings ended and 1
+  started in 90 days**, so a re-derived role is stable, not flapping.
+- *"automate as much as we can, secondary to accuracy"* → automate the decidable; `unknown` stays an
+  honest absence and will remain large. That is correct, not a failure.
+- *"resolution at the entity level would limit the work"* → one determination per entity, ~10k.
+
+⚠️ **The finding that matters: the vocabulary cannot express the most valuable state.**
+**3,795 organizations owned before and hold nothing now — 2,784 still typed `unknown`.** Scott's
+model is *"volume with repeat seller clients"*, so **a party that has sold to us before is the
+highest-value prospect in the business**, and the five declared roles have no word for it.
+**`former_owner` is required for accuracy** — without it a correct classifier concludes "not
+currently an owner" about 3,795 real parties, which is true and useless.
+
+**Design:** recorded facts only — operator flag (P113) · holds ≥1 current fact (6,308) ·
+**former owner (3,795)** · ≥2 `purchases` edges (2,478) · the developer classifier — behind the
+existing brokerage / placeholder / not-prospected guards. **No lexical classifier anywhere**
+(~25% raw, 7%, 4-of-6 guarded across this arc). `role_source` is mandatory; a manual
+`behavioral_override` always wins.
+
+👤 **Four open questions in §6:** confirm `former_owner`; precedence when an entity both holds and
+buys repeatedly (recommended `user_owner`, ⚠️ **overlap unmeasured**); view vs recomputed column;
+and P0.4 (C4f, deliberately not bundled).
+
+## 2026-08-31 — C12: C4a sized into a decidable question (decision brief, nothing built)
+
+**NOTHING WRITTEN, nothing recommended for build.** 👤 **This is a decision brief for Scott** —
+`docs/audits/C12_C4a_DECISION_BRIEF_2026-08-31.md`; canonical §7 decisions table updated;
+**C4a 👤 sized · C4b 👤 settled in principle.**
+
+- **The classifier is easy and the signal is clean: 3,217 `unknown` organizations hold a current
+  portfolio asset** — a **recorded fact**, not a name guess. Top 16 by rent read Easterly (85
+  assets / $114.9M), NGP Capital, USAA, US Fed Properties Trust, Government Properties Income
+  Trust, Elman, Piedmont REIT. Guards over the whole set: **brokerage 6 · placeholder 3 ·
+  not-prospected 124** (GWU among them — the drop-universities decision already covers it).
+- ⚠️ **The blast radius IS the decision: 2,949 of the 3,217 would enter P0.4, taking it 555 →
+  ~3,500** — 6× the band that already makes the queue 57% data-completion work, **because P0.4 has
+  no value gate**. ⚠️ **The deal-timing bands are unaffected** (C6 removed the role from them) and
+  the prospecting brief barely moves (C8's resolved-owner arm already admits most).
+- ⚠️ **Worth stating plainly: P0.4's job is *resolve ownership control*, and these 3,217 are exactly
+  owners whose control is unresolved — admitting them is arguably CORRECT. It is also 6× a band
+  nobody is working.** Correct and unusable are not mutually exclusive.
+- **Three options, each with its measured consequence** (A absorb / **B classify + gate P0.4** /
+  C retire `user_owner`). ⚠️ **Which floor B uses is its own question — five distinct $500k floors
+  exist (§4g) and any new one must be NAMED.** At ≥2 assets the set is 292; at ≥5 it is 30.
+- **C4b is settled in principle: `user_owner` is not a mistake to remove — it is a role with an
+  obvious producer nobody built.** Its disposition follows C4a and must not be decided separately.
+- ⚠️ **Named as unmeasured:** whether a P0.4 floor would apply to newcomers only or to its existing
+  555 rows — **different changes, different consequences, and it matters for option B.**
+
+## 2026-08-31 — C11 SHIPPED; the call-sheet arc is COMPLETE, and C11a is refuted
+
+**C11 is LIVE** — the sheet now states the BASIS on which each person is the contact. **C6 → C8 →
+C10 → C11 are all shipped: 126 rows, correctly gated, legible, each justified.** Canonical **§4b**
+is the new "state of this surface" section. **C11a ❌ refuted · C9 re-scoped.**
+
+- ⚠️ **C11a is NOT a defect.** `institution_decision_maker` reading **0-for-35** on employer
+  corroboration is the **sponsor↔SPE pattern** — the arc's most recurrent finding (A3 32-of-74,
+  P188/P196, C2h's 69 pairs). Named rows: **`ar-global.com` serves six `ARC GS…001, LLC` SPEs**
+  (AR Global); `princetonholdingsllc.com` two FGF SPEs; `usrealco.com` two US… entities; 7 are
+  gmail/aol on genuine individual owners. **34 contacts / 20 domains — they cluster because a
+  sponsor's people serve its SPE family.** `lcc_tier0_company_confirms_domain` **structurally
+  cannot** confirm a sponsor domain against an SPE name. Compare `prospecting_contact`: 58 rows /
+  55 domains / 15 corroborated — near 1:1, different provenance.
+- ⚠️ **The obvious fix was measured and rejected: wiring `lcc_owner_sponsor_domain` into the
+  corroboration signal rescues 1 of 34.** The map holds 8 confirmed rows; only 4 sheet rows
+  fleet-wide sit on a known sponsor domain; and `hpitx.com` — already confirmed — still fails
+  because `TEP Houston DHS` lacks the `hpi` token. **Populate the map (C2i) before wiring it.**
+- ⚠️ **C9 re-scoped: its 45 true splits touch exactly ONE of the 126 sheet rows.** 35 sheet rows sit
+  in some name group; 1 is a true split. **C9 is real but is not a call-sheet problem.**
+- **What is left on this surface is ~4 rows of 126** — C11b (a cadence contact is **Scott himself**,
+  1), C11c (brokerage guard blind to a broker in the **contact** slot, 2), C9 (1).
+  **The surface is in good shape; further polishing here has sharply diminishing returns.**
+- **The remaining leverage is upstream: C4a** (what promotes an owner out of `unknown` — still
+  governs the 57% data-work share, and it is Scott's doctrine call) and **C7a** (mailbox coverage —
+  the precondition under assignment, voice corpus, deal attribution and draft-assist alike).
+
 ## 2026-08-31 — C10 SHIPPED (the sheet is legible); C11 prompt written for what it exposed
 
 **C10 is LIVE.** All 126 rows render a real name and portfolio value; gate, ordering and limit
