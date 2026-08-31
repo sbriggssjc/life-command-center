@@ -239,6 +239,27 @@ rent) is tabulated in
 ⚠️ **`lcc_property_attributes` carries a DATE, not an OUTCOME** — renewal, extension and holdover
 are indistinguishable in that column. **Read the asset before acting on any expiry date.**
 
+### ⏰ P1 HAS A HARD LOWER EDGE — an asset leaves the band the morning after it expires (2026-08-31)
+
+Re-measured two days after C6 shipped, on the day C5a's own deadline arrived. P1's predicate is
+`lease_expiration >= CURRENT_DATE`, so **an asset drops out the day after its lease expires** —
+silently, with no terminal state, and nothing recording that it was ever flagged.
+
+**Live 2026-08-31: 6 P1 assets expire TODAY**, across 5 owners — Boyd Watterson (property 10776,
+the row C5a named "three days out"), Greenleaf Management, Karen Curran, plus the pre-existing
+`developer` owners Bains Holdings and Highwoods Realty.
+
+⚠️ **5 of the 6 carry no other band on that asset**, and **Greenleaf Management and Karen Curran
+have ZERO other queue rows at all** — tomorrow they leave the surface entirely. Boyd's *owner*
+stays visible on its other 74 rows, which is the harder half to notice: **the asset stops being
+flagged while the owner still looks covered.**
+
+**This is not self-evidently a defect and must not be "fixed" by reflex.** A just-expired gov lease
+is plausibly the peak seller conversation — holdover is a live tenancy — and the same column that
+cannot tell renewal from termination cannot tell holdover from a vacated building (the
+DATE-not-OUTCOME warning above, read the other way). Whether P1 should carry a short post-expiry
+tail is a **band-semantics decision, not a view bug**. Sized here, not built: backlog **C6a**.
+
 ### C6 — SHIPPED 2026-08-29
 
 The role predicate in `gov_owner_props` is replaced by *holds a current gov asset* (the
@@ -249,6 +270,15 @@ All four predicted deltas hit exactly; six bands and all of dia held, positive-c
 
 **Reachability = `owner_contact_pivot.active_contact_entity_id IS NOT NULL`** — the fact the Tier 0
 arc (P188/P194) *writes* and `v_owner_contact_enrich_queue` already keys on.
+
+✅ **Re-verified live 2026-08-31, two days on** — cache refreshed 3 min before the read and agreeing
+with the live view on **all ten bands**; `unreachable_rows_emitted` **0**; `nongov_rows_in_gov_bands`
+**0**; P5 still 58 against a positive control of 1,681 (565 dia). **P1 149 → 153 and P3 163 → 166 is
+ordinary rolling-window drift, attributed exactly, not regression**: P1's 24-month upper edge
+advanced two days and admitted **exactly 4** assets, with **0** falling off the lower edge (149+4=153).
+⚠️ **The drift is NOT reachability** — 0 rows in the four bands have a pivot touched since C6. And
+⚠️ `lcc_entity_portfolio_facts.updated_at` cannot attribute it either: the nightly re-upsert touches
+most rows every day, so every source reads "written today" (the documented B4/B5 trap).
 
 ⚠️ **NOT `reachable_hero_qualified`, and `CLAUDE.md`'s instruction to quote it is not wrong.**
 That instruction is about **reporting the reachability metric**; this is a **join predicate**, a
