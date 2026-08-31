@@ -11,13 +11,39 @@ points at its canonical row, and **the backlog row stays authoritative.**
 
 ---
 
-## 🔒 1. Security — do these first
+## ⏸️ 1. Security — ROTATION DEFERRED BY DECISION (Scott, 2026-08-29)
 
-| # | Action | Why it can't wait |
+> **Decision: all credential rotation is deferred until a second user is added to LCC.**
+> Rationale: single-user, still building, private repo — the exposure has no second party to reach.
+> **This is a recorded risk acceptance with a trigger, not an oversight.** The rows stay open below
+> so the decision cannot go quiet.
+
+### 🔔 The trigger is broader than "another user" — these all mean *rotate first*
+
+**The private repo is what is carrying this risk**, so anything that widens who can read it fires
+the same trigger:
+
+- **adding a second LCC user** (the stated trigger), **or**
+- **making the repo public**, **or**
+- **sharing the repo / granting access to a contractor, vendor, or Northmarq IT**, **or**
+- **a lost or compromised laptop**, **or**
+- **taking LCC out of "still building" into anything a client touches.**
+
+**Any one of those → rotate before it happens, not after.**
+
+### ✅ Still worth doing NOW, because it stops the problem growing
+
+**SEC4 is not a rotation and should stay active** — a pre-commit / CI check for JWT-shaped,
+`sb_secret_`, and long-hex strings in `*.json` flow exports and `*.txt` config files. **Deferring
+rotation is a decision about the keys that are already exposed; SEC4 is what stops the next export
+adding more.** Without it, the rotation you eventually do is against a moving target.
+
+| # | Action | Status |
 |---|---|---|
-| **SEC2** | **Rotate `LCC_API_KEY`, then untrack `wave0-config-values.txt`.** | It is **tracked in git at the repo root in plaintext**, not gitignored. ⚠️ **Rotation is what neutralises it** — a `git rm --cached` leaves the value in history and in every clone. Order: rotate → update Railway → `git rm --cached` + `.gitignore` → *only then* consider history. **Do not reach for `filter-branch`** (this repo nearly lost a 475 MB mailbox that way). |
-| **I1** | **Rotate the `PA_WEBHOOK_SECRET`** (`X-PA-Webhook-Secret`). | Committed **inline in a Power Automate export**; rotation never confirmed. Covers the Google-Alert / RCM / LoopNet shared secret. |
-| **SEC3** | **Rotate the Supabase keys in the PA packages.** | **Ten of seventeen** deployed PA packages carry **literal JWT-like values**, and `sync-sf-activities-to-supabase.md` has an unresolved P0 reading *"rotate exposed Supabase keys immediately — Credential rotation completed: **TBD**"*. ⚠️ **I1 covers only the webhook secret; this is separate and larger.** |
+| **SEC2** | Rotate `LCC_API_KEY`, then untrack `wave0-config-values.txt`. ⚠️ Rotation is what neutralises it — `git rm --cached` leaves the value in history and in every clone. Order when you do it: **rotate → update Railway → `git rm --cached` + `.gitignore` → only then consider history.** **Do not reach for `filter-branch`** (this repo nearly lost a 475 MB mailbox that way). | ⏸️ **DEFERRED** — trigger above |
+| **I1** | Rotate the `PA_WEBHOOK_SECRET` (`X-PA-Webhook-Secret`), committed inline in a PA export. Covers the Google-Alert / RCM / LoopNet shared secret. | ⏸️ **DEFERRED** |
+| **SEC3** | Rotate the Supabase keys in the PA packages — **ten of seventeen** carry literal JWT-like values; `sync-sf-activities-to-supabase.md` still reads *"Credential rotation completed: **TBD**"*. | ⏸️ **DEFERRED** |
+| **SEC4** | **The guard** — pre-commit / CI check for secret-shaped strings in flow exports and config files. | 🟢 **KEEP ACTIVE** — it stops new exposure while rotation waits |
 
 ## 🔴 2. Blocked builds — an agent cannot finish these without you
 

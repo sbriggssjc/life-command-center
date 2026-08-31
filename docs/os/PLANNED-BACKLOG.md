@@ -153,7 +153,26 @@ to the developer across target markets* — **that 1.1% is the number that matte
 > sections with no single view. **That page is a LENS, not a second backlog: these rows stay
 > authoritative, and if the two ever disagree, this file wins.**
 
-## P0s — 🔒 SECRETS EXPOSED IN THE REPO (found 2026-08-28, cleanup pass 3) — 👤 SCOTT, DO FIRST
+## P0s — ⏸️ SECRETS EXPOSED IN THE REPO — ROTATION DEFERRED BY DECISION (Scott, 2026-08-29)
+
+> 👤 **DECISION, 2026-08-29: all credential rotation is deferred until a second user is added to
+> LCC.** Rationale: single-user, still building, private repo — the exposure has no second party to
+> reach. **This is a recorded risk acceptance with a trigger, not an oversight**, and the rows stay
+> open so it cannot go quiet.
+>
+> 🔔 **The trigger is broader than "another user" — the PRIVATE REPO is what carries this risk.**
+> Rotate BEFORE any of: a second LCC user · **making the repo public** · **sharing it with a
+> contractor, vendor or Northmarq IT** · a lost/compromised laptop · LCC leaving "still building"
+> for anything a client touches.
+>
+> ✅ **SEC4 STAYS ACTIVE.** It is a guard, not a rotation: deferring rotation is a decision about the
+> keys already exposed; **SEC4 is what stops the next PA export adding more.** Without it, the
+> rotation you eventually do is against a moving target.
+>
+> ⚠️ **When rotation happens, ORDER MATTERS: rotate → update Railway → `git rm --cached` +
+> `.gitignore` → only then consider history.** `git rm --cached` alone leaves the value in history
+> and in every clone. **Do not reach for `filter-branch`** — this repo nearly lost a 475 MB mailbox
+> that way.
 
 ⚠️ **These are credential exposures, not hygiene. They outrank every other row in this file.**
 **Rotation is what neutralises them — removing a file from tracking does NOT**, because the value
