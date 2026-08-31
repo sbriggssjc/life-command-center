@@ -359,6 +359,37 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — C4a §2d: the landlord gap sized, and it needs TWO states
+
+**NOTHING BUILT.** `docs/architecture/owner-role-classification.md` **§2d**; backlog C4a updated.
+This closes §6 Q1, which I had flagged as the biggest remaining gap.
+
+The 6,308 current holders are **not one population** — they split along the distinction Scott
+stated at the outset (*"developers treated differently than one-off owners, who are treated
+differently than buyers"*). Of the **3,217 that are currently `unknown`**:
+
+| proposed state | entities | current rent | contactable |
+|---|---:|---:|---:|
+| **`investor_owner`** — 2+ current assets | **292** | **$583.9M** | 54 |
+| **`one_off_owner`** — 1 asset, no buying activity | **2,448** | **$523.1M** | **279** |
+| single-asset but active | 477 | — | — |
+| SPE-shell-named | 35 | — | — |
+
+⚠️ **The one-off owners are the finding and they invert the intuition: they carry nearly as much
+rent as the investors ($523.1M vs $583.9M) and are FIVE TIMES more contactable (279 vs 54).**
+Scott's sweet spot is single-tenant deals at $2M–$20M reached through volume with repeat sellers —
+**the one-off owner of a single net-leased building IS that market.** A vocabulary with only
+`investor_owner` would name the smaller, less reachable half and leave the core of the business in
+`unknown`. **Two states are required, not one.**
+
+- **Both are deterministic from recorded facts** — a count of current portfolio rows and a count of
+  `purchases` edges. **No name test, no inference.**
+- ⚠️ **The 477 single-but-active and 35 SPE-shell-named are surfaced separately, not forced into
+  either bucket.** Accuracy-first: an honest `unknown` beats a guess.
+- 👤 **Remaining for Scott:** confirm the two names and that they are prospected differently;
+  `former_owner`; `user_owner` as a human-confirmed lane (n=13); view vs recomputed column; and
+  **P0.4 (C4f)**, still deliberately unbundled.
+
 ## 2026-08-31 — C4a definitions CORRECTED by Scott; my `user_owner` draft was wrong by ~3 orders
 
 **NOTHING BUILT.** `docs/architecture/owner-role-classification.md` rewritten §1–§2c.

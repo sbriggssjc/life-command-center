@@ -109,6 +109,49 @@ landlords and investors, and **the vocabulary has no word for "owns and leases o
 ordinary case. That is now the open question in §6, and it is a bigger gap than the one I originally
 reported.
 
+## 2d. ✅ The landlord gap, sized — and it splits along Scott's own distinction
+
+§2c ended with *"no arm classifies the 6,308 current holders."* Measured 2026-08-31, they are **not
+one population**, and the split is the one Scott stated at the outset: *"developers treated
+differently than one-off owners, who are treated differently than buyers."*
+
+**All 6,308 current holders:**
+
+| shape | entities | |
+|---|---:|---|
+| **one asset, ≤1 purchase, no past holdings** | **4,870 (77%)** | the one-off owner |
+| **two or more current assets** | **762** | **$1.47B** — the investor / portfolio owner |
+| one asset but repeat buys or past holdings | 676 | active, single-asset today |
+| SPE-shell-named | 150 (129 single-asset) | belongs to a sponsor, not standalone |
+| already carry a role | 3,091 | mostly `buyer` |
+
+**The 3,217 that are currently `unknown` — i.e. what a classifier would actually change:**
+
+| proposed state | entities | current rent | **contactable today** |
+|---|---:|---:|---:|
+| **`investor_owner`** — 2+ current assets | **292** | **$583.9M** | 54 |
+| **`one_off_owner`** — 1 asset, no buying activity | **2,448** | **$523.1M** | **279** |
+| single-asset but active (repeat buys or past holdings) | 477 | — | — |
+| SPE-shell-named | 35 | — | — |
+
+### ⚠️ The one-off owners are the finding, and they invert the intuition
+
+**2,448 one-off owners carry $523.1M — nearly as much as the 292 investors' $583.9M — and they are
+five times more contactable (279 vs 54).**
+
+That is not a footnote. Scott's stated sweet spot is **single-tenant deals of $2M–$20M, reached
+through volume with repeat seller clients.** **The one-off owner of a single net-leased building
+*is* that market.** A vocabulary that had only `investor_owner` would name the smaller, less
+reachable half and leave the core of the business in `unknown`.
+
+**So two states are required, not one** — and they are prospected differently, which is precisely
+why the distinction has to exist in the data rather than in an operator's head.
+
+⚠️ **Both are deterministic from recorded facts** (a count of current portfolio rows, a count of
+`purchases` edges). **No name test, no inference.** The SPE-shell-named 35 and the 477
+single-but-active should be **surfaced separately rather than forced into either bucket** — they
+are genuinely ambiguous and, per the accuracy-first constraint, an honest `unknown` beats a guess.
+
 ## 3. It must be DERIVED, and the churn measurement says that is safe
 
 ⚠️ **The accuracy constraint and the changes-over-time constraint both point at a view, not a
@@ -165,11 +208,12 @@ existing 555 rows.** Different changes, different consequences.
 
 ## 6. Open questions for Scott
 
-1. ⚠️ **The biggest gap, newly visible: there is no role for "owns and leases out" — the ordinary
-   landlord/investor.** 6,308 organizations currently hold assets and, under the corrected
-   definitions, **none of the five roles describes them.** They would stay `unknown`, which is
-   honest but leaves 93.9% of the fleet unclassified and the queue's 57% data-work share untouched.
-   **A sixth/seventh state — `investor_owner` or similar — is probably what accuracy requires.**
+1. ✅ **SIZED in §2d — and it needs TWO states, not one.** Of the 3,217 unknown current holders:
+   **`investor_owner`** (2+ assets) = **292 / $583.9M / 54 contactable**, and **`one_off_owner`**
+   (1 asset, no buying activity) = **2,448 / $523.1M / 279 contactable**. ⚠️ **The one-off owners
+   carry nearly as much rent and are 5× more contactable — and a single net-leased building at
+   $2M–$20M IS the stated sweet spot.** Confirm both names and that they are prospected
+   differently.
 2. **`former_owner`** — confirm (3,795; 191 contactable; recency carried separately, not baked in).
 3. **`user_owner` as a human-confirmed lane** rather than an automated arm, given n=13.
 4. **View vs recomputed column** — accuracy is identical; this is a performance and
