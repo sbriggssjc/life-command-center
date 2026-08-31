@@ -16,6 +16,64 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-31 — B6d-cms-step second pass: the latch had two more doors, and one was open in the live watermark
+
+**Reconciled first.** The first pass shipped in a parallel window (`68da552`, PR #7381) and is on
+`main`; nothing was re-done. Re-measuring afterwards found three more instances of the same shape —
+*a slot that exists to carry meaning, written with something else* — and **corrected two claims the
+first pass made.**
+
+- 🔴 **The "success on a no-op" defect is REAL; the first pass dismissed it on a true fact.** It
+  split `ingestion_tracker` by `source`, correctly established that `cms_ingestion` has never
+  reported success, and concluded the defect does not exist. But `get_last_ingestion_meta()` filters
+  on `dataset_id` + `run_status` and **not on `source`** — so the `source='CMS'` rows ARE this
+  pipeline's watermark, and the live one is a **zero-duration** row (`finished_at = started_at`),
+  `rows_upserted` NULL, every count 0. **Split by the key the CONSUMER uses, not the one that best
+  explains the population.** Fixed: the stamp carries `WATERMARK_RUN_STATUS='watermark'` instead of
+  wearing `success` (still in `INGESTED_RUN_STATUSES`, so the gate arms exactly as before).
+- 🔴 **B6d-pri's own code comment is false in effect.** It says the `recorded` skip row *"can never
+  re-arm the change-detection watermark"*. That row is correctly excluded — and the **same
+  invocation** wrote a `CMS`/`success` row 0.4 s earlier carrying the **identical**
+  `dataset_modified_date`, which is not. **An exclusion is only as strong as the set of rows that
+  can carry the same fact.**
+- 🔴 **The reason latched on a channel the fix did not cover — 470 rows.** The first fix recovers
+  from `payload`; these producers pass the reason as an **argument** (`clinic_removed`,
+  `status_unknown`), and `update_data.get("reason") or reason` let a placeholder outrank it.
+  `_first_real` is hoisted to module scope (`_pu_first_real`) and both channels resolve through it —
+  one implementation, one vocabulary.
+- ✅ **`error_summary` has its first writer.** Both janitors wrote `error_log`, overwriting the
+  process's own diagnostic — which is why 16 of 18 populated values were janitor artifacts rather
+  than tracebacks. The janitor is an **outside observer**; it writes `error_summary` now.
+- ✅ **The queue is legible for the first time.** `address_change` 2,148 → **5,102**;
+  `unknown_reason` 3,424 → **0**; `table_name='unknown'` 470 → **0**. Predicted 2,954 repairable /
+  470 not and got **exactly that**. The 470 are **marked, not repaired** —
+  `producer_supplied_no_reason` is a provenance statement, not a reason, worded so it cannot later
+  be mistaken for recovered content. ⚠️ `field_name` stays `__record__` deliberately: it is a live
+  **sentinel** elsewhere, so *recoverable* and *safe to rewrite* are different questions
+  (**B6d-cms-step-field**).
+- ✅ **Zero regressions, established by a full-suite before/after baseline diff** — identical failure
+  set (53 pre-existing, all environmental). Guard `tests/test_b6d_cms_step_error_channel.py`,
+  **11/11 mutations RED**, asserting on the **AST**: the fixes' comments quote `error_log`,
+  `"success"` and the old `or` expression while explaining them, and comments are absent from the
+  AST by construction — removing the stripper-bug class rather than working around it.
+- ⚠️ **Three prior-window guards went red and were established STALE, not breached, before being
+  touched.** Each pinned a literal (`INGESTED_RUN_STATUSES == ("success",)`, `sink[0]["error_log"]`)
+  while its stated intent survives; rewritten to assert the intent, and the reclaim guard was
+  *strengthened* to assert `error_log` is not written.
+- ⚠️ **Still no exception text, and that is the honest deliverable.** The 18:30 run reproduces the
+  shape exactly: heartbeat at 18:38:14.99 on `current_step: medicare_ingestion`, declared failed at
+  18:38:16.10 by a **`(force)`** reclaim — alive 1.1 s earlier. It was **killed**, then
+  force-reclaimed by a second invocation. `ingestion_tracker` structurally cannot carry an OOM;
+  **Railway deploy logs remain the next step.**
+- 🔴 **The outage broke open further during the work**: `max(medicare_clinics.source_last_seen)`
+  **2026-06-25 → 2026-08-31 21:22:29**. ⚠️ **84 of 8,547 (0.98%)** — the pipeline can write again;
+  the feed is not healthy. The last clinic write is an hour *after* the last `ingestion_tracker`
+  row, so that work carries **no run record at all**.
+- ⚠️ **New, unproven, filed not asserted:** `dataset_modified_date` looks **clock-derived** (one
+  second after the preceding reclaim; the patient-counts skip row carries the identical stamp for a
+  different dataset; CMS's own `last_modified` is captured on 3 of 193 rows, newest 2026-03-24).
+  That would be the same latch through a third door — **B6d-cms-step-watermark-clock**.
+
 ## 2026-08-31 — B6d-cms-step + B6d-pri-reason: the error channel works; the audit read a decoy column
 
 **The premise was refuted, and the correction is the deliverable.** `ingestion_tracker` has **two**
