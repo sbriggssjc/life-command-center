@@ -359,6 +359,41 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — C4a DESIGNED to Scott's constraints; `former_owner` is the finding
+
+**NOTHING BUILT.** Canonical design: **`docs/architecture/owner-role-classification.md`** — a new
+sibling page, linked from `bd-ranking-and-priority-queue.md`, `CURRENT-STATE.md` and the backlog.
+**C4a 👤 designed · C4f 🔴 filed.**
+
+Scott's four constraints, and what each settled:
+
+- *"most accurate determination possible as the guiding principle"* → ⚠️ **RETIRES C12's option B**
+  (classify + gate P0.4 to hold the flood down). **Suppressing an accurate determination to protect
+  an ungated band is the wrong trade.** P0.4's missing value gate is P0.4's defect — filed **C4f**.
+- *"can change over time, isn't a one-time determination"* → ⛔ **no one-shot stamped column**
+  (Class 8). **Derived and re-computed.** ✅ **And that is safe: churn is 3 holdings ended and 1
+  started in 90 days**, so a re-derived role is stable, not flapping.
+- *"automate as much as we can, secondary to accuracy"* → automate the decidable; `unknown` stays an
+  honest absence and will remain large. That is correct, not a failure.
+- *"resolution at the entity level would limit the work"* → one determination per entity, ~10k.
+
+⚠️ **The finding that matters: the vocabulary cannot express the most valuable state.**
+**3,795 organizations owned before and hold nothing now — 2,784 still typed `unknown`.** Scott's
+model is *"volume with repeat seller clients"*, so **a party that has sold to us before is the
+highest-value prospect in the business**, and the five declared roles have no word for it.
+**`former_owner` is required for accuracy** — without it a correct classifier concludes "not
+currently an owner" about 3,795 real parties, which is true and useless.
+
+**Design:** recorded facts only — operator flag (P113) · holds ≥1 current fact (6,308) ·
+**former owner (3,795)** · ≥2 `purchases` edges (2,478) · the developer classifier — behind the
+existing brokerage / placeholder / not-prospected guards. **No lexical classifier anywhere**
+(~25% raw, 7%, 4-of-6 guarded across this arc). `role_source` is mandatory; a manual
+`behavioral_override` always wins.
+
+👤 **Four open questions in §6:** confirm `former_owner`; precedence when an entity both holds and
+buys repeatedly (recommended `user_owner`, ⚠️ **overlap unmeasured**); view vs recomputed column;
+and P0.4 (C4f, deliberately not bundled).
+
 ## 2026-08-31 — C12: C4a sized into a decidable question (decision brief, nothing built)
 
 **NOTHING WRITTEN, nothing recommended for build.** 👤 **This is a decision brief for Scott** —
