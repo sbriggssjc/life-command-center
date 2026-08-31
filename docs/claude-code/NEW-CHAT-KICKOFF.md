@@ -91,9 +91,13 @@ from exactly that source. Two more: **`gsa_lease_change_facts`** (336,303 rows; 
   `feed_stale` alerts** are open after 33 days of zero. **The transport was two different causes**
   (gov cold-start timeout, dia missing grant). Invariant **I11** now has a standing detector.
 > 👤 **If Scott asks "what needs me?" → [`docs/os/OPERATOR-ACTIONS.md`](../os/OPERATOR-ACTIONS.md).**
-> Three of the highest-value items in the system are blocked on him, not on a build: **rotate the
-> committed `LCC_API_KEY` (SEC2)**, **pull the Railway logs for the live CMS outage
-> (B6d-cms-restart)**, and **re-issue `SAM_API_KEY` (B6d-sam)**.
+> ⏸️ **Credential rotation is DEFERRED by decision (2026-08-29)** — single-user, still building,
+> private repo. **Do not re-propose it**; it is a recorded risk acceptance with an enumerated
+> trigger (a second user · repo made public · shared with a contractor/vendor/IT · lost laptop ·
+> LCC leaving "still building"). ✅ **SEC4, the secret-shaped-string guard, stays ACTIVE** — it
+> stops the next export adding more.
+> **Live operator items: pull the Railway logs for the CMS outage (B6d-cms-restart)** and
+> **re-issue `SAM_API_KEY` (B6d-sam)**.
 >
 > ## 📍 STATE AS OF 2026-08-29 — the B-series is CLOSED. Read this block, not the B6b line below.
 >

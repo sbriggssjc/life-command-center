@@ -1065,6 +1065,33 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-29 — 👤 DECISION: credential rotation DEFERRED until a second LCC user
+
+**Scott, 2026-08-29:** *"Skip all the key rotation until we add another user to the LCC. I'm not too
+worried about it since we are single user for now and still building."*
+
+**Recorded as a risk acceptance with a trigger, not dropped.** `SEC2` (the committed `LCC_API_KEY`),
+`I1` (the PA webhook secret) and `SEC3` (Supabase keys in ten of seventeen PA packages) stay open and
+marked ⏸️ **DEFERRED** in both `PLANNED-BACKLOG.md` §P0s and `OPERATOR-ACTIONS.md`. The rationale is
+sound: single-user, still building, private repo — **the exposure has no second party to reach.**
+
+⚠️ **One correction to the trigger, and it is the reason this is written down rather than assumed:
+the PRIVATE REPO is what carries the risk, so "another user" is not the only event that fires it.**
+Rotate before **any** of: a second LCC user · **making the repo public** · **sharing it with a
+contractor, vendor or Northmarq IT** · a lost or compromised laptop · LCC leaving "still building"
+for anything a client touches. **Several of those could happen without anyone thinking of them as a
+security event**, which is exactly why the trigger is enumerated.
+
+✅ **SEC4 stays ACTIVE and is now the more valuable half.** It is a *guard*, not a rotation — a
+pre-commit/CI check for JWT-shaped, `sb_secret_` and long-hex strings in flow exports and config
+files. **Deferring rotation is a decision about the keys already exposed; SEC4 is what stops the
+next PA export adding more.** Without it, the eventual rotation is against a moving target.
+
+**And the order is recorded now, while it is cheap to write down:** rotate → update Railway →
+`git rm --cached` + `.gitignore` → **only then** consider history. `git rm --cached` alone leaves the
+value in history and in every clone, and **`filter-branch` is the tool that nearly cost this repo a
+475 MB mailbox.**
+
 ## 2026-08-29 — D1 drafted, and sizing it corrected the invariant it was written from.
 
 **Prompt: `prompts/D1-cross-database-provenance-diff-2026-08-29.md`.** Audit + a standing detector;
