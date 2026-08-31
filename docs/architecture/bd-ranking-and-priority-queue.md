@@ -19,7 +19,13 @@
 > and all of dia unchanged (positive-controlled). Migration
 > `supabase/migrations/20261002110000_lcc_c6_current_holding_seller_bands.sql`; evidence
 > [`C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md`](../audits/C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md).
-> **C4a (the pitch/bucket) and C4b (`user_owner`) remain open and are Scott's.**
+> **NEXT: C11** — the sheet names a person and gives no basis; 121 of 126 carry a contact↔owner edge
+> whose role we already hold and never print. Prompt
+> `docs/claude-code/prompts/C11-prospecting-brief-show-the-relationship.md`.
+> **Open and Scott's: C4a** (the pitch/bucket). **C4b** (`user_owner`) is resolved as inert.
+> **Open, sized, unbuilt: C9** (45 true-split merge groups), **C9b** (434 edge splits), **C9a** /
+> **C10a** / **C8a** (design + dead-branch decisions), **C7a** (mailbox coverage — the precondition
+> under all of it).
 
 ---
 
@@ -239,8 +245,14 @@ name (P197) and **14 are consumer mailboxes**: Boyd Watterson's contact is *@mcw
 Easterly's is *@centurytel.net*. ⚠️ **16/113 is a LOWER BOUND, not 97 wrong** — a real employee can
 use a personal address (the P188 asymmetry). **121 of 126 do carry a relationship edge** and the
 edge role is on file — `prospecting_contact` 58 · `institution_decision_maker` 35 · `manager` 15 ·
-**`works_at` 12 (the weak SF org edge P161 disqualified)** · `decision_maker` 1 — **and the sheet
-prints none of it.** Surfacing the role needs it on the view.
+**`works_at` 12 (the weak SF org edge P161 disqualified)** · `decision_maker` 1 · **no edge at all
+5** — **and the sheet prints none of it.** Surfacing the role needs it on the view.
+
+⚠️ **Re-measured 2026-08-31: only 12 of the 126 owners are on the Tier 0 confirm lane, so "route it
+to Tier 0" is NOT the answer** — that lane selects on a different basis and does not cover this
+population. **The fix is to PRINT THE BASIS, never to filter on corroboration**: filtering would
+drop ~97 rows on a lower bound and re-create the Class 24 mistake C8 just fixed. Prompt:
+`docs/claude-code/prompts/C11-prospecting-brief-show-the-relationship.md`.
 
 🔴 **C8a — the fallback branch is ungated AND structurally dead** (`engagement_score` = 0 on all
 30,714 gov `unified_contacts` rows). Not a `V2_MAP` gate failure: it is a different source that

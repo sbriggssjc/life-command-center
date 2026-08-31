@@ -244,6 +244,30 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — C10 SHIPPED (the sheet is legible); C11 prompt written for what it exposed
+
+**C10 is LIVE.** All 126 rows render a real name and portfolio value; gate, ordering and limit
+untouched, count held at 126. **C8's benefit is only now visible** — Easterly reads
+"$114,864,150 across 85 properties" instead of "Unknown … rent unknown". Guard
+`test/prospecting-brief-column-mapping.test.mjs`. **C10b 🟢 build-ready as C11.**
+
+- ⚠️ **Two of my C10 brief's predictions were wrong, and CC measured rather than accepting them.**
+  **4 rows DO carry a null `rank_value`**, and **`[mixed]` was a genuine null `domain` on 74% of
+  rows**, not a mapping defect — still dishonest to print, but a different one (**C10a**:
+  `is_cross_vertical` is never read). That is the right instinct and worth naming.
+- 🟢 **C10b is next and it is small.** The sheet names a person and gives **no basis**. Only **16 of
+  113** contact emails corroborate the owner domain — ⚠️ **a LOWER BOUND, not "97 are wrong"**
+  (P188: Easterly's own confirmed contact is `@centurytel.net`). ⚠️ **And only 12 of 126 owners are
+  on the Tier 0 lane**, so routing there is not the answer either.
+- **What we hold and never print: 121 of 126 carry a contact↔owner edge with a role** —
+  `prospecting_contact` 58 · `institution_decision_maker` 35 · `manager` 15 · **`works_at` 12** (the
+  SF org edge **P161 disqualified** as evidence of control) · `decision_maker` 1 · **no edge 5**.
+- **The fix is to PRINT THE BASIS, not filter on it.** ⚠️ Filtering on corroboration would drop ~97
+  rows on a lower bound — the Class 24 mistake C8 just fixed.
+- 🔴 **C8a correctly re-characterised by CC: inert, not mismapped.** Its mapping is real for
+  `unified_contacts`; the branch is dead because `engagement_score` is 0 on all 30,714 gov rows.
+  **The open decision is whether to delete it.**
+
 ## 2026-08-31 — C6 + C8 both SHIPPED; C10 prompt written for the defect C8 exposed
 
 **C6 and C8 are LIVE.** C8: migration `20260831120000` (+`is_resolved_owner`, `is_brokerage` on
