@@ -83,6 +83,15 @@ belongs to the app window.** If it is not obvious which window you are in, ask.
 - Prompts: `<id>-<kebab-topic>-<YYYY-MM-DD>.md`.
 - Architecture/design: lower-kebab, no date — these are living documents, updated in place.
 
+## 6x. 👤 Operator actions — the one place to see what is blocked on Scott
+
+📍 **[`OPERATOR-ACTIONS.md`](OPERATOR-ACTIONS.md)** collects every `👤` row from
+`PLANNED-BACKLOG.md` into one ranked page — security first, then blocked builds, then decisions.
+**It is a LENS over the backlog, never a second source of truth**; the backlog row stays
+authoritative and wins any disagreement. It exists because 68 operator markers scattered across a
+dozen sections is the same *"no single accurate representation"* problem this map addresses for
+documents.
+
 ## 6y. 🔁 The build-turn protocol — this map's parent rule
 
 📍 **[`BUILD-TURN-PROTOCOL.md`](BUILD-TURN-PROTOCOL.md) is the definition of done for every change**
