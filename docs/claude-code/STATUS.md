@@ -110,6 +110,103 @@ Writeup `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`; **I2**, **Class
   people learn to merge past. **First credentialed run is an operator step.**
 - Also fixed in passing: the backlog's **D1 row had 5 cells in a 4-column table and an unescaped `|`
   inside a code span**, so GFM was silently dropping its status cell.
+## 2026-08-31 — ✅ D1 SHIPPED: the two domains are already coherent, and the real gap is in the INSTRUMENT
+
+`docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`. **The honest result I asked for, and it is
+mostly a clean bill of health — which the prompt explicitly said was an acceptable outcome.**
+
+**69 differences triaged: 58 legitimate · 5 unexplained · 6 unwired — and NONE is B5-sized.** The
+largest unwired candidate is **1,021 rows of broker market intelligence**. **D1c** is the closest
+analogue: `property_sale_events` fed from `ownership_history` — dia 52, gov 0 — *"same shape as B5,
+~2% of the size."*
+
+**⚠️ The finding the prompt did NOT anticipate, and it is the more valuable one: 12 stores cannot be
+diffed at all, because they carry no provenance column** — **including dia `ownership_history`
+(10,037 rows)**, *the very store whose provenance diff found B5*. **B5 was a finding about ownership
+history, and dia's copy of that table is invisible to the detector that found it.** That is a gap in
+the **instrument**, not the data — the same class one level up.
+
+**The design constraints I asked for were all met, and one better than specified:**
+**acknowledgement is not silencing** — `legitimate` silences a row; **`unexplained` and `unwired`
+keep emitting**, in `scripts/d1-provenance-acknowledgements.json`. That is what stops this becoming
+the badge-of-noise failure B6d fixed one layer up.
+
+⚠️ **The positive control was honest about itself: 2 of 3 re-found, the third out of reach** — and it
+said so rather than reporting three. B6c-dup was re-found from cold (dia `property_sale_events`
+carries producers `sales_transactions` 2,646 and `ownership_history` 52; **gov carries neither**).
+
+**So the P0d thesis holds and is now measured: the domains are substantially coherent, and D1's
+standing value is preventing the NEXT divergence rather than clearing a current backlog.**
+
+## 2026-08-31 — RECONCILED against the baseline. The throttle was hiding a real failure, and one fix traded a loud error for a silent one.
+
+**Measured against this morning's baseline. Three results, and two of them are corrections to me.**
+
+| metric | baseline | now | verdict |
+|---|---|---|---|
+| `max(medicare_clinics.source_last_seen)` | 2026-06-25 | **2026-06-25** | ❌ **unmoved** |
+| clinics refreshed since | 0 | **0** | ❌ unmoved |
+| newest CMS attempt / status | 2026-08-27 · `abandoned` | **2026-08-31 · `failed`** | ✅ it RAN |
+| `rows_upserted` | null | **null** | ❌ |
+| `pending_updates` | 1,959 | **2,341** | ⚠️ **moved — I predicted it would not** |
+
+### 🎯 The force-run answered the decisive question: the throttle was hiding a REAL failure
+
+`--force-run` bypassed the throttle and the run executed — **18:30:26 → 18:38:16, ~8 minutes,
+`failed`** — with `notes: {"current_step": "medicare_ingestion", "heartbeat_at": …}`. **The new
+instrumentation works: it names the step it died in.** ⚠️ **And two rows remain `started` with
+`finished_at` NULL — the orphan shape re-forming in the same session.**
+
+**So the 2026-06-23 hang is still live underneath.** The throttle was never the disease; it was what
+kept us from seeing it for two months. **That is the branch I flagged as *a finding, not a failure*,
+and it is the more useful outcome.**
+
+⚠️ **`error_summary` is `(none)` on the failed run.** A run that fails without recording why is
+**I5's defect in a second place** — the PA fault branch has the identical shape. **Filed as
+`B6d-cms-step`: the step is named, the error is not.**
+
+### ⚠️ My prediction was wrong, and the reason matters more than the prediction
+
+I wrote: *"the DSN fix should NOT move `pending_updates` on its own — if it does, my read of the two
+defects as independent is wrong."* **It moved +382.** The cause is not the DSN: **`B6d-pri`'s code
+fix landed and made the writes succeed.** So the two defects were independent after all — **the
+prediction was right about the mechanism and wrong about what else would ship in between.**
+
+### 🚨 But the fix satisfied the constraint with a PLACEHOLDER, which the prompt explicitly forbade
+
+**437 rows written today carry `reason = 'unknown_reason'`** — first and last seen **2026-08-31**, so
+entirely new. `B6d-pri` §2 said: *"give it a real reason string — **not a placeholder** … a reason
+that restates the source is not a reason."*
+
+⚠️ **And the same table already demonstrates the standard:** `public_record_ai_no_yield` (1,893),
+*"Salesforce auto-created property — verify accuracy and check for duplicates"* (65), *"unmatched
+property_id during financial propagation"* (1). **The codebase knows how to write meaningful
+reasons.**
+
+**In operator terms this is arguably a regression.** Before: the writes failed loudly, ~500 errors a
+run. After: they succeed silently and **437 unactionable rows enter a human triage queue**. **A loud
+failure is more useful than a quiet placeholder** — this is the Consumption-Layer rule (every badge
+is actionable work) violated by a fix meant to satisfy a NOT NULL. Filed as **`B6d-pri-reason`**.
+
+### CC's two corrections to my brief — both accepted
+
+1. **The 1,001 log lines are a VIEWER CAP, not a run boundary.** 496+486+10+~9 = 1,001 against
+   **1,952 stale rows** — **my counts were FLOORS; the true per-run figure is ~1,950.** I read a
+   truncated export as a complete run.
+2. **The logs are the `cms-ingestion` service, not `public-record-ingest`.** The drain lives in
+   `run_cms_ingestion.main()`, *which is also why the failures precede the skip* — a detail that
+   only makes sense once the service is identified correctly. **I mis-attributed it twice.**
+
+### Two further findings from B6d-pri, both worth carrying
+
+- **`properties._new_property` is a pseudo-field (0 columns, 65 rows), and the swallowed 42703 meant
+  those rows silently read as "no change."** It was a **data** defect, not a log defect.
+- **§5b answered, and the answer is worse than expected: NEITHER cron is registered anywhere.**
+  `feed_freshness_registry` is table-keyed (5 dia rows), **`ingestion_tracker` has no reader**, and
+  `v_pipeline_task_health` is **gov-only**. → **`B6d-cms-escalation`**, unbuilt by design.
+- **New: `B6d-pri-metrics`** — `metrics.persist_run_summary` defines an inner `_insert()` and
+  **never calls it**, so it writes no summary row anywhere.
+
 ## 2026-08-31 — 📋 BASELINE captured before the CMS force-run and the DSN fix land
 
 **Three things are in flight at once**, so the baseline is recorded *before* any of them lands —
