@@ -361,7 +361,9 @@ that is harmless today only because `recorded` is excluded from the watermark.
   force-reclaimed by a second invocation. `ingestion_tracker` structurally cannot carry an OOM;
   **Railway deploy logs remain the next step.**
 - 🔴 **The outage broke open on its own during this work**: `max(medicare_clinics.source_last_seen)`
-  moved **2026-06-25 → 2026-08-31 21:22:29**, first movement in 67 days. ⚠️ **84 of 8,547 clinics
-  (0.98%)** — the pipeline can write again; the feed is not healthy. Note the last clinic write
+  moved **2026-06-25 → 2026-08-31**, first movement in 67 days. ⚠️ **The count was still CLIMBING
+  while this was written — 61 → 84 → 163 of 8,547 across three measurements in one session — so
+  quote it with its timestamp or not at all.** Even at 163 that is **1.9%**: the pipeline can write
+  again; the feed is not healthy. Note the last clinic write
   (21:22) is an hour *after* the last `ingestion_tracker` row (20:25), so that work carries no run
   record at all.

@@ -66,8 +66,9 @@ first pass made.**
   force-reclaimed by a second invocation. `ingestion_tracker` structurally cannot carry an OOM;
   **Railway deploy logs remain the next step.**
 - 🔴 **The outage broke open further during the work**: `max(medicare_clinics.source_last_seen)`
-  **2026-06-25 → 2026-08-31 21:22:29**. ⚠️ **84 of 8,547 (0.98%)** — the pipeline can write again;
-  the feed is not healthy. The last clinic write is an hour *after* the last `ingestion_tracker`
+  **2026-06-25 → 2026-08-31**. ⚠️ **Still climbing while this was written — 61 → 84 → 163 of 8,547
+  across three measurements in one session, so quote it with its timestamp or not at all.** Even at
+  163 that is **1.9%**: the pipeline can write again; the feed is not healthy. The last clinic write is an hour *after* the last `ingestion_tracker`
   row, so that work carries **no run record at all**.
 - ⚠️ **New, unproven, filed not asserted:** `dataset_modified_date` looks **clock-derived** (one
   second after the preceding reclaim; the patient-counts skip row carries the identical stamp for a
