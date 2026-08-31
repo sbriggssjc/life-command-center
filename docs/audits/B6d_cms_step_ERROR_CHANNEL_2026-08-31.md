@@ -367,3 +367,46 @@ that is harmless today only because `recorded` is excluded from the watermark.
   again; the feed is not healthy. Note the last clinic write
   (21:22) is an hour *after* the last `ingestion_tracker` row (20:25), so that work carries no run
   record at all.
+
+---
+
+## 7. Follow-up measured 22:27 — the outage is ending, and the MONITOR will say so far too early
+
+`source_last_seen` began advancing at **20:33:51** and is climbing steadily at **~1.8 clinics/min**
+(105 at 21:32 → 203 at 22:27). All 203 carry **`data_source='cms_ingestion'`**, a key set *only*
+inside the `if updates:` branches of `fix_medicare_ingestion.py` — so **real field changes are
+landing.** This is genuine ingestion.
+
+⚠️ **Correction to §4's reading.** §4 inferred "it never writes the clinic" partly from
+`updated_at` being untouched. **None of the three `source_last_seen` writers sets `updated_at`**, so
+that column proves nothing here — the same trap the Dialysis `CLAUDE.md` already documents in the
+other direction (*"`updated_at` IS NOT the freshness signal … written by the reconciled-econ denorm,
+not by ingestion"*). The `no ingestion_tracker row` half of §4 **stands**: 0 tracker rows since
+20:30, so this work is still invisible to every surface built on that table.
+
+### 🔴 The new finding: a `max()` monitor reads FRESH on 2.38% coverage
+
+`feed_freshness_registry` watches `medicare_clinics` on **`ts_column = 'source_last_seen'`** with a
+45-day bound, and `compute_feed_freshness` takes **`max(ts_column)`**. Measured 22:27:
+
+| | |
+|---|---:|
+| clinics total | 8,547 |
+| touched today | **203 (2.38%)** |
+| still ≥30 days stale | **7,489 (87.6%)** |
+| `max(source_last_seen)` → what the monitor reads | **today, age 0 days** |
+
+**One stamped row takes the whole feed from 65 days stale to fresh.** The `feed_stale` alert will
+auto-resolve on 2.38% coverage, while seven-eighths of the fleet is still a month behind — and at
+1.8/min a full pass is **~79 hours**. So the monitor is about to stop reporting an outage that is
+87.6% unresolved.
+
+This is B6d's own *"grade the threshold, or it hides breaks"* lesson one layer down: B6d graded the
+**bound** and never asked whether the **aggregate** could be satisfied by a fraction of the
+population. A max-based freshness check answers *"did anything arrive"*, never *"was the feed
+ingested"*. The honest instrument for a per-row feed is a **coverage** measure —
+`count(*) filter (where ts_column >= now() - bound) / count(*)`, or the **p95 age** rather than the
+min. Filed **`B6d-cms-freshness-max`**.
+
+**Do not read the alert auto-resolving as the outage being fixed.** Verify on the coverage
+percentage and on a `cms_ingestion` run row appearing in `ingestion_tracker`.
