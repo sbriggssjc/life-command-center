@@ -150,6 +150,54 @@ Writeup `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`; **I2**, **Class
   people learn to merge past. **First credentialed run is an operator step.**
 - Also fixed in passing: the backlog's **D1 row had 5 cells in a 4-column table and an unescaped `|`
   inside a code span**, so GFM was silently dropping its status cell.
+## 2026-08-31 (evening) — ✅ THE CMS OUTAGE IS BROKEN OPEN after 67 days. 🚨 And the placeholder regression grew 8×.
+
+**Measured against this morning's baseline. Two results, in opposite directions.**
+
+### ✅ Data moved for the first time since 2026-06-25
+
+| metric | baseline | now |
+|---|---|---|
+| `max(medicare_clinics.source_last_seen)` | 2026-06-25 | **2026-08-31** |
+| clinics refreshed since 2026-06-25 | **0** | **61** |
+| newest run | 08-27 `abandoned` | **08-31 `success`** |
+
+**67 days of silence ended.** The chain that got here — B6a made producers visible, B6a-follow-up
+made them alertable, B6d graded the bound that refused to be widened, the logs named a throttle, and
+`--force-run` proved the throttle was hiding a real failure — **every step was necessary and none of
+them alone would have done it.**
+
+⚠️ **Three honest qualifications, none of which undo the result:**
+
+1. **61 of 8,547 clinics is 0.7%.** This is a **partial** ingest, not a completed one. **Do not read
+   `source_last_seen` moving as "the feed is healthy"** — read it as "the pipeline can write again."
+2. **The `feed_stale` alert is STILL OPEN.** The LCC-side monitor has not re-evaluated since the
+   data moved at 20:25. **It should auto-resolve on its next cycle — and THAT is the confirmation,
+   not this measurement.** ⚠️ *Reading the alert ledger rather than my own query is the rule
+   B6a-follow-up exists for; it applies to good news too.*
+3. **The 20:25 run reported `success` with `rows_upserted` NULL.** So the §2 defect
+   (`success` on a no-op, and `rows_upserted` never recorded) is **still live** — it is in
+   `B6d-cms-step`, which is now in flight.
+
+### 🚨 The `unknown_reason` regression grew 8× in one day — this is now the urgent item
+
+| | this morning | after the first fix | **now** |
+|---|---:|---:|---:|
+| `pending_updates` total | **1,959** | 2,341 | **7,531** |
+| carrying `reason = 'unknown_reason'` | 0 | 437 | **3,424** |
+
+**The human triage queue nearly quadrupled in a day, and 45% of it is now unactionable placeholder
+rows.** ⚠️ **And the asymmetry is the tell: 61 clinics refreshed against +5,572 queue rows.** The
+drain is generating queue work two orders of magnitude faster than it is refreshing data.
+
+**This is the Consumption-Layer failure in its purest form** — a fix that satisfied a NOT NULL
+constraint turned ~500 loud errors per run into **3,424 silent, unactionable rows in a queue a human
+is supposed to work.** `B6d-pri-reason` was filed as a correctness nit this morning; **it is now the
+most operator-damaging open item on the board**, and it is already bundled into `B6d-cms-step`.
+
+⚠️ **Whoever picks this up: the placeholder rows must be BACKFILLED or MARKED, not just stopped.**
+Stopping the writer leaves 3,424 rows nobody can triage sitting in the queue forever.
+
 ## 2026-08-31 — B6d-cms-step drafted, and measuring it found the defect is 47× bigger than one run
 
 **Prompt: `prompts/B6d-cms-step-capture-the-error-2026-08-31.md`**, bundled with **`B6d-pri-reason`** —
