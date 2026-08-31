@@ -125,18 +125,45 @@ cadence-gated, not opportunity-gated, not stale — **just the wrong grain** (§
   ⚠️ **That is the N18 view** — whose ranking N18 found was arbitrary, not knowing it sits upstream
   of the ranked call list.
 
-### ⚠️ C8 (2026-08-29) — the role gate is on a SECOND surface, and there it hides the book
+### ✅ C8 (2026-08-29 diagnosed, SHIPPED 2026-08-31) — the role gate was on a SECOND surface
 
-`handleProspectingBrief` (`api/operations.js:~4805`) — **the operator call sheet** — gates on
+`handleProspectingBrief` (`api/operations.js`) — **the operator call sheet** — gated on
 `owner_role IN ('developer','user_owner','buyer','seller_flipper','operator')`. Of **311** eligible
-cadence rows it shows **80**; of the **231** excluded as `unknown`, **47 are resolved property
-owners carrying $515.2M — more than the $442.8M it shows** — against **3** flagged brokerages.
-**Easterly ($114.9M, 85 properties), NGP Capital, USAA Real Estate, US Fed Properties Trust,
-Gardner Tanenbaum, GI Partners, Trammell Crow, Clarion Partners** are all excluded. Evidence:
-[`C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md`](../audits/C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md);
-build prompt `docs/claude-code/prompts/C8-prospecting-brief-admit-resolved-owners.md`.
-**Same Class 24 defect as C6, different surface. Fix: admit on the per-asset fact (is a resolved
-owner) with an EXPLICIT brokerage guard — 80 → 127 rows.**
+cadence rows it showed **80** ($442.8M); of the **231** excluded as `unknown`, **47 are resolved
+property owners carrying $515.2M — more than everything it showed**. **Easterly ($114.9M, 85
+properties), NGP Capital, USAA Real Estate, US Fed Properties Trust, Gardner Tanenbaum, GI Partners,
+Trammell Crow, Clarion Partners** were all off the sheet. Evidence:
+[`C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md`](../audits/C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md).
+**Same Class 24 defect as C6, different surface.** Shipped: admit on the per-asset fact
+(`is_resolved_owner` — owns an asset in `lcc_property_owner`) **OR** a classified role, **AND NOT**
+`is_brokerage`, on both arms. Migration `20260831120000` appends the two facts to
+`v_bd_cadence_dashboard`; the policy stays in the handler. Guard
+`test/c8-prospecting-brief-gate.test.mjs` (5 tests, 8 mutations RED).
+
+| eligible cadence rows | before | after |
+|---|---:|---:|
+| served by the gate | **80** | **126** |
+| rank value | $442,805,301 | **$957,742,929** |
+| brokerages admitted | **1** | **0** |
+| genuinely unclassified (`unknown`, no assets) | excluded (181) | excluded (181) |
+
+⚠️ **THE PREDICTED 127 WAS 126, AND THE MISSING ROW IS THE FINDING.** The audit sized the brokerage
+population by reading only the **excluded** half and found 3. There are **4**: **`Stan Johnson Co`
+carries `owner_role='buyer'` and was being SHOWN** ($238,700). Making the guard explicit on both
+arms drops it — so the delta is +47 −1, not +47. **A population counted on one side of a gate is not
+the population.**
+
+⚠️ **The four brokerage-flagged rows, read individually** (the P116 false-positive check the audit
+asked for): `Coldwell Banker Commercial Realty` and `Stan Johnson Co` are genuine brokerages;
+`Northmarq Support` is our own firm; **`Clark Matthews` is the documented false positive** — the
+pattern matches bare `\mmatthews\M` and caught a person's SURNAME. It costs nothing: he is
+`unknown`, owns no asset, and fails the OR arm regardless. **The guard changes the outcome for
+exactly ONE of the four**, and that one is real.
+
+⚠️ **At the default `limit=10`, NINE of the ten call-sheet slots change.** Easterly enters at rank 2
+behind Boyd Watterson; NGP Capital, USAA Real Estate, US Fed Properties Trust, Elman Investors,
+Trammell Crow and Beacon Capital all reach page 1 for the first time. This is a reach fix, not a
+count fix.
 
 ### ✅ The role-gate sweep — there is no third surface (2026-08-29)
 
@@ -239,6 +266,27 @@ rent) is tabulated in
 ⚠️ **`lcc_property_attributes` carries a DATE, not an OUTCOME** — renewal, extension and holdover
 are indistinguishable in that column. **Read the asset before acting on any expiry date.**
 
+### ⏰ P1 HAS A HARD LOWER EDGE — an asset leaves the band the morning after it expires (2026-08-31)
+
+Re-measured two days after C6 shipped, on the day C5a's own deadline arrived. P1's predicate is
+`lease_expiration >= CURRENT_DATE`, so **an asset drops out the day after its lease expires** —
+silently, with no terminal state, and nothing recording that it was ever flagged.
+
+**Live 2026-08-31: 6 P1 assets expire TODAY**, across 5 owners — Boyd Watterson (property 10776,
+the row C5a named "three days out"), Greenleaf Management, Karen Curran, plus the pre-existing
+`developer` owners Bains Holdings and Highwoods Realty.
+
+⚠️ **5 of the 6 carry no other band on that asset**, and **Greenleaf Management and Karen Curran
+have ZERO other queue rows at all** — tomorrow they leave the surface entirely. Boyd's *owner*
+stays visible on its other 74 rows, which is the harder half to notice: **the asset stops being
+flagged while the owner still looks covered.**
+
+**This is not self-evidently a defect and must not be "fixed" by reflex.** A just-expired gov lease
+is plausibly the peak seller conversation — holdover is a live tenancy — and the same column that
+cannot tell renewal from termination cannot tell holdover from a vacated building (the
+DATE-not-OUTCOME warning above, read the other way). Whether P1 should carry a short post-expiry
+tail is a **band-semantics decision, not a view bug**. Sized here, not built: backlog **C6a**.
+
 ### C6 — SHIPPED 2026-08-29
 
 The role predicate in `gov_owner_props` is replaced by *holds a current gov asset* (the
@@ -249,6 +297,15 @@ All four predicted deltas hit exactly; six bands and all of dia held, positive-c
 
 **Reachability = `owner_contact_pivot.active_contact_entity_id IS NOT NULL`** — the fact the Tier 0
 arc (P188/P194) *writes* and `v_owner_contact_enrich_queue` already keys on.
+
+✅ **Re-verified live 2026-08-31, two days on** — cache refreshed 3 min before the read and agreeing
+with the live view on **all ten bands**; `unreachable_rows_emitted` **0**; `nongov_rows_in_gov_bands`
+**0**; P5 still 58 against a positive control of 1,681 (565 dia). **P1 149 → 153 and P3 163 → 166 is
+ordinary rolling-window drift, attributed exactly, not regression**: P1's 24-month upper edge
+advanced two days and admitted **exactly 4** assets, with **0** falling off the lower edge (149+4=153).
+⚠️ **The drift is NOT reachability** — 0 rows in the four bands have a pivot touched since C6. And
+⚠️ `lcc_entity_portfolio_facts.updated_at` cannot attribute it either: the nightly re-upsert touches
+most rows every day, so every source reads "written today" (the documented B4/B5 trap).
 
 ⚠️ **NOT `reachable_hero_qualified`, and `CLAUDE.md`'s instruction to quote it is not wrong.**
 That instruction is about **reporting the reachability metric**; this is a **join predicate**, a
@@ -335,6 +392,9 @@ the same limit on the outbound side). Filed as **C7a**; it was not filed anywher
 | ✅ **P5 keeps the role gate** | 83% of the flood, weakest signal, cross-domain |
 | ✅ **Reachability gates the widening** | P112; converts 2,719 owners → 303 callable. **Shipped as the pivot's `active_contact_entity_id`, not `reachable_hero_qualified`** — the latter is an aggregate with no membership surface and a different population (C6 §4) |
 | ✅ **C6 shipped — the band fires on current holding** | 2026-08-29; four predictions hit exactly, six bands + dia held |
+| ✅ **C8 shipped — the call sheet admits resolved owners** | 2026-08-31; 80 → **126** rows, +$515.2M. Predicted 127, landed 126 — the audit had counted brokerages on one side of the gate only |
+| 🔴 **C8a — the brief's fallback branch is ungated AND structurally dead** | `engagement_score` is 0 on all 30,714 gov `unified_contacts` rows, so `gt.0` returns nothing; it also reads the frozen pre-cutover gov snapshot, not the `CONTACTS_HUB=ops` hub. A latent fail-open, not a live one |
+| 🔴 **C8c — every call-sheet row renders "Unknown"** | The handler maps `c.name` / `c.company_name` / `c.annual_rent`; the view supplies `entity_name` / (none) / `rank_value`. Pre-existing, unaffected by C8, and it blunts C8's whole benefit |
 | 👤 **C4a — what promotes an owner out of `unknown`** | **Scott's, doctrine not code.** Recorded facts available, none adopted: portfolio shape · `purchases` edges (repeat investor vs one-off — his own distinction, already modelled) · `is_operator_not_owner` (P113) · deed/B5 party roles |
 | 👤 **C4b — `user_owner`: fill the arm or remove it** | Leaving it is how C4 stayed invisible |
 | 🔴 **C4d — marketing / deal-execution actions are not inventoried** | The other half of "compared to the balance of the leads or marketing activities." **That inventory does not exist today**; a cross-surface weighting cannot be built until it does |
