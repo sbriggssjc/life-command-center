@@ -90,6 +90,25 @@ select source_domain, split_part(coalesce(<provenance_col>,'(null)'),':',1) as s
 from <fact_store> group by 1,2 order by 1, 3 desc;
 ```
 
+> ⚠️ **CORRECTED 2026-08-29 (D1 sizing) — THE QUERY ABOVE HAS A POPULATION OF ONE.** Measured on
+> LCC Opps: **exactly one table carries BOTH a domain column and a provenance column —
+> `lcc_entity_portfolio_facts`, the very table that found B5.** So the intra-table form of this
+> detector cannot generalise, and writing it as *the* detector overstated its reach.
+>
+> **The form that generalises is a CROSS-DATABASE diff of PARALLEL tables (gov vs dia)** — which is
+> how B5 was actually found, and how B6c found dia's `property_sale_events` differs from gov's.
+> Twelve parallel pairs carry a provenance column; see `docs/audits/D1_*`.
+>
+> ⚠️ **And a naive cross-DB query breaks on the first pair it meets:** `properties` uses
+> **`data_source` in gov and `source` in dia**. **Resolve the provenance column per table from the
+> catalogue; never hard-code it.** ⚠️ Several values also carry a suffix (`county_deed:<uuid>`,
+> `gov_master_backfill_r71|h=<hash>`), so `split_part` before grouping or the diff drowns in
+> one-row buckets.
+>
+> ⚠️ **Row-count disparity is NOT the signal — the producer SET is.** `property_financials` is
+> **98,510 (gov) vs 676 (dia)** and may be entirely legitimate. Diff the distinct sources; report
+> volume only as context.
+
 **A difference is not automatically a defect** — a domain may legitimately lack a source (dia has no
 GSA lease inventory; gov's tenant is a federal agency so it has no operator-vs-owner conflation).
 **But it must be an explained difference, not an unnoticed one.**
