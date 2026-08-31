@@ -16,6 +16,43 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-08-31 — 📋 BASELINE captured before the CMS force-run and the DSN fix land
+
+**Three things are in flight at once**, so the baseline is recorded *before* any of them lands —
+otherwise tomorrow we compare against memory.
+
+**In flight:** (1) Scott running the CMS ingestion locally with `--force-run`; (2) `SUPABASE_DB_DSN`
+set on the Railway `public-record-ingest` service and redeployed; (3) `B6d-pri` and `D1` both with
+Claude Code.
+
+**Baseline — dia `zqzrriwuavgrquhisnoa`, 2026-08-31:**
+
+| metric | value |
+|---|---|
+| `max(medicare_clinics.source_last_seen)` | **2026-06-25** |
+| `medicare_clinics` rows | 8,535 |
+| clinics refreshed since 2026-06-25 | **0** |
+| newest CMS attempt / status | **2026-08-27 · `abandoned`** |
+| `pending_updates` rows | **1,959** (newest 2026-08-26) |
+| open `feed_stale` alerts | **2** — `medicare_clinics` (dia), `sam_lease_opportunities` (gov) |
+
+**What each fix should move — and what it should NOT:**
+
+- **The force-run** → `source_last_seen` advances past **2026-06-25**, `clinics_refreshed_since`
+  rises above **0**. ⚠️ **The confirmation is the `feed_stale` alert AUTO-RESOLVING, not the run
+  finishing** — read the alert ledger, not the console.
+- **The DSN fix** → the next `public-record-ingest` run stops emitting the **486** `Failed to mark
+  stale … DSN not configured` lines. ⚠️ **It should NOT move `pending_updates` on its own** — those
+  writes fail on the separate **23502 `reason` NOT NULL** defect, which is a code fix in `B6d-pri`.
+  **If the row count moves after the DSN change alone, my read of the two defects as independent is
+  wrong, and that is worth knowing.**
+- ⚠️ **A redeploy is not a run.** The DSN change proves nothing until the service's next scheduled
+  execution; **the evidence is a clean log, not a green deploy.**
+
+⚠️ **The decisive question the force-run answers:** if it **completes**, the throttle was the last
+obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
+hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
+
 ## 2026-08-29 — C9 split rate measured: 45 groups, not 181 (and my first metric was wrong)
 
 **NOTHING WRITTEN.** Folded into `C9_...md` **§7**, canonical **§3**, backlog **C9** revised,
