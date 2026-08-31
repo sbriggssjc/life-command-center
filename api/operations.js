@@ -4795,17 +4795,62 @@ async function handleProspectingBrief(params, user, workspaceId) {
   const limit = Math.min(parseInt(params?.limit) || 10, 25);
   const domainFilter = params?.domain || null;
 
-  // BD-target gate: require a classified owner_role for ALL contacts.
-  // Brokers and unclassified intermediaries have owner_role='unknown' and
-  // must be excluded regardless of domain. The previous implementation queried
-  // unified_contacts (GOV Supabase) which has no owner_role classification —
-  // it returned brokers alongside property owners, polluting the call sheet.
-  // This version queries v_bd_cadence_dashboard (LCC production) which joins
-  // entities (owner_role, domain) with touchpoint_cadence (rank_value, days_overdue).
+  // BD-target gate: keep brokers and unclassified intermediaries off the call
+  // sheet. The previous implementation queried unified_contacts (GOV Supabase)
+  // which has no owner_role classification — it returned brokers alongside
+  // property owners, polluting the sheet. This version queries
+  // v_bd_cadence_dashboard (LCC production), which joins entities (owner_role,
+  // domain) with touchpoint_cadence (rank_value, days_overdue).
+  //
+  // C8 (2026-08-31) — THE INTENT ABOVE IS RIGHT; `owner_role` ALONE WAS THE
+  // WRONG INSTRUMENT FOR IT. `unknown` covers 93.9% of entities and is not in
+  // the vocabulary at all, so the role list excluded the book to exclude the
+  // brokers. Measured live over the 311 eligible cadence rows: the role gate
+  // showed 80 ($442.8M) and hid 231, of which 47 are RESOLVED PROPERTY OWNERS
+  // carrying $515.2M — more rank value than everything it showed — against 3
+  // brokerages. Easterly Gov Properties ($114.9M / 85 properties), NGP Capital,
+  // USAA Real Estate, US Fed Properties Trust and Trammell Crow were all off
+  // the sheet. Audit: docs/audits/C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md
+  //
+  // The rule is C6's, on a second surface: admit on the PER-ASSET FACT the
+  // system already holds, not on the party-level label —
+  //   (a classified owner_role) OR (a resolved owner in lcc_property_owner)
+  //   AND NOT a brokerage, on BOTH arms.
+  // The brokerage guard is now EXPLICIT rather than a side effect of the role
+  // label, which is what the comment always intended: it removes one row the
+  // role arm was admitting today (Stan Johnson Co, owner_role='buyer').
+  //
+  // Both new predicates are COLUMNS on the view (migration 20260831120000) so
+  // the gate stays in the SELECTION and `order=rank_value.desc&limit=N` stays
+  // server-side. Filtering after the read would leave the ranked head full of
+  // rows nobody can work, which is the failure this is fixing.
+  //
+  // ⚠️ `user_owner` and `seller_flipper` have NEVER been written to any entity
+  // (0 rows each) — they are inert tokens kept here deliberately so this change
+  // moves exactly one thing. Removing them is a literal no-op (backlog C4b).
+  // Whether an owner should leave `unknown` at all is C4a, not this gate.
   const BD_OWNER_ROLES = 'developer,user_owner,buyer,seller_flipper,operator';
-  const bdGate = domainFilter
-    ? `&domain=eq.${pgFilterVal(domainFilter)}&owner_role=in.(${BD_OWNER_ROLES})`
-    : `&owner_role=in.(${BD_OWNER_ROLES})`;
+
+  // ⚠️ The role arm is spelled as one `owner_role.eq.<role>` alternative per
+  // role, NOT as `owner_role.in.(a,b,c)` nested inside the `or=` group. The two
+  // are semantically identical (asserted on this population: both select the
+  // same 80 rows), but the `in.(...)` form puts a comma-separated list inside a
+  // group whose own separator is a comma. PostgREST parses that correctly, and
+  // NOTHING IN THIS REPO EXERCISES IT — there is not one `or=(...in.(...))` on
+  // the whole API surface, whereas `or=(a.eq.x,b.eq.y[,and(...)])` is used in a
+  // dozen places (see api/queue.js). A 400 here would not raise: the handler
+  // treats `!queueResult.ok` as "queue empty" and falls through to the dead
+  // fallback branch below, so a mis-parsed filter would surface as the
+  // perfectly calm sentence "No BD contacts found." Given the endpoint could
+  // not be probed from the build sandbox (Supabase egress is blocked by network
+  // policy, 403 CONNECT), use the construct that is already proven in
+  // production over the one that would be taken on faith.
+  const roleArm = BD_OWNER_ROLES.split(',')
+    .map(r => `owner_role.eq.${r}`)
+    .join(',');
+  const bdGate = (domainFilter ? `&domain=eq.${pgFilterVal(domainFilter)}` : '')
+    + `&or=(${roleArm},is_resolved_owner.is.true)`
+    + `&is_brokerage=is.false`;
 
   // Primary: LCC queue ranked by portfolio value (rank_value) and urgency (days_overdue)
   const queueResult = await opsQuery('GET',
@@ -4830,7 +4875,27 @@ async function handleProspectingBrief(params, user, workspaceId) {
       phase:           c.phase || ''
     }));
   } else {
-    // Fallback: Outlook/Salesforce engagement scores when LCC queue is empty
+    // Fallback: Outlook/Salesforce engagement scores when LCC queue is empty.
+    //
+    // ⚠️ C8 checked this branch for the A1 `V2_MAP` failure — a gate fixed in
+    // one branch that silently stops filtering in the other. It is NOT a second
+    // implementation of the BD-target gate; it is a different source that has
+    // never carried one, and structurally cannot carry this one:
+    // `unified_contacts` has no `owner_role`, no link to `lcc_property_owner`,
+    // and lives on the GOV project (govContactQuery -> GOV_URL), not the hub
+    // that `CONTACTS_HUB=ops` made live. Re-implementing the brokerage guard
+    // here in JS would be the normaliser drift this codebase keeps paying for.
+    //
+    // ⚠️ AND THE BRANCH IS STRUCTURALLY DEAD, MEASURED 2026-08-31:
+    // `engagement_score` is 0 on ALL 30,714 gov `unified_contacts` rows (max 0,
+    // 0 non-null above zero), so `engagement_score=gt.0` returns nothing and
+    // this path can only ever fall through to the "No BD contacts found"
+    // return below. It is ungated AND inert — the fail-open is latent, not
+    // live. It goes live the day anyone backfills that column, or repoints
+    // this query at the live hub. Filed as C8a; deliberately not restructured
+    // here, because rewiring it is a behaviour change nobody has graded and
+    // would reintroduce exactly the broker pollution the comment above
+    // describes.
     source = 'outlook_engagement';
     const hotResult = await govContactQuery(
       `unified_contacts?contact_class=eq.business&engagement_score=gt.0&order=engagement_score.desc&limit=${limit}&select=unified_id,full_name,email,phone,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent`

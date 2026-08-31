@@ -1102,6 +1102,93 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-31 — 🎯 THE CMS OUTAGE IS ROOT-CAUSED. It was never a hang — it is a 30-day throttle keyed on the last ATTEMPT.
+
+**From the Railway logs Scott pulled (1,001 lines, 2026-08-31 06:03 → 16:42, one deployment).** The
+decisive three lines, from **today's** run:
+
+```
+06:03:21  WARNING:__main__:CMS ingestion recently run (3 days ago < 30); skipping. Use --force-run to override.
+06:03:21  CMS ingestion recently run; skipping.
+06:03:21  [2026-08-31T06:03:21Z] Cron complete
+```
+
+**The cron fires daily, decides it ran recently, exits CLEANLY with zero errors, and ingests
+nothing.**
+
+⚠️ **The mechanism is the whole outage: "3 days ago" is measured from the last ATTEMPT — 2026-08-27,
+which was `abandoned` — not from the last SUCCESS, 2026-06-25.** So **a failed run buys 30 days of
+silence**, and the next failure buys another 30. That is exactly how a two-month gap forms without
+anything erroring.
+
+⚠️ **AND THIS IS THE THROTTLE B6d-cms REPORTED REMOVING.** The log is from **2026-08-31, after that
+PR merged** — so either the Dialysis PR is not deployed to this Railway service, or the fix did not
+cover this path. **Verify the DEPLOYED code, not the merge** (*merged is not running*, a fourth time).
+
+✅ **Immediate unblock: run it with `--force-run`.**
+
+⚠️ **A correction to my own framing, and it is the useful lesson.** I reported *"no attempts since
+08-27, against a daily schedule"* and read that as the cron having stopped. **It had not. The cron
+ran every day — a SKIP writes no `ingestion_tracker` row, so it leaves no trace.** *"No rows" and
+"no runs" are different facts*, which is **Class 21 one layer up**: B6a made a skipped step visible
+inside the pipeline runner, and here a skipped step is invisible *to the tracker itself*.
+
+### 🚨 And the same service is failing ~1,000 times a day while reporting success — filed as `B6d-pri`
+
+The `public-record-ingest` service produced **502 error lines and 499 info lines in one day**, from
+**three distinct live defects**:
+
+1. **496× `null value in column "reason" of relation "pending_updates" violates not-null
+   constraint`** (23502) — the writer omits a NOT NULL field, so **every** pending-update write fails.
+2. **486× `Failed to mark stale <uuid>: Supabase Postgres DSN not configured`** (`SUPABASE_DB_DSN` /
+   `SUPABASE_DB_POSTGRES_URL` / `SUPABASE_DB_URL`) — **a missing env var on the Railway service.**
+   The entire mark-stale path is dead.
+3. **10× `column properties._new_property does not exist`** (42703) — a stale column reference in the
+   comparison step.
+
+⚠️ **And it logs `Pending updates cleanup complete` immediately after ~500 consecutive failures.**
+That is the honest-count failure this whole arc has been about, in a single line — **and none of it
+alerted, because the service exits 0.**
+
+## 2026-08-29 — AUTH contradiction SETTLED, and B6d-cms was pointed at the wrong producer
+
+### ✅ Auth: enforced. `CURRENT-STATE.md` was wrong; `CLAUDE.md` was right.
+
+`GET /api/diag?kind=auth-ready` → **`lcc_env: production`, `enforcing: true`,
+`api_key_configured: true`**. One command, contradiction closed, and the wrong page corrected in
+place.
+
+⚠️ **`would_pass_in_production: false` in that same response is NOT a failure, and the docs invite
+misreading it.** It describes **the calling request** — that curl sent no key, so rejection is
+correct behaviour and is itself the proof. **`CLAUDE.md` rule 0 tells you to verify readiness with
+`would_pass_in_production == true`, which is guidance for BEFORE the flip.** Post-enforcement, an
+unauthenticated probe returning `false` is expected. Noted on the row so nobody reads it as a break.
+
+### 🚨 B6d-cms: I named the wrong producer, and this failure was already diagnosed in June
+
+**(1) The producer is a RAILWAY CRON, not the GitHub workflow.**
+`audit/data-flow-2026-05-30/DIA_OVERVIEW_TILE_AUDIT_2026-06-23.md` says it outright: the live path
+is **Railway cron → `scripts/cron/cms-ingestion.sh` → `python -m src.run_cms_ingestion`**, and
+**`cms-ingestion-daily.yml` is a `workflow_dispatch` MANUAL FALLBACK ONLY.** **My B6d-cms prompt
+named the workflow as the producer.** A fix landing there would not touch the daily run — **which is
+exactly consistent with zero attempts since 2026-08-27.**
+
+**(2) This exact failure was diagnosed on 2026-06-23 and the write-up is still in the repo.**
+`CLAUDECODE_PROMPT_CMS_INGEST_hangguard.md`: *"The cron FIRES, but runs HANG… stuck in `'started'`
+for 9-24h and marked `abandoned`… each daily tick reclaims the prior orphan, starts, hangs, dies."*
+Root cause named there: **no per-step timeout in `run_cms_ingestion`'s steps loop**
+(`src/run_cms_ingestion.py` ~679-746). **The symptom then — last success 2026-05-13 — is
+byte-for-byte the symptom now, last success 2026-06-25.**
+
+**So this is a RECURRENCE or a never-applied fix, not a new defect.** ⚠️ **Check whether the
+hangguard ever shipped before diagnosing from scratch** — that is the *re-measure a dated blocker*
+rule, and I skipped it: I drafted B6d-cms without grepping for prior work on the same producer.
+
+⚠️ **And the prior fix as specified would not have been sufficient anyway.** The hangguard proposes
+**SIGALRM**, which `CLAUDE.md` later established is **not enough**: *SIGALRM does not bound a blocked
+C-level socket read — every network call in the Python pipelines MUST carry its own `timeout=`.*
+**A SIGALRM-only fix would look applied and still hang**, which may be precisely what happened.
+
 ## 2026-08-29 — 👤 DECISION: credential rotation DEFERRED until a second LCC user
 
 **Scott, 2026-08-29:** *"Skip all the key rotation until we add another user to the LCC. I'm not too
