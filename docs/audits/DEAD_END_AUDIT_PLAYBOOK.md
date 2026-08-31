@@ -2174,3 +2174,59 @@ Gardner Tanenbaum's 240 relationships off the entity holding its 13 assets.
 row** — not its value. Ask what the mechanism would also predict (a population, a distribution, a
 second consumer) and check one of those predictions. If the only evidence is that the number looks
 familiar, say "resembles X, unverified" and go measure.
+
+---
+
+## Class 30 — a CONSUMER reads a field its source has never supplied
+
+**Detector.** For every handler that maps a view/table onto display or downstream fields, diff the
+field names it READS against the source's actual column list:
+
+```sql
+select column_name from information_schema.columns
+where table_schema='public' and table_name='<the view the handler queries>';
+```
+
+Then grep the handler for `<row>.<name>` and subtract. **Anything left is dead on every row.**
+
+**First run (C10, 2026-08-31).** `handleProspectingBrief` read six names
+`v_bd_cadence_dashboard` has never had — `name`, `contact_name`, `company_name`, `org_name`,
+`annual_rent`, `priority_signal` — against a view supplying `entity_name` and `rank_value`. **Four
+of the six meaningful fields on the operator call sheet were dead on all 126 rows**, which rendered
+`Unknown — unknown [mixed] … rent unknown … Signal: none`.
+
+**Why nothing catches it.** PostgREST returns the columns it has and says nothing about the ones you
+asked for by mistake; JS reads `undefined` and the `||` fallback fires. There is no error, no log,
+no null, and **the row COUNT is correct throughout** — the failure presents as a working surface
+with thin data. It is the mirror of P137 (*a consumer wired to a producer that does not exist*) at
+the column grain, and of P134's *diff the view's columns against the handler's `select=`*: same
+question, asked of the RENDERER rather than the query.
+
+- **⚠️ THE FALLBACK IS WHAT HIDES IT, AND THE MORE POLITE THE FALLBACK THE LONGER IT SURVIVES.**
+  `|| 'Unknown'`, `|| ''`, `|| 'none'`, `|| 'rent unknown'` all render as *plausible absence of
+  data*. A field that threw, or rendered blank, would have been reported in a day. **A defensive
+  default on a field you believe is usually present converts a wiring bug into a data-quality
+  impression.**
+- **⚠️ TWO DEFECTS ON ONE SURFACE HIDE EACH OTHER, AND THIS IS THE MECHANISM.** The role gate C8
+  fixed had excluded $515M of resolved owners from this same sheet for months. **A sheet on which
+  every row reads "Unknown … rent unknown" is not a sheet anyone works** — so nobody was positioned
+  to notice what was missing from it. When you find a legibility defect on a surface, **re-ask
+  whether the surface's SELECTION was ever really reviewed**, and vice versa.
+- **⚠️ CHECK WHETHER THE DEAD FIELD REACHES A WRITE.** Here `getFollowUpSuggestions` read
+  `contacts[0].name` and fired `draft_outreach_email` with `contact_name: 'Unknown'`. A rendering
+  defect had reached an action surface.
+- **⚠️ FIX THE FALLBACK TEXT, NOT ONLY THE MAPPING.** Two of the surviving fields were mapped
+  correctly and still lied: `[mixed]` for a NULL domain (93 of 126) asserts the owner spans
+  verticals, and a `/yr` suffix on a value that is relationship-derived for many rows asserts an
+  annual basis. **A correct mapping with a dishonest default is the same P180 failure one step
+  later.**
+- **⚠️ AND GUARD IT WITH THE COMMENTS STRIPPED.** The fix's own comments necessarily name every
+  banned column while explaining the bug — 5 times here — so a detector reading raw source finds
+  them all present and passes over a regression (the A5c / N18 lesson). Guard the two layers
+  separately: *map reads ⊆ source columns*, and *renderer reads ⊆ map keys*. The second is how
+  `priority_signal` survived — the renderer read a field nothing ever set, which no amount of
+  column-checking on the query would catch.
+
+**Where else to run it.** Any handler that maps a domain view onto display fields, and especially
+any that gained columns later: `v_bd_cadence_dashboard`, `v_priority_queue_enriched`,
+`v_lcc_research_lane_summary`, `v_next_best_research`, the federated Decision Center lanes.

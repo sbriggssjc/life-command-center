@@ -4861,17 +4861,48 @@ async function handleProspectingBrief(params, user, workspaceId) {
   let source = 'lcc_queue';
 
   if (queueResult.ok && (queueResult.data || []).length > 0) {
+    // C10 (2026-08-31) — MAP ONTO THE COLUMNS THE VIEW ACTUALLY SUPPLIES.
+    // Four of the six meaningful fields were read under names
+    // `v_bd_cadence_dashboard` has never had, so every row on the call sheet
+    // rendered `Unknown - unknown [mixed] ... rent unknown ... Signal: none`.
+    // The view supplies `entity_name` (not `name`/`contact_name`) and
+    // `rank_value` (not `annual_rent`); it has no company column and no
+    // `priority_signal` column at all. Nothing errored -- PostgREST returns the
+    // 37 columns it has and JS reads `undefined` off the rest.
+    //
+    // This mattered more than a cosmetic defect: C8 had just put Easterly
+    // ($114.9M / 85 properties), NGP Capital and USAA Real Estate onto this
+    // sheet, and every one of them rendered as "Unknown". A sheet where every
+    // line is anonymous is not a sheet anyone works, which is plausibly why the
+    // role gate C8 fixed survived unexamined for so long -- two defects, each
+    // making the other harder to see.
+    //
+    // Audit: docs/audits/C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md
+    // Dead-End playbook Class 24.
+    //
+    // ⚠️ RENDERING ONLY. The gate, the ordering and the limit are untouched --
+    // if the row count moves, something is wrong.
     contacts = queueResult.data.map(c => ({
       contact_id:      c.contact_id || null,
-      name:            c.name || c.contact_name || 'Unknown',
-      company:         c.company_name || c.org_name || '',
-      email:           c.contact_email || c.email || '',
+      name:            c.entity_name || 'Unknown',
+      email:           c.contact_email || '',
       domain:          c.domain || '',
       owner_role:      c.owner_role || '',
-      annual_rent:     c.annual_rent || null,
-      rank_value:      c.rank_value || null,
+      // ⚠️ `rank_value` is COALESCE(NULLIF(current_annual_rent_total,0),
+      // connected_property_value) -- for a substantial minority of rows it is
+      // RELATIONSHIP-DERIVED value, not owned annual rent (backlog C9a). It is
+      // named and rendered as portfolio value, never as rent, and carries no
+      // `/yr` suffix, because a connected-property value is not an annual
+      // figure. PostgREST returns numeric as a string; coerce once here so the
+      // renderer can tell a real 0 from an absent value (P180).
+      rank_value:      c.rank_value == null ? null : Number(c.rank_value),
+      property_count:  c.rank_property_count == null ? null : Number(c.rank_property_count),
       days_overdue:    c.days_overdue || 0,
-      priority_signal: c.priority_signal || '',
+      // Replaces the invented `priority_signal`. Both of these are real columns.
+      // `review_flag` is R34 Unit 3's staleness guard (an active cadence silently
+      // >90 days overdue) -- 7 of the 126 eligible rows carry it.
+      next_touch_type: c.next_touch_type || '',
+      review_flag:     c.review_flag === true,
       phase:           c.phase || ''
     }));
   } else {
@@ -4930,15 +4961,28 @@ async function handleProspectingBrief(params, user, workspaceId) {
 
   const contactList = source === 'lcc_queue'
     ? contacts.map((c, i) => {
-        const rent = c.annual_rent ? `$${Math.round(c.annual_rent).toLocaleString()}/yr` : 'rent unknown';
-        return `${i + 1}. ${c.name}${c.company ? ` (${c.company})` : ''} — ${c.owner_role} [${c.domain || 'mixed'}]\n   Email: ${c.email || 'no email on file'}\n   Portfolio value: ${rent} | Days overdue: ${c.days_overdue}\n   Signal: ${c.priority_signal || 'none'} | Phase: ${c.phase}`;
+        // C10: every token below comes from a column the view actually has.
+        // A null is stated as "not on file", never rendered as a measured
+        // value -- `[mixed]` for a null domain asserted the owner spans
+        // verticals (it is null on 93 of 126 eligible rows), and `Signal: none`
+        // asserted a measured absence of a field that never existed. Both are
+        // the P180 NULL-is-not-zero failure in prose.
+        const value = Number.isFinite(c.rank_value)
+          ? `$${Math.round(c.rank_value).toLocaleString()}`
+          : 'not on file';
+        const assets = Number.isFinite(c.property_count) && c.property_count > 0
+          ? ` across ${c.property_count} propert${c.property_count === 1 ? 'y' : 'ies'}`
+          : '';
+        // R34 Unit 3 staleness guard -- surfaced, never auto-expired.
+        const stale = c.review_flag ? ' | ⚠ cadence stale >90d, review' : '';
+        return `${i + 1}. ${c.name} — ${c.owner_role || 'role not on file'} [${c.domain || 'domain not on file'}]\n   Email: ${c.email || 'no email on file'}\n   Portfolio value: ${value}${assets} | Days overdue: ${c.days_overdue}\n   Next touch: ${c.next_touch_type || 'not scheduled'}${stale} | Phase: ${c.phase}`;
       }).join('\n\n')
     : contacts.map((c, i) =>
         `${i + 1}. ${c.name} (${c.company}) — ${c.heat} (score: ${c.score})\n   Title: ${c.title}\n   Last call: ${c.last_call} | Last email: ${c.last_email}\n   Calls: ${c.total_calls} | Emails: ${c.total_emails}\n   Phone: ${c.phone} | Email: ${c.email}`
       ).join('\n\n');
 
   const prompt = source === 'lcc_queue'
-    ? `Generate a concise daily BD prospecting call sheet for ${today}.\n\nThese are the top investment sales targets ranked by portfolio value and days overdue. All are property owners — not brokers or intermediaries:\n\n${contactList}\n\nFor each contact provide:\n1. A one-line call prep note (owner role, why to call now based on days overdue)\n2. A domain-specific talking point (government net-lease, dialysis net-lease, etc.)\n3. Priority: call today / this week / nurture\n\nThis is for an investment sales professional (SVP, Investment Sales) at Northmarq. Keep each entry tight — 2-3 lines.`
+    ? `Generate a concise daily BD prospecting call sheet for ${today}.\n\nThese are the top investment sales targets ranked by portfolio value and days overdue. All are property owners — not brokers or intermediaries:\n\n${contactList}\n\nFor each contact provide:\n1. A one-line call prep note (owner role, why to call now based on days overdue)\n2. A talking point. Use the domain for a sector-specific angle (government net-lease, dialysis net-lease) ONLY when a domain is given; where it reads "domain not on file", keep the talking point generic and do NOT assume a sector.\n3. Priority: call today / this week / nurture\n\nGround rules: "Portfolio value" is the relationship value we hold for that owner — annual rent where known, otherwise connected-property value. Do NOT describe it as annual rent or as a valuation. Never restate a field shown as "not on file" as though it were known, and do not invent a company, sector or figure that is not above.\n\nThis is for an investment sales professional (SVP, Investment Sales) at Northmarq. Keep each entry tight — 2-3 lines.`
     : `Generate a concise daily prospecting call sheet for ${today}.\n\nHere are the top contacts ranked by engagement:\n\n${contactList}\n\nFor each contact, provide:\n1. A one-line call prep note (why to call based on engagement pattern)\n2. A suggested talking point or reason to reach out\n3. Priority level (call today / this week / nurture)\n\nFocus on contacts who haven't been called recently but have high engagement. Flag any that are overdue for a touchpoint.`;
 
   const result = await invokeChatProvider({
