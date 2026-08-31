@@ -19,9 +19,10 @@
 > and all of dia unchanged (positive-controlled). Migration
 > `supabase/migrations/20261002110000_lcc_c6_current_holding_seller_bands.sql`; evidence
 > [`C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md`](../audits/C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md).
-> **NEXT: C11** — the sheet names a person and gives no basis; 121 of 126 carry a contact↔owner edge
-> whose role we already hold and never print. Prompt
-> `docs/claude-code/prompts/C11-prospecting-brief-show-the-relationship.md`.
+> ✅ **C11 SHIPPED 2026-08-31 — the call-sheet arc (C6 → C8 → C10 → C11) is COMPLETE.** See **§4b**
+> for the state of this surface: 126 rows, gated, legible, each stating its basis; **~4 defective
+> rows remain** (C11b, C11c, one C9 split). ⚠️ **C11a is REFUTED** (sponsor↔SPE, not a defect) and
+> **C9's 45 splits touch exactly 1 sheet row** — neither is a call-sheet priority.
 > **Open and Scott's: C4a** (the pitch/bucket). **C4b** (`user_owner`) is resolved as inert.
 > **Open, sized, unbuilt: C9** (45 true-split merge groups), **C9b** (434 edge splits), **C9a** /
 > **C10a** / **C8a** (design + dead-branch decisions), **C7a** (mailbox coverage — the precondition
@@ -413,6 +414,53 @@ would be a second copy of a definition. It would also have gated *narrower* than
 ⏰ **All 14 owners with a gov lease expiring inside 90 days who were contactable and invisible now
 appear in P1** (17 rows), in both the live view and the refreshed cache. **Boyd Watterson's
 2026-08-31 is two days out.** ⚠️ Date ≠ outcome — read the asset.
+
+## 4b. ✅ The call-sheet arc is COMPLETE — state as of 2026-08-31
+
+C6 (gate) → C8 (admit resolved owners) → C10 (legibility) → C11 (contact basis) are all live.
+**The sheet serves 126 rows, correctly gated, legible, each stating why that person is the contact.**
+
+### ⚠️ C11a is REFUTED — `institution_decision_maker` 0-for-35 is the sponsor↔SPE pattern
+
+It reads like a broken lane. Read on named rows it is the arc's most recurrent pattern:
+
+| contact domain | rows | the owners using it |
+|---|---:|---|
+| **`ar-global.com`** | **6** | six `ARC GS…001, LLC` SPEs — **AR Global / American Realty Capital, the sponsor** |
+| `princetonholdingsllc.com` | 2 | `HOUSTON TX I FGF` · `San Diego CA I FGF` |
+| `usrealco.com` | 2 | `US Global Business Fund` · `US Union Square DC 999` |
+| `hpitx.com` | 2 | `Hpi/Gsa - 1a` · `TEP Houston DHS` |
+| gmail / aol | 7 | individual owners (`Pool Edwin J`, `Ronald J Rossiter`, `Crockett Ranch LP`) |
+
+**34 contacts across 20 domains — they cluster because a sponsor's people serve its SPE family.**
+The contacts are right; **`lcc_tier0_company_confirms_domain` structurally cannot confirm a
+sponsor's domain against an SPE's name** (`ARC GSFFDME001` vs `ar-global`). Compare
+`prospecting_contact`: 58 rows / 55 domains / 15 corroborated — near 1:1, a different provenance.
+
+⚠️ **And the tempting fix was measured and rejected: wiring `lcc_owner_sponsor_domain` into the
+corroboration signal rescues 1 of 34.** The map holds **8 confirmed rows**; only **4 sheet rows
+fleet-wide** sit on a known sponsor domain, and `hpitx.com` — already confirmed — still fails
+because `TEP Houston DHS` does not contain the `hpi` token. **Populate the map first (C2i); wiring
+it is worthless until then.**
+
+### ⚠️ C9's 45 true splits touch exactly ONE sheet row
+
+**35 of the 126 rows sit in some canonical-name group; only 1 is a true split.** C9 remains a real
+defect worth fixing on its own terms — but **it is not a call-sheet problem**, and this page should
+not be read as saying it is.
+
+### What is actually left on this surface — about 4 rows of 126
+
+| | rows |
+|---|---:|
+| **C11b** — a cadence contact is **Scott himself** | 1 |
+| **C11c** — brokerage guard is blind to a broker in the **contact** slot | 2 |
+| **C9** — a true-split duplicate | 1 |
+
+**The surface is in good shape. Further polishing here has sharply diminishing returns** — the
+remaining leverage is upstream: **C4a** (what promotes an owner out of `unknown`, which still
+governs the 57% data-work share) and **C7a** (mailbox coverage, the precondition under assignment,
+voice, deal attribution and draft-assist alike).
 
 ## 5. ⚠️ The four traps, each of which produced a wrong answer first
 

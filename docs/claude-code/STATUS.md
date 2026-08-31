@@ -359,6 +359,33 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — C11 SHIPPED; the call-sheet arc is COMPLETE, and C11a is refuted
+
+**C11 is LIVE** — the sheet now states the BASIS on which each person is the contact. **C6 → C8 →
+C10 → C11 are all shipped: 126 rows, correctly gated, legible, each justified.** Canonical **§4b**
+is the new "state of this surface" section. **C11a ❌ refuted · C9 re-scoped.**
+
+- ⚠️ **C11a is NOT a defect.** `institution_decision_maker` reading **0-for-35** on employer
+  corroboration is the **sponsor↔SPE pattern** — the arc's most recurrent finding (A3 32-of-74,
+  P188/P196, C2h's 69 pairs). Named rows: **`ar-global.com` serves six `ARC GS…001, LLC` SPEs**
+  (AR Global); `princetonholdingsllc.com` two FGF SPEs; `usrealco.com` two US… entities; 7 are
+  gmail/aol on genuine individual owners. **34 contacts / 20 domains — they cluster because a
+  sponsor's people serve its SPE family.** `lcc_tier0_company_confirms_domain` **structurally
+  cannot** confirm a sponsor domain against an SPE name. Compare `prospecting_contact`: 58 rows /
+  55 domains / 15 corroborated — near 1:1, different provenance.
+- ⚠️ **The obvious fix was measured and rejected: wiring `lcc_owner_sponsor_domain` into the
+  corroboration signal rescues 1 of 34.** The map holds 8 confirmed rows; only 4 sheet rows
+  fleet-wide sit on a known sponsor domain; and `hpitx.com` — already confirmed — still fails
+  because `TEP Houston DHS` lacks the `hpi` token. **Populate the map (C2i) before wiring it.**
+- ⚠️ **C9 re-scoped: its 45 true splits touch exactly ONE of the 126 sheet rows.** 35 sheet rows sit
+  in some name group; 1 is a true split. **C9 is real but is not a call-sheet problem.**
+- **What is left on this surface is ~4 rows of 126** — C11b (a cadence contact is **Scott himself**,
+  1), C11c (brokerage guard blind to a broker in the **contact** slot, 2), C9 (1).
+  **The surface is in good shape; further polishing here has sharply diminishing returns.**
+- **The remaining leverage is upstream: C4a** (what promotes an owner out of `unknown` — still
+  governs the 57% data-work share, and it is Scott's doctrine call) and **C7a** (mailbox coverage —
+  the precondition under assignment, voice corpus, deal attribution and draft-assist alike).
+
 ## 2026-08-31 — C10 SHIPPED (the sheet is legible); C11 prompt written for what it exposed
 
 **C10 is LIVE.** All 126 rows render a real name and portfolio value; gate, ordering and limit
