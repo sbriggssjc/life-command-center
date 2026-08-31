@@ -1044,6 +1044,45 @@ gov `county_deed` reads as **1 row instead of 1,614**. And **69% of dia's own `o
 carries a NULL `ownership_source`**, so the detector is structurally blind to it (B6g).
 
 
+## 2026-08-29 — D1 drafted, and sizing it corrected the invariant it was written from.
+
+**Prompt: `prompts/D1-cross-database-provenance-diff-2026-08-29.md`.** Audit + a standing detector;
+**builds no feeder.**
+
+⚠️ **I2's stated query has a POPULATION OF ONE, and I only found that by trying to size it.** The
+invariant says *group the fact store by its provenance column, split by domain*. Measured on LCC
+Opps: **exactly one table carries both a domain column and a provenance column —
+`lcc_entity_portfolio_facts`, the very table that found B5.** Writing that as *the* detector
+overstated its reach, and a prompt built on it would have swept one table and reported a
+comfortable result.
+
+**The form that generalises is a CROSS-DATABASE diff of parallel tables (gov vs dia)** — which is
+how B5 was *actually* found, and how B6c found dia's `property_sale_events` differs from gov's.
+**Twelve parallel pairs carry a provenance column.** I2 is corrected in place.
+
+**Two traps the sizing already surfaced, both now in the prompt:**
+
+- 🚨 **A naive cross-DB query breaks on the first pair it meets** — `properties` uses **`data_source`
+  in gov and `source` in dia.** *Resolve the provenance column per table from the catalogue; never
+  hard-code it.* Several values also carry a `:<uuid>` / `|h=<hash>` suffix, so `split_part` before
+  grouping or the diff drowns in one-row buckets.
+- ⚠️ **Row-count disparity is NOT the signal — the producer SET is.** `property_financials` is
+  **98,510 (gov) vs 676 (dia)**, a 145× gap that may be entirely legitimate. **Diff the distinct
+  sources; report volume only as context.** A detector that flags volume would have opened with a
+  false headline.
+
+**Three guardrails carried in:** a difference is not a defect and the surface must let one be
+**marked explained with a reason** (*a detector reporting 40 legitimate differences every run is
+noise, and will be ignored within a month — the exact failure B6d just fixed one layer up*); the
+detector must **re-find B5, B6c and B6b from cold** as its positive control, since *a run that
+surfaces nothing is a bug signal, not a clean bill of health*; and it must **not manufacture a
+finding** — if every difference is legitimate, that is a real result and its value is preventing the
+next divergence.
+
+⚠️ **Kept distinct from its two siblings, deliberately:** **I2/D1** asks *does the other domain have
+this producer at all* · **I3/D2** asks *can this link column hold its target's key* · **B6c-orphan**
+asks *does the key it holds still exist*. Three questions, three detectors, one family.
+
 ## 2026-08-29 — B6d-cms root-caused and fixed IN CODE. ⚠️ Verified: the outage is NOT yet fixed, and that distinction is the whole point.
 
 Merged: `Dialysis#7379` (the code fix — removes a **throttle** and a **crashed-run latch**) plus the
