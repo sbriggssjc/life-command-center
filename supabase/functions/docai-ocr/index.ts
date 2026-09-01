@@ -68,6 +68,17 @@
 // ⚠️ SAFE DEPLOY: a processor that rejects the field must not break the ≤15-page
 // path that works today, so an INVALID_ARGUMENT naming `imagelessMode` retries
 // ONCE without it. `DOCAI_IMAGELESS_MODE=false` is the kill switch.
+//
+// ✅ CONFIRMED LIVE, v23, 2026-09-01 16:00:35 UTC — the processor ACCEPTS the
+// field and the cap really did move. A 40-page lease came back:
+//   [docai-ocr] Document AI 400 (processor=…5ecc6339861c88e1, imageless=true):
+//     "Document pages exceed the limit: 30 got 40"   PAGE_LIMIT_EXCEEDED
+//     metadata { page_limit: "30", pages: "40" }
+// The limit Google reports is now **30, not 15**, and the phrase "in non-imageless
+// mode" is gone. ⚠️ That is also the first real 31+-page observation this lane has
+// ever had, and it fell through to gpt-4o for 211 chars — because the CALLER-side
+// pre-flight is JS and had not yet shipped. It is exactly the class the
+// `over_docai_page_cap` marker exists for.
 // ============================================================================
 
 // ── Env ─────────────────────────────────────────────────────────────────────
@@ -295,13 +306,37 @@ export function rejectsImagelessMode(detail: string): boolean {
 }
 
 /**
- * Pull the page count out of a PAGE_LIMIT_EXCEEDED body:
- *   "Document pages in non-imageless mode exceed the limit: 15 got 19."
- * Returns { limit: 15, got: 19 }. Either half is null when absent — an absent
- * count is NULL, never 0 (P180), because 0 pages is a different, real answer.
+ * Pull the page count out of a PAGE_LIMIT_EXCEEDED body. Nothing was processed,
+ * so this is the ONLY page count anyone gets on this path — the caller records it
+ * on its marker instead of a NULL that reads as "we never looked" (P180: unknown
+ * is not zero, and either half stays null when genuinely absent).
+ *
+ * ⚠️ PREFER THE STRUCTURED FIELD, because the MESSAGE has already changed once.
+ * Pre-DOC8 it read `"Document pages in non-imageless mode exceed the limit: 15
+ * got 19."`; live at 16:00:35 UTC on 2026-09-01, with imageless mode accepted, the
+ * same failure reads `"Document pages exceed the limit: 30 got 40"` — the phrase
+ * dropped and the number moved. Both carry the same machine-readable shape:
+ *   details[].reason = "PAGE_LIMIT_EXCEEDED"
+ *   details[].metadata = { page_limit: "30", pages: "40" }   // int64 -> STRING
+ * So parse that first and keep the prose regex as the fallback. A detector keyed
+ * only on wording is one Google copy-edit away from silently returning null.
  */
 export function pageLimitFromError(detail: string): { limit: number | null; got: number | null } {
   const d = String(detail || "");
+
+  try {
+    const parsed = JSON.parse(d);
+    const details = (parsed?.error?.details as Array<Record<string, unknown>>) || [];
+    for (const item of details) {
+      const md = (item?.metadata as Record<string, unknown>) || {};
+      const lim = Number(md.page_limit);
+      const got = Number(md.pages);
+      if (Number.isFinite(got) && got > 0) {
+        return { limit: Number.isFinite(lim) && lim > 0 ? lim : null, got };
+      }
+    }
+  } catch { /* not JSON, or a shape we do not know — fall through to the prose */ }
+
   const m = /exceed(?:s)? the limit:\s*(\d+)\s*got\s*(\d+)/i.exec(d);
   if (m) return { limit: Number(m[1]), got: Number(m[2]) };
   const g = /\bgot\s+(\d+)\b/i.exec(d);

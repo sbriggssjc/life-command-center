@@ -112,6 +112,48 @@ describe('DOC8 — the page count Google names in its own error is carried, not 
       { limit: 15, got: 19 });
   });
 
+  it('prefers the STRUCTURED metadata — the wording has already changed once', () => {
+    // Verbatim from the live 400 at 2026-09-01 16:00:35 UTC, imageless=true. The
+    // pre-DOC8 message said "in non-imageless mode … the limit: 15 got 19"; this one
+    // dropped the phrase and moved the number. `details[].metadata` did neither.
+    const live = JSON.stringify({
+      error: {
+        code: 400,
+        message: 'Document pages exceed the limit: 30 got 40',
+        status: 'INVALID_ARGUMENT',
+        details: [{
+          '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+          reason: 'PAGE_LIMIT_EXCEEDED',
+          domain: 'documentai.googleapis.com',
+          metadata: { page_limit: '30', pages: '40' },   // int64 -> STRING in JSON
+        }],
+      },
+    });
+    assert.deepEqual(EDGE.pageLimitFromError(live), { limit: 30, got: 40 });
+  });
+
+  it('reads the metadata when the PROSE no longer carries the pair at all', () => {
+    // ⚠️ The discriminating case, and the whole reason for the change: the live
+    // body's `message` happens to repeat the numbers, so a test using only that
+    // body passes with the structured path deleted. Google has already re-worded
+    // this message once; the next re-wording looks like this.
+    const reworded = JSON.stringify({
+      error: {
+        code: 400,
+        message: 'Document pages exceed the allowed maximum for synchronous processing.',
+        status: 'INVALID_ARGUMENT',
+        details: [{ reason: 'PAGE_LIMIT_EXCEEDED', metadata: { page_limit: '30', pages: '40' } }],
+      },
+    });
+    assert.deepEqual(EDGE.pageLimitFromError(reworded), { limit: 30, got: 40 },
+      'a detector keyed only on wording returns null the day the wording changes');
+  });
+
+  it('still parses a body carrying ONLY the prose (the fallback)', () => {
+    assert.deepEqual(EDGE.pageLimitFromError('Document pages exceed the limit: 30 got 40'),
+      { limit: 30, got: 40 });
+  });
+
   it('takes the limit from the PAIR, not the first number that looks like one', () => {
     // A loose `limit:?\s*(\d+)` fallback grabs the quota figure. The paired form
     // is what makes the parse mean the page cap.

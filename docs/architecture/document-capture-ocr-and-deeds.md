@@ -184,14 +184,39 @@ deploy, not a Railway one, so it is live independently of the PR.
   known-unservable document every 30 minutes would park the 15-row batch on it forever, while never
   re-admitting it would make it a tombstone nobody revisits. Re-admission costs a byte fetch and a
   pdf-parse — **zero OCR spend**.
-- ⚠️ **HOW MUCH OF THE BACKLOG IS 31+ PAGES IS STILL UNMEASURED, AND THE INSTRUMENT IS NEW.** Neither
-  store carries a page count: `lcc_cre_property_documents` has no size/pages column at all, and the
-  sidecar's `page_count` is populated on **4 of 87** rows. The only page evidence that has ever
-  existed is 6 DocAI successes (1, 1, 5, 5, 6, 10 pages) and one PAGE_LIMIT_EXCEEDED at 19 — **7
-  observations, of which 1 exceeded 15 and 0 exceeded 30.** That sample is far too small to size a
-  406-lease / 235-dd backlog, and a full original lease at 30+ pages is completely ordinary, so
-  **do not read "0 of 7" as "the residual is small."** What DOES measure it, from now on: the tick's
-  `over_page_cap` counter, `page_count` on every marker, and `v_lcc_cre_thin_ocr_watch`.
+- ✅ **CONFIRMED LIVE ON THE FIRST POST-DEPLOY OCR EVENT, 2026-09-01 16:00:35 UTC — the processor
+  ACCEPTS the field and the cap really did move.** Cron 167 reached document **24**
+  (`ACMP EXEC Lease 10.9.14.pdf`) and `docai-ocr` v23 logged:
+
+  ```
+  [docai-ocr] Document AI 400 (processor=…/processors/5ecc6339861c88e1, imageless=true):
+    "Document pages exceed the limit: 30 got 40"       reason: PAGE_LIMIT_EXCEEDED
+    metadata { page_limit: "30", pages: "40" }
+  ```
+
+  **The limit Google reports is now 30, not 15**, and the phrase *"in non-imageless mode"* is gone —
+  the imageless request was honoured, and the fallback did not fire. This is the deploy verified on
+  behaviour rather than on a `/version`-style claim; the sandbox cannot reach
+  `*.supabase.co` (proxy 403), so the edge log is the probe.
+- ⚠️ **AND THE SAME LINE IS THE FIRST REAL 31+-PAGE OBSERVATION THIS LANE HAS EVER HAD: 40 pages.**
+  It fell through to gpt-4o and returned **211 chars** — because the CALLER-side pre-flight is JS and
+  had not shipped. That row is exactly the class `over_docai_page_cap` exists for, and (at 211 chars,
+  under the 500 unknown-pages floor) it is also exactly the class DOC10 marks. **Both halves of the
+  fix are correct and neither was deployed for it**, which is the honest reading.
+- ⚠️ **HOW MUCH OF THE BACKLOG IS 31+ PAGES IS STILL NOT SIZED.** Neither store carries a page count:
+  `lcc_cre_property_documents` has no size/pages column at all, and the sidecar's `page_count` is
+  populated on 4 of 87 rows. Total page evidence that has ever existed: **8 observations** — six
+  DocAI successes (1, 1, 5, 5, 6, 10), one over-cap at 19, one over-cap at **40**. **1 of 8 exceeds
+  30, and it is the very first document the raised cap was tested on.** That is a sample of eight
+  against a 406-lease / 235-dd backlog and a full original lease at 30+ pages is completely ordinary,
+  so it is a reason to expect MORE, not a rate. What measures it: the tick's `over_page_cap` counter,
+  `page_count` on every marker, and `v_lcc_cre_thin_ocr_watch`.
+- **⚠️ THE ERROR'S WORDING HAS ALREADY CHANGED ONCE, SO THE PARSER READS THE STRUCTURED FIELD FIRST**
+  (v24). Pre-DOC8 the message was *"…in non-imageless mode exceed the limit: 15 got 19"*; now it is
+  *"Document pages exceed the limit: 30 got 40"*. `details[].metadata { page_limit, pages }` did not
+  change (int64 → **string** in JSON). The prose regex stays as the fallback. **A detector keyed only
+  on wording is one Google copy-edit away from silently returning null** — the same class as the
+  P182 deparse trap.
 
 **DOC9 — the spend counter was blind to the expensive path.** `bump()` accumulated only when
 `ocr_pages > 0`, and gpt-4o returns no page count, so the 15:00 tick reported `ocr_by_engine: {}` and
@@ -256,7 +281,7 @@ invisible to both consumers and re-admits after 24 h.
   half of the order, since DOC8's page pre-flight is also JS.
 - **NOT re-OCR'd:** nothing already extracted at good length. Only rows below the floor re-admit.
 
-**Guard:** `test/doc8-doc9-doc10-page-cap-and-thin-floor.test.mjs` — 31 tests, **29 of 29 mutations
+**Guard:** `test/doc8-doc9-doc10-page-cap-and-thin-floor.test.mjs` — 34 tests, **33 of 33 mutations
 verified RED**, 0 skipped. Source assertions strip comments first (the fixes' own prose names
 `imagelessMode`, `ocr_by_engine` and `thin_ocr_result` repeatedly). Two assertions were rewritten
 after they **passed their own mutation**: `imageless: imagelessUsed` legitimately appears in both the
@@ -265,7 +290,11 @@ the increment — both are now anchored on their BRANCH, not on presence (the B6
 edge module is imported with a `globalThis.Deno` stub so those tests RUN rather than silently skip.
 `test/cre-doc-text-window-jam.test.mjs` changed one row deliberately: DOC1 pinned `thin_ocr_result`
 as never-re-admitted, which was correct when a thin row counted as an answer and is exactly what
-DOC10 refutes.
+DOC10 refutes. ⚠️ Two further mutants survived the *first* metadata-parser test and the fix was to
+add the DISCRIMINATING case, not to accept them: the live 400's `message` happens to repeat the same
+two numbers as its metadata, so a test using only that body stays green with the structured path
+deleted. The added case is a re-worded message with intact metadata — the scenario the change exists
+for.
 
 ### ⚠️ CORRECTION — an earlier draft of this page recommended widening cron 160. That is REFUTED.
 

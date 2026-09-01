@@ -54,13 +54,30 @@ covered — they were "covered" by 31–200-char fragments. Consumer-visible sid
 reading covered 25 → 13; `v_lcc_cre_thin_ocr_watch` still-covered 12 → **0**. gov deeds unchanged at
 **325/325**, cron 160's command unchanged, crons 167/169 still active.
 
-**⚠️ NOT YET MEASURABLE, and stated rather than guessed:** (a) **the post-DOC8 tier split** — the
-16:00 tick drained one `office_text` document and no OCR at all, so no OCR has run since the edge
-deploy; (b) **a re-read of the 12 thin documents** — re-admission needs `thin_ocr_result` in
-`CRE_RETRY_REASONS`, which is JS and unmerged; (c) **how much of the backlog is 31+ pages** — neither
-store carries a page count and the only page evidence that has ever existed is 7 observations, so
-"0 of 7 over 30" is **not** evidence the residual is small. The `over_page_cap` counter, `page_count`
-on every marker, and `v_lcc_cre_thin_ocr_watch` are what will answer all three.
+✅ **THE EDGE HALF IS CONFIRMED ON BEHAVIOUR, 16:00:35 UTC.** The first post-deploy OCR event (cron
+167, document 24, `ACMP EXEC Lease 10.9.14.pdf`) logged
+`Document AI 400 (…, imageless=true): "Document pages exceed the limit: 30 got 40"`,
+`metadata { page_limit: "30", pages: "40" }`. **The limit Google reports is now 30, not 15**, and the
+phrase *"in non-imageless mode"* is gone — the field was accepted and the fallback did not fire.
+(The sandbox cannot reach `*.supabase.co` — proxy 403 — so the edge log IS the probe.)
+
+⚠️ **And that same line is the FIRST 31+-page observation this lane has ever had: 40 pages.** It fell
+through to gpt-4o for **211 chars**, because the caller-side pre-flight is JS and unmerged. Both
+halves of the fix are correct and neither was deployed for that document. Page evidence to date is
+**8 observations, 1 over 30** — a reason to expect more, not a rate.
+
+⚠️ **The wording of that error has already changed once**, so `pageLimitFromError` now reads
+`details[].metadata` first and keeps the prose regex as a fallback (**v24**). Two mutants survived
+the first test of it, because the live body's `message` repeats the same numbers as its metadata —
+fixed by adding the discriminating case (a re-worded message with intact metadata), not by accepting
+them.
+
+**⚠️ STILL NOT MEASURABLE, and stated rather than guessed:** (a) **`cloud_cheap` overtaking `cloud`**
+— the only post-deploy OCR event so far was that 40-page document, which is over the cap either way,
+so the tier split needs the next few ticks; (b) **a re-read of the 12 thin documents** —
+re-admission needs `thin_ocr_result` in `CRE_RETRY_REASONS`, which is JS and unmerged; (c) **how much
+of the backlog is 31+ pages.** The `over_page_cap` counter, `page_count` on every marker, and
+`v_lcc_cre_thin_ocr_watch` are what will answer all three.
 
 **Next:** merge → Railway redeploy → read `ocr_docs_by_engine` on the first ticks (`cloud_cheap` must
 overtake `cloud`), then read three named re-extracted documents at their MIDPOINT — a tier change is
