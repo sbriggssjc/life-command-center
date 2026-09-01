@@ -54,6 +54,44 @@ RCA/CoStar capture the CRM has never held).
 view, so the C13b file no longer describes what ships (P197). All 11 C13b invariants pass over the
 shipped definition.
 
+## 2026-09-01 — DOC14 sized and staged: the over-cap population is 100% LEASES, at 8.1%
+
+**Re-measured on a larger sample per my own caveat, and it sharpened rather than softened.**
+
+| doctype | drained | **over cap** | rate | still undrained |
+|---|---:|---:|---:|---:|
+| **lease** | 86 | **7** | **8.1%** | **360** |
+| dd | 51 | **0** | 0% | 205 |
+| om | 30 | **0** | 0% | 39 |
+
+**Every over-cap document is a lease**, 31–57 pages. **Projected: ~29 more, ~36 total** receiving no
+text at all.
+
+⚠️ **AND THE DENOMINATOR CAUGHT ME MID-SESSION.** `over_cap ÷ page_counted_leases` reads **32%** —
+but only OCR-path rows carry a `page_count`, so that is the OCR subset, not all leases. I had begun
+compounding that into a projection of ~130 before measuring the rate directly at **8.1%**. **A ~4×
+overstatement, avoided only by measuring instead of multiplying two estimates.**
+
+**The bimodality now has a semantic explanation:** leases are either **short (1–12 pages** —
+amendments, short forms) or **long (31–57** — full executed leases). **The 16–30 band holds ONE
+document corpus-wide and it is a DD.** So DOC8's 15 → 30 raise unlocks **zero leases** — the DOC12
+finding, restated with the doctype attached.
+
+**Why it is the right next item:** `bov-extract.js` reads leases to extract the tenant, and these are
+the full executed documents. ⚠️ **They yield nothing while `bov_ready` climbs — the marker makes the
+gap quiet**, which is this repo's own honest-counts failure pointed back at us.
+
+**Prompt staged: `DOC14-long-lease-ocr-async.md`** — DocAI async/batch through the **existing
+`mode=jobs` lane** (submit → poll → ingest), with three constraints written in: ⚠️ **async cannot fit
+the 22 s tick** (long-running operation, GCS output); ⚠️ **verify the contract against the live v1
+discovery document**, since DOC8's flag was a top-level boolean and the prompt's framing would have
+made it a silent no-op; ⛔ **never fall back to gpt-4o.** ⚠️ **And if the route is unavailable, stop
+and say so** — chunking a lease changes what `extractTenantFromLease` receives, and a named honest
+ceiling beats a plausible workaround.
+
+**Drain at 22:20: undrained 604, sidecar 167, `bov_ready` 13, gpt-4o escalations still 0.**
+🔵 **DOC13 (retry re-admission) remains time-gated to ~16:00–16:30 UTC 2026-09-02 and has NOT run.**
+
 ## 2026-09-01 — C13c SHIPPED and verified; DOC12 CLOSED, and its finding inverts DOC8's premise
 
 ⚠️ **Naming note for whoever reads this next: the response filed as "DOC13" was C13c.** DOC13 (the
