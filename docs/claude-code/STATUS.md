@@ -52,6 +52,17 @@ no service key, and `api.stlouisfed.org` is `connect_rejected` by the proxy). Th
 ⚠️ **If the dependency fix is wrong the workflow will now go RED — that is success. Do not revert the
 pipefail to restore green.**
 
+🚨 **The sweep's SECOND pass found the bigger one: Dialysis `ci.yml` cannot fail on its own subject
+matter.** `| tee` is one masking idiom; **`|| echo` is another, used 5× in `ci.yml`** —
+`pytest tests/ … 2>/dev/null || echo "Tests completed…"` swallows the exit code, so **3,042 collected
+tests can never fail CI.** Every guard in `tests/` is a regression detector no merge gate enforces —
+the LCC repo's own *"no workflow runs `npm test` on a PR"* finding, in a different disguise. ⚠️ **The
+cruellest instance is `python -c "import src.main" 2>/dev/null || echo`: exactly the check that would
+have caught FRED's `ModuleNotFoundError`.** **NOT flipped** — gating a never-enforced suite whose
+greenness is unmeasured is the documented *"never green once on main"* trap. Backlog **B6e-ci-mask**.
+Also added `PyYAML>=6.0.1` to `requirements.txt`: the new guard parses workflow YAML, and a guard that
+cannot import is a guard that does not run.
+
 Also: `INFRASTRUCTURE.md`'s job map gains `fred-ingest-daily.yml` (a scheduled producer nobody had
 written down) and `metadata-backfill-queue.sh`; `dia_producer_registry.notes` for `fred_ingest`
 rewritten to say *merged, not yet executed*. Writeup:

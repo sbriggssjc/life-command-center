@@ -120,6 +120,45 @@ legitimately appears twice is not a guard*).
 
 ---
 
+## 3b. 🚨 Second pass: `ci.yml` cannot fail on its own subject matter
+
+`| tee` is one exit-code-masking idiom. **`|| echo` is another**, and `ci.yml` uses it five times.
+The decisive one is the test job:
+
+```
+pytest tests/ -v --tb=short --ignore=tests/integration/ 2>/dev/null || echo "Tests completed (some may have been skipped)"
+```
+
+`|| echo` swallows pytest's exit code, so **the step always succeeds**; `2>/dev/null` discards the
+traceback so you cannot see why. **3,042 tests are collected and not one of them can fail CI.** Every
+guard in `tests/` — the mutation-verified B6d ones, and the one added this round — is a regression
+detector that **no merge gate enforces.** This is the LCC repo's documented *"NO WORKFLOW RUNS
+`npm test` ON A PULL REQUEST"* finding, in the Dialysis repo, in a different disguise.
+
+| line | masked | effect |
+|---|---|---|
+| 89 | `pytest … 2>/dev/null \|\| echo` | **the whole suite cannot fail** |
+| 137–138 | `python -c "import src.main" 2>/dev/null \|\| echo` | **the import check cannot fail** |
+| 108 | `pip-audit … 2>/dev/null \|\| echo` | vulnerability scan cannot fail |
+| 114 | `! grep -rE "(sk-…)" … \|\| echo` | secrets grep cannot fail (plus `continue-on-error: true`) |
+
+⚠️ **The cruellest instance is 137–138.** That import check is *exactly* what would have caught FRED's
+`ModuleNotFoundError: postgrest`. **The repo already has the detector; it simply cannot fail.**
+
+**Not flipped, deliberately.** Turning a never-enforced 3,042-test suite into a merge gate is the
+documented *"a NEW CI job is not shipped until it has been green once on `main`"* trap — if the suite
+is red it blocks every merge, and **whether it is green is unmeasured.** It cannot be established from
+this sandbox (a `--collect-only` run gave 3,042 collected / 3 collection errors, but those errors are
+an incomplete local `flask` install — a sandbox artifact, not evidence about CI). **Measure first,
+then gate.** Backlog **B6e-ci-mask**.
+
+**The `| tee` guard does not catch this, and correctly so** — it masks `||` as boolean OR precisely so
+it can detect pipes. **Exit-code masking is a wider class than piping**: `|| echo`, `|| true`,
+`2>/dev/null`, `continue-on-error: true` and `set +e` all belong to it. Extending the guard now would
+ship a test that is red on every run with no safe way to green it — the exact anti-pattern above.
+
+---
+
 ## 4. 🚨 The operator exposure — the exhibit does not show a gap, it shows a wrong number
 
 `economic_indicators` has exactly two consumers, and both are Capital Markets book exhibits:
@@ -254,4 +293,5 @@ for all five series, and the upsert is idempotent on `(series_id, observation_da
 | **B6e-fred-verify** | 👤 Operator: dispatch `fred-ingest-daily.yml` with `observation_start=2026-08-01` to prove the fix and close the 25-day gap in one run. Verify by the `created_at` delta. |
 | **B6e-fred-cm-exposure** | 👤 Operator: establish whether a book/CM export went out after 2026-08-07. If so the August/Q3 macro point is built from 3 days and needs correcting. |
 | **B6e-fred-sendcount** | `_upsert_batch` returns rows SENT (`return=minimal`), so the script's `sys.exit` guard cannot distinguish a real write from an idempotent no-op. |
+| **B6e-ci-mask** | 🚨 `ci.yml` masks exit codes in 5 places; **3,042 tests cannot fail CI**, and neither can the import check that would have caught this very bug. Measure the suite green on `main` FIRST, then remove the masking. |
 | **B6e-ledger** | Unchanged — three dia producers still emit no run row. |
