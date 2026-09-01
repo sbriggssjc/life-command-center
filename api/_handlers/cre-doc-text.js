@@ -50,16 +50,51 @@ export async function handleCreDocTextTick(req, res, deps = PROD_DEPS) {
     // oldest-first scan can page past it. Counted separately from fetch_failed so
     // "we could not fetch it" and "and we recorded that" stay distinguishable.
     retry_marked: 0,
-    ocr_pages_total: 0, ocr_by_engine: {}, items: [],
+    // DOC10: an OCR result too thin to be the document. It is NOT an extraction and
+    // does not report as one — it writes DOC1's dated marker and re-admits.
+    thin_ocr: 0,
+    // DOC8: over Google's synchronous page cap, so no OCR was attempted at all.
+    over_page_cap: 0,
+    // ── DOC9 — THE COUNTER BUILT TO CATCH THE 6-14x ESCALATION WAS BLIND TO IT ──
+    // The old bump() accumulated ONLY when `ocr_pages > 0`, and the gpt-4o path
+    // returns no page count — so the 15:00 tick reported `ocr_by_engine: {}` and
+    // `ocr_pages_total: 0` WHILE SPENDING gpt-4o MONEY. The spend guard read empty
+    // precisely when the spend happened: failure-looks-like-success, inside the
+    // instrument.
+    //
+    // ENGINE is counted UNCONDITIONALLY (documents), PAGES only when known. The two
+    // are separate keys because they are different units and one name cannot carry
+    // both — the old `ocr_by_engine` counted PAGES, so re-using that name for a
+    // document count would silently change what every reader thinks it says. It is
+    // REMOVED rather than redefined: a reader of the old field now gets `undefined`,
+    // which is loud, instead of a plausible number meaning something else.
+    //
+    // ⚠️ An unknown page count is NOT reported as 0 (P180). It is counted in
+    // `ocr_pages_unknown`, so `ocr_pages_total: 0` can never again mean "we OCR'd
+    // nothing" when it actually means "we could not price what we OCR'd".
+    ocr_docs: 0,
+    ocr_docs_by_engine: {},
+    ocr_pages_total: 0,
+    ocr_pages_by_engine: {},
+    ocr_pages_unknown: 0,
+    items: [],
   };
   const bump = (r) => {
     result.scanned++;
     if (Object.prototype.hasOwnProperty.call(result, r.outcome)) result[r.outcome]++;
     if (r.retry_marked) result.retry_marked++;
-    if (Number.isFinite(r.ocr_pages) && r.ocr_pages > 0) {
-      result.ocr_pages_total += r.ocr_pages;
+    // An OCR was SERVED whenever a tier or an engine came back — independent of
+    // whether that engine reports pages. This is the arm DOC9 adds.
+    if (r.ocr_tier || r.ocr_engine) {
+      result.ocr_docs++;
       const eng = r.ocr_engine || r.ocr_tier || 'unknown';
-      result.ocr_by_engine[eng] = (result.ocr_by_engine[eng] || 0) + r.ocr_pages;
+      result.ocr_docs_by_engine[eng] = (result.ocr_docs_by_engine[eng] || 0) + 1;
+      if (Number.isFinite(r.ocr_pages) && r.ocr_pages > 0) {
+        result.ocr_pages_total += r.ocr_pages;
+        result.ocr_pages_by_engine[eng] = (result.ocr_pages_by_engine[eng] || 0) + r.ocr_pages;
+      } else {
+        result.ocr_pages_unknown++;
+      }
     }
     result.items.push(r);
   };
@@ -116,8 +151,14 @@ export async function handleCreDocTextTick(req, res, deps = PROD_DEPS) {
     const r = await runPropertyDocText(row.id, { ...deps, registryRow: row, version });
     bump(r);
   }
-  if (result.ocr_pages_total > 0) {
-    console.log(`[cre-doc-text] OCR cost: ${result.ocr_pages_total} pages ${JSON.stringify(result.ocr_by_engine)}`);
+  // DOC9: log whenever OCR was SERVED, not only when pages were priced — an
+  // unpriced gpt-4o document is exactly the line that used to be missing.
+  if (result.ocr_docs > 0) {
+    console.log(
+      `[cre-doc-text] OCR: ${result.ocr_docs} docs ${JSON.stringify(result.ocr_docs_by_engine)}` +
+      ` | ${result.ocr_pages_total} priced pages ${JSON.stringify(result.ocr_pages_by_engine)}` +
+      ` | ${result.ocr_pages_unknown} docs with an UNKNOWN page count`,
+    );
   }
   return res.status(200).json(result);
 }

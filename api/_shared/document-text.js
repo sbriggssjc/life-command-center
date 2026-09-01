@@ -127,6 +127,29 @@ export async function pdfTextFromBuffer(buffer) {
 }
 
 /**
+ * DOC8 — how many pages does this PDF have? pdf-parse walks the page tree, so it
+ * answers for a SCANNED pdf with no text layer too, which is exactly the
+ * population that reaches the OCR tiers.
+ *
+ * ⚠️ This is the only page count anybody has BEFORE spending. The sidecar's
+ * `page_count` column is NULL on 79 of 80 rows and `ocr_pages` only exists when
+ * DocAI already succeeded — so a rule keyed on either is inert precisely where
+ * it is needed. Returns null (never 0) when the count cannot be read: unknown is
+ * not zero, and a 0-page PDF is a different, real answer.
+ */
+export async function pdfPageCountFromBuffer(buffer) {
+  try {
+    const pdfParse = nodeRequire('pdf-parse');
+    const parsed = await pdfParse(buffer);
+    const n = Number(parsed?.numpages);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch (err) {
+    console.warn('[document-text] pdf-parse page count failed:', err?.message);
+    return null;
+  }
+}
+
+/**
  * OCR a scanned PDF to raw VERBATIM text via the vision model (gpt-4o). Reuses
  * the OM pipeline's invokeVisionExtractionAI but with a transcription prompt
  * (not the structured-JSON extraction prompt) so the result is feedable to the
@@ -252,7 +275,16 @@ export async function ocrCloudCheap({ buffer, mediaType, fetchImpl } = {}) {
   try { data = await r.json(); } catch { return { ok: false, reason: 'cloud_ocr_bad_json' }; }
   // The wrapper may report ok:false with a structured reason (e.g. over_page_cap)
   // so the tiered seam can fall through to the gpt-4o last resort.
-  if (data && data.ok === false) return { ok: false, reason: data.reason || 'cloud_ocr_failed', status: data.status || 0 };
+  // DOC8: an over_page_cap failure carries the page count Google names in its own
+  // error ("exceed the limit: 15 got 19"). Nothing was processed, so that is the
+  // ONLY count available on this path — carry it rather than discarding it.
+  if (data && data.ok === false) {
+    return {
+      ok: false, reason: data.reason || 'cloud_ocr_failed', status: data.status || 0,
+      pages: Number.isFinite(data.pages) ? data.pages : null,
+      page_limit: Number.isFinite(data.page_limit) ? data.page_limit : null,
+    };
+  }
   const text = String(data?.text || data?.content || data?.transcription || '').trim();
   if (!text) return { ok: false, reason: 'cloud_ocr_empty' };
   const confidence = typeof data?.confidence === 'number' ? data.confidence : null;
@@ -320,12 +352,19 @@ export async function ocrPdfToTextTiered({ buffer, mediaType } = {}, deps = {}) 
   // configured (mode==='cheap') or an adapter is injected (tests). gpt-4o is NOT
   // reached here — that is the whole point of UW#4b.
   let cheapReason = 'cloud_ocr_unconfigured';
+  let cheapPages = null;
+  let cheapPageLimit = null;
   if (mode === 'cheap' || deps.cloudCheapOcr) {
     const cc = await (deps.cloudCheapOcr || ocrCloudCheap)({ buffer, mediaType, fetchImpl: deps.fetchImpl });
     if (cc && cc.ok && cc.text) {
       return { ok: true, text: cc.text, tier: 'cloud_cheap', confidence: cc.confidence ?? null, pages: cc.pages ?? null, pageTexts: cc.pageTexts ?? null, engine: cc.engine || 'cloud_ocr' };
     }
     cheapReason = cc?.reason || 'cloud_ocr_failed';
+    // DOC8: when the cheap tier refused on the page cap it told us the real page
+    // count. gpt-4o never returns one, so this is the only chance to learn it —
+    // carry it out on BOTH the success-elsewhere and the total-failure paths.
+    cheapPages = Number.isFinite(cc?.pages) ? cc.pages : null;
+    cheapPageLimit = Number.isFinite(cc?.page_limit) ? cc.page_limit : null;
   }
 
   // Tier 3 — gpt-4o vision LAST RESORT. Explicit opt-in only; never the default.
@@ -333,11 +372,18 @@ export async function ocrPdfToTextTiered({ buffer, mediaType } = {}, deps = {}) 
     || String(process.env.OCR_CLOUD_GPT4O_LASTRESORT || '').toLowerCase() === 'true';
   if (allowGpt4o) {
     const c = await (deps.ocrPdfToText || ocrPdfToText)({ buffer, mediaType, ocrImpl: deps.ocrImpl });
-    if (c && c.ok && c.text) return { ok: true, text: c.text, tier: 'cloud', confidence: null, engine: c.model || 'gpt-4o-vision' };
-    return { ok: false, reason: c?.reason || 'ocr_failed' };
+    if (c && c.ok && c.text) {
+      return {
+        ok: true, text: c.text, tier: 'cloud', confidence: null, engine: c.model || 'gpt-4o-vision',
+        // NOT the pages gpt-4o read (it reports none) — the pages the CHEAP tier
+        // counted before refusing. Labelled so nobody reads it as a spend figure.
+        pages: null, cheap_reason: cheapReason, cheap_pages: cheapPages, cheap_page_limit: cheapPageLimit,
+      };
+    }
+    return { ok: false, reason: c?.reason || 'ocr_failed', cheap_reason: cheapReason, cheap_pages: cheapPages };
   }
 
-  return { ok: false, reason: cheapReason };
+  return { ok: false, reason: cheapReason, cheap_pages: cheapPages, cheap_page_limit: cheapPageLimit };
 }
 
 /**
@@ -353,7 +399,14 @@ export async function ocrPdfToTextTiered({ buffer, mediaType } = {}, deps = {}) 
  * fetch failure (ok:false), so the worker can record it vs. leave it for retry.
  */
 export async function extractDocumentText(
-  { sourceUrl, storageRef, storagePath, mediaType, allowOcr = true, ocrTiered = false, minChars = DOC_TEXT_MIN_CHARS } = {},
+  {
+    sourceUrl, storageRef, storagePath, mediaType, allowOcr = true, ocrTiered = false,
+    minChars = DOC_TEXT_MIN_CHARS,
+    // DOC8 — refuse OCR above this many PDF pages instead of falling through to
+    // gpt-4o. null (the default) is OFF, so every existing caller — the deed lane
+    // included — behaves byte-identically. Only the CRE worker opts in.
+    ocrPageCap = null,
+  } = {},
   deps = {},
 ) {
   const fetched = await (deps.fetchDocBytes || fetchDocBytes)({
@@ -418,6 +471,32 @@ export async function extractDocumentText(
   // OCR (Surya/Paddle → cheap cloud → gpt-4o LAST RESORT) instead of gpt-4o
   // direct — the same expensive-engine avoidance the lease path uses.
   if (isPdf && allowOcr) {
+    // ── DOC8 PAGE PRE-FLIGHT ────────────────────────────────────────────────
+    // Google's synchronous OCR caps at 30 pages in imageless mode. Above it,
+    // DocAI 502s `over_page_cap` and — measured on 19 live rows — gpt-4o returns
+    // a fragment (avg 1,579 chars, 63% under 500, minimum 31) that DOC10's floor
+    // then rejects anyway. So spending on it buys nothing.
+    //
+    // ⚠️ This does NOT remove the gpt-4o tier. It remains the last resort for
+    // every document under the cap where the cheap tier fails for any other
+    // reason. What it removes is the SILENT fall-through on the one class where
+    // gpt-4o is known to fail: an over-cap document now stops with a NAMED,
+    // DATED marker instead (DOC1's mechanism), so it is countable and re-admits
+    // itself if the cap or the tiering ever changes.
+    const pageCap = Number.isFinite(ocrPageCap) && ocrPageCap > 0 ? ocrPageCap : null;
+    if (pageCap) {
+      const pre = await (deps.pdfPageCount || pdfPageCountFromBuffer)(buffer);
+      if (Number.isFinite(pre) && pre > pageCap) {
+        return {
+          ok: true, text: '', method: null, text_len: 0,
+          ocr_attempted: false, needs_ocr: true,
+          reason: 'over_docai_page_cap',
+          page_count: pre, ocr_page_cap: pageCap,
+          thin_text_layer: thinTextLayer || undefined,
+        };
+      }
+    }
+
     let ocr;
     if (ocrTiered) {
       ocr = await (deps.ocrPdfToTextTiered || ocrPdfToTextTiered)({ buffer, mediaType: ct || 'application/pdf' }, deps);
@@ -430,6 +509,10 @@ export async function extractDocumentText(
         ocr_attempted: true, ocr_ok: true, via: fetchedVia,
         ocr_tier: ocr.tier || null, ocr_engine: ocr.engine || ocr.model || null,
         ocr_pages: ocr.pages ?? null,   // UW#4c — per-page cost telemetry
+        // DOC8: gpt-4o reports no page count, but the cheap tier counted the
+        // document before refusing it. Distinct field — `ocr_pages` is what we
+        // were BILLED for, `page_count` is how long the document is.
+        page_count: Number.isFinite(ocr.pages) ? ocr.pages : (Number.isFinite(ocr.cheap_pages) ? ocr.cheap_pages : null),
         pages: ocr.pageTexts ?? null,   // R58 Unit 4 — per-page text for clause_ref page anchors
         thin_text_layer: thinTextLayer || undefined,
       };
@@ -437,6 +520,8 @@ export async function extractDocumentText(
     return {
       ok: true, text: '', method: null, text_len: 0, ocr_attempted: true, ocr_ok: false,
       needs_ocr: true, reason: ocr.reason || 'ocr_failed', thin_text_layer: thinTextLayer || undefined,
+      // DOC8: the cheap tier's refusal carries a real page count; keep it.
+      page_count: Number.isFinite(ocr.cheap_pages) ? ocr.cheap_pages : null,
     };
   }
 

@@ -71,6 +71,75 @@ fabrication finding, I12 and Ollama measurement all stand; only its verdict and 
 do not.
 
 ## 2026-09-01 — ✅ FRED IS ALIVE (verified on the delta), and the metadata build-out is measured: DON'T BUILD IT ⚠️ *(verdict superseded — see the entry above)*
+## 2026-09-01 — DOC8 / DOC9 / DOC10: the expensive OCR tier was FAILING, and its fragments read as covered leases
+
+**PR #1995 — open, not merged. `docai-ocr` v23 IS deployed to LCC Opps (15:50 UTC) and the DOC10
+backfill IS applied (15:51 UTC); the JS half ships on the Railway redeploy of the merge.**
+
+**The measurement first.** Across every OCR row the CRE lane has ever produced: **gpt-4o 19 rows,
+avg 1,579 chars, 12 under 500, minimum 31; DocAI 6 rows, avg 9,055, none under 500.** The
+**expensive** tier returned ~9× LESS text, on 86% of the OCR events. Cause read from the edge log,
+not guessed: `PAGE_LIMIT_EXCEEDED — "15 got 19"`, DocAI's synchronous page cap, **not** the
+documented Custom-Extractor footgun.
+
+- **DOC8** — `docai-ocr` sets `imagelessMode`, cap **15 → 30**. ⚠️ **Verified against the live v1
+  discovery document, not taken from the prompt: it is a TOP-LEVEL `ProcessRequest` boolean, NOT
+  `processOptions.ocrConfig`** — nesting it there is a silent no-op that leaves the cap at 15. A
+  processor that rejects the field retries once without it, so the deploy cannot break the ≤15-page
+  path that already works. **Above 30 the CRE worker now stops with a named, dated
+  `over_docai_page_cap` marker from a pdf-parse pre-flight and spends nothing** — the gpt-4o tier is
+  NOT removed, it is just no longer reached silently on the one class it is measured to fail. The
+  pre-flight is opt-in (`ocrPageCap`, default null), so **cron 160 and the deed lane are
+  byte-identical**.
+- **DOC9** — the spend counter accumulated only when `ocr_pages > 0`, and gpt-4o reports no pages, so
+  the tick read `ocr_by_engine: {}` **while spending gpt-4o money**. Engine now counted
+  unconditionally, pages only when known, unknown counted as `ocr_pages_unknown` and **never 0**.
+  ⚠️ **`ocr_by_engine` is REMOVED rather than redefined** — it counted PAGES, so reusing the name for
+  a document count changes its meaning silently. The same blindness is still live in
+  `document-text.js` (the deed lane, deliberately untouched) and `lease-backfill.js`.
+- **DOC10** — a **31-character fragment satisfied both consumers** (`needs_ocr=is.false ∧ raw_text≠
+  null`; `NOT needs_ocr`) so BOV extract received it as the lease and it could never be retried.
+  `reason='thin_ocr_result'` was already set and **nothing read it**. Page-aware floor now
+  (`max(120, pages×200)`; **500** when pages are unknown — a 500 that sits inside a 3.9× gap the data
+  actually has). **Backfill: 12 rows / 9 properties, re-run marks 0, reversal RUN not asserted (12 of
+  12 restored byte-identically in a rolled-back round trip).**
+
+**⚠️ `v_lcc_cre_bov_ready` 7 → 4, and that is the fix working.** Those three properties were never
+covered — they were "covered" by 31–200-char fragments. Consumer-visible sidecars 77 → 65; OCR rows
+reading covered 25 → 13; `v_lcc_cre_thin_ocr_watch` still-covered 12 → **0**. gov deeds unchanged at
+**325/325**, cron 160's command unchanged, crons 167/169 still active.
+
+✅ **THE EDGE HALF IS CONFIRMED ON BEHAVIOUR, 16:00:35 UTC.** The first post-deploy OCR event (cron
+167, document 24, `ACMP EXEC Lease 10.9.14.pdf`) logged
+`Document AI 400 (…, imageless=true): "Document pages exceed the limit: 30 got 40"`,
+`metadata { page_limit: "30", pages: "40" }`. **The limit Google reports is now 30, not 15**, and the
+phrase *"in non-imageless mode"* is gone — the field was accepted and the fallback did not fire.
+(The sandbox cannot reach `*.supabase.co` — proxy 403 — so the edge log IS the probe.)
+
+⚠️ **And that same line is the FIRST 31+-page observation this lane has ever had: 40 pages.** It fell
+through to gpt-4o for **211 chars**, because the caller-side pre-flight is JS and unmerged. Both
+halves of the fix are correct and neither was deployed for that document. Page evidence to date is
+**8 observations, 1 over 30** — a reason to expect more, not a rate.
+
+⚠️ **The wording of that error has already changed once**, so `pageLimitFromError` now reads
+`details[].metadata` first and keeps the prose regex as a fallback (**v24**). Two mutants survived
+the first test of it, because the live body's `message` repeats the same numbers as its metadata —
+fixed by adding the discriminating case (a re-worded message with intact metadata), not by accepting
+them. ⚠️ **v24 is deployed and UNEXERCISED** — the behavioural confirmation above is v23's, and no
+DocAI call has been made since v24 landed. Deployed is not exercised.
+
+**⚠️ STILL NOT MEASURABLE, and stated rather than guessed:** (a) **`cloud_cheap` overtaking `cloud`**
+— the only post-deploy OCR event so far was that 40-page document, which is over the cap either way,
+so the tier split needs the next few ticks; (b) **a re-read of the 12 thin documents** —
+re-admission needs `thin_ocr_result` in `CRE_RETRY_REASONS`, which is JS and unmerged; (c) **how much
+of the backlog is 31+ pages.** The `over_page_cap` counter, `page_count` on every marker, and
+`v_lcc_cre_thin_ocr_watch` are what will answer all three.
+
+**Next:** merge → Railway redeploy → read `ocr_docs_by_engine` on the first ticks (`cloud_cheap` must
+overtake `cloud`), then read three named re-extracted documents at their MIDPOINT — a tier change is
+not evidence the text is usable. Full state: `docs/architecture/document-capture-ocr-and-deeds.md`
+§0d.
+## 2026-09-01 — ✅ FRED IS ALIVE (verified on the delta), and the metadata build-out is measured: DON'T BUILD IT
 
 ### FRED — the fix is PROVEN
 
@@ -1135,7 +1204,7 @@ correctly rejects most leases and parks the backlog.
 not have caught DOC8 alone — the sidecar column is populated, the tick's own summary is not.
 **Both instruments were needed.**
 
-**Prompt staged: `DOC8-docai-page-cap-and-thin-ocr-floor.md`** (DOC8 → DOC9 → DOC10, in that order).
+~~**Prompt staged: `DOC8-docai-page-cap-and-thin-ocr-floor.md`**~~ ✅ **EXECUTED 2026-09-01 (PR #1995), prompt filed to `prompts/done/`** (DOC8 → DOC9 → DOC10, in that order — the order was kept).
 
 ## 2026-09-01 — DOCUMENT PIPELINE: one canonical page, and the blocker found
 
