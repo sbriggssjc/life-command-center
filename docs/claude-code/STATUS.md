@@ -257,6 +257,39 @@ Writeup `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`; **I2**, **Class
   people learn to merge past. **First credentialed run is an operator step.**
 - Also fixed in passing: the backlog's **D1 row had 5 cells in a 4-column table and an unescaped `|`
   inside a code span**, so GFM was silently dropping its status cell.
+## 2026-09-01 — 👤 Operator check: `metadata_backfill_queue` was NEVER WIRED, and a second Railway deployment surfaced
+
+**Scott checked Railway.** The service exists on **both** the `life-command-center` and
+`tranquil-delight` deployments, and **neither carries a Cron Schedule setting.**
+
+✅ **So `metadata_backfill_queue` has no trigger anywhere — it is deployable code that nothing runs.**
+That is the third of the three outcomes I laid out: **designed and never wired**, not *scheduled and
+undocumented*.
+
+⚠️ **This converts it from a bug into a DECISION.** It has never run, so **nothing regressed by its
+absence** — wiring it is **new capability**, and it should clear the Consumption-Layer bar (named
+consumer, value gate, auto-retire predicate, honest counts) exactly like any other new producer.
+**Not "turn it on because it exists."**
+
+⚠️ **And the registry row needs a precise correction, because the two states are different facts.**
+`dia_producer_registry.scheduler_confirmed` stays **false**, but the notes currently say
+*"SCHEDULE UNCONFIRMED — operator must confirm"*. **It is now CONFIRMED UNSCHEDULED.** Leaving it as
+"unconfirmed" implies the weaker claim and invites someone to re-check what has already been
+checked. Proposed one-line update handed to Scott.
+
+### ⚠️ Second finding, surfaced incidentally: the dormant `life-command-center` service is still live
+
+The metadata service appearing on **both** deployments means **the dormant `life-command-center`
+Railway service still exists**, carrying service definitions, alongside `tranquil-delight`.
+
+**`I16` already names deleting it** (part of the Render-contingency decision), and
+`CURRENT-STATE.md` treats `tranquil-delight` + the standalone MCP as the live pair. ⚠️ **This is the
+P194 shape** — the retired Vercel deployment that still answers and still holds a service key — **and
+the lesson there was that a stale deployment is invisible to every check this repo runs.** Filed as
+**`I16b`**: confirm it holds no live traffic and no live credentials **before** deleting, and confirm
+it is not quietly serving something unaccounted for. *Do not delete on the assumption it is dormant;
+that assumption is exactly what P194 punished.*
+
 ## 2026-09-01 — B6e-fred drafted, and the operator cost turns out to be the Capital Markets book
 
 **Prompt: `prompts/B6e-fred-green-ci-dead-producer-2026-09-01.md`.**
