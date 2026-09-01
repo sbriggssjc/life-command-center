@@ -309,6 +309,85 @@ Writeup `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`; **I2**, **Class
   people learn to merge past. **First credentialed run is an operator step.**
 - Also fixed in passing: the backlog's **D1 row had 5 cells in a 4-column table and an unescaped `|`
   inside a code span**, so GFM was silently dropping its status cell.
+## 2026-09-01 — Registry corrected, and the queue measured: DO NOT schedule it yet
+
+**SQL run.** `dia_producer_registry.metadata_backfill_queue` now reads **CONFIRMED UNSCHEDULED**
+with the operator check recorded; `scheduler_confirmed` stays `false`, which remains accurate.
+
+### 📊 Scott asked whether to wire the schedule while we are here. The measurement says NO — a schedule solves the wrong half.
+
+`property_metadata_backfill_queue`:
+
+| fact | value |
+|---|---|
+| total rows | **1,365** |
+| enqueued | **ALL on ONE day — 2026-05-21** |
+| `attempts > 0` | **ZERO rows. The drain has never processed a single row.** |
+| `open` | 662 · `captured`/resolved | 703 |
+
+**Three findings, and they point the same way:**
+
+1. **Nothing ENQUEUES.** No new rows in 3.5 months. **A weekly cron would drain 662 once and then
+   run empty forever** — a consumer with no producer, the mirror of Class 2.
+2. **The drain has NEVER executed.** ⚠️ **Scheduling untested code is exactly how the last three
+   silent producers happened** (`fred_ingest` green-and-dead, `cms_ingestion` throttled,
+   `public_record_ingest` failing 500×/run). **Prove it works before automating it.**
+3. **But the gaps ARE real** — of the 662 open rows, **0 properties are gone** and only **16 have
+   since had `year_built` filled (16 for `land_area`)**, so **~646 are still genuine**
+   (`year_built` 224, `land_area` 205, plus combinations). **This is worth doing; it is not worth
+   scheduling yet.**
+
+⚠️ **The most interesting number is the one that argues for caution: 703 rows are `captured` and
+RESOLVED with ZERO attempts.** **51% of the original queue self-resolved through other ingestion
+paths.** That is simultaneously evidence the fields do fill over time *and* a reason to **size the
+assessor's marginal yield before automating** — it may be doing less work than the queue depth
+implies.
+
+**Recommended sequence, in order:**
+
+1. **Run it ONCE, manually, against the 662** — measure the real yield (how many of ~646 gaps does
+   the assessor actually fill?).
+2. **If the yield justifies it, build the ENQUEUER** — the missing producer half. Without it, any
+   schedule is a one-shot wearing a cron.
+3. **Only then add a schedule**, and register it with a declared cadence so
+   `v_dia_producer_health` can see it from day one.
+
+**This is the Consumption-Layer bar applied to a producer we were about to switch on because it
+existed** — the exact move `B6b-lead` was refused for, and the reason that refusal was right.
+
+## 2026-09-01 — 👤 Operator check: `metadata_backfill_queue` was NEVER WIRED, and a second Railway deployment surfaced
+
+**Scott checked Railway.** The service exists on **both** the `life-command-center` and
+`tranquil-delight` deployments, and **neither carries a Cron Schedule setting.**
+
+✅ **So `metadata_backfill_queue` has no trigger anywhere — it is deployable code that nothing runs.**
+That is the third of the three outcomes I laid out: **designed and never wired**, not *scheduled and
+undocumented*.
+
+⚠️ **This converts it from a bug into a DECISION.** It has never run, so **nothing regressed by its
+absence** — wiring it is **new capability**, and it should clear the Consumption-Layer bar (named
+consumer, value gate, auto-retire predicate, honest counts) exactly like any other new producer.
+**Not "turn it on because it exists."**
+
+⚠️ **And the registry row needs a precise correction, because the two states are different facts.**
+`dia_producer_registry.scheduler_confirmed` stays **false**, but the notes currently say
+*"SCHEDULE UNCONFIRMED — operator must confirm"*. **It is now CONFIRMED UNSCHEDULED.** Leaving it as
+"unconfirmed" implies the weaker claim and invites someone to re-check what has already been
+checked. Proposed one-line update handed to Scott.
+
+### ⚠️ Second finding, surfaced incidentally: the dormant `life-command-center` service is still live
+
+The metadata service appearing on **both** deployments means **the dormant `life-command-center`
+Railway service still exists**, carrying service definitions, alongside `tranquil-delight`.
+
+**`I16` already names deleting it** (part of the Render-contingency decision), and
+`CURRENT-STATE.md` treats `tranquil-delight` + the standalone MCP as the live pair. ⚠️ **This is the
+P194 shape** — the retired Vercel deployment that still answers and still holds a service key — **and
+the lesson there was that a stale deployment is invisible to every check this repo runs.** Filed as
+**`I16b`**: confirm it holds no live traffic and no live credentials **before** deleting, and confirm
+it is not quietly serving something unaccounted for. *Do not delete on the assumption it is dormant;
+that assumption is exactly what P194 punished.*
+
 ## 2026-09-01 — B6e-fred drafted, and the operator cost turns out to be the Capital Markets book
 
 **Prompt: `prompts/B6e-fred-green-ci-dead-producer-2026-09-01.md`.**
