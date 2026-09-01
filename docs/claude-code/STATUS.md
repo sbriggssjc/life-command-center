@@ -16,6 +16,47 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-01 — B6e-fred: the sweep was the finding; the FRED fix was already merged and still has not run
+
+**`fred_ingest` has NEVER written a row** — not "dead for 25 days". `economic_indicators` has exactly
+ONE write event in its life (2026-08-07 19:59, 86 rows) and it landed **after** both of that day's
+workflow runs finished (19:47, 19:55): a hand-run. The workflow was added that day to fix a silent
+stall and has been silently stalled from its first green run.
+
+**The fix was already merged before this session** (`e0ec3fc`, PR #7383, 12:53 UTC) — deps + `set -o
+pipefail` + fail-on-stale. **It has still never executed**: today's scheduled run fired ~11:30 UTC,
+before the merge. *Merged is not running.* Next scheduled run 2026-09-02 11:30 UTC.
+
+🚨 **The sweep outranked the FRED fix, as the brief predicted.** 2 of 3 piped producer steps were
+broken. **`public-record-ingest-daily.yml` had `bash …sh 2>&1 | tee` with no pipefail** — and the
+script sets `set -euo pipefail` internally and exits non-zero correctly, so **B6d-pri's brand-new
+`EXIT_DRAIN_FAILED = 3` was being discarded one layer up by that pipe.** Fixed.
+⚠️ **A guard for this exact defect already existed and was scoped to the ONE file the previous audit
+was looking at** (`test_fred_workflow_sets_pipefail_before_piping_to_tee`), and used a file-wide
+`find()` rather than a step anchor. **A guard written for an instance does not cover the class.**
+Replaced with `tests/test_b6e_pipefail_workflow_guard.py` — class-wide, step-anchored, 10 tests,
+**7/7 mutations RED**, with its own positive control.
+
+🚨 **The operator exposure is a WRONG NUMBER, not a gap.** `economic_indicators` feeds only
+`cm_dialysis_macro_rates_m/_q` — both CM book exhibits. The views do **not** go blank: the monthly
+view still emits `2026-08-31` and the quarterly `2026-09-30`. Behind that "August" point:
+**DGS10 = 3 observations (Aug 3–5), MORTGAGE30US = 1 (Aug 6), and FEDFUNDS/UNRATE/CPIAUCSL = 0.**
+A complete-looking monthly average of the 10-year Treasury from three business days.
+👤 **Whether a book went out after 2026-08-07 is an operator check; if so it is a correction, not
+just a pipeline fix.** Nothing was regenerated.
+
+⚠️ **BLOCKER — the live re-run is operator-gated and the gap is NOT backfilled.** `workflow_dispatch`
+returned **403 (no Actions write scope)**; running it directly is impossible here (no `FRED_API_KEY`,
+no service key, and `api.stlouisfed.org` is `connect_rejected` by the proxy). The fix remains
+**unproven** until `max(economic_indicators.created_at)` advances past 2026-08-07.
+⚠️ **If the dependency fix is wrong the workflow will now go RED — that is success. Do not revert the
+pipefail to restore green.**
+
+Also: `INFRASTRUCTURE.md`'s job map gains `fred-ingest-daily.yml` (a scheduled producer nobody had
+written down) and `metadata-backfill-queue.sh`; `dia_producer_registry.notes` for `fred_ingest`
+rewritten to say *merged, not yet executed*. Writeup:
+`docs/audits/B6e_fred_GREEN_CI_DEAD_PRODUCER_2026-09-01.md`.
+
 ## 2026-09-01 — B6d-cms-escalation: dia's producer-health surface, and a workflow that was green 16 times over nothing
 
 **Shipped:** `dia_producer_registry` + `v_dia_producer_health` on Dialysis_DB
