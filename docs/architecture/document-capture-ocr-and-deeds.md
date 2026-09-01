@@ -266,15 +266,62 @@ before any backfill — Class 8.
 
 ## 7. What DOC1 changed, and what it did not
 
-| | before | after |
+✅ **DEPLOYED AND VERIFIED on the first real cron tick, 2026-09-01 15:00:00 UTC** (merge 14:56:09 →
+Railway redeploy → cron 167). These are measured, not predicted:
+
+| | before (14:30 tick) | after (15:00 tick) |
 |---|---:|---:|
-| `eligible` on a fresh tick | **0** (permanently) | **> 0** while a backlog exists |
-| lowest registry id the scan can reach | **~2258** | **the oldest row in the population** |
-| lease/dd/om undrained | **695** | falls ~15 per tick as crons 167/169 run |
-| sidecar rows | 76 | rising |
+| `eligible` | **0** (permanently) | **15** |
+| `scan_lowest_id` / `eligible_lowest_id` | ~2258 | **2 / 2 — the oldest row in the population** |
+| `scan_pages` · `scan_rows` · `scan_capped` | — | 1 · 200 · **false** |
+| `scanned` · `text_extracted` · `ocr` | 0 · 0 · 0 | **4 · 3 · 1** |
+| lease/dd/om undrained | **695** | **691** |
+| sidecar rows | 76 | **80** |
+| `bov_ready_properties` (the CONSUMER) | 5 | **6** |
 | deeds (`property_documents`) | **325/325** | **325/325 — UNCHANGED** |
 | cron 160's command | `doctype=deed` | **`doctype=deed` — UNCHANGED** |
-| cron 167/169 schedule + `limit` | `*/30`, `15` | **unchanged** |
+
+Documents reached on that tick: **id 2** (om, 57,084 chars) · **7** (lease, 6,935) · **10** (lease,
+9,492) · **11** (lease, OCR). `scanned: 4` against `eligible: 15` is **the 22 s tick budget stopping
+on an item boundary**, reported honestly rather than silently.
+
+⚠️ **`scan_capped: false` with `scan_exhausted: false` is the third, correct state** — the scan
+stopped because it had its full batch of 15, not because the budget or the population ran out.
+
+### 🔴 THE FIRST OCR ROW WENT TO gpt-4o, AND IT IS **NOT** THE CUSTOM-EXTRACTOR FOOTGUN (DOC8)
+
+The one `ocr` row on that tick — document **11**, a lease — came back
+`ocr_tier: 'cloud'`, `ocr_engine: 'gpt-4o-2024-08-06'`, **116 chars**, tagged `thin_ocr_result`
+(under the 120-char `CRE_OCR_MIN_CHARS` floor). **We paid the 6–14× premium and got nothing usable.**
+
+**The documented footgun is REFUTED here — check the error, not the symptom.** §5 says
+`ocr_tier:'cloud'` where `cloud_cheap` is expected means the edge secret points at a Custom
+Extractor. Live at 15:00:18, the `docai-ocr` function log reads:
+
+```
+[docai-ocr] Document AI 400 (processor=projects/108926230693/locations/us/processors/5ecc6339861c88e1):
+  "message": "Document pages in non-imageless mode exceed the limit: 15 got 19.
+              Try using imageless mode to increase the limit to 30.",
+  "reason": "PAGE_LIMIT_EXCEEDED"
+```
+
+That is **the correct Enterprise Document OCR processor** (the exact resource id §"OCR foundation"
+names as right). The secret is fine. The cause is a **19-page lease against DocAI's 15-page sync
+cap** — i.e. the documented `over_page_cap → gpt-4o last resort` behaving as designed. **Google's own
+error names the fix: imageless mode raises the cap 15 → 30**, a one-line edge-function change that
+would route this class back to the cheap tier. **Not done here** — it is an edge-function deploy, a
+different change with its own grade. Filed **DOC8**.
+
+⚠️ **AND THE COST TELEMETRY IS BLIND TO EXACTLY THE EXPENSIVE PATH.** That tick reported
+**`ocr_by_engine: {}` and `ocr_pages_total: 0` while spending gpt-4o money**, because
+`bump()` only accumulates when `ocr_pages > 0` and the gpt-4o path returns no page count. **The
+counter built to catch the 6–14× escalation reads empty precisely when the escalation happens** — the
+failure-looks-like-success shape, inside the spend guard itself. **Until that is fixed, read
+`items[].ocr_tier` / `ocr_engine`, NEVER `ocr_by_engine`.** Filed **DOC9**.
+
+⚠️ **Sample size is ONE OCR row.** The mechanism is confirmed; the RATE across the 691 is not. The
+undrained population is lease-heavy and a 16–30-page lease is ordinary, so this plausibly repeats at
+scale — **watch the next few ticks before letting it run unattended, and read the tier per item.**
 
 **Untouched on purpose:** the `mode=jobs` claim semantics (`claimPendingJobs` is a different path
 with its own locking); the 50-row hard cap and the 22 s tick budget (**the only brakes — there is no
@@ -284,7 +331,9 @@ object. ⚠️ **If cron 160 or the deed counts move, the wrong lane was changed
 ## 7b. ⚠️ THE STANDING STATUS CHECK — run this before quoting any number on this page
 
 Everything above is dated. These four queries re-derive it. **Baseline = 2026-09-01, immediately
-before the DOC1 fix shipped**, so a later reading is a delta, not a fresh guess.
+before the DOC1 fix shipped**, so a later reading is a delta, not a fresh guess. ✅ **The fix is
+live** (first tick 15:00 UTC, §7) — so the baseline is now genuinely a *before*, and the numbers
+should be moving.
 
 ```sql
 -- LCC Opps (xengecqvemvfknjvbvrq)
@@ -315,8 +364,16 @@ select coalesce(reason,'(none)') as reason, needs_ocr, method, ocr_tier, count(*
 from lcc_cre_property_document_text group by 1,2,3,4 order by n desc;
 
 -- 3. Did the drain reach the CONSUMER? A rising sidecar count is NOT the same fact.
---    BASELINE: 0 fully-covered properties on the readiness view.
-select count(*) as bov_ready_properties from v_lcc_cre_bov_ready;
+--    BASELINE 2026-09-01: bov_ready_properties 5 · bov_extractions 6 ·
+--    consumer_visible_sidecars 66 (om 25 / lease 22 / dd 19) over 38 properties.
+--    ⚠️ 66 covered documents yield only 5 READY properties, because the view needs
+--       >=1 lease AND *every* lease/dd/om doc on that property covered. So the
+--       consumer metric moves in steps, on a property's LAST document — expect it
+--       to lag the sidecar count badly and then jump.
+select (select count(*) from v_lcc_cre_bov_ready)      as bov_ready_properties,
+       (select count(*) from lcc_cre_bov_extraction)   as bov_extractions,
+       (select count(*) from lcc_cre_property_document_text
+          where needs_ocr = false and raw_text is not null) as consumer_visible_sidecars;
 
 -- 4. The lane that must NOT move. BASELINE: gov deeds 325 of 325 with text.
 --    (gov scknotsqkcheojiaewwh) — and cron 160's command must still read doctype=deed.
@@ -338,6 +395,13 @@ from property_documents where lower(document_type) = 'deed';
   success.** `v_lcc_cre_bov_ready` requires **every** lease/dd/om doc on a property to be covered, so
   a partly-drained property crosses over only on its last document. **The lane's point is BOV
   extract; the sidecar count is the means.**
+- ✅ **The extraction QUALITY on the already-drained 76 was read, not assumed** (2026-09-01): five
+  named OMs (`MavisDiscountTire-EastGateCommons`, `Walgreens - Franklin Park`, `FedExGround-Middletown`,
+  `LandPro Equipment - Clymer`, `Lowes-Edmond`) carry 16k–35k chars of real body text — tenant, address,
+  lease structure, guaranty — and four named DDs (a PSA extension notice, a tax bill, a title commitment,
+  an 84k-char executed PSA) read correctly at their MIDPOINT, not just the cover page. **A non-zero
+  `char_len` is not evidence the extraction is useful; a midpoint sample is.** Fleet: om 25 / lease 22 /
+  dd 19 covered, avg 14.9k / 16.3k / 64.0k chars.
 - ⚠️ **The undrained population's scanned-vs-digital mix has never been sampled.** Every sidecar row
   since 2026-07-18 is `pdf_text` (free). The first real OCR ticks are the measurement — watch
   `ocr_by_engine` / `ocr_pages_total` on the tick response before letting it run unattended.
