@@ -705,3 +705,81 @@ gained 6,501 edges in the same window**, which is what moves `repeat_buyer`. So 
 negligible"* is true of the portfolio arms and false of the acquisition arm, and a nightly stamped
 column would be stale against those 6,501 while a view cannot be. ⚠️ `lcc_entity_portfolio_facts.updated_at`
 moved on **14,113 of 14,119 rows** (the nightly re-upsert) and is useless as a churn signal.
+
+
+## 9. ⚠️ C13c measured — `one_off_owner`'s evidence column is wrong in BOTH directions (2026-09-01)
+
+`one_off_owner` = **142**, and its only evidence is `entities.entity_type = 'person'`. **28 fail
+`lcc_looks_like_person`; reading them settles it.**
+
+**Organizations wrongly typed `person`** — the top by rent is **`Jamestown` at $22,801,678**, an
+institutional investment manager, currently labelled a one-off individual investor. Also `SkyREM`
+$1.48M · `Deoworks` $1.11M · `Protea Primewest` $985k · `Everbank` $787k · `Gofsco` $605k ·
+**`AEI NET Lease Portfolio XIII D`** $294k · plus `Alexandria`, `Brixmor`, `AvalonBay`, `BREIT`,
+`LaSalle`, `MIT`, `Komatsu`, `EJME`.
+
+**Genuine individuals the name test REJECTS** — so tightening the name rule is not the fix:
+`Maslow Robert C & Michele C` ($654k), `Anil M & Rajeshkumar K Khatri` ($454k), `Richard S Coulter &
+Camilla M Coulter`, `John a Bruzzone Sr Fam Ptshp`, `Rubinfeld Family`, `Separovich/Domich`,
+`Chad Schnabel (GA)`, `Nafez Harmouche (TX)`, `Neeta`, `Guy`, `Joan`, `Buddy`. ⚠️ **`&` is a married
+couple, not a firm (P158a).** `lcc_owner_name_has_org_marker` catches **0 of 142**.
+
+### ✅ A discriminating recorded fact exists, and its POSITIVE CONTROL is the important half
+
+**A `salesforce/Contact` external identity: 13 of 142.** (`salesforce/Account` **0**; `works_at`
+edges **0** either direction.) Read on named rows, **12 of the 13 are unmistakable individuals** —
+Martin Starr, Denis Rodger, Bill Weitzenkorn, Ryan Gaylord, Brian Revis, Jim Glickman, Jay Morris,
+Molly Huang, Sarita Mutscher, Michael P Brown, Justin Kaufmann, Pinakinl & Rajendrabhai J Patel. The
+one miss is **`Law Offices`**, which `lcc_looks_like_person` wrongly passes (the documented
+two-capitalised-tokens false positive).
+
+⚠️ **And ZERO of the institutional names carry one** — not Jamestown, BREIT, AvalonBay, Brixmor,
+Alexandria or MIT. **The signal separates exactly the population that must be separated**, which is
+what makes it worth building on where a name test is not.
+
+### The disposition — a CONFIDENCE SPLIT, not a deletion
+
+⚠️ **142 → 13 would be wrong**: it discards `Maslow Robert C & Michele C` and every genuine
+individual simply absent from Salesforce. ⚠️ **Asserting all 142 is also wrong**: it puts a $22.8M
+institutional manager on a one-off-individual lane. **So split the `evidence_arm`** — corroborated
+(13) vs `entity_type` only (129) — and let the surface gate. **P181 one layer down: an escalation
+must carry its confidence, and a genuine judgement call must not wear the same label as a worthless
+one.** The ~15 named institutional owners are not low-confidence, they are **wrong**, and go to
+`v_lcc_entity_role_ambiguity` as reviewed rows (the §8 confirmation pattern), **never as a name
+stoplist in the classifier.**
+
+**Prompt: `docs/claude-code/prompts/C13c-one-off-owner-confidence.md`.**
+⚠️ **Two things it deliberately does NOT do:** repair `entities.entity_type` itself (written by other
+producers, read by other consumers — **size it and file it**), and touch `investor_owner`, which is
+**correct** for those same institutional entities. Only their `one_off_owner` claim is false.
+## 8. ✅ `user_owner` CONFIRMED 2026-09-01 — the lane produced its first verdicts
+
+**10 confirmed, 4 rejected, 1 left undecided.** `v_lcc_entity_roles.user_owner` **0 → 10**;
+multi-role entities **946 → 954**. Verdicts are in `lcc_entity_role_confirmation`
+(`confirmed_by = 'scott'`), which is the INPUT to the view — never a derived stamp.
+
+**Confirmed (10)** — health systems and independent operators owning the building they treat in:
+Atlantis Healthcare Group · Centers for Dialysis Care · Northwest Kidney Centers · Michigan Kidney
+Consultants · Concerto Missouri LLC (exact core matches) · Gundersen Lutheran · Mayo Clinic Dialysis
+· Puget Sound Kidney Centers · Sanford Health (own named unit) · **Wake Forest University**.
+
+⚠️ **Wake Forest carries `is_not_prospected = true` and is STILL correctly `user_owner`.** The
+classification is a fact about the party; whether we prospect them is a separate gate. **Do not let
+the prospecting guard suppress a role.**
+
+**Rejected (4)** — and all four are ONE shape, an SPE/DST **named after the tenant it houses**:
+`FSC FMC Carbondale IL DST` ← Fmc-Carbondale · `USGBF NIAID LLC` ← NIAID · `NOAA Maryland LLC` ←
+NOAA · `MORGANTOWN GSA USDA, LLC` ← USDA.
+
+⚠️ **`name_reads_as_spe_shell` read FALSE on all four** — the SPE detector caught **none** of them
+(the documented place-named-SPE hole). **That is the empirical case for this being a human lane
+rather than a rule**, and it is now measured rather than argued: at n=15 a person separated them in
+one pass; the guard that exists would have separated zero.
+
+**Undecided (1): `Mena Dialysis` ← *DaVita Mena Dialysis Center*.** The tenant is DaVita, which
+argues landlord-leasing-to-DaVita rather than owner-occupier; it could equally be the predecessor
+practice that kept its building. **Genuinely undecidable from the record — left on the lane, not
+guessed.** An undecided candidate simply remains.
+
+⚠️ **The verdict vocabulary is CHECK-constrained to `confirmed` / `rejected`** — not
+`confirm`/`reject`. PK is `(entity_id, role)`, so a re-verdict is an UPDATE, not a second row.

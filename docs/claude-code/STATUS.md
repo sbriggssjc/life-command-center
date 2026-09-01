@@ -16,6 +16,42 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-01 — C13c measured and staged: `one_off_owner`'s evidence column fails BOTH ways
+
+**`one_off_owner` = 142 and its only evidence is `entities.entity_type='person'`.** 28 fail
+`lcc_looks_like_person`; **reading them is what settles it, not the rate.**
+
+⚠️ **Institutions typed `person`, by rent: `Jamestown` at $22,801,678** — an institutional
+investment manager sitting on a one-off-individual lane — then SkyREM $1.48M, Deoworks, Protea
+Primewest, Everbank, Gofsco, **`AEI NET Lease Portfolio XIII D`** (a fund, in its own name), plus
+Alexandria, Brixmor, AvalonBay, BREIT, LaSalle, MIT, Komatsu.
+
+⚠️ **And the name test rejects genuine individuals**, so tightening it is not the fix:
+`Maslow Robert C & Michele C` $654k · `Anil M & Rajeshkumar K Khatri` $454k · `Rubinfeld Family` ·
+`Chad Schnabel (GA)` · `Neeta` · `Guy` · `Joan` · `Buddy`. **`&` is a married couple (P158a)**, and
+`lcc_owner_name_has_org_marker` catches **0 of 142**.
+
+✅ **A discriminating RECORDED fact exists: a `salesforce/Contact` identity — 13 of 142, and 12 of
+the 13 are unmistakable individuals** (the miss is `Law Offices`, the documented
+two-capitalised-tokens false positive). ⚠️ **The positive control is the important half: ZERO of the
+institutional names carry one** — not Jamestown, BREIT, AvalonBay, Brixmor, Alexandria or MIT.
+**The signal separates exactly the population that must be separated**, which is why it is worth
+building on where a name test is not.
+
+**Disposition: a CONFIDENCE SPLIT, not a deletion.** ⚠️ 142 → 13 discards genuine individuals simply
+absent from Salesforce; asserting all 142 keeps a $22.8M manager mislabelled. So the count stays 142
+and the **`evidence_arm` splits** — corroborated 13 / `entity_type`-only 129 — with the ~15 named
+institutions routed to ambiguity as **reviewed rows**, never a name stoplist. **P181 one layer
+down.** Prompt: `C13c-one-off-owner-confidence.md`.
+
+🔧 **Git locks — I am the cause, and my first diagnosis was incomplete.** `ORIG_HEAD.lock` is written
+by `pull`/`merge`/`reset`, so I blamed `git pull` from the sandbox. ⚠️ **Then `git fetch` left an
+`index.lock` behind too.** The real rule is broader: **the Linux sandbox cannot unlink ANY lock file
+it creates on the Windows mount** (`Operation not permitted`), so **no git command that takes a lock
+should be run from the sandbox** — not `pull`, not `fetch`. Read-only inspection
+(`git log`, `git show origin/main:<path>`, `ls`) is safe. ⚠️ **I had also grepped the warning out of
+my own output**, which is why it took three occurrences to notice.
+
 ## 2026-09-01 — ✅ C13b SHIPPED: the owner-role classification is a SET, and three of its own inputs were wrong
 
 `v_lcc_entity_roles` is live on LCC Opps — **one row per (entity, role)** with its evidence arm,
@@ -1402,6 +1438,40 @@ mechanism is confirmed, the rate across the remaining 691 is not, and the popula
 
 ⚠️ **I did not merge #1989 and was told not to.** Scott merged it 5 seconds after `npm test` went
 green, which is why the §7b baseline correction landed as a separate PR (#1990).
+
+## 2026-09-01 — `user_owner` confirmed (10/4/1); DOC12 half closed, and the reason is NOT the cap raise
+
+✅ **The `user_owner` lane produced its first verdicts — 10 confirmed, 4 rejected, 1 left
+undecided.** `v_lcc_entity_roles.user_owner` **0 → 10**, multi-role **946 → 954**. Verdicts live in
+`lcc_entity_role_confirmation`, the INPUT to the view, never a derived stamp.
+
+⚠️ **The 4 rejects are ONE shape — an SPE/DST named after the tenant it houses** (`FSC FMC
+Carbondale IL DST` ← Fmc-Carbondale · `USGBF NIAID LLC` ← NIAID · `NOAA Maryland LLC` ← NOAA ·
+`MORGANTOWN GSA USDA, LLC` ← USDA) — **and `name_reads_as_spe_shell` read FALSE on ALL FOUR.** The
+SPE detector caught none of them. **The case for a human lane is now measured rather than argued: a
+person separated them in one pass; the guard that exists would have separated zero.**
+
+⚠️ **Wake Forest is `is_not_prospected` and is STILL correctly `user_owner`** — the classification
+is a fact about the party; prospecting is a separate gate. **`Mena Dialysis` left undecided on
+purpose** (tenant is *DaVita Mena Dialysis Center* — landlord or predecessor practice, undecidable
+from the record). ⚠️ Verdict vocabulary is CHECK-constrained to **`confirmed`/`rejected`**.
+
+**C4b is closed by this** — `user_owner` is no longer *"written by nothing, ever."*
+
+🟡 **DOC12 half closed — and the precise reason matters more than the win.** Since the redeploy:
+**9 of 9 OCR events on DocAI, ZERO on gpt-4o** (char lengths 33,590 · 21,454 · 4,378 … 627, all
+real), and **`over_docai_page_cap` fires correctly on 2 documents at 39 and 31 pages.** The 86%
+escalation is finished and the marker path is proven.
+
+⚠️ **But the flip is the MARKER's doing, not the cap raise's. Every successful DocAI row since
+deploy is ≤12 pages — which the OLD 15-page cap served too — and the two over-cap documents are 31
+and 39, both ABOVE 30. The 16–30 band, the exact population the 15 → 30 raise exists for, has still
+had ZERO successful OCR events.** **Do not quote the zero-escalation result as evidence for the cap
+raise: two changes shipped together and only one has been exercised.** *A win in the metric you were
+watching is not automatically a win for the change you shipped.*
+
+**Drain: undrained 695 → 639; `bov_ready` 5 → 11 — the consumer more than doubled.**
+🔵 **DOC13 is narrowed to the retry half, time-gated to ~16:00–16:30 UTC 2026-09-02.**
 
 ## 2026-09-01 — C13b SHIPPED (PR #2003); it corrected THREE of my own numbers; stale files consolidated
 
