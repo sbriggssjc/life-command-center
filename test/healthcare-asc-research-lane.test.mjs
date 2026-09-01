@@ -514,7 +514,7 @@ test('evidence-backed aliases allow only terminal legal-entity suffix difference
   );
 });
 
-test('building ranges match only a frozen endpoint with exact location and tenant corroboration', () => {
+test('building ranges contain a frozen street number only with exact location and tenant corroboration', () => {
   const target = {
     candidate_fingerprint: sha('9'),
     address_token: '120 RESEARCH DR NW|TESTVILLE|OH|44000',
@@ -536,16 +536,28 @@ test('building ranges match only a frozen endpoint with exact location and tenan
   const built = buildAscStructuredCapture(target, context);
   assert.equal(built.capture.address_token, target.address_token);
   assert.equal(built.capture.address, context.address);
-  assert.equal(built.identity_match.mode, 'tenant_corroborated_range_endpoint');
+  assert.equal(built.identity_match.mode, 'tenant_corroborated_range_containment');
   assert.equal(built.identity_match.frozen_street_number, 120);
   assert.equal(built.identity_match.captured_range_start, 100);
   assert.equal(built.identity_match.captured_range_end, 120);
   assert.equal(built.identity_match.second_review_required, true);
 
-  assert.throws(
-    () => buildAscStructuredCapture({ ...target, address_token: '110 RESEARCH DR NW|TESTVILLE|OH|44000' }, context),
-    /does not match/,
-  );
+  const interior = buildAscStructuredCapture({
+    ...target,
+    address_token: '110 RESEARCH DR NW|TESTVILLE|OH|44000',
+    cms_identity: { ...target.cms_identity, address: '110 Research Drive NW' },
+  }, context);
+  assert.equal(interior.identity_match.mode, 'tenant_corroborated_range_containment');
+  assert.equal(interior.identity_match.frozen_street_number, 110);
+  for (const addressToken of [
+    '99 RESEARCH DR NW|TESTVILLE|OH|44000',
+    '121 RESEARCH DR NW|TESTVILLE|OH|44000',
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture({ ...target, address_token: addressToken }, context),
+      /does not match/,
+    );
+  }
   assert.throws(
     () => buildAscStructuredCapture(target, { ...context, address: '100-120 Other Dr NW' }),
     /does not match/,

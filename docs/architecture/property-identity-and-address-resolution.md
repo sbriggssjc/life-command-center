@@ -32,6 +32,13 @@ The frozen ASC research run has exposed reusable classes rather than isolated ba
 These classes must not be solved by stripping more tokens until strings happen to match. Each rule needs a
 defined evidence burden, collision controls, negative fixtures, and a second-review policy.
 
+For numeric building ranges, containment is a governed parent-building rule—not ordinary normalization. A
+single frozen civic number may match a captured inclusive range only when the remaining normalized street,
+city, state, and postal components agree exactly and an explicit facility or tenant observation corroborates
+the ASC. Reversed ranges, out-of-range numbers, street or location disagreements, and absent corroboration
+remain blocked. Both raw addresses are preserved and every accepted range-containment match requires second
+review.
+
 ## 3. Non-negotiable properties
 
 1. **Preserve raw observations.** Store and display source text separately from derived tokens.
