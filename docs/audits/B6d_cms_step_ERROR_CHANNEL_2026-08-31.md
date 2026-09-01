@@ -367,3 +367,87 @@ that is harmless today only because `recorded` is excluded from the watermark.
   again; the feed is not healthy. Note the last clinic write
   (21:22) is an hour *after* the last `ingestion_tracker` row (20:25), so that work carries no run
   record at all.
+
+---
+
+## 7. Follow-up measured 22:27 — the outage is ending, and the MONITOR will say so far too early
+
+`source_last_seen` began advancing at **20:33:51** and is climbing steadily at **~1.8 clinics/min**
+(105 at 21:32 → 203 at 22:27). All 203 carry **`data_source='cms_ingestion'`**, a key set *only*
+inside the `if updates:` branches of `fix_medicare_ingestion.py` — so **real field changes are
+landing.** This is genuine ingestion.
+
+⚠️ **Correction to §4's reading.** §4 inferred "it never writes the clinic" partly from
+`updated_at` being untouched. **None of the three `source_last_seen` writers sets `updated_at`**, so
+that column proves nothing here — the same trap the Dialysis `CLAUDE.md` already documents in the
+other direction (*"`updated_at` IS NOT the freshness signal … written by the reconciled-econ denorm,
+not by ingestion"*). The `no ingestion_tracker row` half of §4 **stands**: 0 tracker rows since
+20:30, so this work is still invisible to every surface built on that table.
+
+### 🔴 The new finding: a `max()` monitor reads FRESH on 2.38% coverage
+
+`feed_freshness_registry` watches `medicare_clinics` on **`ts_column = 'source_last_seen'`** with a
+45-day bound, and `compute_feed_freshness` takes **`max(ts_column)`**. Measured 22:27:
+
+| | |
+|---|---:|
+| clinics total | 8,547 |
+| touched today | **203 (2.38%)** |
+| still ≥30 days stale | **7,489 (87.6%)** |
+| `max(source_last_seen)` → what the monitor reads | **today, age 0 days** |
+
+**One stamped row takes the whole feed from 65 days stale to fresh.** The `feed_stale` alert will
+auto-resolve on 2.38% coverage, while seven-eighths of the fleet is still a month behind — and at
+1.8/min a full pass is **~79 hours**. So the monitor is about to stop reporting an outage that is
+87.6% unresolved.
+
+This is B6d's own *"grade the threshold, or it hides breaks"* lesson one layer down: B6d graded the
+**bound** and never asked whether the **aggregate** could be satisfied by a fraction of the
+population. A max-based freshness check answers *"did anything arrive"*, never *"was the feed
+ingested"*. The honest instrument for a per-row feed is a **coverage** measure —
+`count(*) filter (where ts_column >= now() - bound) / count(*)`, or the **p95 age** rather than the
+min. Filed **`B6d-cms-freshness-max`**.
+
+**Do not read the alert auto-resolving as the outage being fixed.** Verify on the coverage
+percentage and on a `cms_ingestion` run row appearing in `ingestion_tracker`.
+
+### 7a. ⚠️ CONFIRMED 23:25 — the pass DIED at 2.91% and the monitor now reads `ok`
+
+The §7 hazard is no longer a projection. Measured 23:25:
+
+```
+v_feed_freshness where feed_name='medicare_clinics'
+  latest    2026-08-31 22:51:07     age_days 0     is_stale FALSE     status 'ok'
+```
+
+against:
+
+| | |
+|---|---:|
+| clinics total | 8,547 |
+| touched by the pass | **249 (2.91%)** |
+| **beyond the feed's own 45-day SLA** | **7,445 (87.1%)** |
+| `ingestion_tracker` rows for the pass | **0** |
+
+**The monitor reports `ok` over an outage that is 87.1% unresolved.**
+
+And the pass did not finish — it ran 20:33:51 → **22:51:07** at a steady 1–4 clinics/min and then
+stopped dead, **34 minutes of silence** with no taper, no terminal status, and no run row anywhere.
+That is the **same abrupt-stop signature** as the killed runs this whole audit is about (§2): work
+ceases mid-flight and nothing records why. The difference is that this time it left the freshness
+surface green on the way out.
+
+So the two defects compose into the worst case: **a run that dies at 2.91% is now indistinguishable
+from a healthy feed**, because the only instrument watching it takes a `max()`. Before this pass the
+outage was at least visible as 65 days stale. It is now invisible.
+
+**Verification from here is coverage, never `status`:**
+`count(*) filter (where source_last_seen >= now() - interval '45 days') / count(*)` — **2.91%**
+(249 of 8,547), measured 2026-09-01 00:23.
+
+⚠️ **Self-correction: §7 quoted 12.9% and that figure was never measured this session.** It was
+carried forward from an earlier note. It was true before **2026-08-09**, when the 2026-06-25 ingest
+still sat inside the 45-day window; those rows aged out of the bound and nothing re-derived it. The
+only clinics now within the bound are the 249 this dead pass touched, so the stated verification
+target overstated coverage by **4.4×**. *Re-measure a dated figure before quoting it* — the same
+doctrine this audit applies to everything else, missed on a number the audit itself published.
