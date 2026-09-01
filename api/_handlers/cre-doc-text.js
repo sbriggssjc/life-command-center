@@ -13,7 +13,9 @@
 //
 // SAFE / GATED: capped batch (?limit default 15 / hard cap 50), wall-clock
 // budgeted, idempotent on (document_id, extractor_version). needs_ocr is recorded
-// (terminal-this-pass); a transient fetch failure is left for a later tick.
+// (terminal-this-pass); a transient fetch failure records a DATED deferred-retry
+// marker (DOC1) so the oldest-first backlog scan pages past it and re-admits it
+// after CRE_DOC_TEXT_RETRY_AFTER_HOURS.
 // ============================================================================
 
 import { authenticate } from '../_shared/auth.js';
@@ -44,11 +46,16 @@ export async function handleCreDocTextTick(req, res, deps = PROD_DEPS) {
     mode: mode + (dryRun ? '_dry_run' : ''),
     version, doctype: doctype || 'lease,dd,om', limit,
     scanned: 0, text_extracted: 0, ocr: 0, already_extracted: 0, needs_ocr: 0, fetch_failed: 0, persist_failed: 0, error: 0, not_found: 0,
+    // DOC1: a byte-fetch failure now leaves a dated deferred-retry marker so the
+    // oldest-first scan can page past it. Counted separately from fetch_failed so
+    // "we could not fetch it" and "and we recorded that" stay distinguishable.
+    retry_marked: 0,
     ocr_pages_total: 0, ocr_by_engine: {}, items: [],
   };
   const bump = (r) => {
     result.scanned++;
     if (Object.prototype.hasOwnProperty.call(result, r.outcome)) result[r.outcome]++;
+    if (r.retry_marked) result.retry_marked++;
     if (Number.isFinite(r.ocr_pages) && r.ocr_pages > 0) {
       result.ocr_pages_total += r.ocr_pages;
       const eng = r.ocr_engine || r.ocr_tier || 'unknown';
@@ -76,8 +83,26 @@ export async function handleCreDocTextTick(req, res, deps = PROD_DEPS) {
 
   // ---- Eligible-scan mode: find registry lease/dd/om with no sidecar yet.
   const eligible = await (deps.fetchEligibleCreDocs || fetchEligibleCreDocs)({ limit, doctype, version }, deps);
-  if (!eligible.ok) return res.status(200).json({ ...result, error_detail: eligible.detail });
+  if (!eligible.ok) {
+    // A failed registry page or sidecar probe fails CLOSED (see
+    // fetchEligibleCreDocs) — report the stage rather than draining a queue we
+    // could not verify was undrained.
+    return res.status(200).json({
+      ...result, scan_failed: true, scan_stage: eligible.stage || null, error_detail: eligible.detail,
+    });
+  }
   result.eligible = eligible.rows.length;
+  // DOC1 scan telemetry. ⚠️ Read scan_capped before reading eligible:0 as an
+  // empty queue, and scan_lowest_id to confirm the walk is reaching the bottom
+  // of the backlog rather than skimming the newest rows.
+  result.scan_pages = eligible.scan_pages;
+  result.scan_rows = eligible.scan_rows;
+  result.scan_capped = eligible.scan_capped;
+  result.scan_exhausted = eligible.scan_exhausted;
+  result.scan_lowest_id = eligible.scan_lowest_id;
+  result.scan_highest_id = eligible.scan_highest_id;
+  result.retry_admitted = eligible.retry_admitted;
+  result.eligible_lowest_id = eligible.rows.length ? Math.min(...eligible.rows.map((r) => r.id)) : null;
 
   if (dryRun) {
     result.items = eligible.rows.slice(0, 20).map((r) => ({

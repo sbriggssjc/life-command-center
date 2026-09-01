@@ -2323,10 +2323,11 @@ never enter a queue asking *"who owns this?"*
 
 ## Class 12 — third instance (DOC1, 2026-09-01)
 
-`fetchEligibleCreDocs` (`api/_shared/cre-property-doc-text.js:265-290`) reads the **newest
-`cap*4` = 60** registry rows, diffs out the ones already extracted, and returns the remainder.
-Once those 60 are all done the diff is empty **forever**: `eligible: 0`, HTTP 200, every 30
-minutes, over **695 unreachable documents** (ids 2 → 2250) in the lane that feeds `bov-extract.js`.
+`fetchEligibleCreDocs` (`api/_shared/cre-property-doc-text.js`) read the **newest `cap*4` = 60**
+registry rows, diffed out the ones already extracted, and returned the remainder. Once those 60 were
+all done the diff was empty **forever**: `eligible: 0`, HTTP 200, every 30 minutes, over **695
+unreachable documents** (ids 2 → 2317) in the lane that feeds `bov-extract.js`. ✅ **Fixed
+2026-09-01** — ascending keyset walk, page budget, `scan_capped` reported.
 
 - **The detector is the class's own:** diff the working set across two consecutive runs. Here it is
   even cheaper — **`newest60_already_done = 60` against `truly_undrained = 695`** settles it in one
@@ -2334,12 +2335,29 @@ minutes, over **695 unreachable documents** (ids 2 → 2250) in the lane that fe
 - ⚠️ **P135 (fixed window), P136 (re-checking the same 120 nightly), now this. Knowing the class did
   not prevent the third instance** — because each one looks like a different worker until you ask
   *what makes the window move*.
-- **The distinguishing question against P136:** does a processed row leave the candidate set? Here
-  **yes** — failures write a sidecar row (`ocr_non_ok`, `over_ocr_cap`, `thin_ocr_result` are all
-  present), so oldest-first self-advances and no negative marker is needed. P136 needed one because
-  an empty target left no trace anywhere. **Same class, different remedy — check before copying.**
+- ⚠️ **THE DISTINGUISHING QUESTION AGAINST P136 WAS ANSWERED FROM THE WRONG EVIDENCE, AND THE
+  ANSWER WRITTEN HERE FIRST WAS HALF WRONG.** It read: *"does a processed row leave the candidate
+  set? Here **yes** — failures write a sidecar row (`ocr_non_ok`, `over_ocr_cap`,
+  `thin_ocr_result` are all present), so oldest-first self-advances and no negative marker is
+  needed."* Those three reasons are **post-fetch** outcomes and they do persist a row. They say
+  nothing about the **pre-fetch** case — and `extractDocumentText` has **exactly ONE `ok:false`
+  return, `fetch_failed`**, on which the worker returned **without writing anything**. So
+  oldest-first would have jammed on the first unfetchable document, permanently, and **the fix
+  would have been strictly worse than the jam it replaced.**
+  - **The tell was in the same table that "proved" safety: ZERO `fetch_failed` rows have ever
+    existed.** That reads as *"no document has ever failed to fetch"* and is equally consistent
+    with *"a fetch failure never persists"* — and only the code path distinguishes them.
+    **Enumerate a function's failure RETURNS; do not infer them from the reasons its output table
+    happens to contain.** An outcome that never persists is, by construction, absent from the
+    evidence you would use to look for it.
+  - So DOC1 needed **both** halves after all: a cursor that advances **and** P136's dated,
+    expiring negative marker. **Same class, same remedy — and "check before copying" was the right
+    instruction pointed at the wrong artifact.**
 - ⚠️ **Raising the constant is not the fix** (P136 stated this and it holds): a bigger window moves
   the jam to row N+1 and makes it more expensive to see.
+- **A bounded scan must SAY it was bounded.** `scan_capped` distinguishes *the budget stopped me*
+  from *the queue is empty* — without it a page budget just re-creates the class one layer up.
+- Guard: `test/cre-doc-text-window-jam.test.mjs` (15 tests, 11/11 mutations RED).
 
 ## Class 33 — a drain widened where nothing consumes the result (DOC7, 2026-09-01)
 
