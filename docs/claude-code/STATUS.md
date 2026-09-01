@@ -209,6 +209,53 @@ Writeup `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`; **I2**, **Class
   people learn to merge past. **First credentialed run is an operator step.**
 - Also fixed in passing: the backlog's **D1 row had 5 cells in a 4-column table and an unescaped `|`
   inside a code span**, so GFM was silently dropping its status cell.
+## 2026-09-01 — ✅ CLOSED. The CMS alert auto-resolved, the placeholder regression is at ZERO, and one feed_stale alert remains.
+
+**Both checks I promised, run — and both passed.**
+
+### ✅ Check 1: the alert auto-resolved on its own
+
+**`medicare_clinics` — detected 2026-08-28, RESOLVED 2026-09-01.** ⚠️ **This, not my query, was
+always the confirmation** — I said so explicitly last night and it is worth naming that the rule
+held: *the monitor closed its own alert*, which is the whole point of B6a-follow-up.
+
+**Open `feed_stale` alerts: 4 → 1.** The only survivor is **`sam_lease_opportunities`**, which is
+`B6d-sam` — a 401, an owner action, and correctly still open.
+
+### ✅ Check 2: the placeholder regression is fixed properly, not just stopped
+
+| | baseline | peak | **now** |
+|---|---:|---:|---:|
+| `pending_updates` total | 1,959 | **7,531** | **1,965** |
+| `reason = 'unknown_reason'` | 0 | **3,424** | **0** |
+
+**And the writer now emits a REAL reason** — `public_record_ai_no_yield` moved 1,893 → **1,899**
+with `last_seen` **2026-09-01**, so the six new rows today carry a meaningful reason. The three
+legitimate categories are intact and nothing else was disturbed.
+
+⚠️ **Recorded precisely: the 3,424 were DELETED, not re-labelled.** `public_record_ai_no_yield`
+gained **6**, not ~3,424 — so the placeholder rows were removed as the artifact they were, and the
+writer was fixed separately. **That is a defensible third option beyond my "backfill or mark"
+framing** (they were one day's output of a broken path, not real pending work), **but it is a
+different act and the record should say which happened.**
+
+### ⚠️ The one thing NOT finished: the ingest is 2.9% complete
+
+**`refreshed_since` 61 → 249 of 8,547 clinics = 2.9%.** `source_last_seen` is 2026-08-31.
+
+**So the pipeline can write again and is progressing — but this is not a completed ingest.**
+⚠️ **And the alert resolving does NOT mean the feed is whole**: the freshness check asks *has data
+arrived recently*, which 249 rows satisfy. **A green alert and a complete dataset are different
+facts** — the same shape as every honest-count lesson in this arc, now in our favour rather than
+against us. **The next scheduled run should push 249 higher; if it stalls there, the pipeline
+completes without finishing.**
+
+**Sixty-seven days of silence, closed.** The chain that did it: B6a made producers visible →
+B6a-follow-up made them alertable → **B6d graded the bound and refused to widen it** → the Railway
+logs named a throttle → `--force-run` proved the throttle was hiding a real failure → B6d-pri/-step
+made the failure legible. **No single step would have done it, and the one that mattered most was
+declining to widen an SLA that looked wrong.**
+
 ## 2026-08-31 (evening) — ✅ THE CMS OUTAGE IS BROKEN OPEN after 67 days. 🚨 And the placeholder regression grew 8×.
 
 **Measured against this morning's baseline. Two results, in opposite directions.**
