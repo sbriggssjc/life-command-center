@@ -129,7 +129,7 @@ previously felt the single column was insufficient and worked around it.**
 |---|---|---|
 | **`one_off_owner`** | *"a category of **individual investor** that only owns one of our target submarket category"* | ⚠️ **an INDIVIDUAL, one target asset** — my 2,448 counted any org with one asset, which is not this. **143 person-typed entities hold exactly one.** |
 | **`investor_owner`** | *"anyone or firm or SPE that owns for the purpose of investing and probably should include **all of our prospects in the space**"* | **deliberately BROAD** — the default for owning-to-lease. **6,469.** SPEs included. |
-| **`developer`** | *"buys and sells programmatically… pursuing a relationship with the tenant, showing sites, negotiating a lease, building for the tenant, and then usually selling to realize the arbitrage between build cost/cap and exit cap"* | ⚠️ **a BEHAVIOURAL signature — acquire → build → sell, repeatedly.** The existing classifier reads `properties.developer_name`, which is a *label*, not this behaviour. **Under-specified by what we hold; do not claim the current 715 satisfies it.** |
+| **`developer`** ⚠️ **see §2e — this is BUILT, not unbuilt** | *"buys and sells programmatically… pursuing a relationship with the tenant, showing sites, negotiating a lease, building for the tenant, and then usually selling to realize the arbitrage between build cost/cap and exit cap"* | ⚠️ **a BEHAVIOURAL signature — acquire → build → sell, repeatedly.** The existing classifier reads `properties.developer_name`, which is a *label*, not this behaviour. **Under-specified by what we hold; do not claim the current 715 satisfies it.** |
 | **`repeat_buyer`** | *"anyone that has acquired more than one asset in our swimlane; the more frequent and recent the acquisitions, the more relatively important"* | **≥2 acquisitions — 3,258** — plus **pacing as a weight, not a label** |
 | **`user_owner`** | *"fairly infrequent… good with it being a human determination"* | ✅ confirmed: human-confirmed lane, ~13 candidates |
 
@@ -177,6 +177,136 @@ name field. **Detecting the real thing needs acquire→build→sell sequences pe
 has measured.** Under accuracy-first, **the honest move is to keep the existing `developer` label as
 what it is (a captured attribution) and flag the behavioural definition as unbuilt** — not to claim
 the two are the same.
+
+## 2e. ⚠️ CORRECTION — `developer` is NOT under-specified. It is defined, built, live, and defective in a known way.
+
+**§2c-i said the behavioural definition was *"under-specified by what we hold"* and *"nobody has
+measured"* it. That was wrong, and it was wrong because I did not look.** Scott: *"there should be
+tons of details on this somewhere."* There are. **Five generations, 2026-05-22 → 2026-08-31.**
+
+### Scott's definition was already the implemented one
+
+> *"Developer is always going to be the **first owner in the chain of ownership with our target
+> tenant's first action in that building**, build or lease, usually a retrofit. The developer will
+> have acquired the land or vacant building, renovated, then the lease with our target tenant
+> starts."* — 2026-08-31
+
+**That is `v_gov_owner_at_first_gen`, shipped 2026-05-22** (migration
+`government/20260522150100_gov_apply_owner_role_classification_v5.sql`) — *"owner at the
+first-generation lease commencement"*, resolved as **"owner at time T = the `new_owner` of the most
+recent transfer with `transfer_date <= T`."** Live today:
+
+| gov view | rows |
+|---|---:|
+| `v_gov_owner_at_first_gen` | **3,667** |
+| `v_gov_developer_candidates` | 354 (349 distinct) |
+| `v_gov_owner_role_classification` = `developer` | **343** |
+| `v_developer_chain_candidate` (UW#7) | 7,736 |
+
+It even carries the **retrofit** case Scott names: the anchor predicate exists for **both**
+`year_built` and **`year_renovated`** (`lease_anchored_to_year_renovated`), and a buyer counter-rule
+(acquired >90 days after first-gen commencement ⇒ `buyer`, not developer).
+
+### ⚠️ But its output reproduces a failure mode LCC already diagnosed and killed
+
+Read on named rows, the 343 are dominated by **address-named single-asset SPEs at confidence 0.75** —
+`1020 Lantrip, LLC` · `10668 SIERRA, LLC` · `2011 STEVENS POINT LLC` · `211 STREET LLC` ·
+`2202 NORTH VAN BUREN, LLC` · `30th Street, LLC` · `3201 E UNIVERSAL LLC`. **Only 4 reach 0.85
+(`dev_props ≥ 2`)**, and one of those, `GPT Properties Trust`, is a REIT.
+
+**Both of those are documented, twice-killed failure modes on the LCC side:**
+
+- `20260609140000` — *"the literal 'earliest owner + BTS-timing' rule alone produced **single-property
+  individuals** — the gate caught it."*
+- `20260609150000` — Signal B **DROPPED** because *"a REIT acquiring a build-to-suit near
+  construction is the **BUYER in a sale-leaseback**, not the developer… A precision-correct
+  chain/BTS signal (builder vs first net-lease buyer) is **deferred**."*
+
+⚠️ **So the gov v5 view was never reconciled against the LCC lesson.** The definition is right; the
+implementation predates the correction and reproduces exactly what the correction was written for.
+**This is the real state, and it is neither "unbuilt" (my error) nor "working" (the view's row count).**
+
+### What already exists that this design assumed did not
+
+| thing | where | status |
+|---|---|---|
+| the doctrine, 3,334 lines | `docs/history/DEVELOPER_BD_AUDIT_v3.md` ⚠️ **duplicated verbatim in GovernmentProject and DialysisProject** | **the "tons of detail"** |
+| current-vs-former developer | `entities.developer_status_active_until` — *"current = active project in the past 3–5 years"* | ✅ **column exists** |
+| ⭐ **multi-label storage precedent** | **`entities.developer_flag_sources JSONB`** — *append-only array of `{source, confidence, observed_at}`* | ✅ **the set model already exists for ONE role** |
+| `is_current_developer` | `v_entities_effective_role` | ✅ live |
+| BTS → developer trigger | `dialysis/20260522180000_dia_bts_tracker_to_developer.sql` | ⚠️ **backfill was a no-op — 0 delivered rows** |
+| proposed but NEVER built | `property_developers` junction · `is_retrofit` · `is_first_generation_lease_marker` · `leases.is_extension` | ❌ still unbuilt |
+
+⚠️ **`developer_flag_sources` matters beyond `developer`:** it is an append-only `{source,
+confidence, observed_at}` array on `entities` — **the multi-label shape §2c says the design needs,
+already built for one role.** **C16 should extend that pattern, not invent a new table.**
+
+## 2f. ✅ The reconciliation, measured — and it is blocked on CHAIN DEPTH, not on the rule
+
+I recommended reconciling gov v5 against the June lesson (separate the builder from the first
+net-lease buyer). **Measured, the diagnosis is right, the fix exists one domain over, and it cannot
+be applied.**
+
+### The defect is exact
+
+`v_gov_developer_candidates` takes **the owner AT first-gen commencement**. It never requires that
+the owner held the property **before** the lease started:
+
+```sql
+JOIN v_gov_owner_at_first_gen oaf USING (property_id, first_gen_commencement)
+WHERE ps.is_build_to_suit = true            -- Rule A, 0.90
+   -- or NOT build_to_suit                  -- Rule B, 0.80
+```
+
+**dia v5, same version, same date, HAS the guard** — its Rule A requires the owner *"held the
+property continuously from ≥90 days BEFORE the first long-term lease through its commencement"*, and
+its header names the exact pattern gov admits:
+
+> *"Excluded by data integrity: owners whose `start_date` equals or precedes `lease_start` by <90
+> days (the **'took title at delivery'** pattern that historically mis-classified buyers like
+> Carrollwood, Butler Trust as developers)."*
+
+**Scott's definition demands the same ordering** — *"acquired the land or vacant building,
+renovated, **then** the lease starts."* One domain implemented it; the other did not.
+
+### ⚠️ But the guard cannot be ported — the dates to apply it do not exist
+
+| gov developer candidates | |
+|---|---:|
+| candidate rows / distinct owners | 354 / 349 |
+| candidate properties **with ownership history** | **354 of 354** ✅ |
+| …with any transfer dated **at or before** first-gen commencement | **1** |
+| …**held ≥90 days before** (the dia test) | **1** |
+| …no qualifying acquisition date | **353** |
+
+⚠️ **This is not "no history" — every candidate property has ownership rows, and 70% of gov's 18,969
+history rows carry a `transfer_date`. The chain simply does not reach back before the lease.** For
+**353 of 354**, the recorded ownership begins *after* the tenant's first lease commenced.
+
+**So the 343 are not wrong — they are UNVERIFIABLE.** With current chain depth we cannot distinguish
+*"acquired the land, built, then leased"* (developer) from *"bought the completed building at
+delivery"* (net-lease buyer). **That is precisely the discrimination the June migration deferred,
+and it is deferred for a data reason, not a logic reason.**
+
+### This converges with C14
+
+⚠️ **Two independent threads now bottom out on the same missing data:**
+
+- **C14 / pacing** — `ownership_start_date` on 50.7% of LCC portfolio facts, so repeat-buyer
+  frequency and recency are half unmeasurable.
+- **Developer** — the gov chain does not extend before the first lease on 353 of 354 candidates.
+
+**Both are ownership-chain DEPTH and DATING**, which is what the A1–A5 / B1 / B5 lane has been
+working on all along (`BD_PIPELINE_FUNNEL_AUDIT`: **149 of 13,835 gov properties have 2+ historical
+owner links — 1.1%**).
+
+**So the binding constraint on this entire design is chain depth, not classification logic.** The
+rule for `developer` is settled and shipped; what it needs is history reaching further back.
+
+⚠️ **What NOT to do:** do not add the ≥90-day guard to gov v5 as things stand — it would take the
+population from 343 to **1**, which is not a precision improvement but a measurement of how little
+chain we hold. **And do not "fix" the 343 by relaxing anything**; they are honest output of a rule
+that cannot currently be verified. Label them by confidence and say so.
 
 ## 3. It must be DERIVED, and the churn measurement says that is safe
 

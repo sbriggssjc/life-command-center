@@ -16,6 +16,54 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-01 — B6d-cms-escalation: dia's producer-health surface, and a workflow that was green 16 times over nothing
+
+**Shipped:** `dia_producer_registry` + `v_dia_producer_health` on Dialysis_DB
+(`20260901120000`, applied live) — the dia half of gov's `v_pipeline_task_health`. Before it, dia
+ran **five scheduled ingestion producers and had zero producer-health objects**; the only
+instrument was a 45-day freshness bound on a downstream table. Writeup:
+[`docs/audits/B6d_cms_escalation_DIA_PRODUCER_HEALTH_2026-09-01.md`](../audits/B6d_cms_escalation_DIA_PRODUCER_HEALTH_2026-09-01.md).
+
+**The enumeration was the finding, and it outranks the view.**
+`.github/workflows/fred-ingest-daily.yml` has reported `conclusion: success` on **16 consecutive
+scheduled runs since 2026-08-10 while writing ZERO rows** — and it has **never** written a row in
+its 20-run life, despite being added on 2026-08-07 *to fix a silent FRED stall*. Root cause:
+`ModuleNotFoundError: No module named 'postgrest'` at import (the workflow installs only
+`requests python-dotenv`; both `postgrest` and `supabase` are pinned in `requirements.txt`),
+**masked by `cmd | tee` without `pipefail`** — measured directly as `exit 0` vs `exit 1`. That
+masking also defeated the script's own `sys.exit(1 if nothing written)` guard, which never ran.
+The 2026-08-07 "recovery" was a hand-run at 19:59, after both workflow runs finished (19:47,
+19:55). Three surfaces each held half the truth — GH Actions said success, the watchdog held an
+`lcc_health_alerts` row open 16 days, the workflow printed `{"status":"stale"}` in its own log
+every green run — **and nothing joined them.** Workflow fixed: deps + `set -o pipefail` +
+fail-on-stale.
+
+**Four of five dia producers write no run ledger at all** (verified by reading
+`public_record_ingest.py`, `assessor_enrichment.py`, `ingest_fred_to_dialysis.py`,
+`sf_object_sync.py` — zero `ingestion_tracker`/`run_log` writes). They read **`no_run_ledger`**
+with a CHECK-enforced `blindness_reason`: the blindness is stated, never hidden behind a proxy.
+⚠️ **Enumerating from `ingestion_tracker` would have rebuilt that blindness** — its five distinct
+`source` values are the real producer plus the janitor, the watermark writer, a one-shot and a dead
+lane.
+
+**Two readings that exist only because columns were kept separate:** `cms_ingestion` reads
+`last_success_at` **2026-04-04** against `last_rows_written_at` **2026-08-31** (no clean `success`
+since April, yet moving rows via `partial` runs); and its observed **p90 gap of 30.44 days against
+a declared 1-day cron** is the removed 30-day throttle still legible in the run history.
+
+**Verification:** positive control on three arms (`overdue` / `never_ran`, plus a **negative
+control on the same rows** reading `ok`), 0 residue. Guards
+`tests/test_b6d_cms_escalation_producer_health.py` — 14 tests, **14/14 mutations RED**. Two guard
+defects were caught by the mutation pass itself: a file-wide `exit 1` grep passed its own mutation
+(the token appears twice — re-anchored on the step), and comment-stripping proved load-bearing.
+
+⚠️ **No alert shipped, deliberately** — 50 zero-duration watermark rows still wear
+`run_status='success'`, so alerting on it would manufacture false all-clears. Follow-ups filed:
+**B6d-cms-escalation-emit** (make the four blind producers emit — the fix that turns this from a
+blindness report into monitoring), **-alert**, **-metadata** (is `metadata-backfill-queue` actually
+wired in Railway?), **-infradoc** (`INFRASTRUCTURE.md` is dated 2026-05-16 and its job map is
+missing `fred-ingest-daily` entirely).
+
 ## 2026-08-31 — B6d-cms-step second pass: the latch had two more doors, and one was open in the live watermark
 
 **Reconciled first.** The first pass shipped in a parallel window (`68da552`, PR #7381) and is on
@@ -209,6 +257,93 @@ Writeup `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`; **I2**, **Class
   people learn to merge past. **First credentialed run is an operator step.**
 - Also fixed in passing: the backlog's **D1 row had 5 cells in a 4-column table and an unescaped `|`
   inside a code span**, so GFM was silently dropping its status cell.
+## 2026-09-01 — B6d-cms-escalation drafted: dia has five producers and no health surface over any of them
+
+**Prompt: `prompts/B6d-cms-escalation-dia-producer-health-2026-09-01.md`.** This is the answer to
+*"why did the CMS outage take two months?"*, and it is the structural half of **I4**.
+
+**Verified live:**
+
+| | gov | **dia** |
+|---|---|---|
+| producer health view | ✅ `v_pipeline_task_health` | ❌ **does not exist** |
+| producer run table | `run_log` (5,813 rows) | `ingestion_tracker` (292) |
+| producer-registry objects | ✅ | ❌ **zero** |
+| `feed_freshness_registry` | per-feed | **5 rows, TABLE-keyed** |
+| producers writing runs | — | **5 distinct**, newest 2026-09-01 |
+
+**dia runs five ingestion producers and has no surface that can say whether any is healthy.** The
+only instrument pointing at them is a freshness bound on the **output** — which structurally cannot
+distinguish *the producer failed* from *the source published nothing*. **B6a built this for gov; dia
+never got it.**
+
+✅ **The port is well-defined, and gov's view already carries the exact distinction this thread was
+about: `last_success_at` SEPARATE from `last_outcome_at`.** That is precisely what the CMS throttle
+violated — it keyed on the last *attempt* and bought 30 days of silence per failure. Plus
+`skip_reason`/`skip_declared` from B6a and `p90_gap_days` from B6d. ⚠️ **It is a port with a column
+mapping, not a copy** — gov reads `run_log`, dia has `ingestion_tracker` with different columns and a
+producer keyed on `task_name` **or** `source`.
+
+🚨 **The prompt's central trap, and it would have rebuilt the blindness one level up: ENUMERATE
+PRODUCERS FROM THE SCHEDULER, NOT FROM `ingestion_tracker`.** The tracker's five are only those that
+have **ever written a row** — *a producer that has never emitted is invisible to it*, which is Class
+21 exactly. **A scheduled producer with zero rows ever is the highest-value row that view can
+contain.**
+
+**Two honesty constraints carried in:** ⚠️ **`last_error` will be empty at first** — `error_summary`
+is NULL on **47 of 47** dia runs until `B6d-cms-step` lands — **and a view showing always-null errors
+must not be read as "no errors."** ⚠️ **`success` is not yet trustworthy on dia** (six successes
+while zero clinics refreshed), so **`last_success_at` inherits that weakness and NO alert ships until
+the view is honest** — an alerting surface over an untrustworthy `success` would manufacture false
+all-clears.
+
+## 2026-09-01 — ✅ CLOSED. The CMS alert auto-resolved, the placeholder regression is at ZERO, and one feed_stale alert remains.
+
+**Both checks I promised, run — and both passed.**
+
+### ✅ Check 1: the alert auto-resolved on its own
+
+**`medicare_clinics` — detected 2026-08-28, RESOLVED 2026-09-01.** ⚠️ **This, not my query, was
+always the confirmation** — I said so explicitly last night and it is worth naming that the rule
+held: *the monitor closed its own alert*, which is the whole point of B6a-follow-up.
+
+**Open `feed_stale` alerts: 4 → 1.** The only survivor is **`sam_lease_opportunities`**, which is
+`B6d-sam` — a 401, an owner action, and correctly still open.
+
+### ✅ Check 2: the placeholder regression is fixed properly, not just stopped
+
+| | baseline | peak | **now** |
+|---|---:|---:|---:|
+| `pending_updates` total | 1,959 | **7,531** | **1,965** |
+| `reason = 'unknown_reason'` | 0 | **3,424** | **0** |
+
+**And the writer now emits a REAL reason** — `public_record_ai_no_yield` moved 1,893 → **1,899**
+with `last_seen` **2026-09-01**, so the six new rows today carry a meaningful reason. The three
+legitimate categories are intact and nothing else was disturbed.
+
+⚠️ **Recorded precisely: the 3,424 were DELETED, not re-labelled.** `public_record_ai_no_yield`
+gained **6**, not ~3,424 — so the placeholder rows were removed as the artifact they were, and the
+writer was fixed separately. **That is a defensible third option beyond my "backfill or mark"
+framing** (they were one day's output of a broken path, not real pending work), **but it is a
+different act and the record should say which happened.**
+
+### ⚠️ The one thing NOT finished: the ingest is 2.9% complete
+
+**`refreshed_since` 61 → 249 of 8,547 clinics = 2.9%.** `source_last_seen` is 2026-08-31.
+
+**So the pipeline can write again and is progressing — but this is not a completed ingest.**
+⚠️ **And the alert resolving does NOT mean the feed is whole**: the freshness check asks *has data
+arrived recently*, which 249 rows satisfy. **A green alert and a complete dataset are different
+facts** — the same shape as every honest-count lesson in this arc, now in our favour rather than
+against us. **The next scheduled run should push 249 higher; if it stalls there, the pipeline
+completes without finishing.**
+
+**Sixty-seven days of silence, closed.** The chain that did it: B6a made producers visible →
+B6a-follow-up made them alertable → **B6d graded the bound and refused to widen it** → the Railway
+logs named a throttle → `--force-run` proved the throttle was hiding a real failure → B6d-pri/-step
+made the failure legible. **No single step would have done it, and the one that mattered most was
+declining to widen an SLA that looked wrong.**
+
 ## 2026-08-31 (evening) — ✅ THE CMS OUTAGE IS BROKEN OPEN after 67 days. 🚨 And the placeholder regression grew 8×.
 
 **Measured against this morning's baseline. Two results, in opposite directions.**
@@ -417,6 +552,73 @@ Claude Code.
 ⚠️ **The decisive question the force-run answers:** if it **completes**, the throttle was the last
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
+
+## 2026-08-31 — the developer reconciliation, measured: blocked on CHAIN DEPTH, not on the rule
+
+**NOTHING BUILT.** Design **§2f**; **C15 updated · C14 promoted to the binding constraint.**
+
+I recommended reconciling gov v5 against the June builder-vs-net-lease-buyer lesson. **The diagnosis
+is right, the fix exists one domain over, and it cannot be applied.**
+
+- **The defect is exact.** `v_gov_developer_candidates` takes the owner **AT** first-gen commencement
+  and **never requires holding BEFORE** it. **dia v5 — same version, same date — HAS that guard**
+  (*"held continuously from ≥90 days BEFORE the first long-term lease"*), and its header names the
+  pattern gov admits: the **"took title at delivery"** case that *"historically mis-classified buyers
+  like Carrollwood, Butler Trust as developers."* **Scott's definition demands the same ordering** —
+  *acquired, renovated, THEN the lease starts.* One domain implemented it; the other did not.
+- ⚠️ **But the dates to apply it do not exist. Only 1 of 354 candidates has a transfer dated at or
+  before the first-gen commencement.** This is **not** "no history" — **all 354 candidate properties
+  have ownership rows** and 70% of gov's 18,969 history rows carry a date. **The chain simply starts
+  after the lease.**
+- **So the 343 are not wrong — they are UNVERIFIABLE.** We cannot distinguish *acquired-built-leased*
+  from *bought-at-delivery*. That is exactly what June deferred, **and it is deferred for a DATA
+  reason, not a logic one.**
+- ⛔ **Do NOT add the guard now** — it takes 343 → **1**, which measures chain depth, not precision.
+  ⛔ **And do not relax anything to "fix" the 343**; they are honest output of a currently
+  unverifiable rule. Label by confidence and state what is unverified.
+- ⚠️ **This converges with C14, which is now the binding constraint on the entire design.** Pacing is
+  50.7% dated; the developer chain reaches back on 0.3% of candidates. **Both are ownership-chain
+  DEPTH and DATING** — the A1–A5 / B1 / B5 lane's subject (`BD_PIPELINE_FUNNEL`: **149 of 13,835 gov
+  properties have 2+ historical owner links, 1.1%**). **The classification logic is settled; what it
+  needs is history reaching further back.**
+
+## 2026-08-31 — ⚠️ `developer` is NOT unbuilt: it is defined, live, and defective in a known way
+
+**NOTHING BUILT.** Design **§2e**; **C15 corrected · C16 updated · C17 filed**; canonical banner added
+to `docs/history/DEVELOPER_BD_AUDIT_v3.md`.
+
+⚠️ **I claimed yesterday that `developer` was "under-specified by what we hold" and that "nobody has
+measured" the behaviour. That was wrong, and it was wrong because I did not search before
+concluding.** Scott: *"there should be tons of details on this somewhere."* **There are — five
+generations, 2026-05-22 → today.**
+
+- **Scott's definition was already the implemented one.** *"The first owner in the chain of ownership
+  with our target tenant's first action in that building"* **is `v_gov_owner_at_first_gen`**, shipped
+  2026-05-22 — *"owner at time T = the `new_owner` of the most recent transfer with
+  `transfer_date <= T`."* **Live: 3,667 owner-at-first-gen rows · 354 candidates · 343 classified ·
+  7,736 UW#7 chain candidates.** It even handles the **retrofit** case Scott named
+  (`lease_anchored_to_year_renovated`) and carries a buyer counter-rule (>90 days after commencement
+  ⇒ buyer).
+- ⚠️ **But its output reproduces a failure LCC already killed.** The 343 are dominated by
+  **address-named single-asset SPEs at 0.75** — `1020 Lantrip, LLC`, `211 STREET LLC`,
+  `30th Street, LLC`. **Only 4 reach 0.85, and one is `GPT Properties Trust`, a REIT.** Both are
+  documented twice-killed modes: *"the literal earliest-owner + BTS-timing rule produced
+  single-property individuals"* and *"a REIT acquiring a BTS near construction is the BUYER in a
+  sale-leaseback, not the developer."* **The gov v5 view was never reconciled against that lesson.**
+  **The task is reconciliation, not construction.**
+- ⭐ **C16 changes: do NOT invent a multi-label table.** `entities.developer_flag_sources` is already
+  an **append-only `{source, confidence, observed_at}` JSONB array** — the exact set shape §2c says
+  the design needs, **already built for one role.** `developer_status_active_until` (current-vs-former,
+  3–5 years) and `v_entities_effective_role.is_current_developer` also already exist. **The 2026-05-22
+  taxonomy migration anticipated most of this design.**
+- 🟢 **C17 — consolidation:** `DEVELOPER_BD_AUDIT_v3.md` (3,334 lines) is **duplicated verbatim in
+  three repositories.** A future chat reading either mirror gets 2026-05-22 implementation claims
+  with **no supersession notes** — exactly the misdirection Scott asked to eliminate. The
+  life-command-center copy now carries a canonical banner; ⚠️ **the two mirrors need the same banner
+  or deletion, and that is a cross-repo edit this PR cannot make.**
+
+**The durable lesson: "nobody has measured this" is a claim about the repository, and it requires
+searching the repository.** I asserted it twice without doing so.
 
 ## 2026-08-31 — Scott's definitions land: the role is MULTI-LABEL, and C13 is superseded
 
