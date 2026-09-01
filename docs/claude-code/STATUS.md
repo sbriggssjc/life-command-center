@@ -257,6 +257,34 @@ Writeup `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`; **I2**, **Class
   people learn to merge past. **First credentialed run is an operator step.**
 - Also fixed in passing: the backlog's **D1 row had 5 cells in a 4-column table and an unescaped `|`
   inside a code span**, so GFM was silently dropping its status cell.
+## 2026-09-01 — B6e-fred drafted, and the operator cost turns out to be the Capital Markets book
+
+**Prompt: `prompts/B6e-fred-green-ci-dead-producer-2026-09-01.md`.**
+
+🚨 **`economic_indicators` is not an obscure table. It feeds exactly two consumers, and both are
+Capital Markets book exhibits** — **`cm_dialysis_macro_rates_m`** and **`cm_dialysis_macro_rates_q`**,
+the macro-rate exhibits in the **Dialysis State of the Market book**. The series include **`DGS10`**,
+the 10-year Treasury.
+
+**So this is not a stale internal table — it is a client deliverable running on rates that stopped
+updating 2026-08-07.** ⚠️ **The prompt requires establishing whether a book or CM export actually
+went out in that window: if one did, that is a correction to make, not just a pipeline to fix.**
+
+**Two sequencing decisions written in, both counter-intuitive:**
+
+- **Fix `pipefail` BEFORE the dependency**, so the next failure is loud even if the dependency fix is
+  wrong.
+- ⚠️ **If `pipefail` lands first, the workflow will correctly go RED — and that is SUCCESS for step
+  1.** The prompt says explicitly: **do not "fix" the redness by reverting the pipefail.** A loud
+  failure is the improvement; a green badge over a dead producer is the defect.
+
+🚨 **And the sweep is the bigger prize.** One instance of `| tee` without `pipefail` implies a
+pattern, and the pattern is **invisible by construction**. The prompt requires every workflow with a
+piped step lacking `pipefail` to be reported **whether or not it is currently failing** — and says
+plainly: **if the shape appears in several workflows, that is the finding and it outranks the FRED
+fix.** *One dead producer is a bug; a class of workflows that cannot report their own failures is a
+blind spot.*
+
 ## 2026-09-01 — ✅ B6d-cms-escalation SHIPPED, and its FIRST honest run found a producer green in CI and dead for 25 days
 
 `dia_producer_registry` + `v_dia_producer_health` are live. **The instrument was the deliverable; what
