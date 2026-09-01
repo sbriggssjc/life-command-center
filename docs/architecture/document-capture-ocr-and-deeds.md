@@ -322,6 +322,95 @@ gov docs assert a *"document-text-tick → lease-extractor chain"* that **is not
 **The lesson: a drain is only worth widening where something consumes the result.** The measurement
 that settles it is *"grep every read of the column,"* and it inverts the recommendation.
 
+### 🔴 POST-DOC8 RE-MEASURE, 2026-09-01 16:21 UTC — the edge half is LIVE, the JS half is NOT DEPLOYED
+
+**The tier split HAS flipped, and it is now measurable** — the DOC8 response said it was not, which
+was true when written (15:30's DocAI rows landed minutes later). Every OCR event since 15:00:
+
+| doc | tier | pages | chars | reason | `needs_ocr` |
+|---:|---|---:|---:|---|---|
+| 11 | gpt-4o | — | **116** | `thin_ocr_result` | **true** ✅ |
+| 12 | **DocAI** | 5 | **7,572** | — | false ✅ |
+| 15 | **DocAI** | 1 | 601 | — | false ✅ |
+| 17 | **DocAI** | 1 | 2,094 | — | false ✅ |
+| **24** | gpt-4o | — | **211** | `no_page_anchors_gpt4o` | 🔴 **FALSE** |
+
+**Today: 3 DocAI vs 2 gpt-4o (all-time 6 vs 20).** The DocAI rows carry real page counts and real
+text; **both gpt-4o rows carry no page count and 116 / 211 characters.** The pattern that produced
+the 9.3× gap is visible in five rows.
+
+⚠️ **THREE INDEPENDENT TELLS THAT THE RAILWAY REDEPLOY HAS NOT RUN** — the JS half of DOC8, all of
+DOC9 and DOC10's floor are merged and inert:
+
+1. **`over_docai_page_cap` has NEVER been written** (0 rows) — and a **40-page** document was hit at
+   16:00:51. The post-fix behaviour is to stop with that marker and attempt no OCR; instead it fell
+   through to gpt-4o, which is the pre-fix path.
+2. **The 16:00 tick body still carries `ocr_by_engine`** — DOC9 **removed** that field. A deployed
+   build would report `ocr_docs_by_engine` / `ocr_pages_unknown`.
+3. **Document 24 was written `needs_ocr = false` at 211 characters.** DOC10's floor (500 when the
+   page count is unknown) would have marked it.
+
+🔴 **Document 24 is the DOC10 defect recurring live, four minutes after DOC10 shipped.** 211
+characters, `needs_ocr = false`, so it satisfies `gatherPropertyText` and
+`v_lcc_cre_bov_ready` — **BOV extract will receive 211 characters as a lease, and the row can never
+be retried.** *Merged is not running*, demonstrated on the exact defect the merge was meant to close.
+
+⚠️ **And one thing to verify AFTER the redeploy, not assumed:** document 24's reason is
+`no_page_anchors_gpt4o`, **not** `thin_ocr_result`. DOC10's re-admission is a **set membership over
+reasons**, so a thin row that arrives under a different reason must still (a) be caught by the
+char-length floor and (b) land in `CRE_RETRY_REASONS`, or it will be marked and never re-admitted —
+marked-and-idle is better than covered-and-wrong, but it is not the goal.
+
+**Backlog: 691 → 682, `lowest_id_reached` = 2, sidecars 80 → 89, `needs_ocr` markers 22 (12 of them
+DOC10's backfill).**
+
+### ✅ POST-REDEPLOY VERIFICATION, 2026-09-01 16:30 UTC — deploy confirmed, DOC10 closed, one straggler repaired
+
+**The deploy was confirmed BEHAVIOURALLY, not from `/version`** — the sandbox cannot reach the
+Railway host, so a zero-work tick was fired through `lcc_cron_post` and its response read:
+
+```
+{"mode":"jobs","limit":1,...,"thin_ocr":0,"over_page_cap":0,"ocr_docs":0,
+ "ocr_docs_by_engine":{},"ocr_pages_total":0,"ocr_pages_by_engine":{},"ocr_pages_unknown":0,...}
+```
+
+**`ocr_docs_by_engine` / `ocr_pages_unknown` / `thin_ocr` / `over_page_cap` are present and
+`ocr_by_engine` is GONE** — that is the DOC9/DOC10 build answering. ⚠️ **A `mode=jobs&limit=1` tick
+does no work and still proves the shape** — the cheapest possible deploy probe on this lane.
+
+| check | result |
+|---|---|
+| deploy live | ✅ new counters present, `ocr_by_engine` removed |
+| **rows covered-and-thin** | ✅ **0** — the DOC10 defect is fully closed |
+| drain advancing | ✅ undrained **695 → 678** today, `lowest_id_reached` = 2 |
+| new extractions clean | ✅ 15,383 / 7,068 / **1,886** chars — and the 1,886-char lease was **not**
+  falsely marked thin, so the floor is not over-firing |
+| `bov_ready` | 7 → 4 (DOC10 backfill) → **5** (two properties earned it, one lost on the straggler) |
+| **`over_docai_page_cap`** | ⚠️ **0 — DEPLOYED BUT UNEXERCISED** |
+
+🔧 **One straggler found and repaired: document 24.** It was written by the **pre-deploy** build at
+16:00:51 — after DOC10's backfill and before the JS shipped — at **211 chars against a floor of
+500**, `needs_ocr = false`. A sweep of the whole sidecar found **exactly one** such row. It was set
+to `needs_ocr = true, reason = 'thin_ocr_result'`, which is **byte-identical to what
+`cre-property-doc-text.js:296` now writes** (`thinOcr` takes precedence over the gpt-4o reason).
+**Reversal:** `update … set needs_ocr=false, reason='no_page_anchors_gpt4o' where document_id=24`.
+
+⚠️ **The reason MATTERS and it is not cosmetic.** `CRE_RETRY_REASONS` is
+`['fetch_failed','extract_error','thin_ocr_result']` — **`no_page_anchors_gpt4o` is NOT in it.**
+Marking the row while keeping its original reason would have made it *marked-and-idle forever*:
+better than covered-and-wrong, but not the goal. **Verified in the code before writing** — line 296
+overwrites the reason when the row is thin, so every FUTURE thin gpt-4o result re-admits correctly.
+The design is sound; doc 24 was purely a deploy-window artifact.
+
+⚠️ **10 of the 24 `needs_ocr` markers are NOT re-admittable** (`ocr_non_ok`, `over_ocr_cap`,
+`office_unreadable`) — **CEILING markers, by design**, distinct from the 14 retry markers. Read
+`marked_and_readmittable`, never the bare `needs_ocr` count.
+
+⚠️ **STILL UNPROVEN, and both need a real 31+ page document:** `over_docai_page_cap` has never been
+written, and **v24's structured-metadata parser has never been exercised** — the only observation of
+the new cap (*"30 got 40"*) was made on **v23**. **The 16–30 page band — the entire population DOC8
+exists for — has had zero OCR events either way.** A tier-split claim needs that band.
+
 ## 1. Scott's question, answered
 
 > *"At one point there was an issue with access to deeds ingested from CoStar and I asked whether we
