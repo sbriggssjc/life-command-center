@@ -54,6 +54,43 @@ RCA/CoStar capture the CRM has never held).
 view, so the C13b file no longer describes what ships (P197). All 11 C13b invariants pass over the
 shipped definition.
 
+## 2026-09-01 — C13c SHIPPED and verified; DOC12 CLOSED, and its finding inverts DOC8's premise
+
+⚠️ **Naming note for whoever reads this next: the response filed as "DOC13" was C13c.** DOC13 (the
+document-lane retry check) has **not** run and is still time-gated to **~16:00–16:30 UTC 2026-09-02**.
+**C13c ≠ DOC13** — two different threads, one keystroke apart.
+
+✅ **C13c verified live: `one_off_owner` held at 142** exactly as predicted, split into
+**13 `individual_single_current_asset_sf_corroborated` / 129 `..._unverified`**, with **21 rows
+routed to ambiguity as contradicted** — six more than the list I had read. `user_owner` 10 and
+`entities_with_role` 10,655 both unchanged, so nothing else moved.
+
+🔴 **DOC12 CLOSED — the escalation is fixed, but NOT by what we shipped it for.** 14 OCR events since
+redeploy, **zero gpt-4o**; drain **695 → 615**; `bov_ready` **5 → 13**. The page distribution settles
+the cause:
+
+| band | docs | range |
+|---|---:|---|
+| 01–15 — the OLD cap already served these | **19** | 1–12 |
+| **16–30 — the entire population DOC8's raise exists for** | **1** | 25 |
+| 31+ — marker, no OCR | **5** | **31–57** |
+
+**The 16–30 band holds ONE document in the whole corpus and it predates the deploy.** The documents
+that were actually falling through are **31–57 pages — above 30 either way.** ⚠️ **So the cap raise
+fixed almost nothing; the MARKER closed the escalation.** DOC8's fix was chosen from Google's error
+text (*"imageless raises the limit to 30"*) — **a fact about the API, not about our corpus.**
+**A vendor's stated limit tells you what the API will accept, never whether your population sits
+under it. Measure the distribution before sizing a fix to a threshold.**
+
+🔴 **DOC14 filed — and it is the part that matters now.** Those **5 documents at 31–57 pages get NO
+text at all**: marked, invisible to both consumers, never extracted. At that length on this corpus
+they are almost certainly **full executed leases — the highest-value input BOV extract could get** —
+and the count grows as the backlog drains. ⚠️ **The marker is correct behaviour but it is not
+coverage, and it makes the gap QUIET**: `bov_ready` climbs while the longest leases silently yield
+nothing. Likely route is DocAI **async/batch**; ⚠️ **verify the ceiling against the live discovery
+document** (DOC8's own lesson) and **do not reach back for gpt-4o** (9.3× less text).
+⚠️ `page_count` is populated on **25 of 156** rows — right population, small sample; re-measure.
+
 ## 2026-09-01 — C13c measured and staged: `one_off_owner`'s evidence column fails BOTH ways
 
 **`one_off_owner` = 142 and its only evidence is `entities.entity_type='person'`.** 28 fail

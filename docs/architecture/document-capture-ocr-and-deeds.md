@@ -442,6 +442,53 @@ doubled.** 🔵 **DOC13's other half is still time-gated:** the 14 retry markers
 then — ⚠️ **and `marked_and_readmittable`, never the bare `needs_ocr` count**, which now also holds
 the over-cap and legacy-doc ceiling markers that must NOT re-admit.
 
+### 🔴 DOC12 CLOSED, 2026-09-01 21:15 UTC — the cap raise addresses a band that barely EXISTS
+
+**14 OCR events since the redeploy, still ZERO on gpt-4o.** The escalation is fixed and stays fixed.
+`over_docai_page_cap` has grown **2 → 5**. Drain: undrained **695 → 615**; `bov_ready` **5 → 13**.
+
+**But the page distribution settles what actually fixed it, and it is not what DOC8 shipped for:**
+
+| band | docs | observed range |
+|---|---:|---|
+| **01–15** — the OLD cap already served these | **19** | 1–12 |
+| **16–30** — *the entire population the 15 → 30 raise exists for* | **1** | 25–25 |
+| **31+** — marker, no OCR attempted | **5** | **31–57** |
+| unknown (no pre-flight page count) | 131 | — |
+
+**The 16–30 band holds ONE document in the whole measured corpus, and it predates the deploy.**
+Meanwhile **five documents are 31–57 pages** — above 30 either way. **The corpus is bimodal: short
+documents and long ones, with almost nothing in between.**
+
+⚠️ **So DOC8's premise was wrong in an instructive way.** The fix was chosen from Google's own error
+text (*"imageless mode raises the limit to 30"*) — **a fact about the API, not about our corpus.**
+The documents actually falling through to gpt-4o were **31–57 pages**, which the raise cannot help.
+**What closed the escalation was the MARKER, which stopped the fall-through.** The two changes
+shipped together and only the marker did the work.
+
+**The generalisable lesson: a vendor's stated limit tells you what the API will accept, never
+whether your population sits under it. Measure the distribution before sizing a fix to a threshold.**
+
+### 🔴 DOC14 — the long documents now get NO text at all, and they are probably the best ones
+
+The marker is correct behaviour (better than paying 6–14× for a 211-character fragment) but it is
+**not coverage**. **5 documents at 31–57 pages are marked `over_docai_page_cap`, invisible to both
+consumers, and will never be extracted** — and at that length, on this corpus, they are almost
+certainly **full executed leases**, the highest-value documents BOV extract could receive. **The
+count grows as the backlog drains.**
+
+⚠️ **This is a real gap, not a solved problem, and the marker makes it quiet** — the honest-counts
+rule applies to us here: `bov_ready` rising while the longest leases silently get nothing.
+
+**The likely route is DocAI ASYNCHRONOUS/batch processing**, whose page ceiling is far above the
+synchronous 30 — ⚠️ **but verify that against the live discovery document rather than this page**
+(DOC8's own lesson: the imageless flag was a top-level boolean, not where the prompt put it).
+**Do not reach back for gpt-4o**, which was measured at 9.3× less text.
+
+⚠️ **Caveat on all of the above: `page_count` is populated on 25 of 156 sidecar rows** — the
+pre-flight only runs on the OCR path, so this is the right population but a **small sample**.
+Re-measure as the backlog drains before treating the bimodality as settled.
+
 ## 1. Scott's question, answered
 
 > *"At one point there was an issue with access to deeds ingested from CoStar and I asked whether we
