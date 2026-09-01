@@ -16,6 +16,67 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-01 — ✅ FRED IS ALIVE (verified on the delta), and the metadata build-out is measured: DON'T BUILD IT
+
+### FRED — the fix is PROVEN
+
+Scott dispatched `fred-ingest-daily`. Verified on the state delta, not the green check:
+**`max(created_at)` 2026-09-01 15:31:40** (past the 2026-08-07 19:59:41 hand-run) and
+**`max(observation_date)` 2026-08-28** (past 2026-08-06). Rows 8,316 → **8,336**. The 25-day gap on
+the two high-frequency series is **closed**: `DGS10` +17 (2026-08-06 → 08-28), `MORTGAGE30US` +3
+(08-13 → 08-27). **After 25 days green-and-dead, this producer has now written its first rows ever
+from CI.**
+
+⚠️ **One residual, and it is a real one.** The three monthly series took **0 rows**: `FEDFUNDS` and
+`UNRATE` still end 2026-07-01, which is *correct* (August prints ~Sept 2–4, not yet published), but
+**`CPIAUCSL` ends 2026-06-01 and July CPI published ~2026-08-12** — inside the dead window and
+retrievable now. The likely mechanism, inferred from the fetch boundaries rather than read in code:
+**a lookback keyed on `observation_date` cannot reach a monthly series whose observation date is
+older than the window even though its value was published inside it** (`DGS10`'s new rows start
+2026-08-06, consistent with a ~30-day observation-date window; 2026-07-01 falls outside it). Filed
+**B6e-fred-monthly**.
+
+Two run annotations, both filed and neither blocking: **`/usr/bin/git` exit 128** (a warning on a
+green run — ⚠️ *an unexplained non-zero in a workflow we just fixed for exactly this class* →
+**B6e-fred-git128**), and **Node 20 deprecation** on `checkout@v4` / `setup-python@v5` /
+`upload-artifact@v4` — the same shape as the LCC Node-version lockout already in `CLAUDE.md` →
+**B6e-node24**.
+
+### The metadata build-out — measured against all three options, and the answer is don't
+
+Scott asked whether **local Ollama**, the **LCC sidebar Chrome extension**, or a combination
+maximises leverage on the ~646 remaining gaps. **All three were measured against the actual
+population before designing anything, and all three fail on reach:**
+
+| option | reach on the 662 | |
+|---|---:|---|
+| Ollama over our own documents | **9** with usable text (23 with any doc) — **1.4%** | ❌ no corpus; P131 case (b) is empty |
+| Sidebar, in the flow | **6** `status='active'` | ❌ no natural encounters |
+| Sidebar, deliberate lookup | 662 searches, **1 listing URL** | ❌ 617 are **sold**, 86 superseded |
+
+⚠️ **I nearly reported "554 are on-market listings — send Scott to CoStar."** They are rows in
+`available_listings`, but **211 are `data_source='synthetic_from_sale'`** (synthesized from a sale,
+never marketed) and by `status` only **6** are active. *Check what a population IS before routing
+work to it.*
+
+⚠️ **And the extension is not the problem — it already extracts all three fields**
+(`costar.js`: `year_built`, `square_footage`, and a `lot_size` branch handling **both** "Land Acres"
+and "Land SF"). **The 393 `land_area` gaps have NEITHER column populated** — these properties were
+never captured at all. **Absence of capture, not a mapping loss**, so a mapping fix buys nothing
+here. Found while checking: `sidebar-pipeline.js` ~4597 sets `land_area` only on `/AC/i`, a latent
+I12 minter — **measured, 0 such rows exist fleet-wide**, so it is a hazard to guard, not the cause.
+
+**Recommendation: no build on this 662.** Stale sold comps, no documents, no live surface, no key —
+a documented ceiling is worth more. The concrete cost is narrow and now stated: **82 properties have
+a sale price and no building size, so they cannot produce a $/SF comp.** If a book needs those, that
+is a targeted value-ranked ask (82 lookups with a named purpose), not draining a 662-row queue.
+The two things carrying real leverage are **forward**: capture-at-ingest, and closing the I12
+asymmetry so no future capture mints another unclosable row. → **B6d-assessor-capture**.
+
+📁 **Consolidated into one canonical page: `docs/architecture/property-metadata-coverage.md`** — the
+gap, the queue's structure, why the lane was retired, I12, the three refuted sources, and what is
+actually worth doing. Future sessions start there rather than re-deriving it.
+
 ## 2026-09-01 — B6d-assessor-marker: the marker was built, and what it exposed is worse than a dead lane
 
 **VERDICT: RETIRE.** PR **sbriggssjc/Dialysis#7385** merged (`422ef419`). The marker shipped

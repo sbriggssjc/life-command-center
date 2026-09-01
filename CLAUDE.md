@@ -4093,6 +4093,16 @@ Related invariants from the same round:
   `<>`-exclusion trap that would have hidden live cards, and the measured refutation of P192's
   un-park and learn-from-rejects claims).
 - **On-box daily-brief narrative (Analyst's Take), R8 Stage 1:** `docs/architecture/briefing-analyst-take-onprem.md` — the first net-new on-prem GENERATION surface, its fabrication guard, and the operator gate.
+- **Property metadata coverage (dia) — and the decision NOT to build:**
+  `docs/architecture/property-metadata-coverage.md`. **START HERE before proposing any source for
+  `year_built` / `building_size` / `land_area` gaps.** Carries the retired assessor lane, invariant
+  **I12** (acres vs sq ft, 3,702 paired rows, 0 equal, ratio 43,560 on 91.1%), and **three sources
+  measured and REFUTED**: Ollama over our documents reaches **9 of 662**, sidebar in-flow **6**,
+  sidebar deliberate lookup **662 searches / 1 URL over 617 SOLD properties**. ⚠️ **The seductive
+  wrong number was "554 on-market listings"** — 211 are `synthetic_from_sale` and by `status` only 6
+  are active; *check what a population IS before routing work to it*. The concrete residue is
+  narrow and named: **82 properties with a sale price and no building size cannot produce a $/SF
+  comp.**
 - **Ownership Resolution Engine:** government-lease `docs/OWNERSHIP_RESOLUTION_ENGINE.md`.
 - **Property-owner subsystem + SF-as-a-source doctrine:** `docs/architecture/property-owner-subsystem.md`
   + `docs/architecture/property-owner-source-authority-and-doctrine.md`. **Point person ≠ property owner:**
