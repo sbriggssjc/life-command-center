@@ -707,6 +707,51 @@ column would be stale against those 6,501 while a view cannot be. ⚠️ `lcc_en
 moved on **14,113 of 14,119 rows** (the nightly re-upsert) and is useless as a churn signal.
 
 
+## 9. ⚠️ C13c measured — `one_off_owner`'s evidence column is wrong in BOTH directions (2026-09-01)
+
+`one_off_owner` = **142**, and its only evidence is `entities.entity_type = 'person'`. **28 fail
+`lcc_looks_like_person`; reading them settles it.**
+
+**Organizations wrongly typed `person`** — the top by rent is **`Jamestown` at $22,801,678**, an
+institutional investment manager, currently labelled a one-off individual investor. Also `SkyREM`
+$1.48M · `Deoworks` $1.11M · `Protea Primewest` $985k · `Everbank` $787k · `Gofsco` $605k ·
+**`AEI NET Lease Portfolio XIII D`** $294k · plus `Alexandria`, `Brixmor`, `AvalonBay`, `BREIT`,
+`LaSalle`, `MIT`, `Komatsu`, `EJME`.
+
+**Genuine individuals the name test REJECTS** — so tightening the name rule is not the fix:
+`Maslow Robert C & Michele C` ($654k), `Anil M & Rajeshkumar K Khatri` ($454k), `Richard S Coulter &
+Camilla M Coulter`, `John a Bruzzone Sr Fam Ptshp`, `Rubinfeld Family`, `Separovich/Domich`,
+`Chad Schnabel (GA)`, `Nafez Harmouche (TX)`, `Neeta`, `Guy`, `Joan`, `Buddy`. ⚠️ **`&` is a married
+couple, not a firm (P158a).** `lcc_owner_name_has_org_marker` catches **0 of 142**.
+
+### ✅ A discriminating recorded fact exists, and its POSITIVE CONTROL is the important half
+
+**A `salesforce/Contact` external identity: 13 of 142.** (`salesforce/Account` **0**; `works_at`
+edges **0** either direction.) Read on named rows, **12 of the 13 are unmistakable individuals** —
+Martin Starr, Denis Rodger, Bill Weitzenkorn, Ryan Gaylord, Brian Revis, Jim Glickman, Jay Morris,
+Molly Huang, Sarita Mutscher, Michael P Brown, Justin Kaufmann, Pinakinl & Rajendrabhai J Patel. The
+one miss is **`Law Offices`**, which `lcc_looks_like_person` wrongly passes (the documented
+two-capitalised-tokens false positive).
+
+⚠️ **And ZERO of the institutional names carry one** — not Jamestown, BREIT, AvalonBay, Brixmor,
+Alexandria or MIT. **The signal separates exactly the population that must be separated**, which is
+what makes it worth building on where a name test is not.
+
+### The disposition — a CONFIDENCE SPLIT, not a deletion
+
+⚠️ **142 → 13 would be wrong**: it discards `Maslow Robert C & Michele C` and every genuine
+individual simply absent from Salesforce. ⚠️ **Asserting all 142 is also wrong**: it puts a $22.8M
+institutional manager on a one-off-individual lane. **So split the `evidence_arm`** — corroborated
+(13) vs `entity_type` only (129) — and let the surface gate. **P181 one layer down: an escalation
+must carry its confidence, and a genuine judgement call must not wear the same label as a worthless
+one.** The ~15 named institutional owners are not low-confidence, they are **wrong**, and go to
+`v_lcc_entity_role_ambiguity` as reviewed rows (the §8 confirmation pattern), **never as a name
+stoplist in the classifier.**
+
+**Prompt: `docs/claude-code/prompts/C13c-one-off-owner-confidence.md`.**
+⚠️ **Two things it deliberately does NOT do:** repair `entities.entity_type` itself (written by other
+producers, read by other consumers — **size it and file it**), and touch `investor_owner`, which is
+**correct** for those same institutional entities. Only their `one_off_owner` claim is false.
 ## 8. ✅ `user_owner` CONFIRMED 2026-09-01 — the lane produced its first verdicts
 
 **10 confirmed, 4 rejected, 1 left undecided.** `v_lcc_entity_roles.user_owner` **0 → 10**;

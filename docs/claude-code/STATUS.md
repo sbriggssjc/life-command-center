@@ -16,6 +16,42 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-01 — C13c measured and staged: `one_off_owner`'s evidence column fails BOTH ways
+
+**`one_off_owner` = 142 and its only evidence is `entities.entity_type='person'`.** 28 fail
+`lcc_looks_like_person`; **reading them is what settles it, not the rate.**
+
+⚠️ **Institutions typed `person`, by rent: `Jamestown` at $22,801,678** — an institutional
+investment manager sitting on a one-off-individual lane — then SkyREM $1.48M, Deoworks, Protea
+Primewest, Everbank, Gofsco, **`AEI NET Lease Portfolio XIII D`** (a fund, in its own name), plus
+Alexandria, Brixmor, AvalonBay, BREIT, LaSalle, MIT, Komatsu.
+
+⚠️ **And the name test rejects genuine individuals**, so tightening it is not the fix:
+`Maslow Robert C & Michele C` $654k · `Anil M & Rajeshkumar K Khatri` $454k · `Rubinfeld Family` ·
+`Chad Schnabel (GA)` · `Neeta` · `Guy` · `Joan` · `Buddy`. **`&` is a married couple (P158a)**, and
+`lcc_owner_name_has_org_marker` catches **0 of 142**.
+
+✅ **A discriminating RECORDED fact exists: a `salesforce/Contact` identity — 13 of 142, and 12 of
+the 13 are unmistakable individuals** (the miss is `Law Offices`, the documented
+two-capitalised-tokens false positive). ⚠️ **The positive control is the important half: ZERO of the
+institutional names carry one** — not Jamestown, BREIT, AvalonBay, Brixmor, Alexandria or MIT.
+**The signal separates exactly the population that must be separated**, which is why it is worth
+building on where a name test is not.
+
+**Disposition: a CONFIDENCE SPLIT, not a deletion.** ⚠️ 142 → 13 discards genuine individuals simply
+absent from Salesforce; asserting all 142 keeps a $22.8M manager mislabelled. So the count stays 142
+and the **`evidence_arm` splits** — corroborated 13 / `entity_type`-only 129 — with the ~15 named
+institutions routed to ambiguity as **reviewed rows**, never a name stoplist. **P181 one layer
+down.** Prompt: `C13c-one-off-owner-confidence.md`.
+
+🔧 **Git locks — I am the cause, and my first diagnosis was incomplete.** `ORIG_HEAD.lock` is written
+by `pull`/`merge`/`reset`, so I blamed `git pull` from the sandbox. ⚠️ **Then `git fetch` left an
+`index.lock` behind too.** The real rule is broader: **the Linux sandbox cannot unlink ANY lock file
+it creates on the Windows mount** (`Operation not permitted`), so **no git command that takes a lock
+should be run from the sandbox** — not `pull`, not `fetch`. Read-only inspection
+(`git log`, `git show origin/main:<path>`, `ls`) is safe. ⚠️ **I had also grepped the warning out of
+my own output**, which is why it took three occurrences to notice.
+
 ## 2026-09-01 — ✅ C13b SHIPPED: the owner-role classification is a SET, and three of its own inputs were wrong
 
 `v_lcc_entity_roles` is live on LCC Opps — **one row per (entity, role)** with its evidence arm,
