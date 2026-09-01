@@ -1,5 +1,7 @@
 # B6d-assessor-marker — the assessor drain had no trace, and the trace is the verdict
 
+> 📍 **CANONICAL PAGE: [`../architecture/producer-health-and-ci-enforcement.md`](../architecture/producer-health-and-ci-enforcement.md)** — one door into the whole B6 arc (live producer state, CI enforcement status per repo, and the traps already paid for). **This file is EVIDENCE for its date.** Where it and the canonical page disagree, the page wins.
+
 **Date:** 2026-09-01 · **Repo:** Dialysis · **DB:** Dialysis_DB `zqzrriwuavgrquhisnoa`
 **Shipped:** `src/assessor_queue_marker.py` (new), `src/assessor_enrichment.py`,
 `tests/test_b6d_assessor_marker.py` (28 tests, **23/23 mutations RED**).

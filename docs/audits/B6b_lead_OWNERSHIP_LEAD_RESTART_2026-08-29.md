@@ -1,5 +1,7 @@
 # B6b-lead — the ownership-change lead lane: graded, funnelled, and NOT restarted (2026-08-29)
 
+> 📍 **CANONICAL PAGE: [`../architecture/producer-health-and-ci-enforcement.md`](../architecture/producer-health-and-ci-enforcement.md)** — one door into the whole B6 arc (live producer state, CI enforcement status per repo, and the traps already paid for). **This file is EVIDENCE for its date.** Where it and the canonical page disagree, the page wins.
+
 **Verdict: STOP. Do not restart `ingest_ownership`.** Not because the gate failed the test this
 prompt set for it — it passed — but because the measurement that justified treating this restart as
 different from every other dead producer, **"its consumer is confirmed alive," is refuted.** Across

@@ -1,5 +1,7 @@
 # B6d-cms-step + B6d-pri-reason — the error channel works; the audit was pointed at a decoy column
 
+> 📍 **CANONICAL PAGE: [`../architecture/producer-health-and-ci-enforcement.md`](../architecture/producer-health-and-ci-enforcement.md)** — one door into the whole B6 arc (live producer state, CI enforcement status per repo, and the traps already paid for). **This file is EVIDENCE for its date.** Where it and the canonical page disagree, the page wins.
+
 **Date:** 2026-08-31 · **Repo:** Dialysis · **DB:** Dialysis_DB `zqzrriwuavgrquhisnoa`
 **Backlog:** `B6d-cms-step`, `B6d-pri-reason` (bundled) · **Contract:** BUILD-TURN-PROTOCOL, I4
 

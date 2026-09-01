@@ -572,6 +572,77 @@ test('building ranges contain a frozen street number only with exact location an
   );
 });
 
+test('building ranges accept a controlled ASC identity alias only with owner enrollment corroboration', () => {
+  const target = {
+    candidate_fingerprint: sha('d'),
+    address_token: '1720 DAVIE AVE|STATESVILLE|NC|28677',
+    cms_identity: {
+      facility_name: 'Iredell Ambulatory Surgery Center',
+      address: '1720 Davie Avenue', city: 'Statesville', state: 'NC', zip: '28677',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Iredell Physician Network LLC', 'Iredell Surgical Associates, LLP'],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/davie-ave-medical-center',
+    address: '1714-1726 Davie Ave', city: 'Statesville', state: 'NC', zip: '28677',
+    square_footage: '7,290',
+    tenancy_type: 'Multi',
+    tenants: [
+      { name: 'Iredell Surgical Center', occupied_sf: '3,645' },
+      { name: 'Iredell Wound Care & Hyperbaric Center', occupied_sf: '3,645' },
+    ],
+    contacts: [
+      { role: 'owner', name: 'M & P Associates' },
+      { role: 'owner', name: 'IREDELL SURGICAL ASSOC LLP', address: '1720 Davie Ave' },
+    ],
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'controlled_multisignal_range_identity');
+  assert.equal(built.identity_match.organization_core, 'IREDELL');
+  assert.equal(built.identity_match.captured_tenant_name_preserved, 'Iredell Surgical Center');
+  assert.equal(built.identity_match.captured_owner_name_preserved, 'IREDELL SURGICAL ASSOC LLP');
+  assert.equal(built.identity_match.enrollment_organization_preserved, 'Iredell Surgical Associates, LLP');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const mismatch of [
+    { tenants: [{ name: 'Unrelated Surgical Center' }] },
+    { contacts: [{ role: 'owner', name: 'Unrelated Surgical Associates LLP' }] },
+    { contacts: [{ role: 'listing_broker', name: 'Iredell Surgical Assoc LLP' }] },
+    { address: '1727-1730 Davie Ave' },
+    { city: 'Charlotte' },
+    { state: 'SC' },
+    { zip: '28678' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: { ...target.cms_evidence, enrollment_corroborated: false },
+    }, context),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_identity: { ...target.cms_identity, facility_name: 'Ambulatory Surgery Center' },
+    }, {
+      ...context,
+      tenants: [{ name: 'Surgical Center' }],
+    }),
+    /does not match/,
+  );
+});
+
 test('migration is private, RLS-protected, exact-50, and hard-blocks prohibited writes', async () => {
   const sql = await readFile(new URL('../supabase/migrations/20261001120000_lcc_asc_research_swim_lane.sql', import.meta.url), 'utf8');
   for (const table of ['runs', 'candidates', 'captures', 'evidence', 'reviews']) {

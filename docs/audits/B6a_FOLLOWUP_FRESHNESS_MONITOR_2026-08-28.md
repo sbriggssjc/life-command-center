@@ -1,5 +1,7 @@
 # B6a-follow-up — the monitor went quiet at the moment it went blind
 
+> 📍 **CANONICAL PAGE: [`../architecture/producer-health-and-ci-enforcement.md`](../architecture/producer-health-and-ci-enforcement.md)** — one door into the whole B6 arc (live producer state, CI enforcement status per repo, and the traps already paid for). **This file is EVIDENCE for its date.** Where it and the canonical page disagree, the page wins.
+
 **2026-08-28 · LCC Opps `xengecqvemvfknjvbvrq` (+ one dia grant) · contract I11 · playbook Class 21
 · backlog B6a-follow-up**
 

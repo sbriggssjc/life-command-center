@@ -1,5 +1,7 @@
 # B6d-pri — a service failing ~1,950 times a day and reporting success (2026-08-31)
 
+> 📍 **CANONICAL PAGE: [`../architecture/producer-health-and-ci-enforcement.md`](../architecture/producer-health-and-ci-enforcement.md)** — one door into the whole B6 arc (live producer state, CI enforcement status per repo, and the traps already paid for). **This file is EVIDENCE for its date.** Where it and the canonical page disagree, the page wins.
+
 > ⚠️ **CONTEXT ADDED 2026-09-01 (PR1) — READ THIS BEFORE ACTING ON ANYTHING BELOW.**
 > **Every defect this audit found and fixed is real. What it could not see is what the service
 > IS.** `public_record_ingest.py` **contains no county record fetch on either domain** — dia's one
