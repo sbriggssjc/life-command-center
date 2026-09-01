@@ -39,6 +39,16 @@ the ASC. Reversed ranges, out-of-range numbers, street or location disagreements
 remain blocked. Both raw addresses are preserved and every accepted range-containment match requires second
 review.
 
+A range may also use a controlled multi-signal ASC identity rule when an otherwise valid location is blocked
+only by a governed facility-name form. That rule requires all three signals together: inclusive range
+containment with exact remaining location components; an explicit captured tenant whose distinctive
+organization core exactly matches the CMS facility while only the terminal forms `AMBULATORY SURGERY CENTER`
+and `SURGICAL CENTER` differ; and a captured contact explicitly labeled as an owner that exactly matches a
+CMS enrollment organization after legal-suffix removal and the single controlled whole-token expansion
+`ASSOC` to `ASSOCIATES`. Generic organization cores, non-owner contacts, absent enrollment corroboration, or
+any location disagreement remain blocked. The decision preserves every raw name and address and always
+requires second review.
+
 ## 3. Non-negotiable properties
 
 1. **Preserve raw observations.** Store and display source text separately from derived tokens.
@@ -124,7 +134,8 @@ Every proposed equivalence follows the same lifecycle:
 7. monitor aggregate outcomes by rule version; and
 8. retire or supersede the rule without deleting prior decisions.
 
-The golden corpus must include suites/floors, parent buildings, same-address campuses, ranges, directionals,
+The golden corpus must include suites/floors, parent buildings, same-address campuses, ranges, controlled
+multi-signal facility/owner identity, directionals,
 suffixes, municipality aliases, compound streets, postal extensions, historical tokens, and deliberately
 confusable facilities. Every positive fixture needs at least one nearby negative control capable of exposing
 over-normalization.
