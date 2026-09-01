@@ -9,11 +9,14 @@
 > `audit/data-flow-2026-05-30/AUDIT_document_intelligence_2026-06-20.md` (the original inventory) ·
 > `CLAUDECODE_PROMPT_deed_capture_at_ingestion.md` (the fix prompt).
 >
-> **Live-verified 2026-08-31.**
+> **Live-verified 2026-08-31; §0 blocker FIXED and re-measured 2026-09-01 (DOC1).**
+>
+> ⚠️ **Every number on this page is dated. Before quoting one, run §7b — the standing status check,
+> with its 2026-09-01 baseline.**
 
 ---
 
-## 0. ⚠️ THE HEADLINE — a green cron has been returning `eligible: 0` over 695 waiting documents
+## 0. ⚠️ THE HEADLINE — a green cron returned `eligible: 0` over 695 waiting documents (FIXED, DOC1)
 
 **There are TWO document stores, in two databases, with two workers. Conflating them is why this
 topic keeps getting rediscovered.**
@@ -25,11 +28,11 @@ topic keeps getting rediscovered.**
 | has a bytes column? | ✅ `storage_path` + `storage_bucket` | ❌ **none — `source_url` only** |
 | doctypes drained | `deed` only | `lease, dd, om` |
 | **downstream consumer** | deed parser → BD spine | **BOV extract** → tenant/DD/OM |
-| state | **deeds 325/325 text — 100% ✅** | ⚠️ **76 of 771 — and permanently stuck** |
+| state | **deeds 325/325 text — 100% ✅** | **76 of 771 — the jam is FIXED, the backlog drains from 06-01** |
 
-### ⚠️ The blocker, found 2026-09-01 — `fetchEligibleCreDocs` has a fixed window and no cursor
+### ⚠️ The blocker, found AND fixed 2026-09-01 — `fetchEligibleCreDocs` had a fixed window and no cursor
 
-`api/_shared/cre-property-doc-text.js:265-290`:
+**The code as it stood** (`api/_shared/cre-property-doc-text.js`, pre-DOC1):
 
 ```js
 const reg = await q('GET', `lcc_cre_property_documents?...&order=id.desc&limit=${cap * 4}`);  // newest 60
@@ -37,21 +40,67 @@ const side = ...;                                    // which of THOSE 60 alread
 const rows = reg.data.filter((r) => !done.has(r.id)).slice(0, cap);
 ```
 
-**It only ever looks at the newest 60 rows.** Measured live: **`newest60_already_done = 60`.** So the
-diff is empty, `eligible` is **0**, and it will be 0 forever — while **695 documents (ids 2 →
-~2250) are permanently unreachable.** Live cron responses, every 30 minutes, HTTP **200**:
+**It only ever looked at the newest 60 rows.** Measured live: **`newest60_already_done = 60`.** So the
+diff was empty, `eligible` was **0**, and it would have been 0 forever — while **695 documents (ids 2
+→ 2317) sat permanently unreachable.** Live cron responses, every 30 minutes, HTTP **200**:
 
 ```
 {"mode":"eligible","doctype":"lease,dd,om","limit":15,"scanned":0,"eligible":0,"items":[]}
 ```
 
-⚠️ **This is Dead-End Playbook Class 12 for the THIRD time** — P135 (property-twin, fixed window),
+⚠️ **This was Dead-End Playbook Class 12 for the THIRD time** — P135 (property-twin, fixed window),
 P136 (reachability harvest, re-checking the same 120 nightly), and now this. **Same signature every
 time: green cron, honest-looking zero counters, nothing moving.**
 
 ⚠️ **And these are SharePoint paths, not CoStar** — `/sites/TeamBriggs20/Shared Documents/…`,
 **100% of 1,066 rows**. They do **not** expire, are **not** session-bound, and need **no** residential
 egress. **They are fetchable today.** The CoStar token problem does not apply to this store at all.
+
+⚠️ **Re-measured before the fix, 2026-09-01: 771 / 76 / 695, ids 2 → 2317, `newest60_done = 60` —
+identical to the diagnosis, and 100% SharePoint server-relative on BOTH halves** (undrained 416
+lease / 235 dd / 44 om, ids 2 → 1118). So the undrained set is structurally the same kind of
+document as the drained set; nothing about it made it unfetchable.
+
+### ✅ The fix — an ascending keyset walk with a page budget, and a negative marker
+
+`fetchEligibleCreDocs` now walks the registry **oldest-first** (`order=id.asc`) on a keyset cursor
+(`id=gt.<last id seen>`, 200 rows/page, budget 12 pages ≈ 2,400 rows/tick against a 771-row
+population), stopping as soon as it has `limit` rows. It returns `scan_pages` / `scan_rows` /
+**`scan_capped`** / `scan_exhausted` / `scan_lowest_id` / `retry_admitted`, all surfaced on the tick.
+
+- ⚠️ **`cap * 4` was NOT simply raised, deliberately.** A bigger constant moves the jam to row N+1
+  and makes it more expensive to see — P136's explicit finding, and the third time this class has
+  been met (P135 fixed window, P136 same-120-nightly).
+- ⚠️ **THE §2 SELF-EXCLUSION PREMISE WAS HALF TRUE, AND THE OTHER HALF WOULD HAVE JAMMED
+  OLDEST-FIRST ON ROW ONE.** The sidecar's `ocr_non_ok` / `over_ocr_cap` / `thin_ocr_result` rows do
+  prove that *post-fetch* failures persist a row and self-exclude. They say nothing about the
+  *pre-fetch* case, and **`extractDocumentText` has exactly ONE `ok:false` return — `fetch_failed`
+  (`document-text.js:361`)** — which `runPropertyDocText` returned on **without writing anything**.
+  Live confirmation of the mechanism: **zero `fetch_failed` rows have ever existed in the sidecar.**
+  Since all 771 documents are SharePoint refs fetched through the PA flow, one unset
+  `SHAREPOINT_FETCH_URL` would have parked the whole lane on the oldest document, forever.
+  **Reading the table would have "confirmed" safety; reading the code path refuted it.**
+- **So a fetch failure (and an extraction throw) now writes a DATED negative marker** —
+  `needs_ocr = true`, `raw_text = null`, `reason = 'fetch_failed' | 'extract_error'`. It is invisible
+  to **both** consumers (`gatherPropertyText` filters `needs_ocr=is.false&raw_text=not.is.null`;
+  `v_lcc_cre_bov_ready` counts a doc covered only `AND NOT t.needs_ocr`), and **deliberately not
+  terminal**: the scan re-admits it after `CRE_DOC_TEXT_RETRY_AFTER_HOURS` (24 h). Each retry
+  refreshes `extracted_at`, which is what makes the cursor ADVANCE instead of re-trying the same head
+  every 30 minutes. The `mode=jobs` lane is unaffected — `sidecarStatus` short-circuits only on
+  `done`, so a marker row still re-extracts on demand.
+- **The sidecar probe now FAILS CLOSED.** It previously treated an errored probe as *"nothing is
+  done"* and handed every row to the drain — harmless behind a 60-row window, a re-OCR bill across a
+  full-population scan. There is no spend guard that halts a tick; an unreadable probe must stop the
+  scan, not widen it.
+- **The `reason` column carries the marker kind only; the underlying `detail` rides the tick response
+  and the cron's stored HTTP body.** A stated limitation, not an oversight — an exact `reason` is
+  what lets the re-admission predicate be a set membership rather than a `like` pattern.
+- Guard: `test/cre-doc-text-window-jam.test.mjs` (15 tests, **11 of 11 mutations verified RED**:
+  descending order, keyset removed, `scan_capped` hard-coded false, either marker removed, the
+  clobber guard removed, expiry removed, the retry-reason filter removed, the probe failing open, a
+  page size above the PostgREST cap, and a reference to the domain store). Source assertions **strip
+  comments first** — the fix's own prose names `id.desc` and `fetch_failed` repeatedly, so a raw
+  grep would pass over the regression it exists to catch (the A5c / N18 / B1 lesson).
 
 ### ⚠️ CORRECTION — an earlier draft of this page recommended widening cron 160. That is REFUTED.
 
@@ -136,11 +185,12 @@ groups into `{leases, dd, om}`, and feeds `extractTenantFromLease` plus the DD/O
 
 ## 3. ⚠️ THE BLOCKERS, in priority order
 
-**B1 — 🟢 `fetchEligibleCreDocs` never advances past the newest 60 rows. 695 documents with a live
-consumer are unreachable.** §0. **This is the fix on this page.** The failure lanes already write a
-sidecar row (`ocr_non_ok`, `over_ocr_cap`, `thin_ocr_result` are all present), so a completed or
-failed row self-excludes — meaning **oldest-first ordering self-advances** and cannot jam on a
-poison pill. ⚠️ **Verify that self-exclusion holds before relying on it.**
+**B1 — ✅ FIXED 2026-09-01 (DOC1). `fetchEligibleCreDocs` never advanced past the newest 60 rows;
+695 documents with a live consumer were unreachable.** §0 carries the fix. ⚠️ **The
+self-exclusion premise written here before the fix was HALF TRUE:** the post-fetch lanes
+(`ocr_non_ok`, `over_ocr_cap`, `thin_ocr_result`) do persist a row, but a **byte-fetch failure
+persisted nothing** — so oldest-first needed the negative marker as well as the cursor. Verifying
+that on the code path rather than from the table is what caught it.
 
 **B2 — 🔴 THE `GovernmentProject` DOCS ARE STALE AND WILL COST MONEY.**
 `GovernmentProject/CLAUDE.md` §26 and `RUNBOOK_firm_term_coverage_ops_gates.md` say *"the crons are
@@ -201,10 +251,157 @@ before any backfill — Class 8.
   The CRE-registry counts are workspace-wide.
 - **WHY the CRE lane's OCR went quiet.** Since **2026-07-18** every sidecar row is `pdf_text` (free,
   digital layer); no OCR has run since. Whether that is because the reachable 60 happened to be
-  digital, or because a tier broke, is **unmeasured** — the window jam masks it either way.
+  digital, or because a tier broke, was **unmeasured** — the window jam masked it either way.
+  ⚠️ **DOC1 removed the mask but did not answer the question**: the 695 have never been sampled, so
+  their scanned/digital mix is still unknown, and **the first real OCR ticks are the measurement.**
+  Watch `ocr_by_engine` and `ocr_pages_total` (§7b query 2) before letting it run unattended.
 - ⚠️ **The tier split on what DID run is worth a look:** **12 rows on gpt-4o** (`tier:'cloud'`,
   `no_page_anchors_gpt4o`) against **3 on `cloud_cheap`** (DocAI) — the documented 6–14× cost
   escalation shape, though all of it predates the 2026-08-12 DocAI fix.
 - **`SHAREPOINT_FETCH_URL`** is runtime env; not assertable from the repo. Probe
   `GET /api/diag?kind=env` → `sharepoint_fetch_url_set`.
 - **Whether any browser profile is running a stale extension** — unobservable from here (B4).
+
+---
+
+## 7. What DOC1 changed, and what it did not
+
+✅ **DEPLOYED AND VERIFIED on the first real cron tick, 2026-09-01 15:00:00 UTC** (merge 14:56:09 →
+Railway redeploy → cron 167). These are measured, not predicted:
+
+| | before (14:30 tick) | after (15:00 tick) |
+|---|---:|---:|
+| `eligible` | **0** (permanently) | **15** |
+| `scan_lowest_id` / `eligible_lowest_id` | ~2258 | **2 / 2 — the oldest row in the population** |
+| `scan_pages` · `scan_rows` · `scan_capped` | — | 1 · 200 · **false** |
+| `scanned` · `text_extracted` · `ocr` | 0 · 0 · 0 | **4 · 3 · 1** |
+| lease/dd/om undrained | **695** | **691** |
+| sidecar rows | 76 | **80** |
+| `bov_ready_properties` (the CONSUMER) | 5 | **6** |
+| deeds (`property_documents`) | **325/325** | **325/325 — UNCHANGED** |
+| cron 160's command | `doctype=deed` | **`doctype=deed` — UNCHANGED** |
+
+Documents reached on that tick: **id 2** (om, 57,084 chars) · **7** (lease, 6,935) · **10** (lease,
+9,492) · **11** (lease, OCR). `scanned: 4` against `eligible: 15` is **the 22 s tick budget stopping
+on an item boundary**, reported honestly rather than silently.
+
+⚠️ **`scan_capped: false` with `scan_exhausted: false` is the third, correct state** — the scan
+stopped because it had its full batch of 15, not because the budget or the population ran out.
+
+### 🔴 THE FIRST OCR ROW WENT TO gpt-4o, AND IT IS **NOT** THE CUSTOM-EXTRACTOR FOOTGUN (DOC8)
+
+The one `ocr` row on that tick — document **11**, a lease — came back
+`ocr_tier: 'cloud'`, `ocr_engine: 'gpt-4o-2024-08-06'`, **116 chars**, tagged `thin_ocr_result`
+(under the 120-char `CRE_OCR_MIN_CHARS` floor). **We paid the 6–14× premium and got nothing usable.**
+
+**The documented footgun is REFUTED here — check the error, not the symptom.** §5 says
+`ocr_tier:'cloud'` where `cloud_cheap` is expected means the edge secret points at a Custom
+Extractor. Live at 15:00:18, the `docai-ocr` function log reads:
+
+```
+[docai-ocr] Document AI 400 (processor=projects/108926230693/locations/us/processors/5ecc6339861c88e1):
+  "message": "Document pages in non-imageless mode exceed the limit: 15 got 19.
+              Try using imageless mode to increase the limit to 30.",
+  "reason": "PAGE_LIMIT_EXCEEDED"
+```
+
+That is **the correct Enterprise Document OCR processor** (the exact resource id §"OCR foundation"
+names as right). The secret is fine. The cause is a **19-page lease against DocAI's 15-page sync
+cap** — i.e. the documented `over_page_cap → gpt-4o last resort` behaving as designed. **Google's own
+error names the fix: imageless mode raises the cap 15 → 30**, a one-line edge-function change that
+would route this class back to the cheap tier. **Not done here** — it is an edge-function deploy, a
+different change with its own grade. Filed **DOC8**.
+
+⚠️ **AND THE COST TELEMETRY IS BLIND TO EXACTLY THE EXPENSIVE PATH.** That tick reported
+**`ocr_by_engine: {}` and `ocr_pages_total: 0` while spending gpt-4o money**, because
+`bump()` only accumulates when `ocr_pages > 0` and the gpt-4o path returns no page count. **The
+counter built to catch the 6–14× escalation reads empty precisely when the escalation happens** — the
+failure-looks-like-success shape, inside the spend guard itself. **Until that is fixed, read
+`items[].ocr_tier` / `ocr_engine`, NEVER `ocr_by_engine`.** Filed **DOC9**.
+
+⚠️ **Sample size is ONE OCR row.** The mechanism is confirmed; the RATE across the 691 is not. The
+undrained population is lease-heavy and a 16–30-page lease is ordinary, so this plausibly repeats at
+scale — **watch the next few ticks before letting it run unattended, and read the tier per item.**
+
+**Untouched on purpose:** the `mode=jobs` claim semantics (`claimPendingJobs` is a different path
+with its own locking); the 50-row hard cap and the 22 s tick budget (**the only brakes — there is no
+spend guard that halts a tick**); the env-driven, doctype-uniform tier selection; and every domain-store
+object. ⚠️ **If cron 160 or the deed counts move, the wrong lane was changed.**
+
+## 7b. ⚠️ THE STANDING STATUS CHECK — run this before quoting any number on this page
+
+Everything above is dated. These four queries re-derive it. **Baseline = 2026-09-01, immediately
+before the DOC1 fix shipped**, so a later reading is a delta, not a fresh guess. ✅ **The fix is
+live** (first tick 15:00 UTC, §7) — so the baseline is now genuinely a *before*, and the numbers
+should be moving.
+
+```sql
+-- LCC Opps (xengecqvemvfknjvbvrq)
+-- 1. The CRE backlog. BASELINE 2026-09-01: population 771 · drained 76 · undrained 695
+--    · min_id 2 · max_id 2317 · newest60_done 60 (the jam's signature).
+with pop as (
+  select d.id from lcc_cre_property_documents d
+  where lower(d.document_type) in ('lease','dd','om')
+), side as (
+  select distinct document_id from lcc_cre_property_document_text
+  where extractor_version = 'unit1_v1'
+)
+select (select count(*) from pop)                                                as population,
+       (select count(*) from pop p join side s on s.document_id = p.id)          as drained,
+       (select count(*) from pop p left join side s on s.document_id = p.id
+          where s.document_id is null)                                           as undrained,
+       (select min(id) from pop) as min_id, (select max(id) from pop) as max_id,
+       (select count(*) from (select id from pop order by id desc limit 60) n
+          join side s on s.document_id = n.id)                                   as newest60_done;
+
+-- 2. Outcome + spend mix. BASELINE: 45 pdf_text · 14 gpt-4o ('cloud') · 3 cloud_cheap (DocAI)
+--    · 7 ocr_non_ok · 4 thin_ocr_result · 3 over_ocr_cap · 0 fetch_failed · 0 extract_error.
+--    ⚠️ `cloud` dominating `cloud_cheap` is the Custom-Extractor footgun and bills 6–14× — STOP.
+--    ⚠️ A rising `fetch_failed` count is the SharePoint PA flow, not this worker: probe
+--       GET /api/diag?kind=env -> sharepoint_fetch_url_set.
+select coalesce(reason,'(none)') as reason, needs_ocr, method, ocr_tier, count(*) as n,
+       min(extracted_at)::date as first_seen, max(extracted_at)::date as last_seen
+from lcc_cre_property_document_text group by 1,2,3,4 order by n desc;
+
+-- 3. Did the drain reach the CONSUMER? A rising sidecar count is NOT the same fact.
+--    BASELINE 2026-09-01: bov_ready_properties 5 · bov_extractions 6 ·
+--    consumer_visible_sidecars 66 (om 25 / lease 22 / dd 19) over 38 properties.
+--    ⚠️ 66 covered documents yield only 5 READY properties, because the view needs
+--       >=1 lease AND *every* lease/dd/om doc on that property covered. So the
+--       consumer metric moves in steps, on a property's LAST document — expect it
+--       to lag the sidecar count badly and then jump.
+select (select count(*) from v_lcc_cre_bov_ready)      as bov_ready_properties,
+       (select count(*) from lcc_cre_bov_extraction)   as bov_extractions,
+       (select count(*) from lcc_cre_property_document_text
+          where needs_ocr = false and raw_text is not null) as consumer_visible_sidecars;
+
+-- 4. The lane that must NOT move. BASELINE: gov deeds 325 of 325 with text.
+--    (gov scknotsqkcheojiaewwh) — and cron 160's command must still read doctype=deed.
+select count(*) filter (where raw_text is not null) as with_text, count(*) as total
+from property_documents where lower(document_type) = 'deed';
+```
+
+**Reading them honestly:**
+
+- ⚠️ **Read `scan_capped` on the tick before reading `eligible: 0` as an empty queue.** Capped means
+  `eligible` is a FLOOR. `scan_exhausted: true` with `eligible: 0` is the genuine all-clear.
+- ⚠️ **Read `scan_lowest_id`, not just `eligible`.** A non-zero `eligible` off the newest rows is
+  exactly what the pre-fix code produced on the day it was written; the fix is only working if the
+  scan is starting at the bottom of the population.
+- ⚠️ **`retry_admitted` is a re-discovery tally, never throughput** (P159a). A steady non-zero
+  `retry_admitted` with a flat `undrained` means fetches are failing, not that work is happening —
+  check `fetch_failed` in query 2 and the SharePoint flow.
+- ⚠️ **`text_extracted` rising and `bov_ready_properties` flat is not a contradiction and not
+  success.** `v_lcc_cre_bov_ready` requires **every** lease/dd/om doc on a property to be covered, so
+  a partly-drained property crosses over only on its last document. **The lane's point is BOV
+  extract; the sidecar count is the means.**
+- ✅ **The extraction QUALITY on the already-drained 76 was read, not assumed** (2026-09-01): five
+  named OMs (`MavisDiscountTire-EastGateCommons`, `Walgreens - Franklin Park`, `FedExGround-Middletown`,
+  `LandPro Equipment - Clymer`, `Lowes-Edmond`) carry 16k–35k chars of real body text — tenant, address,
+  lease structure, guaranty — and four named DDs (a PSA extension notice, a tax bill, a title commitment,
+  an 84k-char executed PSA) read correctly at their MIDPOINT, not just the cover page. **A non-zero
+  `char_len` is not evidence the extraction is useful; a midpoint sample is.** Fleet: om 25 / lease 22 /
+  dd 19 covered, avg 14.9k / 16.3k / 64.0k chars.
+- ⚠️ **The undrained population's scanned-vs-digital mix has never been sampled.** Every sidecar row
+  since 2026-07-18 is `pdf_text` (free). The first real OCR ticks are the measurement — watch
+  `ocr_by_engine` / `ocr_pages_total` on the tick response before letting it run unattended.
