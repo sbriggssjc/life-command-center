@@ -505,6 +505,35 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — the developer reconciliation, measured: blocked on CHAIN DEPTH, not on the rule
+
+**NOTHING BUILT.** Design **§2f**; **C15 updated · C14 promoted to the binding constraint.**
+
+I recommended reconciling gov v5 against the June builder-vs-net-lease-buyer lesson. **The diagnosis
+is right, the fix exists one domain over, and it cannot be applied.**
+
+- **The defect is exact.** `v_gov_developer_candidates` takes the owner **AT** first-gen commencement
+  and **never requires holding BEFORE** it. **dia v5 — same version, same date — HAS that guard**
+  (*"held continuously from ≥90 days BEFORE the first long-term lease"*), and its header names the
+  pattern gov admits: the **"took title at delivery"** case that *"historically mis-classified buyers
+  like Carrollwood, Butler Trust as developers."* **Scott's definition demands the same ordering** —
+  *acquired, renovated, THEN the lease starts.* One domain implemented it; the other did not.
+- ⚠️ **But the dates to apply it do not exist. Only 1 of 354 candidates has a transfer dated at or
+  before the first-gen commencement.** This is **not** "no history" — **all 354 candidate properties
+  have ownership rows** and 70% of gov's 18,969 history rows carry a date. **The chain simply starts
+  after the lease.**
+- **So the 343 are not wrong — they are UNVERIFIABLE.** We cannot distinguish *acquired-built-leased*
+  from *bought-at-delivery*. That is exactly what June deferred, **and it is deferred for a DATA
+  reason, not a logic one.**
+- ⛔ **Do NOT add the guard now** — it takes 343 → **1**, which measures chain depth, not precision.
+  ⛔ **And do not relax anything to "fix" the 343**; they are honest output of a currently
+  unverifiable rule. Label by confidence and state what is unverified.
+- ⚠️ **This converges with C14, which is now the binding constraint on the entire design.** Pacing is
+  50.7% dated; the developer chain reaches back on 0.3% of candidates. **Both are ownership-chain
+  DEPTH and DATING** — the A1–A5 / B1 / B5 lane's subject (`BD_PIPELINE_FUNNEL`: **149 of 13,835 gov
+  properties have 2+ historical owner links, 1.1%**). **The classification logic is settled; what it
+  needs is history reaching further back.**
+
 ## 2026-08-31 — ⚠️ `developer` is NOT unbuilt: it is defined, live, and defective in a known way
 
 **NOTHING BUILT.** Design **§2e**; **C15 corrected · C16 updated · C17 filed**; canonical banner added
