@@ -750,6 +750,46 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — CONSOLIDATION: document capture / OCR / deeds gets ONE canonical page
+
+**NOTHING BUILT.** New canonical page **`docs/architecture/document-capture-ocr-and-deeds.md`**;
+`document-capture-and-ocr-status.md` and `UW6_REV_document_byte_capture.md` bannered as
+narrative/design rather than entry points; **DOC1–DOC5 filed.**
+
+**Scott's recollection was right and it was acted on.** He asked whether we needed to *"download
+those deeds and mortgages at ingestion and store them somewhere to be processed later."* **That was
+the diagnosis, that was the decision, and it was built** — `UW6_REV_document_byte_capture.md`,
+merged as **PR #1703 + #1707**, live in `sidebar-pipeline.js` + the extension. **1,057 of 1,177 gov
+documents (90%) now carry durable bytes.**
+
+⚠️ **THE HEADLINE, live-verified: the pipeline works and is pointed at ONE doctype.**
+
+| doctype | docs | bytes | **text** | **bytes but NO text** |
+|---|---:|---:|---:|---:|
+| **deed** | 325 | 325 | **325 (100%)** | **0** ✅ |
+| other · om · lease · brochure · dd · rest | 852 | 732 | **0** | **732** |
+
+**Cron 160 filters `doctype=deed`.** The chain is proven at 100% on deeds and simply never widened —
+so **732 documents sit in storage with bytes, OCR live, crons running every 30 minutes, and nothing
+drains them.** ⚠️ **That includes 119 LEASES, which is exactly what gov's firm-term coverage gap has
+been waiting on.** → **DOC1**, the highest-value fix on this page.
+
+⚠️ **DOC2 — and this one costs money if acted on.** `GovernmentProject/CLAUDE.md` §26 and
+`RUNBOOK_firm_term_coverage_ops_gates.md` still say *"the crons are `active=false`"* and tell the
+operator to build **a CoStar-authenticated residential-egress session**. **Verified live: crons
+160/167/169 are ACTIVE**, and the residential-egress requirement was **obviated by the extension
+in-session capture.** Cross-repo; this PR cannot fix it.
+
+Also filed: **DOC3** no cron on `doc-bytes-backfill` (85 url-only, 120 with neither today) ·
+**DOC4** extension reload is silent and per-profile (needs ≥1.0.39, current 1.0.45, no telemetry) ·
+**DOC5** brochures excluded from capture while 25 count as term-bearing.
+
+**Honest ceilings now stated in one place:** ~325 dead-URL deeds + ~1,600 docs hold expired CoStar
+tokens the server **cannot** re-fetch · **1,582 gov `deed_records` have neither a document nor a
+URL** · legacy OLE `.doc` is terminal. ⚠️ **And the conflation that keeps recurring:
+`deed_records` (5,819 metadata rows) is NOT `property_documents` (1,177 documents). The OCR-able
+deed corpus is 325 and it is done.**
+
 ## 2026-08-31 — C14 RE-located (§2h): a live producer defect, not an OCR pass — §2g was wrong
 
 **NOTHING BUILT.** Design **§2h**; **C14 rewritten.** I set out to write the extraction prompt and
