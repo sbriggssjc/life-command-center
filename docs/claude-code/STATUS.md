@@ -16,6 +16,56 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-01 — B6d-assessor-marker: the marker was built, and what it exposed is worse than a dead lane
+
+**VERDICT: RETIRE.** PR **sbriggssjc/Dialysis#7385** merged (`422ef419`). The marker shipped
+(`src/assessor_queue_marker.py`, four outcome paths, `skip:` / `source:` / `error:` prefixes, 30-day
+cooldown + `last_attempt_at ASC NULLS FIRST`), and the two-run test is proven: **selection overlap
+25/25 → 0/25**. But building it surfaced three things that outrank the task, and I verified the
+DB-side claims live before recording them.
+
+🚨 **1 — THERE IS NO COUNTY ASSESSOR ADAPTER. THE ONE EXTERNAL CALL ASKS gpt-4o TO RECALL PARCEL
+FACTS.** Zero HTTP calls to any county in the module. A model cannot know a given parcel's year built
+or lot size — it can only produce a plausible number, which this would have written into `properties`
+as a fact. **`enriched: 0` is what saved us, not a guard.** ⚠️ **The gov repo already rejected
+LLM-recall enrichment on exactly these grounds (ORE Phase A1) and nobody checked the dia side.**
+Doctrine added to `CLAUDE.md`: *read what a producer's external call actually talks to before trusting
+its name* — `*_enrichment` names an intent, not a source.
+
+🚨 **2 — THE LARGEST BLOCKER IS A UNIT MISMATCH, NOT A COVERAGE GAP — verified live.** The closure
+trigger watches **`land_area` (acres)**; the writer fills **`lot_sf` (square feet)**. Across all
+**3,702** rows holding both: **0 equal**, and the ratio is **exactly 43,560 ±1 on 3,373 (91.1%)**,
+within 1% on 98.1%, with 27 genuine disagreements (0.8%). One fact, two units, no reconciliation. So
+**223 of 662 open rows (34%) carry only gaps this writer can never close** — the writer succeeds and
+the gap persists, silently, on both sides. Filed as data-coherence invariant **I12**.
+
+⚠️ **3 — AND THE "OTHER PATHS WILL HANDLE IT" FALLBACK IS REFUTED.** The 51% self-resolution I quoted
+last turn hides a collapsed rate: **May 14 → June 174 → July 510 → August 5 → September 0.** July was
+a burst, not a run rate. Quoting the cumulative share was the mistake; the monthly series is the fact.
+
+Also measured here: **500 of 662 open rows (75.6%) have no parcel number** — the key the module's own
+docstring says it depends on. Closable at all: **236 of 662 (36%)**, and that is the ceiling *at
+perfect accuracy*. **A lane that is keyless, fabricating, and capped at 36% cannot be graded into
+working.** No cron. The queue also still has no enqueuer.
+
+⚠️ **I CORRECTED ONE CLAIM.** The response calls `land_area = lot_sf / 43560` *"the single high-value
+fix… closable 236 → 439."* The closability arithmetic is right; **the value framing is not — it fills
+ZERO rows today.** Measured: **0** `properties` rows have `land_area IS NULL AND lot_sf IS NOT NULL`.
+It changes what a *future* source could close, which is plumbing, not yield — and with the lane
+retired there is no such source queued. Re-filed at 🟡 as **B6d-assessor-landarea** with that
+correction attached.
+
+**Guard methodology worth keeping** (from the response, unverified but sound): a mutation scoped to a
+FILE rather than the function it names **graded the wrong code** — `+= fields` appears twice and the
+mutation landed in `run_batch`, not `run_queue_batch`, falsely reporting a survivor. Mutations are AST
+-scoped now. And two genuine survivors came from **monkeypatching the function under test**. 28 tests,
+23/23 mutations RED; full suite 2,980 → 3,008 passing with an identical 54-failure set before and
+after. The `|| echo` masking was not touched (**B6e-ci-mask**) and CI was not relied on.
+
+⚠️ **Dangling pointer, open:** the merged Dialysis `CLAUDE.md` references
+`docs/audits/B6d_assessor_marker_ASSESSOR_DRAIN_TRACE_2026-09-01.md` in *this* repo, pushed to
+`claude/assessor-marker-trace-2ospul` with **no PR**. → **B6d-assessor-doc**.
+
 ## 2026-09-01 — assessor enrichment: ran it once, and the answer is DO NOT WIRE IT
 
 **`python -m src.assessor_enrichment --from-queue 25` → `processed 25, enriched 0, fields_updated 0,

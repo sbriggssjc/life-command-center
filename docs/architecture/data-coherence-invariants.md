@@ -273,6 +273,39 @@ conclusion in this very arc.
 > **Rule:** a fact store carries `created_at` **and** a provenance column. Never date a producer off
 > `updated_at` on an upserted table; find the producer in code.
 
+### I12 — The field a gap-closer WATCHES and the field a writer FILLS must be the same field, in the same unit
+
+**Added 2026-09-01 from B6d-assessor-marker, verified live on 3,702 paired rows.**
+
+`dia.properties` carries **`land_area` in ACRES and `lot_sf` in SQUARE FEET** — the same measurement
+twice, with **no conversion and no reconciliation anywhere**. Measured across every row holding both:
+
+| ratio `lot_sf / land_area` | rows | share |
+|---|---:|---:|
+| **exactly 43,560 ±1** (sq ft per acre) | 3,373 | **91.1%** |
+| within 1% | 258 | 7.0% |
+| within 10% | 44 | 1.2% |
+| genuine disagreement | 27 | 0.8% |
+
+**0 of 3,702 are equal.** They are one fact in two units, and nothing in the schema says so.
+
+The consequence is a queue that cannot close. `property_metadata_backfill_queue`'s closure trigger
+watches `land_area`; its writer fills `lot_sf` — so **223 of 662 open rows (34%) carry only gaps that
+writer can never close**, and the row stays open no matter how well the fill works. **Nothing errors.
+The writer succeeds and the gap persists.**
+
+> **Rule:** wherever a store holds one measurement in two units or two representations, **one is
+> derived and the derivation is enforced** (a `GENERATED` column, a trigger, or a single writer) —
+> never two independently-written columns. And **a gap-closer's watched field must be the field its
+> writer actually writes**; assert that pairing explicitly, because the failure is silent on both
+> sides.
+>
+> ⚠️ **The conversion is NOT a backfill.** Measured 2026-09-01: **zero** `dia.properties` rows have
+> `land_area IS NULL AND lot_sf IS NOT NULL`, so `land_area = lot_sf / 43560` fills **0 rows today**.
+> It changes what a *future* source can close (236 → 439 of 662), which is a plumbing fix, not a
+> yield fix. **State which of the two any such change is** — the audit that found this initially
+> read it as the higher-value one.
+
 ### I11 — A monitor must alert on its own blindness. An exclusion of stale inputs IS a silent failure.
 
 **Added 2026-08-28 from B6a's follow-on finding, and independently verified. ✅ CLOSED THE SAME DAY
