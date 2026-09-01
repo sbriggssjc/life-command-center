@@ -16,6 +16,44 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-01 — C13c SHIPPED: `one_off_owner` carries its confidence, and the fourth column answered
+
+**Live on LCC Opps.** `one_off_owner` **142 = 13 `_sf_corroborated` + 129 `_unverified`** — the
+COUNT deliberately unchanged — plus **21 named institutional rows** on
+`v_lcc_entity_role_ambiguity.entity_type_contradicted_by_named_review`, read from the
+`lcc_entity_role_confirmation` ledger and **never a name stoplist in the classifier**. Every other
+arm, `v_lcc_user_owner_candidates` (15), multi-role (954) and **P0.4 (555)** unmoved. Migration
+`20261006120000`; guard `test/c13c-one-off-owner-confidence.test.mjs` (9 tests, **21/21 mutations
+RED**). Writeup `docs/audits/C13c_ONE_OFF_OWNER_CONFIDENCE_2026-09-01.md`.
+
+⚠️ **C13b's "no non-lexical corroboration exists" was THREE ABSENCES, NOT A SEARCH.**
+`salesforce/Account`, `works_at` and `org_type` are genuinely 0 — and the fourth column,
+`salesforce/Contact`, answers on **13 of 142**, with **ZERO of the institutional names carrying
+one.** *Before recording that a fact has no corroboration, enumerate every identity the table can
+hold.*
+
+⚠️ **The routed set is 21, not the ~15 the brief predicted, and the extra 6 are the arm's biggest
+rows.** The brief's list is drawn from the 28 that FAIL `lcc_looks_like_person`, so it structurally
+cannot contain **`Gates Hudson` ($19.6M)** or **`Metropolitan Life Insurance` ($11.8M)** — #2 and #3
+by rent, both of which **pass** the name test and were already read in the design page. **A list
+filtered by a failing instrument is not the population.**
+
+⚠️ **The uncorroborated 129 read ~80% genuine, and nobody had measured it.** A deterministic 10-row
+sample: **8 clear individuals, 1 clearly not (`Everbank`, already routed), 1 ambiguous
+(`Peter Hanson RE`)**. The 28 name-test failures are not a random sample of the 129.
+
+⚠️ **The brief's prose and its numbers disagreed and the numbers won.** "…so they stop being emitted
+as individuals" against an assertion table reading 142 unchanged, split 13/129. Shipped the split,
+not the suppression — and **proved the reason: all 21 keep `investor_owner`**, so the wrong label
+removes nobody and admits nobody today. Suppression is **C13f**; the `entities.entity_type` repair
+is **C13g** (floor 414 entities / $181.8M — ⚠️ *the lexical 13,225 measures the regex, not the
+population*); the corroboration ceiling is **C13h** (9% here vs 75% fleet-wide, because this arm is
+RCA/CoStar capture the CRM has never held).
+
+⚠️ **`test/c13b-entity-roles-multilabel.test.mjs` now reads the C13c migration** — C13c rebuilds the
+view, so the C13b file no longer describes what ships (P197). All 11 C13b invariants pass over the
+shipped definition.
+
 ## 2026-09-01 — C13c measured and staged: `one_off_owner`'s evidence column fails BOTH ways
 
 **`one_off_owner` = 142 and its only evidence is `entities.entity_type='person'`.** 28 fail
@@ -42,7 +80,7 @@ building on where a name test is not.
 absent from Salesforce; asserting all 142 keeps a $22.8M manager mislabelled. So the count stays 142
 and the **`evidence_arm` splits** — corroborated 13 / `entity_type`-only 129 — with the ~15 named
 institutions routed to ambiguity as **reviewed rows**, never a name stoplist. **P181 one layer
-down.** Prompt: `C13c-one-off-owner-confidence.md`.
+down.** Prompt: `done/C13c-one-off-owner-confidence.md`. **✅ Executed — see the entry above.**
 
 🔧 **Git locks — I am the cause, and my first diagnosis was incomplete.** `ORIG_HEAD.lock` is written
 by `pull`/`merge`/`reset`, so I blamed `git pull` from the sandbox. ⚠️ **Then `git fetch` left an
