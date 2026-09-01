@@ -10,6 +10,16 @@
 > against to find the most accurate representation of each property by field."*
 >
 > **Headline finding 2026-09-01: that lane is ALREADY BUILT and it has NEVER WRITTEN A FIELD.**
+>
+> **⚠️ SECOND FINDING, 2026-09-01 (PR1), AND IT INVERTS THE FIRST ONE'S REMEDY: IT MUST NOT
+> WRITE ONE, BECAUSE THE LANE'S PRODUCER GENERATES ITS VALUES.** `src/public_record_ingest.py`
+> — the producer of `parcel_records`, `tax_records` and `deed_records` on BOTH domains —
+> **contains no county record fetch.** dia asks **gpt-4o to recall** parcel and tax facts from a
+> prompt seeded with the property's own address *and the owner we already hold*; gov fetches a
+> ≤4,000-char snapshot of the assessor **PORTAL HOMEPAGE** and asks a model for parcel JSON.
+> **Wiring that to `lcc_merge_field` would promote model output to `county_records`, which
+> outranks salesforce(20), om_extraction(30–50) and every sidebar(45–65) on 93 rungs.**
+> The consumer was **refused on measurement**; the instrument shipped instead. See §2a.
 
 ---
 
@@ -44,8 +54,11 @@ record is still ownership history, still a sale record, still physical stats.
 is correct** — a public record exists independently of whether we hold a property row for it, which
 is precisely Scott's "its own lane" requirement, already honoured.
 
-**And the authority ladder is registered.** `county_records` sits at **priority 5** across **93
-field rungs spanning BOTH domains** — `dia.properties.year_built / building_size / land_area /
+**And the authority ladder is registered.** `county_records` holds **93 field rungs spanning BOTH
+domains**. ⚠️ **Not all at priority 5 — measured, the rungs are 5, 10 and 15**, and the split
+matters: `dia.properties.year_built` is **@10**, `building_size` **@15**, `parcel_number` **@5**.
+Every one still outranks `salesforce`@20, `om_extraction`(30–50) and the sidebars(45–65), so the
+supersession risk is unchanged; but quote the rung, not the headline. Rungs span — `dia.properties.year_built / building_size / land_area /
 lot_sf / zoning / assessed_value / parcel_number / recorded_owner_id / recorded_owner_name`,
 `dia.ownership_history.*`, `dia.sales_transactions.*`, and the full gov mirror. `recorded_deed` sits
 at **3**. Both **outrank** `om_extraction` (30–50) and `costar_sidebar` (45–60).
@@ -75,14 +88,114 @@ in the same database holding the answer.
 in the system**, and it is invisible to every existing check: the tables are non-empty and growing,
 the producer is green, the ladder is registered, and the fields fill from somewhere else.
 
+## 2a. 🚨 PR1 — the producer generates its values. The consumer was refused. (2026-09-01)
+
+PR1 was *"build the reconciliation consumer."* It was not built. **Read what a producer's external
+call actually TALKS TO before trusting its name** — the rule this repo already paid for twice
+(`assessor_enrichment.py`, gov ORE Phase A1) and did not apply to the module next door.
+
+**dia `src/public_record_ingest.py`** — no `requests`, no `httpx`, no `urlopen`, no county URL. Its
+one external call is `client.chat.completions.create(model="gpt-4o")`, fed a prompt built from the
+property's own `address / city / state / county / **Recorded Owner** / **True Owner**`. The parsed
+result is literally named `gpt_parcel`. **gov's copy** does fetch a URL — `_fetch_text_snapshot`,
+≤4,000 chars — but the `source_url` on every row is the assessor **portal homepage**, never a
+parcel-detail page, and a homepage cannot state a specific parcel's assessed value.
+
+### The evidence, with its own positive control
+
+| measurement | model leg | CoStar leg (same table) |
+|---|---:|---:|
+| gov `parcel_records` assessed values that are exact multiples of **$100,000** | **100.0%** (9,265) | **3.8%** (416) |
+| gov `tax_records`, same test | **100.0%** (3,008) | **3.8%** (416) |
+| dia `tax_records` rows with a literal `XYZ …` placeholder owner | **186** | 0 |
+| dia rows carrying `year_built` / `building_sf` / `lot_sf` | **41, all model leg** | **0** |
+| Regrid-shaped payloads anywhere | **0** | — |
+
+The CoStar leg is the control: same table, same columns, same query — **3.8% vs 100.0%**. Named
+rows from the dia model leg: `mailing_owner` = *"XYZ Dialysis Centers LLC"*, *"XYZ Healthcare
+Trust"*, and city-templated *"Santa Rosa Dialysis LLC"*, *"Houston Dialysis Holdings LLC"*, every
+value field null. gov's newest parcels are all-zero sentinels.
+
+⚠️ **"Unstamped == model output" is a MEASUREMENT here, not an assumption: zero rows are
+Regrid-shaped, so the vendor path has never run.**
+
+### It is already in the curated table
+
+`v_dia_curated_field_ai_provenance` (shipped, live):
+
+| curated field | properties tracing to the **model** leg | to the CoStar leg |
+|---|---:|---:|
+| `dia.properties.tax_year` | **8,842** | 265 |
+| `dia.properties.tax_amount` | **8,842** | 0 |
+| `dia.properties.assessed_value` | **8,682** | 262 |
+| `year_built` / `building_size` / `lot_sf` | 2 / 3 / 1 | 0 |
+
+Two writers put it there, neither recording provenance: `Dialysis/src/sync_properties_from_sources.py`
+(tax fields, latest `tax_year`) and `trg_parcel_propagate_to_property` (physical stats, fill-blanks).
+**So the physical-stats damage is negligible and the tax/assessed damage is ~8,800 properties.**
+
+⚠️ **`dia.properties.tax_delinquent` is `false` on 11,802 of 11,802.** `write_tax_record` had
+`bool(data.get("is_delinquent"))`, and **`bool(None)` is `False`** — so "the source did not say"
+was recorded as "this property is not tax-delinquent", on every property in the portfolio. Fixed
+tri-state. This is P139's constant-wearing-a-value-expression's-clothes, asserting a negative
+finding rather than a rank.
+
+### What shipped instead — marker before verdict
+
+- **Producer provenance stamp**, both domains. `raw_payload.source` now records the acquisition
+  path (`ai_gpt4o` / `ai_recall_gpt` vs `regrid`), and the Regrid overlay also records
+  `source_fields` — the merged parcel is genuinely mixed, so a bare `source='regrid'` would
+  overclaim the fields gpt-4o filled in. ⚠️ **The stamp is EXCLUDED from `data_hash` on dia**
+  (`payload_for_hash`): the hash is the upsert conflict key, so folding provenance into it would
+  give every existing row a new hash and **re-insert the entire table as duplicates**. Proven
+  hash-stable with a positive control. gov is hash-safe by construction (`_md5` over explicit key
+  fields) and already had the `raw_payload["source_origin"]` precedent.
+- **`{dia,gov}_public_record_acquisition_class()`** — one IMMUTABLE owner of "which path produced
+  this row". `ai_gpt4o_presumed` is a **distinct value** from the forward stamp, so a measurement is
+  never quietly reported as a stamp.
+- **`v_{dia,gov}_public_record_acquisition`** — lane composition. Read `trustworthy_source`, never
+  `rows_total`, which is dominated by the model leg.
+- **`v_dia_curated_field_ai_provenance`** — the contamination surface above. It is **value
+  equality against the linked record, not a writer attribution**, and says so.
+- **Guards.** `Dialysis/tests/test_pr1_public_record_provenance.py` (10 tests, **10/10 mutations
+  RED**) and `life-command-center/test/public-records-lane-not-wired.test.mjs` (3 tests, **3/3
+  RED**). Both strip comments first — this page and the fix's own comments name `county_records`
+  and every removed expression, so a raw grep would match the explanation and pass over a
+  regression.
+
+### ⚠️ The trap that would have hidden a wiring either way
+
+`lcc_flush_provenance_events()` carries `v_first_class := ARRAY['splink_v1','sf_link_review_human',
+'splink_v2','sf_account_contact_expansion']` and **relabels every event whose source is not on it to
+`domain_trigger`**. So emitting `source='county_records'` into `provenance_event_log` today would
+land in `field_provenance` as `domain_trigger` — **at a rung that does not exist for these fields** —
+while a verification querying `field_provenance where source='county_records'` **still read zero**.
+Keeping `county_records` off that allowlist is the correct state; adding it is a deliberate act that
+belongs with a real acquisition path, never as plumbing. Pinned by the LCC guard.
+
+### The corrected sequence
+
+**source → verdict → consumer → cron.** The lane's real acquisition path already exists and is
+**one environment variable away**: `src/regrid_client.py` is a complete Regrid Parcels API client
+(a genuine assessor-data vendor, free tier 1,000 calls/day) that plugs in *ahead of* the GPT
+fallback and is gated on **`REGRID_API_KEY`**. Set the key, let it populate, confirm
+`v_dia_public_record_acquisition` shows a `regrid` class with real non-round values — **then** build
+the consumer against `trustworthy_source` rows only. Building it first writes generated numbers into
+the highest non-manual rung in the system.
+
+⚠️ **Do not "fix" this by deleting the GPT fallback in the same change** — it is the only thing
+writing these tables today, and removing it silently empties a lane several surfaces read. Gate it,
+measure, then retire.
+
 ## 3. The three real gaps, in priority order
 
-1. ⭐ **No reconciliation consumer.** Nothing reads `parcel_records` / `tax_records` and calls
-   `lcc_merge_field` against the 93 registered rungs. **This is the whole of Scott's "later code
-   processes evaluate against to find the most accurate representation per field"** — the lane is
-   there, the evaluator is not. **Highest leverage by a wide margin: it needs no new acquisition, no
-   new schema, and no new ladder entry.** Its immediate reach is the 9,166 already-linked properties
-   (78%), not 662.
+1. ~~⭐ **No reconciliation consumer.**~~ **SUPERSEDED BY §2a — this was the wrong remedy and the
+   reasoning that produced it was wrong in a specific, transferable way.** *"It needs no new
+   acquisition"* was true and was exactly the problem: **no new acquisition means the values are
+   whatever the current producer emits, and the current producer is gpt-4o.** The gap is not the
+   evaluator, it is the **source**. Scott's "later code evaluates to find the most accurate
+   representation per field" is right and still the goal — it just cannot be served by a lane whose
+   inputs are generated. **The real first gap is `REGRID_API_KEY`.**
 2. **The parcel leg is thin where the tax leg is strong** — 908 properties vs 9,107, and **only 41
    `parcel_records` rows carry `year_built` / `building_sf` / `lot_sf`** (670 carry `owner_name`).
    ⚠️ **The right question is not "can we reach county assessors" — the tax fetcher demonstrably
@@ -100,9 +213,20 @@ the producer is green, the ladder is registered, and the fields fill from somewh
   fabrication by construction. A real lane fetches a record and stores `raw_payload` + `data_hash`;
   those columns already exist on all three tables. See `CLAUDE.md` → *Data-write discipline*.
 - ⚠️ **I12 — acres vs square feet.** `parcel_records` carries `lot_sf`; `dia.properties` carries
-  **both `land_area` (acres) and `lot_sf`**, with 3,702 paired rows, **0 equal**, ratio exactly
-  43,560 on 91.1%. Any reconciliation must write **one** and derive the other, not populate whichever
-  the source happened to express. Same hazard live at `sidebar-pipeline.js` ~4597.
+  **both `land_area` (acres) and `lot_sf`**, with 3,702 paired rows and **0 equal**. Any
+  reconciliation must write **one** and derive the other, not populate whichever the source happened
+  to express. Same hazard live at `sidebar-pipeline.js` ~4597.
+  - ⚠️ **Re-measured 2026-09-01: the disagreement is 213 rows (5.8%), not 27.** At a 0.1% relative
+    tolerance 3,489 of 3,702 sit at the 43,560 ratio and **213 do not**; on a strict ±1 absolute
+    test it is 300. **The "27 genuine disagreements (0.8%)" figure in circulation does not
+    reproduce** — quote the tolerance with the count, because the two tests differ by 40%.
+  - 🔴 **And there is a LIVE function carrying the I12 bug: `dia_county_digest_property` writes
+    `v_parcel.lot_sf` — square feet — into `properties.land_area`, which is acres**, and never
+    writes `lot_sf` at all. It has **never run** (`county_propagation_log` is empty on dia), which
+    is the only reason it has done no damage; gov's copy ran once on 2026-06-20 and wrote 64
+    `assessed_value` rows. The sibling `trg_parcel_propagate_to_property` trigger gets the units
+    **right** — so two writers on one field disagree about its unit. Backlog **PR6**. Do not fix it
+    by scheduling the digest.
 - **Fill-blanks and priority-gated**, per the standing ladder — `county_records`@5 outranks
   `om_extraction` and the sidebars, so it may legitimately supersede them; it must not overwrite
   `manual`@1 or `recorded_deed`@3.
@@ -122,7 +246,10 @@ always a different question from the source lane:
   captured. Absence of capture, not a mapping loss.
 
 **Neither refutation touches the public-records lane**, which acquires from a different source
-entirely and is already 78% linked.
+entirely and is already 78% linked. ⚠️ **But §2a does**: "acquires from a different source entirely"
+was the assumption, and it is false — the lane acquires from **gpt-4o**, which is the same
+fabrication class as the refuted options above, wearing a source's name. The 78% link coverage is
+real; what is linked is mostly generated.
 
 ## 6. Where else to look
 
