@@ -257,6 +257,54 @@ Writeup `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`; **I2**, **Class
   people learn to merge past. **First credentialed run is an operator step.**
 - Also fixed in passing: the backlog's **D1 row had 5 cells in a 4-column table and an unescaped `|`
   inside a code span**, so GFM was silently dropping its status cell.
+## 2026-09-01 — 🚨 B6e-fred's sweep found the bigger thing: Dialysis CI CANNOT FAIL on its own subject matter
+
+**The FRED fix shipped (PR #7384) and the sweep did what §3 of the prompt hoped — it outranked the
+fix.**
+
+### `B6e-ci-mask` — 3,042 tests collected, not one can fail CI
+
+Dialysis `ci.yml` uses `|| echo` **five times**:
+
+```
+pytest tests/ -v --tb=short --ignore=tests/integration/ 2>/dev/null || echo "Tests completed…"
+```
+
+**`|| echo` swallows pytest's exit code, so the step always succeeds; `2>/dev/null` discards the
+traceback.** ⚠️ **Every guard in `tests/` — including the mutation-verified B6d ones and the new
+pipefail guard — is a regression detector that no merge gate enforces.**
+
+⚠️ **This is LCC's own documented "no workflow runs `npm test` on a PR" finding, in a second repo,
+wearing a different idiom.** `| tee` was one masking form; `|| echo` is another.
+
+🎯 **And the cruellest instance is lines 137–138: `python -c "import src.main" 2>/dev/null || echo`.**
+**That is exactly the check that would have caught FRED's `ModuleNotFoundError: postgrest`.**
+**The repo already had the detector. It simply could not fail.** Twenty-five days of green badges
+over a dead producer, with the guard sitting right there, muzzled.
+
+✅ **CC did NOT flip it, and that was right.** Gating a never-enforced 3,042-test suite is the
+documented **"never green once on `main`"** trap — and whether that suite is green is *unmeasured*.
+The sequence filed is the correct one: **measure on `main` → fix or quarantine what is red → remove
+the masking ONE LINE AT A TIME, starting with the import check.** It also declined to extend the
+pipefail guard to cover `|| echo`, because that would ship a test red on every run with no safe way
+to green it.
+
+### ⚠️ FRED itself is fixed but UNPROVEN — verified: still 25 days stale
+
+`economic_indicators` newest row is **still 2026-08-07**, **0 rows since 2026-08-10**. The workflow
+fix is merged; **the producer has not yet been shown to write.** ⚠️ **"Merged is not running" — and
+here it is also "fixed is not proven."** Dispatching the workflow needs Actions-write scope Claude
+Code does not have (403), so **`B6e-fred-verify` is Scott's**: run it and confirm rows land past
+2026-08-07, then decide on backfilling the 25-day gap.
+
+### A merge resolution worth preserving as a rule
+
+Two windows answered `B6e-meta` simultaneously and both edited that backlog row; the auto-merge was
+clean and produced **two rows under one id**. ⚠️ **CC resolved it correctly: a duplicated row id is
+a MAPPING, not an addition, so "keep both" was wrong** — it kept the richer version (the one with
+the queue measurement) and folded in the single fact only its own had. **That is the YAML
+`node-version` lesson from `CLAUDE.md` §4a, applied to prose, and got right this time.**
+
 ## 2026-09-01 — Registry corrected, and the queue measured: DO NOT schedule it yet
 
 **SQL run.** `dia_producer_registry.metadata_backfill_queue` now reads **CONFIRMED UNSCHEDULED**
