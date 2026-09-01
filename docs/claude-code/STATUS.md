@@ -257,6 +257,52 @@ Writeup `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`; **I2**, **Class
   people learn to merge past. **First credentialed run is an operator step.**
 - Also fixed in passing: the backlog's **D1 row had 5 cells in a 4-column table and an unescaped `|`
   inside a code span**, so GFM was silently dropping its status cell.
+## 2026-09-01 — Registry corrected, and the queue measured: DO NOT schedule it yet
+
+**SQL run.** `dia_producer_registry.metadata_backfill_queue` now reads **CONFIRMED UNSCHEDULED**
+with the operator check recorded; `scheduler_confirmed` stays `false`, which remains accurate.
+
+### 📊 Scott asked whether to wire the schedule while we are here. The measurement says NO — a schedule solves the wrong half.
+
+`property_metadata_backfill_queue`:
+
+| fact | value |
+|---|---|
+| total rows | **1,365** |
+| enqueued | **ALL on ONE day — 2026-05-21** |
+| `attempts > 0` | **ZERO rows. The drain has never processed a single row.** |
+| `open` | 662 · `captured`/resolved | 703 |
+
+**Three findings, and they point the same way:**
+
+1. **Nothing ENQUEUES.** No new rows in 3.5 months. **A weekly cron would drain 662 once and then
+   run empty forever** — a consumer with no producer, the mirror of Class 2.
+2. **The drain has NEVER executed.** ⚠️ **Scheduling untested code is exactly how the last three
+   silent producers happened** (`fred_ingest` green-and-dead, `cms_ingestion` throttled,
+   `public_record_ingest` failing 500×/run). **Prove it works before automating it.**
+3. **But the gaps ARE real** — of the 662 open rows, **0 properties are gone** and only **16 have
+   since had `year_built` filled (16 for `land_area`)**, so **~646 are still genuine**
+   (`year_built` 224, `land_area` 205, plus combinations). **This is worth doing; it is not worth
+   scheduling yet.**
+
+⚠️ **The most interesting number is the one that argues for caution: 703 rows are `captured` and
+RESOLVED with ZERO attempts.** **51% of the original queue self-resolved through other ingestion
+paths.** That is simultaneously evidence the fields do fill over time *and* a reason to **size the
+assessor's marginal yield before automating** — it may be doing less work than the queue depth
+implies.
+
+**Recommended sequence, in order:**
+
+1. **Run it ONCE, manually, against the 662** — measure the real yield (how many of ~646 gaps does
+   the assessor actually fill?).
+2. **If the yield justifies it, build the ENQUEUER** — the missing producer half. Without it, any
+   schedule is a one-shot wearing a cron.
+3. **Only then add a schedule**, and register it with a declared cadence so
+   `v_dia_producer_health` can see it from day one.
+
+**This is the Consumption-Layer bar applied to a producer we were about to switch on because it
+existed** — the exact move `B6b-lead` was refused for, and the reason that refusal was right.
+
 ## 2026-09-01 — 👤 Operator check: `metadata_backfill_queue` was NEVER WIRED, and a second Railway deployment surfaced
 
 **Scott checked Railway.** The service exists on **both** the `life-command-center` and
