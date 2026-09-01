@@ -8,7 +8,8 @@
 > (the chain end to end — this page owns its **last hop**) ·
 > [`tier0-owner-contact-system.md`](tier0-owner-contact-system.md) (person ↔ owner) ·
 > [`ownership-history-lane.md`](ownership-history-lane.md) (ownership depth) ·
-> [`owner-role-classification.md`](owner-role-classification.md) (**how an owner gets its role** —
+> [`owner-role-classification.md`](owner-role-classification.md) (**how an owner gets its role** — ⚠️ **§2e: the
+> `developer` arm is BUILT and live in gov, not unbuilt as earlier claimed** —
 > C4a's design, written to Scott's accuracy-first constraints) ·
 > [`account-based-contact-intelligence.md`](account-based-contact-intelligence.md) (**who** to call
 > and **in what tone** — this page decides *whether the signal fires*, that one decides *the pitch*).

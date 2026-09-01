@@ -505,6 +505,44 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — ⚠️ `developer` is NOT unbuilt: it is defined, live, and defective in a known way
+
+**NOTHING BUILT.** Design **§2e**; **C15 corrected · C16 updated · C17 filed**; canonical banner added
+to `docs/history/DEVELOPER_BD_AUDIT_v3.md`.
+
+⚠️ **I claimed yesterday that `developer` was "under-specified by what we hold" and that "nobody has
+measured" the behaviour. That was wrong, and it was wrong because I did not search before
+concluding.** Scott: *"there should be tons of details on this somewhere."* **There are — five
+generations, 2026-05-22 → today.**
+
+- **Scott's definition was already the implemented one.** *"The first owner in the chain of ownership
+  with our target tenant's first action in that building"* **is `v_gov_owner_at_first_gen`**, shipped
+  2026-05-22 — *"owner at time T = the `new_owner` of the most recent transfer with
+  `transfer_date <= T`."* **Live: 3,667 owner-at-first-gen rows · 354 candidates · 343 classified ·
+  7,736 UW#7 chain candidates.** It even handles the **retrofit** case Scott named
+  (`lease_anchored_to_year_renovated`) and carries a buyer counter-rule (>90 days after commencement
+  ⇒ buyer).
+- ⚠️ **But its output reproduces a failure LCC already killed.** The 343 are dominated by
+  **address-named single-asset SPEs at 0.75** — `1020 Lantrip, LLC`, `211 STREET LLC`,
+  `30th Street, LLC`. **Only 4 reach 0.85, and one is `GPT Properties Trust`, a REIT.** Both are
+  documented twice-killed modes: *"the literal earliest-owner + BTS-timing rule produced
+  single-property individuals"* and *"a REIT acquiring a BTS near construction is the BUYER in a
+  sale-leaseback, not the developer."* **The gov v5 view was never reconciled against that lesson.**
+  **The task is reconciliation, not construction.**
+- ⭐ **C16 changes: do NOT invent a multi-label table.** `entities.developer_flag_sources` is already
+  an **append-only `{source, confidence, observed_at}` JSONB array** — the exact set shape §2c says
+  the design needs, **already built for one role.** `developer_status_active_until` (current-vs-former,
+  3–5 years) and `v_entities_effective_role.is_current_developer` also already exist. **The 2026-05-22
+  taxonomy migration anticipated most of this design.**
+- 🟢 **C17 — consolidation:** `DEVELOPER_BD_AUDIT_v3.md` (3,334 lines) is **duplicated verbatim in
+  three repositories.** A future chat reading either mirror gets 2026-05-22 implementation claims
+  with **no supersession notes** — exactly the misdirection Scott asked to eliminate. The
+  life-command-center copy now carries a canonical banner; ⚠️ **the two mirrors need the same banner
+  or deletion, and that is a cross-repo edit this PR cannot make.**
+
+**The durable lesson: "nobody has measured this" is a claim about the repository, and it requires
+searching the repository.** I asserted it twice without doing so.
+
 ## 2026-08-31 — Scott's definitions land: the role is MULTI-LABEL, and C13 is superseded
 
 **NOTHING BUILT. C13 ⛔ superseded before it ever ran** — which is the staging working as intended.
