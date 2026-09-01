@@ -658,7 +658,13 @@ is the documented two-capitalised-tokens false positive.
 radius is a label: every one also carries `investor_owner`, so a wrong `one_off_owner` removes
 nothing and admits nobody. The upstream defect is `entities.entity_type`, which is unreliable in
 BOTH directions (**979 `former_owner` rows are typed `organization` and read as individuals** —
-`RICHARD LEBOS`, `MITCHELL IDOL`, `Kristen E Pigman`). Backlog **C13c**.
+`RICHARD LEBOS`, `MITCHELL IDOL`, `Kristen E Pigman`).
+⚠️ **SUPERSEDED IN TWO PLACES BY C13c (§9), 2026-09-01 — re-read there before quoting this
+paragraph.** (1) *"No non-lexical corroboration exists"* was true of the three signals checked and
+**false of the one that mattered: 13 of the 142 carry a `salesforce/Contact` identity, and ZERO of
+the institutional names do.** Three absences are not an exhaustive search — the fourth column
+answered. (2) That ambiguity kind now lists **129, not 142**: a corroborated row does not rest on
+`entity_type` alone. The `entities.entity_type` repair is sized in §9b and is backlog **C13g**.
 
 ### 7.5 ⚠️ C13's "477 + 35 ambiguous" do not reproduce — the SET dissolved them
 
@@ -669,6 +675,9 @@ the shipped arms the residue is **12** (a person with one asset and ≥2 acquisi
 (SPE-shell-named single-asset holders) + **15** (unconfirmed `user_owner` candidates) + **142**
 (§7.4) = 298 rows on `v_lcc_entity_role_ambiguity`. **Worth stating rather than quietly reporting
 different numbers: a chunk of what C13 called ambiguity was an artifact of C13's shape.**
+⚠️ **Restated after C13c and after the 10 `user_owner` verdicts (§8): 12 + 129 + 1 + 129 + 21 =
+292**, the last two being the narrowed `one_off_owner_rests_on_recorded_entity_type` and the new
+`entity_type_contradicted_by_named_review`.
 
 ### 7.6 Storage + the consumer mapping, measured
 
@@ -707,7 +716,22 @@ column would be stale against those 6,501 while a view cannot be. ⚠️ `lcc_en
 moved on **14,113 of 14,119 rows** (the nightly re-upsert) and is useless as a churn signal.
 
 
-## 9. ⚠️ C13c measured — `one_off_owner`'s evidence column is wrong in BOTH directions (2026-09-01)
+## 9. ✅ C13c SHIPPED 2026-09-01 — `one_off_owner` carries its confidence (measurement below)
+
+**Live on LCC Opps:** `one_off_owner` **142 = 13 `_sf_corroborated` + 129 `_unverified`**, the count
+deliberately unchanged; **21 named institutional rows routed to
+`v_lcc_entity_role_ambiguity.entity_type_contradicted_by_named_review`** off the
+`lcc_entity_role_confirmation` ledger (never a name stoplist in the classifier); every other arm,
+`v_lcc_user_owner_candidates` (15), the multi-role count (954) and **P0.4 (555)** unmoved.
+Migration `20261006120000_lcc_c13c_one_off_owner_confidence.sql`; guard
+`test/c13c-one-off-owner-confidence.test.mjs` (9 tests, **21/21 mutations RED**). Full writeup +
+every query: [`../audits/C13c_ONE_OFF_OWNER_CONFIDENCE_2026-09-01.md`](../audits/C13c_ONE_OFF_OWNER_CONFIDENCE_2026-09-01.md).
+
+⚠️ **`test/c13b-entity-roles-multilabel.test.mjs` now reads the C13c migration**, because C13c
+rebuilds the view and 20261005120000 no longer describes what ships (P197). Whoever rebuilds this
+view next repoints that constant in the same change.
+
+### The measurement C13c was built on
 
 `one_off_owner` = **142**, and its only evidence is `entities.entity_type = 'person'`. **28 fail
 `lcc_looks_like_person`; reading them settles it.**
@@ -748,10 +772,73 @@ one.** The ~15 named institutional owners are not low-confidence, they are **wro
 `v_lcc_entity_role_ambiguity` as reviewed rows (the §8 confirmation pattern), **never as a name
 stoplist in the classifier.**
 
-**Prompt: `docs/claude-code/prompts/C13c-one-off-owner-confidence.md`.**
+**Prompt: `docs/claude-code/prompts/done/C13c-one-off-owner-confidence.md`.**
 ⚠️ **Two things it deliberately does NOT do:** repair `entities.entity_type` itself (written by other
 producers, read by other consumers — **size it and file it**), and touch `investor_owner`, which is
 **correct** for those same institutional entities. Only their `one_off_owner` claim is false.
+
+### 9a. ⚠️ Four things the build corrected or found, that this page did not say
+
+- **The count and the prose disagreed, and the numbers won.** §9 above says the reviewed rows should
+  "stop being emitted as individuals"; the prompt's own assertion table says `one_off_owner` stays
+  **142, split 13/129**, which leaves no room for a suppressed set. The split shipped and the
+  suppression did **not** — verified rather than argued: **all 21 keep `investor_owner`**, so today a
+  wrong `one_off_owner` removes nobody and admits nobody. Suppression is **C13f**.
+- **The routed set is 21, not ~15, and the extra 6 are the arm's largest rows.** §1 of the prompt
+  draws its list from the 28 that FAIL `lcc_looks_like_person`, so it structurally cannot contain
+  `Gates Hudson` (**$19.6M**) or `Metropolitan Life Insurance` (**$11.8M**) — which §7.4 of this page
+  had already read and recorded, and which **pass** the name test. Restricting to §1's list would
+  have left the arm's #2 and #3 by rent unmarked while marking `EJME` at $0.
+- **⚠️ THE UNCORROBORATED 129 ARE MOSTLY RIGHT, AND NOBODY HAD MEASURED IT.** Read on a
+  deterministic 10-row sample (`order by md5(entity_id::text)`): **8 clear individuals, 1 clearly not
+  (`Everbank`, already routed), 1 ambiguous (`Peter Hanson RE`)**. The 28 name-test failures are not
+  a random sample of the 129, and treating them as one badly understates the arm.
+- **⚠️ THE PRODUCER IS THE TRANSACTION VENDORS, NOT THE CLASSIFIER.** Of the 142, **115 carry an
+  `rca/contact` identity and 32 a `costar/contact`** — the buyer/seller party slot of a deal record,
+  which is where a COMPANY gets filed as a "contact" and minted `person`-typed. That is the mechanism
+  behind Jamestown, BREIT and AvalonBay. ⚠️ And the tempting inverse — a vendor `company` identity on
+  a person-typed row — was measured at **2 of 3** (`Sarita Mutscher` is a real individual and one of
+  the corroborated 13) and **not wired**.
+
+### 9b. The `entities.entity_type` size — C13g, filed not started
+
+**Non-lexical floor, both directions: 414 of 56,192 live entities (0.74%).** 338 typed `person`
+carrying a `salesforce/Account` ($0 current rent — none holds a portfolio fact); **76 typed
+`organization` carrying a `salesforce/Contact`, $181.8M**. `works_at` produces **zero**
+contradictions either way and carries no signal here.
+
+⚠️ **DO NOT QUOTE THE LEXICAL NUMBER AS A DEFECT COUNT.** `lcc_looks_like_person` flags **13,225 of
+43,154 org-typed entities (30.6%, $535.7M)** — and on this very arm it passes `Gates Hudson`,
+`Metropolitan Life Insurance` and `Gladstone Commercial`, all firms. It measures the regex, not the
+population (playbook Class 11). The mirror is as useless: `lcc_owner_name_has_org_marker` flags 19 of
+13,038 and **0 of the 142**. **The only defensible size is the hand read — 21 of 142 ≈ 15%, so
+~1,950 person-typed organizations fleet-wide, offered as an estimate from one non-random sample.**
+
+### 9c. ⚠️ The corroboration's ceiling is the POPULATION, not the feed
+
+`salesforce/Contact` is live and growing — **395 identities in 30 days across 22 distinct days**,
+newest 2026-08-31 — though July 2026 alone holds 8,328 of the 10,083, so the trend is a bulk sync
+plus a trickle. On the arm it went **~2 → 13 in 90 days**, all by 2026-07-31.
+
+**But 9,819 of 13,038 live person-typed entities (75%) already carry one, against 13 of 142 (9%)
+here.** This arm is drawn from RCA/CoStar transaction captures the CRM has never held, so
+**waiting will not lift 9% toward 75%** — reconciling vendor-captured parties into the contact hub
+will, and that is **C13h**.
+
+### 9d. Performance — the corroboration's measured cost
+
+A **CTE mirroring `op`**, never a per-row `EXISTS` (§7.7: an expression referenced in all nine VALUES
+rows is evaluated nine times per candidate). Buffers, the durable evidence:
+
+| shape | C13b | C13c no index | C13c shipped |
+|---|---:|---:|---:|
+| single-entity probe | 60 | 63 | **63** |
+| ranked scan (`limit 50`) | 39,968 | 50,861 (+27%) | **44,204 (+10.6%)** |
+
+The probe is **+3** — the predicate pushes straight down, which is what §7.7's rewrite protects. The
+scan's +27% was the `sfc` leg heap-fetching `entity_id` for 10,083 rows; **P118 corollary 2** says an
+index IS the fix once the aggregate is already hoisted, and **corollary 3** is why this partial index
+is reachable — `sfc` states its predicate verbatim. That leg: **10,893 → 4,236**, an Index Only Scan.
 ## 8. ✅ `user_owner` CONFIRMED 2026-09-01 — the lane produced its first verdicts
 
 **10 confirmed, 4 rejected, 1 left undecided.** `v_lcc_entity_roles.user_owner` **0 → 10**;

@@ -25,8 +25,16 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+// ⚠️ THIS GUARD READS THE C13C MIGRATION, NOT C13B'S — DELIBERATELY. C13c
+// rebuilds `v_lcc_entity_roles` wholesale to split the `one_off_owner` evidence
+// arm, so 20261005120000 is now the HISTORICAL text and no longer describes
+// what ships. A guard pointed at a superseded definition asserts invariants
+// over code nobody runs (P197: `test/tier0-park-reasons.test.mjs` read the P196
+// file after P197 rebuilt the same view). Every C13b decision below is still
+// enforced — it is enforced on the SHIPPED view. Whoever writes the next
+// rebuild of this view repoints this constant in the same change.
 const MIGRATION = fileURLToPath(new URL(
-  '../supabase/migrations/20261005120000_lcc_c13b_entity_roles_multilabel.sql',
+  '../supabase/migrations/20261006120000_lcc_c13c_one_off_owner_confidence.sql',
   import.meta.url));
 const RAW = readFileSync(MIGRATION, 'utf8');
 
@@ -79,9 +87,15 @@ test('repeat_buyer keys on the DISTINCT ASSET, never the edge count', () => {
     'an edge count is an OBSERVATION count, not an acquisition count');
 });
 
+// ⚠️ C13c SPLIT `individual_single_current_asset` INTO TWO. Quote-delimited
+// membership is what makes that visible here: `'individual_single_current_asset'`
+// is a PREFIX of both successors but not equal to either, so this list had to be
+// updated in the same change rather than passing silently on a substring.
 const EVIDENCE_ARMS = ['domain_true_owner_operator_flag', 'entities_owner_role_operator',
   'human_confirmed_owner_occupier', 'current_portfolio_fact', 'distinct_assets_acquired',
-  'ended_holding_no_current', 'individual_single_current_asset',
+  'ended_holding_no_current',
+  'individual_single_current_asset_sf_corroborated',
+  'individual_single_current_asset_unverified',
   'gov_first_generation_classifier', 'manual_override'];
 
 test('every arm carries an evidence arm — no role ships without a recorded basis', () => {

@@ -3880,7 +3880,13 @@ that produced it, its dates and its pacing. **10,655 entities carry ≥1 role (w
     companies on it). So the role is emitted as the recorded fact says and
     `v_lcc_entity_role_ambiguity.one_off_owner_rests_on_recorded_entity_type` states that
     "individual" is unverified. **The blast radius is a label, not a write** — all 142 also carry
-    `investor_owner`, so a wrong one removes nothing and admits nobody. Backlog **C13c**.
+    `investor_owner`, so a wrong one removes nothing and admits nobody.
+  - ⚠️ **THE "ALL ZERO" SENTENCE ABOVE IS SUPERSEDED — C13c FOUND THE CORROBORATION ON THE FOURTH
+    COLUMN NOBODY CHECKED.** `salesforce/Account`, `works_at` and `org_type` are all genuinely 0, and
+    **`salesforce/Contact` is 13 of 142** — read on named rows, 12 unmistakable individuals (Martin
+    Starr, Denis Rodger, Sarita Mutscher…), and **ZERO of the institutional names carry one.** *Three
+    absences are not an exhaustive search*, and the positive control is what made the fourth worth
+    building on. See the C13c section below.
 - **⚠️ THE OBVIOUS VIEW SHAPE WAS 48× SLOWER ON THE ONE QUERY THE CONSUMER MAPPING ISSUES.** Eight
   `union all` branches over a MATERIALIZED `cand` CTE cannot push `entity_id = ?` down — **a CTE
   referenced nine times is always materialized** — so the `EXISTS (… WHERE entity_id = ? AND role =
@@ -3919,6 +3925,84 @@ that produced it, its dates and its pacing. **10,655 entities carry ≥1 role (w
   different numbers.**
 - **Verify on the ARM POPULATIONS and the overlap matrix, never the row count** — 11,631 rows would
   read identically if every entity carried one wrong label.
+
+## C13c — an escalation must carry its confidence, and the fourth column answered (2026-09-01)
+
+`one_off_owner` **142 = 13 `_sf_corroborated` + 129 `_unverified`**, the count deliberately
+unchanged; **21 named institutional rows** routed to
+`v_lcc_entity_role_ambiguity.entity_type_contradicted_by_named_review` off the
+`lcc_entity_role_confirmation` ledger. Every other arm, `v_lcc_user_owner_candidates` (15), the
+multi-role count (954) and **P0.4 (555)** unmoved. Migration
+`20261006120000_lcc_c13c_one_off_owner_confidence.sql`; guard
+`test/c13c-one-off-owner-confidence.test.mjs` (9 tests, **21/21 mutations RED**). Writeup:
+`docs/audits/C13c_ONE_OFF_OWNER_CONFIDENCE_2026-09-01.md`; canonical
+`docs/architecture/owner-role-classification.md` §9.
+
+- **⚠️ "NO CORROBORATION EXISTS" WAS THREE ABSENCES, NOT A SEARCH.** C13b checked
+  `salesforce/Account` (0), `works_at` (0) and `org_type` (0) and concluded the arm had no
+  non-lexical signal. **`salesforce/Contact` is 13 of 142** and separates the population exactly:
+  12 of the 13 are unmistakable individuals and **ZERO of Jamestown / BREIT / AvalonBay / Brixmor /
+  Alexandria / MIT carry one.** **The positive control is the half that matters** — a signal that
+  only ever fires is worthless; this one is silent on precisely the rows that must be excluded.
+  **Before recording that a fact has no corroboration, enumerate every identity the table can hold**
+  (the P197 lesson — `unified_contacts` has five link columns and the email-keyed detector reported
+  the other four's population as absent).
+- **⚠️ THE DISPOSITION IS A CONFIDENCE SPLIT — 142 → 13 AND 142-FLAT ARE BOTH WRONG.** Filtering
+  membership on the corroboration discards `Maslow Robert C & Michele C` and every genuine
+  individual simply absent from Salesforce; asserting all 142 flat is what put a **$22.8M
+  institutional manager on a one-off-INDIVIDUAL lane.** So the **`evidence_arm` carries the
+  confidence** and the surface gates on it — **P181 one layer down: a genuine judgement call and a
+  worthless one must not wear the same label.** The membership predicate is byte-identical to
+  C13b's, and a guard goes RED if `has_sf_contact` ever reaches it.
+- **⚠️ THE REVIEWED ROWS ARE A LEDGER, NEVER A STOPLIST IN THE CLASSIFIER** (the §8 `user_owner`
+  pattern). The classifier holds no name literal; the guard rejects `entity_name = '…'` **and
+  `entity_name NOT IN (…)`** — the `NOT` form walked straight past the first cut of that assertion
+  and was found by the mutation pass, not by reading it.
+- **⚠️ THE PROMPT'S PROSE AND ITS NUMBERS DISAGREED, AND THE NUMBERS WON.** "…so they stop being
+  emitted as individuals" against an assertion table reading **142 unchanged, split 13/129**, which
+  leaves no room for a suppressed set. Shipped the split, not the suppression, and **proved the
+  reason rather than asserting it: all 21 keep `investor_owner`**, so the wrong label removes nobody
+  and admits nobody today. Filed **C13f**.
+- **⚠️ THE ROUTED SET IS 21, NOT ~15, AND THE EXTRA 6 ARE THE ARM'S BIGGEST ROWS.** The prompt's list
+  is drawn from the 28 that FAIL `lcc_looks_like_person`, so it structurally cannot contain
+  **`Gates Hudson` ($19.6M)** or **`Metropolitan Life Insurance` ($11.8M)**, which the design page
+  had already read and which **pass** the name test. **A list filtered by a failing instrument is
+  not the population** — restricting to it would have left #2 and #3 by rent unmarked while marking
+  `EJME` at $0.
+- **⚠️ THE UNCORROBORATED 129 ARE ~80% RIGHT, AND NOBODY HAD MEASURED IT.** A deterministic 10-row
+  sample (`order by md5(entity_id::text)`) reads **8 clear individuals, 1 clearly not, 1 ambiguous**.
+  **The 28 name-test failures are not a random sample of the 129** — reasoning from them understates
+  the arm badly, which is why the split keeps them rather than deleting them.
+- **⚠️ DO NOT QUOTE THE LEXICAL NUMBER WHEN SIZING `entities.entity_type`.**
+  `lcc_looks_like_person` flags **13,225 of 43,154 org-typed entities (30.6%, $535.7M)** and on this
+  arm it PASSES `Gates Hudson`, `Metropolitan Life Insurance` and `Gladstone Commercial` — it
+  measures the regex, not the population (Class 11). The non-lexical floor is **414 of 56,192
+  (0.74%)**: 338 person-typed carrying a `salesforce/Account` ($0 rent), **76 org-typed carrying a
+  `salesforce/Contact`, $181.8M**. `works_at` yields **0 contradictions in either direction** and
+  carries no signal here at all. **The only defensible size is the hand read: 21 of 142 ≈ 15% ⇒
+  ~1,950**, offered as an estimate from one non-random sample. Backlog **C13g**.
+- **⚠️ THE PRODUCER IS THE TRANSACTION VENDORS, NOT THE CLASSIFIER.** Of the 142, **115 carry
+  `rca/contact` and 32 `costar/contact`** — the buyer/seller party slot of a deal record, which is
+  where a COMPANY is filed as a "contact" and minted `person`-typed. ⚠️ The tempting inverse (a
+  vendor `company` identity on a person-typed row) was measured at **2 of 3** — `Sarita Mutscher` is
+  a real individual **and one of the corroborated 13** — and **not wired**, the same n-too-small
+  trap as every lexical signal this arc rejected.
+- **⚠️ CORROBORATION IS GROWING AND ITS CEILING IS THE POPULATION, NOT THE FEED.** 395 new
+  `salesforce/Contact` identities in 30 days across 22 days, newest 2026-08-31 (though July alone
+  holds 8,328 of 10,083). But **9,819 of 13,038 live person-typed entities (75%) already carry one
+  against 13 of 142 (9%) here** — this arm is RCA/CoStar capture the CRM has never held, so waiting
+  will not lift it. Backlog **C13h**.
+- **Cost, measured both ways (§7.7 made shape load-bearing).** The corroboration is a **CTE
+  mirroring `op`, never a per-row `EXISTS`**. Single-entity probe **60 → 63 buffers** (+3, the
+  predicate pushes down — the property §7.7's rewrite protects); ranked scan **39,968 → 50,861
+  (+27%) → 44,204 (+10.6%)** once a **partial** index made the `sfc` leg an Index Only Scan
+  (10,893 → 4,236). **P118 corollary 2** (the aggregate is already hoisted, so an index IS the fix)
+  and **corollary 3** (the query must IMPLY the partial predicate — `sfc` states it verbatim).
+  Wall-clock is not quoted; it moved 748 → 349 ms on a box with 2–4× session variance.
+- ⚠️ **`test/c13b-entity-roles-multilabel.test.mjs` NOW READS THE C13C MIGRATION.** C13c rebuilds the
+  view, so 20261005120000 no longer describes what ships and a guard pointed at it would assert
+  invariants over code nobody runs (P197). All 11 C13b invariants pass over the shipped definition.
+  **Whoever rebuilds this view next repoints that constant in the same change.**
 
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
