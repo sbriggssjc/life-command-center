@@ -359,6 +359,55 @@ and **both unblock from the same extraction.** It is bounded (5,819 rows), the c
 attached to properties, the parse path is proven, and it needs **no new external source and no new
 classifier.**
 
+## 2h. ⚠️ CORRECTION to §2g — it is not an OCR pass either. The producer is LIVE and writing undated rows.
+
+§2g concluded *"a deed-date extraction pass… plugging into the Document AI / `document-text-tick`
+deed drain."* **I checked before writing the prompt, and that is wrong too.** Three checks, each of
+which changed the answer:
+
+**1. Is the date already in the row?** `deed_records.raw_payload` **has a `recording_date` key on
+4,919 of the 4,995 undated rows** — which looks like a free win. **It holds a value on 10.** 4,985
+are JSON `null`. ⚠️ **The key's presence would have read as "the data is there, just unpromoted."
+It is not.** Checking cost one query; not checking would have produced a promotion script that moved
+10 rows.
+
+**2. Is there a document to extract from?** **No — not for most of them.**
+
+| | |
+|---|---:|
+| undated `deed_records` | **4,995** |
+| …with a `source_url` | 3,413 (68%) |
+| …with a `legal_description` | **0** |
+| **deed DOCUMENTS in `property_documents`** | **325 — and all 325 already have `raw_text`** |
+
+**`deed_records` are metadata rows from the county scraper / AI extraction, not OCR'd documents.**
+There are **325 deed documents, every one already text-extracted.** ⚠️ **So there is nothing to OCR:
+the corpus an extraction pass would read is 325 rows, not 4,995**, and it is already done. (This is
+consistent with the standing note that gov `deed_records` holds **zero** `legal_description`
+characters — these rows never carried document text.)
+
+**3. Is the producer still running?** ⚠️ **Yes — `created_at` spans 2026-03-27 → 2026-08-31, today.**
+**The county-record producer is actively writing deed rows with no recording date.**
+
+### What that makes this
+
+**Not county acquisition** (§2g was right about that) · **not an OCR pass** (§2g was wrong) ·
+**a PRODUCER defect plus a re-fetch backlog:**
+
+- **The live producer** — the county ingest lane (`run_county_ingest_cron`, W3.1, Railway-hosted) —
+  **is writing rows without a recording date today.** ⚠️ **Fixing the backfill without fixing the
+  producer is Class 8: a chore repeated silently forever.** **The producer comes first.**
+- **The 3,413 with a `source_url`** are re-fetchable in principle. ⚠️ **But W3.1/§26 document that
+  county and CoStar source URLs are frequently session-bound or dead to a datacenter re-fetch
+  (`session_bound_or_dead`), so treat 3,413 as an upper bound, not a plan.**
+- **The remaining 1,582 have no document and no URL.** For those the date is **not recoverable from
+  what we hold** — and under accuracy-first they stay undated. **That is an honest ceiling, and it
+  should be stated before anyone promises full coverage.**
+
+⚠️ **The order matters and it is the opposite of the instinct:** fix the producer, then measure what
+the re-fetch can actually reach, then decide whether the residue justifies external acquisition.
+**§2g's framing would have started at the wrong end.**
+
 ## 3. It must be DERIVED, and the churn measurement says that is safe
 
 ⚠️ **The accuracy constraint and the changes-over-time constraint both point at a view, not a

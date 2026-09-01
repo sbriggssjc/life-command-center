@@ -2290,3 +2290,40 @@ never enter a queue asking *"who owns this?"*
   rule in its new context.
 - The P195/A2 lesson stated generally: **the hazard travels with the technique**, so a comparator —
   or a gate — sanctioned for one population must be re-graded on the next.
+
+
+---
+
+## Class 32 — a KEY is not a VALUE; a METADATA ROW is not a DOCUMENT; a BACKLOG whose producer still runs is not a backlog
+
+**Found 2026-08-31 (C14 §2h), by running three checks before writing a prompt that was already drafted in my head.**
+
+Each of these looked settled and each was refuted by one query:
+
+| the appearance | the check | the reality |
+|---|---|---|
+| `raw_payload` **has a `recording_date` key** on 4,919 of 4,995 rows — the data is there, just unpromoted | `count(*) filter (where nullif(payload->>'k','') is not null)` | **10 rows hold a value.** 4,985 are JSON `null`. A promotion script would have moved 10 rows and reported success. |
+| 4,995 deed rows need OCR | count the actual DOCUMENTS, not the metadata rows | **325 deed documents exist and all 325 already have `raw_text`.** `deed_records` are scraper metadata — **0 carry a `legal_description`.** There was nothing to OCR. |
+| a 4,995-row backfill backlog | `min/max(created_at)` | **The producer is writing today.** Backfilling it is Class 8 — a chore repeated silently forever. **Fix the producer first.** |
+
+### The detectors, each one query
+
+- **Key vs value:** `jsonb ? 'k'` answers *does the key exist*. It says nothing about content.
+  **Always count non-null, non-empty values**, never key presence.
+- **Row vs document:** when a table is *named after* documents, check whether documents exist
+  separately. A metadata row scraped from a portal and an OCR-able file are different objects with
+  different fixes. **Count the artifact you would actually read.**
+- **Backlog vs live producer:** `min(created_at), max(created_at)` before proposing any backfill.
+  **A max of "today" means the producer comes first**, and the ordering is the opposite of the
+  instinct.
+
+### Why this class is expensive
+
+**All three failure modes produce a plan that runs cleanly and achieves almost nothing** — a
+promotion script that moves 10 rows, an OCR pass over an already-extracted 325, a backfill the
+producer refills. **None of them errors.** That is the unifying property of every class in this file,
+arriving here three times in one investigation.
+
+⚠️ **And note the meta-lesson: §2g had already written "re-measure before building" into itself, and
+that instruction is what caught all three.** A caveat is only worth writing if the next step actually
+executes it.
