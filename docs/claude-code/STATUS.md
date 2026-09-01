@@ -926,6 +926,52 @@ mechanism is confirmed, the rate across the remaining 691 is not, and the popula
 ⚠️ **I did not merge #1989 and was told not to.** Scott merged it 5 seconds after `npm test` went
 green, which is why the §7b baseline correction landed as a separate PR (#1990).
 
+## 2026-09-01 — DOC1 SHIPPED AND DRAINING; the spend check found a bigger problem than cost
+
+**DOC1 merged (PR #1989), deployed, verified live.** `eligible` 0 → 15 · `lowest_id_reached`
+35 → **2**, the oldest document in the population · undrained 695 → **691** · sidecars 76 → 80 ·
+**`bov_ready` 5 → 6 — the consumer moved.** Deeds unchanged at 325/325; cron 160 untouched.
+⚠️ **PR #1990 (the docs follow-up) is OPEN with both checks green and needs merging** — it was
+split off because #1989 merged 5 seconds after CI went green.
+
+⚠️ **The §2 self-exclusion premise was HALF TRUE and the other half would have jammed oldest-first
+on row one.** The sidecar's `ocr_non_ok` / `over_ocr_cap` / `thin_ocr_result` rows are all
+*post-fetch* outcomes. `extractDocumentText` has exactly one `ok:false` return — `fetch_failed` —
+on which nothing was written, and **zero such rows have ever existed**, which reads as *nothing ever
+failed to fetch* and is equally consistent with *a failure never persists*. All 771 documents are
+SharePoint refs through the PA flow, so **one unset `SHAREPOINT_FETCH_URL` would have parked the
+lane on document 1 forever.** **Reading the table would have "confirmed" safety; reading the code
+path refuted it.**
+
+🔴 **THE SPEND CHECK PAID FOR ITSELF, AND THE FINDING IS CORRECTNESS, NOT COST.** DOC1's writeup
+called it *"sample size is one."* Measured across every OCR row the lane has ever produced:
+
+| tier | rows | avg chars | **under 500** | thin |
+|---|---:|---:|---:|---:|
+| **gpt-4o** | **19 (86%)** | **1,579** | **12 (63%)** | 5 |
+| DocAI | 3 | **14,687** | 0 | 0 |
+
+**The expensive tier returns 9.3× LESS text** — gpt-4o's minimum is **31 characters**. Cause, read
+from the edge log rather than guessed: `PAGE_LIMIT_EXCEEDED — 15 got 19`. ⚠️ **NOT the documented
+Custom-Extractor footgun; the processor is correct.** It is DocAI's 15-page sync cap against a
+lease-heavy corpus → **DOC8**, urgent, because the undrained 416 leases + 235 DDs carry ~257 more
+OCR events at 86% to the failing tier over the ~3–4 days the backlog drains.
+
+🔴 **DOC10 is the one that matters most.** `gatherPropertyText` admits on
+`needs_ocr=is.false&raw_text=not.is.null` and `v_lcc_cre_bov_ready` counts covered on
+`AND NOT t.needs_ocr`. **A 31-char fragment satisfies both** — so BOV extract gets it as if it were
+the lease, the property reads *covered*, and **it is never retried.** ⚠️ `reason='thin_ocr_result'`
+is already set on 5 rows and **nothing reads it.** ⚠️ **DOC8 must land first**, or the floor
+correctly rejects most leases and parks the backlog.
+
+🔴 **DOC9 — the counter built to catch the escalation is blind to it.** `ocr_by_engine: {}` and
+`ocr_pages_total: 0` while spending gpt-4o money, because `bump()` only counts when `ocr_pages > 0`.
+**Read `items[].ocr_tier`, never `ocr_by_engine`.** ⚠️ This is also why §7c's SQL spend check could
+not have caught DOC8 alone — the sidecar column is populated, the tick's own summary is not.
+**Both instruments were needed.**
+
+**Prompt staged: `DOC8-docai-page-cap-and-thin-ocr-floor.md`** (DOC8 → DOC9 → DOC10, in that order).
+
 ## 2026-09-01 — DOCUMENT PIPELINE: one canonical page, and the blocker found
 
 **NOTHING BUILT.** Canonical page **`docs/architecture/document-capture-ocr-and-deeds.md`**;
