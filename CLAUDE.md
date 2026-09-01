@@ -4208,6 +4208,15 @@ Related invariants from the same round:
   `<>`-exclusion trap that would have hidden live cards, and the measured refutation of P192's
   un-park and learn-from-rejects claims).
 - **On-box daily-brief narrative (Analyst's Take), R8 Stage 1:** `docs/architecture/briefing-analyst-take-onprem.md` — the first net-new on-prem GENERATION surface, its fabrication guard, and the operator gate.
+- **📍 PRODUCER HEALTH & CI ENFORCEMENT — one door into the whole B6 arc (fourteen audits):**
+  `docs/architecture/producer-health-and-ci-enforcement.md`. **START HERE for "is our ingestion
+  running / does anything watch it / does CI enforce anything".** Live producer state, the CI
+  enforcement status of each repo, and the traps already paid for. ✅ **LCC verified clean
+  2026-09-01** — `npm test` is a bare unmasked `run:` and a required check, all 7 workflows carry
+  `timeout-minutes`. ❌ **Dialysis: the suite now RUNS for the first time in the repo's history**
+  (3,128 collected / 0 errors / **3,128 executed**, 3,065 pass · 55 fail, 6 m 12 s) **but the pytest
+  line is still masked** — ⚠️ **measured, not enforced, which is sharper than the old state: 55 real
+  failures are on `main` and still cannot fail a merge.** ❓ government-lease unswept.
 - **⚠️ PUBLIC RECORDS ARE A SOURCE, NOT A GAP-FILLER — AND THE LANE IS BUILT AND HAS NEVER WRITTEN A
   FIELD (2026-09-01):** `docs/architecture/public-records-source-lane.md`. **START HERE before
   proposing anything about assessor / parcel / tax / deed data.** `county_records` is registered at

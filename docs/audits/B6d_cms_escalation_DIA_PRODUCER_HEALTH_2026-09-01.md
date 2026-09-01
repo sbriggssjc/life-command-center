@@ -1,5 +1,7 @@
 # B6d-cms-escalation — dia has five scheduled producers and had no surface over any of them
 
+> 📍 **CANONICAL PAGE: [`../architecture/producer-health-and-ci-enforcement.md`](../architecture/producer-health-and-ci-enforcement.md)** — one door into the whole B6 arc (live producer state, CI enforcement status per repo, and the traps already paid for). **This file is EVIDENCE for its date.** Where it and the canonical page disagree, the page wins.
+
 **Date:** 2026-09-01 · **Repos:** `Dialysis` (build), `life-command-center` (docs)
 **DB:** Dialysis_DB `zqzrriwuavgrquhisnoa` · **Contract:** I4 (structural half) · **Playbook:** Class 21
 

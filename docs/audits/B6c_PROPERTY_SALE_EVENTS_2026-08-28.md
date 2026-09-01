@@ -1,5 +1,7 @@
 # B6c — `property_sale_events`: the table has a future, the two link columns do not
 
+> 📍 **CANONICAL PAGE: [`../architecture/producer-health-and-ci-enforcement.md`](../architecture/producer-health-and-ci-enforcement.md)** — one door into the whole B6 arc (live producer state, CI enforcement status per repo, and the traps already paid for). **This file is EVIDENCE for its date.** Where it and the canonical page disagree, the page wins.
+
 **Date:** 2026-08-28 · **Window:** data-process & automation audit (lettered prompts)
 **Backlog:** `B6c` · carries **`D2`** · **Contract:** `data-coherence-invariants.md` **I3**
 **Source:** [`B6_OWNERSHIP_CHANGE_SIGNAL_COVERAGE_2026-08-28.md`](B6_OWNERSHIP_CHANGE_SIGNAL_COVERAGE_2026-08-28.md)

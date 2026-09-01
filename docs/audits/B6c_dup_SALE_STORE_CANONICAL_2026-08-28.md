@@ -1,5 +1,7 @@
 # B6c-dup — the two sale stores disagreed about which is canonical
 
+> 📍 **CANONICAL PAGE: [`../architecture/producer-health-and-ci-enforcement.md`](../architecture/producer-health-and-ci-enforcement.md)** — one door into the whole B6 arc (live producer state, CI enforcement status per repo, and the traps already paid for). **This file is EVIDENCE for its date.** Where it and the canonical page disagree, the page wins.
+
 **Window:** data-process & automation audit (lettered prompts) · **Backlog:** `B6c-dup`
 **Measured & shipped:** 2026-08-29 (the brief is dated 2026-08-28; the filename follows the brief)
 **Contract:** [`BUILD-TURN-PROTOCOL.md`](../os/BUILD-TURN-PROTOCOL.md) ·

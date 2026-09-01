@@ -1,5 +1,7 @@
 # B6d — grade the feed expectations before the alert surface becomes noise (2026-08-29)
 
+> 📍 **CANONICAL PAGE: [`../architecture/producer-health-and-ci-enforcement.md`](../architecture/producer-health-and-ci-enforcement.md)** — one door into the whole B6 arc (live producer state, CI enforcement status per repo, and the traps already paid for). **This file is EVIDENCE for its date.** Where it and the canonical page disagree, the page wins.
+
 **Closes** the B6a → B6a-follow-up → B6b → B6b-lead arc. **Contract:** `data-coherence-invariants.md`
 **I4/I11**. **Playbook:** Class 21 (a guard that fails into silence), Class 26 (a status value is not a
 human verdict). **Backlog row:** `B6d`.

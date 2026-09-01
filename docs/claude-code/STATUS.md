@@ -94,6 +94,58 @@ design** (15 candidates read, 10 genuine / 5 SPE-named-after-tenant; the confirm
 `entity_type` defect; **C18** (`ownership_start_date`) is unchanged and still the highest-value item
 — though §7.2 corrects WHY: the 50.7% blindness belongs to `investor_owner` pacing, not to
 repeat-buyer pacing, which is 98.8% dated.
+## 2026-09-01 — ✅ THE DIALYSIS SUITE RAN FOR THE FIRST TIME IN THE REPO'S HISTORY (PR #7389)
+
+| | before (`73f1418`) | after (`fd724a5`) |
+|---|---|---|
+| collected | 3,110 / **5 errors** | **3,128 / 0 errors** |
+| **tests executed** | **0** | **3,128** |
+| step duration | 22 s | **6 m 12 s** |
+| job conclusion | success (masked) | success (**still masked**) |
+
+**Result: 3,065 passed · 55 failed · 7 skipped · 1 xfailed.** The first true measurement this repo
+has ever had. ✅ **And the import check is now a genuine gate** — `import src, src.utils_shared,
+src.ingest_fred_to_dialysis` is unmasked and **green once on a real runner**, which was the standard
+B6e-ci-mask set. That is the check that would have caught FRED's `ModuleNotFoundError` during 25 days
+of green badges over a dead producer.
+
+⚠️ **BE PRECISE ABOUT THE STATE THIS LEAVES: MEASURED, NOT ENFORCED.** The pytest line is **still
+masked**, so **55 real failures are now visible on `main` and still cannot fail a merge.** That is a
+narrower but sharper hazard than before — previously nobody could mistake the badge for a gate;
+now the job runs 3,128 real tests, reports red, and merges green.
+
+⚠️ **Step 3 (fix or quarantine what is red) is UNFINISHED because the PR merged ~2 minutes after the
+suite result first existed.** Fourth instance of merge-before-CI recorded in two days. **The result
+was not ignored — it did not exist yet when the merge happened.**
+
+⚠️ **A number I quoted repeatedly as fact was never stable: 3,042 → 3,110 → 3,128.** The 3,042 came
+from a sandbox `--collect-only` with an incomplete local install; CI collected 3,110 before the fix
+and 3,128 after. **Quote the run, not the figure** — and note the +18 is the newly-loadable files,
+which is the fix working.
+
+**The 55, with a finding inside them.** The largest cluster (~12) is **`openpyxl` leaking as a stub
+across modules** — `module 'openpyxl' has no attribute 'load_workbook'`, `requires openpyxl; install
+it` (**it is installed**), `'DummyWorksheet' does not support item assignment`, `isinstance() arg 2
+must be a type`. **That is the same cross-module stub-pollution class CC had just fixed one module
+over**, and the `conftest` mechanism added there handles exactly this shape. The rest look like
+genuine logic failures (`test_financial_ground_truth` rate assertions, `test_cmbs_propagator`,
+`test_clinic_history` dedupe) plus 2 known `test_handle_natural_language_query` drifts.
+
+✅ **Positive control on the sweep — LCC is CLEAN, checked rather than assumed.** All seven workflows
+carry `timeout-minutes`; `npm test` runs as a bare unmasked `run:`; the `exit 0` / `|| true`
+instances are deliberate control flow inside a `set -euo pipefail` gating script. **The masking class
+is Dialysis-specific, not fleet-wide** — which is worth stating, because "grep for the shape, not the
+spelling" is only useful if the answer is allowed to come back clean.
+
+**Two smaller items surfaced and filed:** Dialysis `ci.yml` has **no `timeout-minutes`**, so an
+unbounded job inherits the **6-hour** default on every PR — now sizeable against a measured 6 m 12 s;
+and `AGENTS.md:60` / `CLAUDE.md:60` still call `requirements_utf8.txt` canonical, **a stale line that
+already produced a false P1 finding from Codex.**
+
+**Recommended next: finish Step 3, then unmask pytest** — the openpyxl cluster plus `timeout-minutes`
+in one change, then the unmask as its own. → **B6e-ci-openpyxl**, **B6e-ci-timeout**,
+**B6e-ci-unmask**, **B6e-doc-reqs**.
+
 ## 2026-09-01 — ✅ PR1a/PR1b SHIPPED across three repos — and the CI finding underneath it is now the top open item
 
 **Merged: Dialysis #7388, government-lease #396, life-command-center #2004.** Independently
