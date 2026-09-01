@@ -602,6 +602,35 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — C14 located: it is deed DATE EXTRACTION, not data acquisition
+
+**NOTHING BUILT.** Design **§2g**; **C14 promoted 🔴 → 🟢 with a specific, bounded fix.**
+
+I recommended following B5's pattern — find a dated source nobody has consumed. **Measured, and the
+answer is neither "the data is missing" nor "the events postdate the lease."**
+
+- Over the 354 gov developer candidates: **351 have deed records (99%)**, 285 have sales. The deed
+  era spans **1976 → 2026**; the candidate leases span **1997 → 2024**, comfortably inside. **Only
+  14 leases predate any deed we hold.** So the corpus is there and the era is right.
+- ⚠️ **The constraint is that only 824 of 5,819 gov deed records carry a `recording_date` — 14.2%.**
+  **The documents exist, attached to the right properties. The date is just not parsed off them.**
+- ⛔ **So this is NOT county acquisition** — the expensive answer B4/C2h explicitly warn is *"the
+  most expensive conclusion available"* when the tables named after the answer have not been read.
+- ✅ **It is a deed-date extraction pass**, and it plugs into machinery that already exists: the
+  Document AI / `document-text-tick` deed drain (gov `CLAUDE.md` §26) and **ORE Phase 1 Unit C,
+  which already extracts grantor/grantee ADDRESSES off these same deeds** — the parse path is proven
+  on this corpus; the recording date is one more field off the same documents.
+- ⚠️ **Never infer a date.** An honest gap beats a guess, and a fabricated acquisition date would
+  corrupt **both** the developer test and pacing — the two things the extraction exists to unblock.
+- ⚠️ **Re-measure before building:** 14.2% is one day's reading, and OCR crons 160/167/169 have a
+  documented history of `active=false` with the CoStar byte-fetch blocked. **Check the chain is
+  running before assuming it will pick these up** — the dated-blocker trap.
+
+**Why this is the right next thread:** two independent high-value threads — `developer` (§2f) and
+pacing (§2c-ii) — **bottom out here and unblock from the same extraction.** It is bounded (5,819
+rows), the corpus is already attached to properties, the parse path is proven, and it needs **no new
+external source and no new classifier.**
+
 ## 2026-08-31 — the developer reconciliation, measured: blocked on CHAIN DEPTH, not on the rule
 
 **NOTHING BUILT.** Design **§2f**; **C15 updated · C14 promoted to the binding constraint.**
