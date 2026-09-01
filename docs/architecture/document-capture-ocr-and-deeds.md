@@ -315,8 +315,16 @@ select coalesce(reason,'(none)') as reason, needs_ocr, method, ocr_tier, count(*
 from lcc_cre_property_document_text group by 1,2,3,4 order by n desc;
 
 -- 3. Did the drain reach the CONSUMER? A rising sidecar count is NOT the same fact.
---    BASELINE: 0 fully-covered properties on the readiness view.
-select count(*) as bov_ready_properties from v_lcc_cre_bov_ready;
+--    BASELINE 2026-09-01: bov_ready_properties 5 · bov_extractions 6 ·
+--    consumer_visible_sidecars 66 (om 25 / lease 22 / dd 19) over 38 properties.
+--    ⚠️ 66 covered documents yield only 5 READY properties, because the view needs
+--       >=1 lease AND *every* lease/dd/om doc on that property covered. So the
+--       consumer metric moves in steps, on a property's LAST document — expect it
+--       to lag the sidecar count badly and then jump.
+select (select count(*) from v_lcc_cre_bov_ready)      as bov_ready_properties,
+       (select count(*) from lcc_cre_bov_extraction)   as bov_extractions,
+       (select count(*) from lcc_cre_property_document_text
+          where needs_ocr = false and raw_text is not null) as consumer_visible_sidecars;
 
 -- 4. The lane that must NOT move. BASELINE: gov deeds 325 of 325 with text.
 --    (gov scknotsqkcheojiaewwh) — and cron 160's command must still read doctype=deed.
@@ -338,6 +346,13 @@ from property_documents where lower(document_type) = 'deed';
   success.** `v_lcc_cre_bov_ready` requires **every** lease/dd/om doc on a property to be covered, so
   a partly-drained property crosses over only on its last document. **The lane's point is BOV
   extract; the sidecar count is the means.**
+- ✅ **The extraction QUALITY on the already-drained 76 was read, not assumed** (2026-09-01): five
+  named OMs (`MavisDiscountTire-EastGateCommons`, `Walgreens - Franklin Park`, `FedExGround-Middletown`,
+  `LandPro Equipment - Clymer`, `Lowes-Edmond`) carry 16k–35k chars of real body text — tenant, address,
+  lease structure, guaranty — and four named DDs (a PSA extension notice, a tax bill, a title commitment,
+  an 84k-char executed PSA) read correctly at their MIDPOINT, not just the cover page. **A non-zero
+  `char_len` is not evidence the extraction is useful; a midpoint sample is.** Fleet: om 25 / lease 22 /
+  dd 19 covered, avg 14.9k / 16.3k / 64.0k chars.
 - ⚠️ **The undrained population's scanned-vs-digital mix has never been sampled.** Every sidecar row
   since 2026-07-18 is `pdf_text` (free). The first real OCR ticks are the measurement — watch
   `ocr_by_engine` / `ocr_pages_total` on the tick response before letting it run unattended.
