@@ -152,11 +152,67 @@ Regrid-shaped, so the vendor path has never run.**
 | `dia.properties.tax_year` | **8,842** | real years (2025/26) | 265 |
 | `year_built` / `building_size` / `lot_sf` | 2 / 3 / 1 | non-zero | 0 |
 
-⚠️ **Read the `traced_value_is_zero` column, not the count.** Live on `dia.properties`:
-`assessed_value` is non-null on 8,962 rows of which **8,700 are exactly `0`** and only **262 are
-positive** — and those 262 are precisely the CoStar-traced ones. `tax_amount` is **9,025 zeros
-against 1 positive**. So the curated columns are not carrying invented figures; they are carrying
-the model leg's no-data sentinel as if it were a measurement.
+⚠️ **Read the `traced_value_is_zero` column, not the count.** Live on `dia.properties`
+BEFORE the cleanup: `assessed_value` was non-null on 8,962 rows of which **8,700 were exactly `0`**
+and only **262 positive** — and those 262 are precisely the CoStar-traced ones. `tax_amount` was
+**9,025 zeros against 1 positive**. So the curated columns were not carrying invented figures; they
+were carrying the model leg's no-data sentinel as if it were a measurement.
+
+✅ **CLEANED 2026-09-01 (PR1a/PR1b). Re-measure before quoting the numbers above.**
+`Dialysis/supabase/migrations/20260901140000_dia_pr1ab_no_data_sentinel_cleanup.sql` (batch
+`pr1ab_20260901`, reversible via `dia_pr1ab_restore_sentinels`) and
+`government-lease/sql/20260901_gov_pr1b_tax_delinquent_sentinel.sql` (batch `gov_pr1b_20260901`).
+
+| column | before | after |
+|---|---|---|
+| dia `properties.assessed_value` | 8,700 zeros / 262 positive | **0 zeros / 262 positive** |
+| dia `properties.tax_amount` | 9,025 zeros / 1 positive | **0 zeros / 1 positive** |
+| dia `properties.tax_delinquent` | false 11,802, true 0, null 0 | **null 11,802** |
+| dia `tax_records.is_delinquent` | false 25,621 | **null 25,621** (`raw_payload` untouched) |
+| gov `properties.tax_delinquent` | false 20,495, true 0, null 0 | **null 20,495** |
+| dia `properties.tax_year` | 9,110 non-null | **9,110 — deliberately untouched, real years** |
+
+- ⚠️ **THE SENTINEL ARRIVED BY *FOUR* ROUTES AND FIXING ANY ONE READS AS COMPLETE.** PR1 fixed
+  `write_tax_record`'s `bool(None)` and that was necessary and **inert for 98.9% of the rows**:
+  (1) the writer's `bool(None)`; (2) **`sync_properties_from_sources.py` carried its own
+  `bool(latest.get("is_delinquent"))`** — a SECOND route to the same curated column that would have
+  re-manufactured `false` on the next run; (3) **a column `DEFAULT false`** on
+  `properties.tax_delinquent` (BOTH domains) and dia `tax_records.is_delinquent`, upstream of every
+  Python fix — this is 100% of gov's 20,495, whose writer only ever sets `True`; and (4) **the
+  prompt template itself**, below. This is the B6d-pri-reason lesson exactly: *when a value can
+  arrive by more than one route, the placeholder rule has to cover every route.*
+- 🚨 **THE TEMPLATE IS THE SENTINEL'S SOURCE, AND THE DATA MIRRORS IT FIELD BY FIELD.** dia's prompt
+  hard-coded **`"is_delinquent": false`** while every other unknown in the same JSON block was
+  `null` — so the model echoed it: **`false` on 25,331 rows, `true` on ZERO**, with the key present
+  in `raw_payload` on every one. gov's template hard-coded **`0` for all nine money fields** and
+  `null` for `year_built`/`building_sf` — and gov's data splits on exactly that line (9,264 of 9,265
+  assessed values are `0.00`; `year_built` is uncontaminated). **The model returns what the template
+  shows.** Both templates now offer `null`; a genuine `0`/`false` is still expressible.
+- ⚠️ **`_positive_numeric` ALREADY EXISTED AND NAMED `assessed_value` IN ITS OWN DOCSTRING.**
+  `write_tax_record` used `_safe_numeric` beside it. Same shape as the FRED finding — *before adding
+  a detector, check whether one exists and is silenced* — here the **coercion** was written, correct,
+  and simply never applied to the two fields that reached curated columns.
+- ⚠️ **A `$0` DEED CONSIDERATION IS A REAL FACT AND IS DELIBERATELY NOT GUARDED.** Quitclaims and
+  intra-sponsor transfers genuinely record $0/$1, and A2b grades "nominal price" as its own shape.
+  Zero-guarding every money field uniformly would have destroyed that signal; the exception is
+  pinned by a test that goes RED if someone "finishes the job".
+- ⚠️ **THE 3 MOST INTERESTING ROWS WERE NOT SENTINELS BUT MASKS.** dia properties 23313 / 25203 /
+  31443 read `assessed_value = 0` while their linked **CoStar** tax record states **$406,662 /
+  $2,430,500 / $2,022,030**. The zero was suppressing a real measurement already on file.
+- **The predicate is evidence-based, not "all falses"**: a row is nulled only when no *trustworthy*
+  linked record actually states the value, so it self-limits if a real source ever lands.
+  `dia_public_record_source_is_trustworthy()` is now the single owner of that judgement and
+  `v_dia_public_record_acquisition` CALLS it — view output fingerprint byte-identical after the
+  refactor. Every `trace_class` is recorded per row in the reversal ledger.
+- ⚠️ **The historical writer of the 8,700 curated `assessed_value` zeros is NOT attributable and the
+  view cannot attribute it** — it joins on *value equality*, and two zeros match trivially. The only
+  in-DB writer (`trg_parcel_propagate_to_property`) has always refused non-positive values, and the
+  only in-repo signal writer reads `parcel_records`, which holds 40 zeros against 8,700 properties.
+  **Say "unattributed", not "written by X".** What is established: no trustworthy leg has ever
+  emitted a zero (0 across 287 CoStar tax + 932 CoStar parcel rows).
+- **Verification is the RE-CONTAMINATION check, not the backfill count** (Class 8): the producers
+  run daily and their fix ships on the next deploy, so the number that matters is whether a zero or
+  a `false` REAPPEARS after the next producer run — not that the columns read clean today.
 
 Two writers put it there, neither recording provenance: `Dialysis/src/sync_properties_from_sources.py`
 (tax fields, latest `tax_year`) and `trg_parcel_propagate_to_property` (physical stats, fill-blanks).
