@@ -241,6 +241,73 @@ implementation predates the correction and reproduces exactly what the correctio
 confidence, observed_at}` array on `entities` — **the multi-label shape §2c says the design needs,
 already built for one role.** **C16 should extend that pattern, not invent a new table.**
 
+## 2f. ✅ The reconciliation, measured — and it is blocked on CHAIN DEPTH, not on the rule
+
+I recommended reconciling gov v5 against the June lesson (separate the builder from the first
+net-lease buyer). **Measured, the diagnosis is right, the fix exists one domain over, and it cannot
+be applied.**
+
+### The defect is exact
+
+`v_gov_developer_candidates` takes **the owner AT first-gen commencement**. It never requires that
+the owner held the property **before** the lease started:
+
+```sql
+JOIN v_gov_owner_at_first_gen oaf USING (property_id, first_gen_commencement)
+WHERE ps.is_build_to_suit = true            -- Rule A, 0.90
+   -- or NOT build_to_suit                  -- Rule B, 0.80
+```
+
+**dia v5, same version, same date, HAS the guard** — its Rule A requires the owner *"held the
+property continuously from ≥90 days BEFORE the first long-term lease through its commencement"*, and
+its header names the exact pattern gov admits:
+
+> *"Excluded by data integrity: owners whose `start_date` equals or precedes `lease_start` by <90
+> days (the **'took title at delivery'** pattern that historically mis-classified buyers like
+> Carrollwood, Butler Trust as developers)."*
+
+**Scott's definition demands the same ordering** — *"acquired the land or vacant building,
+renovated, **then** the lease starts."* One domain implemented it; the other did not.
+
+### ⚠️ But the guard cannot be ported — the dates to apply it do not exist
+
+| gov developer candidates | |
+|---|---:|
+| candidate rows / distinct owners | 354 / 349 |
+| candidate properties **with ownership history** | **354 of 354** ✅ |
+| …with any transfer dated **at or before** first-gen commencement | **1** |
+| …**held ≥90 days before** (the dia test) | **1** |
+| …no qualifying acquisition date | **353** |
+
+⚠️ **This is not "no history" — every candidate property has ownership rows, and 70% of gov's 18,969
+history rows carry a `transfer_date`. The chain simply does not reach back before the lease.** For
+**353 of 354**, the recorded ownership begins *after* the tenant's first lease commenced.
+
+**So the 343 are not wrong — they are UNVERIFIABLE.** With current chain depth we cannot distinguish
+*"acquired the land, built, then leased"* (developer) from *"bought the completed building at
+delivery"* (net-lease buyer). **That is precisely the discrimination the June migration deferred,
+and it is deferred for a data reason, not a logic reason.**
+
+### This converges with C14
+
+⚠️ **Two independent threads now bottom out on the same missing data:**
+
+- **C14 / pacing** — `ownership_start_date` on 50.7% of LCC portfolio facts, so repeat-buyer
+  frequency and recency are half unmeasurable.
+- **Developer** — the gov chain does not extend before the first lease on 353 of 354 candidates.
+
+**Both are ownership-chain DEPTH and DATING**, which is what the A1–A5 / B1 / B5 lane has been
+working on all along (`BD_PIPELINE_FUNNEL_AUDIT`: **149 of 13,835 gov properties have 2+ historical
+owner links — 1.1%**).
+
+**So the binding constraint on this entire design is chain depth, not classification logic.** The
+rule for `developer` is settled and shipped; what it needs is history reaching further back.
+
+⚠️ **What NOT to do:** do not add the ≥90-day guard to gov v5 as things stand — it would take the
+population from 343 to **1**, which is not a precision improvement but a measurement of how little
+chain we hold. **And do not "fix" the 343 by relaxing anything**; they are honest output of a rule
+that cannot currently be verified. Label them by confidence and say so.
+
 ## 3. It must be DERIVED, and the churn measurement says that is safe
 
 ⚠️ **The accuracy constraint and the changes-over-time constraint both point at a view, not a
