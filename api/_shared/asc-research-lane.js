@@ -138,6 +138,70 @@ function corroboratingTenant(target, context) {
   return organization ? { basis: 'cms_enrollment_organization', matched_name: organization } : null;
 }
 
+const GENERIC_ASC_IDENTITY_CORES = new Set([
+  'AMBULATORY', 'CENTER', 'CENTRE', 'HEALTH', 'HEALTHCARE', 'MEDICAL',
+  'SURGERY', 'SURGICAL',
+]);
+
+function controlledAscFacilityAlias(target, context) {
+  const facility = normalizeTenantIdentityName(target.cms_identity?.facility_name);
+  const facilityMatch = facility.match(/^(.+?) AMBULATORY SURGERY CENTER$/);
+  if (!facilityMatch) return null;
+  const facilityCore = facilityMatch[1].trim();
+  if (facilityCore.length < 6
+    || facilityCore.split(' ').every((token) => GENERIC_ASC_IDENTITY_CORES.has(token))) return null;
+  const tenantObservations = [context.tenant_name, context.primary_tenant];
+  for (const tenant of Array.isArray(context.tenants) ? context.tenants : []) {
+    tenantObservations.push(typeof tenant === 'string' ? tenant : tenant?.name || tenant?.tenant_name);
+  }
+  const tenant = tenantObservations.map((rawName) => ({
+    raw_name: clean(rawName),
+    normalized_name: normalizeTenantIdentityName(rawName),
+  })).find(({ normalized_name: name }) => {
+    const tenantMatch = name.match(/^(.+?) SURGICAL CENTER$/);
+    return tenantMatch?.[1]?.trim() === facilityCore;
+  });
+  return tenant ? {
+    basis: 'controlled_asc_facility_alias',
+    organization_core: facilityCore,
+    cms_facility_name: facility,
+    captured_tenant_name: tenant.raw_name,
+  } : null;
+}
+
+function normalizeEnrollmentOrganizationName(value) {
+  return normalizeTenantIdentityName(value)
+    .replace(/\bASSOC\b/g, 'ASSOCIATES')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function ownerEnrollmentOrganizationCorroboration(target, context) {
+  const evidence = target.cms_evidence || {};
+  if (evidence.enrollment_corroborated !== true) return null;
+  const enrollmentOrganizations = (Array.isArray(evidence.enrollment_org_names)
+    ? evidence.enrollment_org_names : [])
+    .map((rawName) => ({
+      raw_name: clean(rawName),
+      normalized_name: normalizeEnrollmentOrganizationName(rawName),
+    }))
+    .filter(({ normalized_name: name }) => Boolean(name));
+  if (enrollmentOrganizations.length === 0) return null;
+  for (const contact of Array.isArray(context.contacts) ? context.contacts : []) {
+    if (clean(contact?.role).toLowerCase() !== 'owner') continue;
+    const capturedOwner = normalizeEnrollmentOrganizationName(contact?.name);
+    const enrollmentOrganization = enrollmentOrganizations
+      .find(({ normalized_name: name }) => name === capturedOwner);
+    if (!enrollmentOrganization) continue;
+    return {
+      basis: 'cms_enrollment_organization_owner',
+      captured_owner_name: clean(contact?.name),
+      enrollment_organization: enrollmentOrganization.raw_name,
+    };
+  }
+  return null;
+}
+
 function exactFacilityCorroboration(target, context) {
   const facility = normalizeTenantIdentityName(target.cms_identity?.facility_name);
   if (!facility) return null;
@@ -387,6 +451,11 @@ export function buildAscStructuredCapture(target, context = {}) {
     const aliasMatch = addressAlias && corroboration;
     const rangeContainment = capturedRangeContainsFrozenNumber(frozenComparisonToken, addressToken);
     const rangeContainmentMatch = rangeContainment && corroboration;
+    const controlledFacilityAlias = controlledAscFacilityAlias(target, context);
+    const ownerEnrollmentCorroboration = ownerEnrollmentOrganizationCorroboration(target, context);
+    const multiSignalRangeMatch = rangeContainment
+      && controlledFacilityAlias
+      && ownerEnrollmentCorroboration;
     const municipalityAlias = terminalTownshipMunicipalityAlias(frozenComparisonToken, addressToken);
     const municipalityAliasMatch = municipalityAlias && exactTenantCorroboration;
     const directionalStreetTypeExtension = capturedDirectionalStreetTypeExtension(
@@ -400,12 +469,27 @@ export function buildAscStructuredCapture(target, context = {}) {
     const compoundStreetSplit = compoundStreetTokenSplit(frozenComparisonToken, addressToken);
     const facilityCorroboration = exactFacilityCorroboration(target, context);
     const compoundStreetSplitMatch = compoundStreetSplit && facilityCorroboration;
-    if (!parentBuildingMatch && !aliasMatch && !rangeContainmentMatch
+    if (!parentBuildingMatch && !aliasMatch && !rangeContainmentMatch && !multiSignalRangeMatch
       && !municipalityAliasMatch && !directionalStreetTypeMatch
       && !compoundStreetSplitMatch) {
       throw new Error('Captured page does not match the active frozen ASC candidate');
     }
-    identityMatch = compoundStreetSplitMatch ? {
+    identityMatch = multiSignalRangeMatch ? {
+      mode: 'controlled_multisignal_range_identity',
+      frozen_street_number: rangeContainment.frozen_number,
+      captured_range_start: rangeContainment.range_start,
+      captured_range_end: rangeContainment.range_end,
+      facility_alias_basis: controlledFacilityAlias.basis,
+      organization_core: controlledFacilityAlias.organization_core,
+      cms_facility_name_preserved: clean(cmsIdentity.facility_name),
+      captured_tenant_name_preserved: controlledFacilityAlias.captured_tenant_name,
+      owner_corroboration_basis: ownerEnrollmentCorroboration.basis,
+      captured_owner_name_preserved: ownerEnrollmentCorroboration.captured_owner_name,
+      enrollment_organization_preserved: ownerEnrollmentCorroboration.enrollment_organization,
+      cms_address_preserved: clean(cmsIdentity.address),
+      captured_building_address: clean(context.address),
+      second_review_required: true,
+    } : compoundStreetSplitMatch ? {
       mode: 'facility_corroborated_compound_street_split',
       frozen_compound_token: compoundStreetSplit.compound_token,
       captured_street_parts: compoundStreetSplit.captured_parts,
