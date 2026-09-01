@@ -779,6 +779,21 @@ possible reality-driven advance.
   `source`/`batch_tag` you can reverse by, over any destructive change. Soft-flag (`metadata.*_flagged`) instead
   of deleting.
 - **Never fabricate** — a field the source doesn't state stays blank; a contact/owner is never invented.
+- **⚠️ AN "ENRICHMENT" THAT ASKS A MODEL TO RECALL A FACT IS FABRICATION BY CONSTRUCTION, AND IT WEARS
+  THE SAME NAME AS A REAL ADAPTER (assessor enrichment, 2026-09-01).** `src/assessor_enrichment.py` is
+  named for a county-assessor lookup and **contains no county HTTP call at all** — its one external
+  request asks **gpt-4o to recall parcel facts from memory**. A model cannot know a specific parcel's
+  year built or lot size; it can only produce a plausible number, and this one would have written that
+  number into `properties` as a fact. **It is `[0 fields written on 25 properties]` that saved us**, not
+  any guard. **The same class was already recorded one domain over** — gov's ORE Phase A1 rejected
+  LLM-recall enrichment for exactly this reason — **and it was never checked on the dia side.**
+  - **The rule this generalises to: read what a producer's external call actually TALKS TO before
+    trusting its name.** `*_enrichment`, `*_lookup`, `*_fetcher` name an INTENT. Grep the module for
+    the host it contacts; if the only outbound call is to a model, it is a generator, not a source, and
+    the P131 lens says this is case (c) — **not on-box, not obtainable, build neither.**
+  - **And re-run the check across domains whenever one domain records a doctrine rejection.** The
+    hazard travels with the TECHNIQUE, not the repo — the same lesson P189/A2/N15c each paid for
+    inside one database, one level up.
 
 ### Deploy ordering (constant rule)
 
