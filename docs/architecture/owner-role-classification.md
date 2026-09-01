@@ -6,8 +6,17 @@
 > framed this as a build-or-don't choice before those constraints were known.
 >
 > **Parent canonical page:** [`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md)
-> (the surfaces that consume the role). **Status: DESIGNED + FULLY MEASURED, NOT BUILT — blocked on
-> §6.** ⛔ **The staged prompt `C13` is SUPERSEDED — it encodes a single-valued role, which §2c
+> (the surfaces that consume the role).
+>
+> ## ✅ STATUS: **BUILT AND LIVE 2026-09-01 (C13b).** Read §7 FIRST — it carries the shipped state and
+> ## the four measurements that CORRECT this page.
+>
+> `v_lcc_entity_roles` on LCC Opps: 11,631 rows, **10,655 entities with ≥1 role, 946 with ≥2.**
+> Migration `20261005120000_lcc_c13b_entity_roles_multilabel.sql`; writeup
+> [`../audits/C13b_OWNER_ROLE_MULTILABEL_2026-09-01.md`](../audits/C13b_OWNER_ROLE_MULTILABEL_2026-09-01.md);
+> guard `test/c13b-entity-roles-multilabel.test.mjs` (19/19 mutations RED).
+> ⚠️ **Several populations below were measured on an EDGE COUNT and are stale — §7 names each one.**
+> ⛔ **The staged prompt `C13` is SUPERSEDED — it encodes a single-valued role, which §2c
 > refutes.** Do not run it; it needs rewriting to the multi-label model.
 
 ## 0. Scott's constraints, and what each one settles
@@ -105,12 +114,16 @@ per entity resolved by a precedence ladder. **It is a SET.** An account can be a
 
 **Measured — and the truncation would fall exactly where it hurts most:**
 
-| | entities |
-|---|---:|
-| carry **2 or more** labels | **957** |
-| …**`investor_owner` + `repeat_buyer`** | **772** |
-| `former_owner` + `repeat_buyer` | 142 |
-| carry exactly one | 11,657 |
+| | entities | ⚠️ BUILT 2026-09-01 |
+|---|---:|---:|
+| carry **2 or more** labels | **957** | **946** ✅ |
+| …**`investor_owner` + `repeat_buyer`** | **772** | ⚠️ **167** — see §7.2 |
+| `former_owner` + `repeat_buyer` | 142 | 16 |
+| carry exactly one | 11,657 | 9,709 |
+
+⚠️ **The 772 was computed over an EDGE count and does not survive §7.2.** The multi-label finding
+itself is unaffected — 946 against a predicted 957 — but the pair that dominates it is
+`developer` + `investor_owner` (258), not this one.
 
 **772 entities are simultaneously an owner and an active acquirer** — and Scott's own rule is that
 this combination *"might take a group from a seller prospect to a buyer prospect for our BD
@@ -130,7 +143,7 @@ previously felt the single column was insufficient and worked around it.**
 | **`one_off_owner`** | *"a category of **individual investor** that only owns one of our target submarket category"* | ⚠️ **an INDIVIDUAL, one target asset** — my 2,448 counted any org with one asset, which is not this. **143 person-typed entities hold exactly one.** |
 | **`investor_owner`** | *"anyone or firm or SPE that owns for the purpose of investing and probably should include **all of our prospects in the space**"* | **deliberately BROAD** — the default for owning-to-lease. **6,469.** SPEs included. |
 | **`developer`** ⚠️ **see §2e — this is BUILT, not unbuilt** | *"buys and sells programmatically… pursuing a relationship with the tenant, showing sites, negotiating a lease, building for the tenant, and then usually selling to realize the arbitrage between build cost/cap and exit cap"* | ⚠️ **a BEHAVIOURAL signature — acquire → build → sell, repeatedly.** The existing classifier reads `properties.developer_name`, which is a *label*, not this behaviour. **Under-specified by what we hold; do not claim the current 715 satisfies it.** |
-| **`repeat_buyer`** | *"anyone that has acquired more than one asset in our swimlane; the more frequent and recent the acquisitions, the more relatively important"* | **≥2 acquisitions — 3,258** — plus **pacing as a weight, not a label** |
+| **`repeat_buyer`** | *"anyone that has acquired more than one asset in our swimlane; the more frequent and recent the acquisitions, the more relatively important"* | ⚠️ **3,258 IS AN EDGE COUNT AND IS WRONG — it is 401 distinct assets, 385 after guards (§7.2).** Scott's word is *asset*; `entity_relationships` has no unique key on `(from,to,type)`, so the other 2,857 are single-asset SPEs whose one conveyance was observed several times. Plus **pacing as a weight, not a label** |
 | **`user_owner`** | *"fairly infrequent… good with it being a human determination"* | ✅ confirmed: human-confirmed lane, ~13 candidates |
 
 ## 2c-ii. ⚠️ Pacing is the signal Scott cares most about, and it is 49% unmeasurable today
@@ -138,14 +151,21 @@ previously felt the single column was insufficient and worked around it.**
 He ties BD treatment to *pacing* — frequency and recency of acquisition. Measured over
 organizations with ≥2 purchases:
 
-| | entities |
-|---|---:|
-| repeat buyers | **2,726** |
-| …last acquisition within 2 years | **43** |
-| …within 5 years | 99 |
-| …**apparently dormant 5+ years** | **2,627** |
-| ≥5 purchases · ≥10 | 1,123 · 288 |
-| repeat buyers who are contactable | 122 |
+| | entities | ⚠️ RE-MEASURED ON THE CORRECTED POPULATION (§7.2) |
+|---|---:|---:|
+| repeat buyers | **2,726** | **401** (385 after guards) |
+| …last acquisition within 2 years | **43** | **98** |
+| …within 5 years | 99 | 80 |
+| …**apparently dormant 5+ years** | **2,627** | **219** |
+| ≥5 purchases · ≥10 | 1,123 · 288 | — |
+| repeat buyers who are contactable | 122 | — |
+
+⚠️ **THE DORMANCY WAS MOSTLY THE PHANTOM SPEs, NOT MISSING DATES — and that is a different finding
+from the one this section drew.** On the corrected population `ownership`-edge dates cover **98.8%**
+(23,557 of 23,847 edges), so `repeat_buyer` pacing is **1 `pacing_unknown` row, not half of them**.
+The 50.7% blindness is real and belongs to **`investor_owner`**, which paces off
+`ownership_start_date` (66% of entities carry one). **C18 is still the highest-value item; the reason
+stated here was partly wrong.**
 
 ⚠️ **Do NOT read 2,627 as dormant. `ownership_start_date` is present on only 7,152 of 14,119
 portfolio facts — 50.7%.** Roughly half of that "dormancy" is **missing dates, not inactivity.**
@@ -161,15 +181,16 @@ newly the highest-value thread in this design.
 
 **Per entity, a SET of roles**, each with its own evidence and dates:
 
-| role | evidence | population | automated? |
-|---|---|---:|---|
-| `operator` | `is_operator_not_owner` / recorded `owner_type` (P113) | 36 | ✅ recorded flag |
-| `user_owner` | owner ≈ tenant on the same property | 13 candidates | 👤 **human-confirmed** |
-| `investor_owner` | ≥1 current portfolio fact | **6,469** | ✅ deterministic |
-| `repeat_buyer` | ≥2 acquisitions in the swimlane **+ pacing** | **3,258** | ✅ count; ⚠️ pacing 49% blind |
-| `former_owner` | held a fact that ended, holds none now | **3,801** | ✅ deterministic |
-| `one_off_owner` | **individual** holding exactly one target asset | **143** | ✅ deterministic |
-| `developer` | ⚠️ **behavioural — not yet specified from what we hold** | 715 *(a label, not the behaviour)* | ❌ **under-specified** |
+| role | evidence | population (design) | **BUILT 2026-09-01** | automated? |
+|---|---|---:|---:|---|
+| `operator` | `is_operator_not_owner` / recorded `owner_type` (P113) | 36 | **29** ⚠️ 36 was a dia-side `true_owners` count, not LCC entities | ✅ recorded flag |
+| `user_owner` | owner ≈ tenant on the same property | 13 candidates | **15 candidates / 0 confirmed** | 👤 **human-confirmed** |
+| `investor_owner` | ≥1 current portfolio fact | **6,469** | **6,447** (−22 guarded) | ✅ deterministic |
+| `repeat_buyer` | ≥2 acquisitions in the swimlane **+ pacing** | **3,258** | ⚠️ **385** — see §7.2 | ✅ count |
+| `former_owner` | held a fact that ended, holds none now | **3,801** | **3,786** (−15 guarded) | ✅ deterministic |
+| `one_off_owner` | **individual** holding exactly one target asset | **143** | **142** ⚠️ the "individual" half is UNVERIFIED — §7.4 | ✅ deterministic |
+| `developer` | ⚠️ **behavioural — see §2e, it IS built** | 715 | **718** ⚠️ 838 before the override rule — §7.3 | ✅ read, never re-implemented |
+| `buyer` | ⚠️ **not a derived role** — a human's `behavioral_override`, emitted verbatim | — | 124 | 👤 manual |
 
 ⚠️ **`developer` is the one arm this design cannot yet honour.** Scott's definition is a *pattern of
 behaviour over time* — build-to-suit for a named tenant, then sell. The existing 715 come from a
@@ -499,10 +520,10 @@ is ≥2 acquisitions with pacing as a weight · `developer` is a behavioural pat
 
 ⛔ **The staged build prompt `C13` is SUPERSEDED and must not be run.** It encodes a
 precedence-ordered **single** role, which §2c refutes on 957 entities.
-✅ **The rewrite is staged and ready: `docs/claude-code/prompts/C13b-owner-role-multilabel.md`** —
-multi-label, Scott's decisions recorded in its §0 so they are not re-asked, populations re-measured
-2026-09-01, and the two genuinely open questions (dia-only `one_off_owner`; storage shape) marked
-as his rather than assumed.
+✅ **RUN AND SHIPPED 2026-09-01 — see §7.** `docs/claude-code/prompts/C13b-owner-role-multilabel.md`
+was executed in full; multi-label, Scott's decisions recorded in its §0 so they were not re-asked,
+populations re-measured. **Four of its inputs were corrected by measurement on the way in** (§7.2
+`repeat_buyer`, §7.3 the override, §7.4 `one_off_owner`, §7.5 the ambiguity sets).
 
 ### ✅ Both remaining questions ANSWERED 2026-09-01 — §6 has no open decisions left
 
@@ -551,9 +572,136 @@ stays for now — 4,132 rows and `behavioral_override` read it.
    shipped 2026-05-22, five generations of it. ⚠️ **Do not build a second classifier for this
    concept** — that is the normaliser drift this repo warns about repeatedly. If it is defective,
    fix it in place.
-3. **Storage shape** — a per-entity/per-role table (with evidence + dates) rather than the scalar
-   `entities.owner_role`. Consumers all ask `owner_role IN (...)`, which becomes *"has role X"*.
+3. ✅ **RESOLVED 2026-09-01 — the storage shape SHIPPED as `v_lcc_entity_roles` (§7).** A view, not
+   a table and not a stamped column; `entities.owner_role` stays. The consumer mapping onto
+   *"has role X"* was measured at **126 → 130 (+4 / −0)** on the one live consumer and deliberately
+   **not applied** — backlog **C13d**.
 4. ✅ **RESOLVED — `one_off_owner` is ALL swimlanes** (above). It stays at the fleet-wide **143**.
    ⚠️ **New, and larger than this item:** *"clients first, not the product type"* means **every
    domain filter on a BD surface is now a candidate defect.** Nobody has swept for them —
    backlog **C19**.
+
+---
+
+## 7. ✅ BUILT 2026-09-01 (C13b) — the shipped state, and the four measurements that CORRECT this page
+
+**Live on LCC Opps:** `v_lcc_entity_roles` (one row per entity+role, carrying its evidence arm,
+dates and pacing), `v_lcc_user_owner_candidates`, `v_lcc_entity_role_ambiguity`, and the
+`lcc_entity_role_confirmation` input ledger (**empty** — `user_owner` is a human-confirmed lane).
+Migration `20261005120000_lcc_c13b_entity_roles_multilabel.sql`. Full writeup + every query:
+[`../audits/C13b_OWNER_ROLE_MULTILABEL_2026-09-01.md`](../audits/C13b_OWNER_ROLE_MULTILABEL_2026-09-01.md).
+Guard `test/c13b-entity-roles-multilabel.test.mjs` (11 tests, **19/19 mutations RED**).
+
+**Nothing writes. No consumer was repointed** (§5: *no change to how a role is CONSUMED*).
+**P0.4 is 555 before and after**, and the deal-timing bands are 621 before and after.
+
+### 7.1 The shape held: 946 entities carry two or more roles
+
+Against §2c's predicted ~957. **`one_off_owner` + `investor_owner` is 142 of 142 — the whole arm, by
+construction** (a person holding one asset holds an asset), so `one_off_owner` is a REFINEMENT of
+`investor_owner`, not an alternative; a precedence ladder would have had to destroy one of them on
+every row. And **`investor_owner` + `operator` is 9** — Northwest Kidney Centers, Puget Sound Kidney
+Centers, Satellite Dialysis and six others own the real estate they operate in. Both labels are true
+and neither is suppressed.
+
+### 7.2 ⚠️ `repeat_buyer` was measured on an EDGE COUNT — 3,258 is 401
+
+Scott's definition says *"more than one **asset**"*. `entity_relationships` has **no unique
+constraint on `(from, to, type)`** (P177) and `purchases` is fed independently by `costar_sidebar`,
+`costar_deed` and `rca_deed`, so an edge count is an OBSERVATION count. Keyed on distinct assets:
+**401** (385 after the brokerage/placeholder guards). Read on named rows, the 2,857 difference is
+address-named single-asset SPEs — `Korea Investment Corporation` reading as a repeat buyer on ONE
+property recorded twice, `Stoneforge Advisors LLC by ARA` with five byte-identical edges on one
+asset, `1300 Pine Avenue Llc` holding `1300 Pine Ave`.
+
+⚠️ **The obvious middle key was measured and rejected too**: `(asset, date)` gives 735, and the extra
+334 are A2b's cross-source lag — one asset seen on two dates from two sources. **A second observation
+is not a second acquisition.**
+
+**The hazard travels with the technique.** This is the same class as the P159a re-discovery tally and
+A5's `815 = 1000 − 185`: a plausible non-zero number that measures the instrument rather than the
+population, carried unchallenged through three documents.
+
+### 7.3 ⚠️ A manual override REPLACES the column an arm reads — 120 developers a human had corrected
+
+**119 live entities carry `owner_role = 'developer'` together with a human `behavioral_override` of
+`buyer`**, and one with `operator`. Those overrides are not an additional fact in a multi-label
+world; they are somebody looking at the gov classifier's verdict and saying *this is not a
+developer*, which is exactly what `coalesce(behavioral_override, owner_role)` on
+`v_entities_effective_role` has always meant. Emitting `developer` anyway resurrects the machine call
+the human corrected. `developer` **838 → 718**. The mirror `true_owner_is_operator` flag is
+INDEPENDENT evidence and is not suppressed by an override of a different value.
+
+**The override rides VERBATIM.** `buyer` (124 rows) is therefore a role token in the output and is
+deliberately *not* in the derived vocabulary — remapping it to `investor_owner` would hand a consumer
+asking for `investor_owner` a false positive. ⚠️ **46 overrides sit on merged-away tombstones** and
+are correctly excluded (425 total, 379 live), so §3's "374" is stale.
+
+### 7.4 ⚠️ `one_off_owner` ships as specified and its "individual" half is UNVERIFIED
+
+The arm is Scott's definition against the recorded fact (`entity_type = 'person'`, one current
+asset). **The recorded fact is wrong on roughly half the arm.** Read on 20 named rows, the top ten by
+rent are **Jamestown ($22.8M), Gates Hudson, Metropolitan Life Insurance ($11.8M), Gladstone
+Commercial, Beverly Wilshire, Samaritan's Purse, SkyREM, Deoworks** — all typed `person` — against
+two genuine individuals; the bottom ten read the same way (`AvalonBay`, `BREIT`, `Apollo Global RE`).
+
+**No non-lexical corroboration exists**, and this was checked rather than assumed: of the 142, **0**
+carry a `salesforce/Account` identity, **0** an inbound `works_at` edge, **0** an `org_type`.
+⚠️ **`first_name`/`last_name` looks like the answer and is not** — it is a whitespace split of the
+same string (`Metropolitan` / `Life Insurance`) and is absent on a real individual
+(`Kalven Cederberg`). That is P125's *a proxy for a fact you already hold is not a measurement*.
+A name test is banned by the design AND would not work: `lcc_looks_like_person` flags 28 of 142 and
+is the documented two-capitalised-tokens false positive.
+
+**So it is SURFACED, not patched** —
+`v_lcc_entity_role_ambiguity.one_off_owner_rests_on_recorded_entity_type` lists all 142. The blast
+radius is a label: every one also carries `investor_owner`, so a wrong `one_off_owner` removes
+nothing and admits nobody. The upstream defect is `entities.entity_type`, which is unreliable in
+BOTH directions (**979 `former_owner` rows are typed `organization` and read as individuals** —
+`RICHARD LEBOS`, `MITCHELL IDOL`, `Kristen E Pigman`). Backlog **C13c**.
+
+### 7.5 ⚠️ C13's "477 + 35 ambiguous" do not reproduce — the SET dissolved them
+
+Both were artifacts of the single-valued precedence ladder and C13's org-inclusive `one_off_owner`.
+Under a set, an entity holding one asset that buys repeatedly is simply **both**, and a single-asset
+*organisation* is unambiguously `investor_owner` under Scott's broad definition. Re-derived against
+the shipped arms the residue is **12** (a person with one asset and ≥2 acquisitions) + **129**
+(SPE-shell-named single-asset holders) + **15** (unconfirmed `user_owner` candidates) + **142**
+(§7.4) = 298 rows on `v_lcc_entity_role_ambiguity`. **Worth stating rather than quietly reporting
+different numbers: a chunk of what C13 called ambiguity was an artifact of C13's shape.**
+
+### 7.6 Storage + the consumer mapping, measured
+
+A **VIEW** over the existing spine, as §6 decided. `entities.owner_role` is left in place.
+`owner_role IN (...)` becomes `EXISTS (SELECT 1 FROM v_lcc_entity_roles r WHERE r.entity_id = ? AND
+r.role = ?)`. The one live consumer is `handleProspectingBrief`'s BD gate: measured over the 308
+eligible cadence rows, **126 → 130 (+4 admitted, −0 removed)** — the "little or none" the prompt
+predicted. **Not repointed here** (it needs `has_bd_role` as a view COLUMN so the gate stays in the
+SELECTION, on a surface C8/C10/C11 have each just fixed) — backlog **C13d**.
+
+### 7.7 ⚠️ The SHAPE was decided by the profile, and the obvious form was 48× slower
+
+The first cut — eight `union all` branches over a MATERIALIZED `cand` CTE — could not push
+`entity_id = ?` down, because a CTE referenced nine times is always materialized. On the exact shape
+the consumer mapping issues:
+
+| | before | after |
+|---|---:|---:|
+| single-entity probe | **39,968 buffers** / ~686 ms | **1,787 buffers** / ~13 ms |
+| ranked scan (`limit 50`) | 39,966 buffers / ~718 ms | 39,967 buffers / ~362 ms |
+
+Fixed by ONE `cand` scan (`not materialized`) with the arms as a LATERAL VALUES list. ⚠️ **That alone
+made the ranked scan 2.4× SLOWER** (1,759 ms), because inlining evaluates an expression referenced in
+all eight VALUES rows eight times per candidate — 106,240 name-guard calls instead of ~11,700.
+**Moving the two guards to a single predicate over the surviving (entity, arm) pairs is what made the
+inlined shape faster than the materialized one.** Both halves were needed. **Buffers are the durable
+evidence** (wall-clock on this box is session-variable by 2–4×). No `loops=` correlated subplan in
+either shape, so **materialization was not required and was not added.**
+
+### 7.8 Churn re-measured — and it argues FOR the view
+
+**3 holdings ended and 1 started in 90 days**, reproducing §3's figure exactly — but **`purchases`
+gained 6,501 edges in the same window**, which is what moves `repeat_buyer`. So *"the volatility is
+negligible"* is true of the portfolio arms and false of the acquisition arm, and a nightly stamped
+column would be stale against those 6,501 while a view cannot be. ⚠️ `lcc_entity_portfolio_facts.updated_at`
+moved on **14,113 of 14,119 rows** (the nightly re-upsert) and is useless as a churn signal.

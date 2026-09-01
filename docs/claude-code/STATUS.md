@@ -16,6 +16,49 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-01 — ✅ C13b SHIPPED: the owner-role classification is a SET, and three of its own inputs were wrong
+
+`v_lcc_entity_roles` is live on LCC Opps — **one row per (entity, role)** with its evidence arm,
+dates and pacing. **10,655 entities carry ≥1 role (was 4,132); 946 carry ≥2 (was structurally
+impossible); 0 duplicate (entity, role) pairs.** A VIEW over the existing spine, never a stamped
+column. **P0.4 555 → 555, deal bands 621 → 621, no consumer repointed, nothing writes.**
+Migration `20261005120000`; guard `test/c13b-entity-roles-multilabel.test.mjs` (11 tests,
+**19/19 mutations RED**); suite 4,954 pass / 0 fail. Writeup
+[`../audits/C13b_OWNER_ROLE_MULTILABEL_2026-09-01.md`](../audits/C13b_OWNER_ROLE_MULTILABEL_2026-09-01.md);
+canonical `docs/architecture/owner-role-classification.md` **§7**.
+
+**Three inputs the design, the prompt and C13 all carried were corrected by measurement:**
+
+- ⚠️ **`repeat_buyer` 3,258 → 401** (385 after guards). 3,258 counts `purchases` EDGES, and
+  `entity_relationships` has no unique key on `(from,to,type)` (P177) with three sources observing
+  the same conveyance. Read on named rows the difference is single-asset SPEs — Korea Investment
+  Corporation on ONE property recorded twice. **The `(asset, date)` middle key was also measured and
+  rejected** (735; the extra 334 are A2b cross-source lag). Knock-on: the design's *"2,627 repeat
+  buyers dormant 5+ years"* is **219**, and 98 are active within 2 years.
+- ⚠️ **A manual override REPLACES the column an arm reads.** 119 entities carry
+  `owner_role='developer'` AND an override of `buyer`; emitting `developer` anyway resurrects the
+  machine call a human corrected. `developer` **838 → 718**. The override rides **verbatim** —
+  `buyer` (124) is not remapped into the derived vocabulary.
+- ⚠️ **`one_off_owner` rests on `entities.entity_type`, which is wrong in both directions.** Top ten
+  by rent: Jamestown $22.8M, Metropolitan Life Insurance, Gladstone Commercial, SkyREM — all typed
+  `person`; and 979 `former_owner` rows are typed `organization` and read as individuals.
+  **`first_name`/`last_name` looked like the corroboration and is a re-split of the same string**
+  (P125). 0 of 142 carry any independent org signal. Surfaced in `v_lcc_entity_role_ambiguity`,
+  not patched — a name test is banned and `lcc_looks_like_person` flags only 28 of 142 anyway.
+  Backlog **C13c**.
+
+**Also:** the obvious view shape (union-all over a materialized CTE) was **48× slower** on the exact
+probe the consumer mapping issues (39,968 → 1,787 buffers); the fix needed BOTH a `not materialized`
+LATERAL and hoisting the name guards out of the per-arm predicates. **C13's "477 + 35 ambiguous" do
+not reproduce** — the SET dissolved them; the real residue is 298 rows. `user_owner` reads **0 by
+design** (15 candidates read, 10 genuine / 5 SPE-named-after-tenant; the confirm ledger ships empty).
+
+**Next:** **C13d** repoint `handleProspectingBrief`'s BD gate (measured 126 → 130, +4/−0; needs
+`has_bd_role` as a view COLUMN); **C13e** build the `user_owner` confirm surface; **C13c** the
+`entity_type` defect; **C18** (`ownership_start_date`) is unchanged and still the highest-value item
+— though §7.2 corrects WHY: the 50.7% blindness belongs to `investor_owner` pacing, not to
+repeat-buyer pacing, which is 98.8% dated.
+
 ## 2026-09-01 — 🚨 SCOTT'S CORRECTION: I scoped a SOURCE to one CONSUMER's gap list. The public-records lane is BUILT and has NEVER WRITTEN A FIELD
 
 **My "don't build" verdict below was scoped to the 662-row metadata backfill queue and is WRONG as a

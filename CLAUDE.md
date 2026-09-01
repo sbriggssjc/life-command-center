@@ -3826,6 +3826,100 @@ Writeup: `docs/audits/C11_CALL_SHEET_CONTACT_BASIS_2026-08-31.md`.
   (`@srsre.com`, `@triprop.com`) — `is_brokerage` reads the OWNER name, so it structurally cannot
   see a broker in the CONTACT slot.
 
+## C13b — the owner-role classification is a SET, and three of its inputs were wrong (2026-09-01)
+
+`v_lcc_entity_roles` (LCC Opps) is live: **one row per (entity, role)** carrying the evidence arm
+that produced it, its dates and its pacing. **10,655 entities carry ≥1 role (was 4,132), 946 carry
+≥2 (was structurally impossible), 0 duplicate (entity, role) pairs.** A VIEW over the existing spine
+— **not** a table, **not** a second cross-DB roll-up (`lcc_entity_portfolio_facts` IS that roll-up),
+**never** a stamped column. `entities.owner_role` is left in place. **P0.4 555 → 555; the deal bands
+621 → 621; no consumer repointed; nothing writes.** Migration `20261005120000`; guard
+`test/c13b-entity-roles-multilabel.test.mjs` (19/19 mutations RED). Writeup
+`docs/audits/C13b_OWNER_ROLE_MULTILABEL_2026-09-01.md`; canonical
+`docs/architecture/owner-role-classification.md` **§7**.
+
+- **⚠️ `repeat_buyer` WAS 3,258 AND IS 401 — AN EDGE COUNT IS AN OBSERVATION COUNT.** Scott's
+  definition says *"more than one ASSET"*; `entity_relationships` has **no unique constraint on
+  `(from, to, type)`** (P177) and `purchases` is fed independently by `costar_sidebar`,
+  `costar_deed` and `rca_deed`. Keyed on distinct assets it is 401 (385 after guards). Read on named
+  rows the 2,857 difference is address-named single-asset SPEs — **Korea Investment Corporation
+  reading as a repeat buyer on ONE property recorded twice**, `Stoneforge Advisors LLC by ARA` with
+  five byte-identical edges on one asset, `1300 Pine Avenue Llc` holding `1300 Pine Ave`.
+  ⚠️ **The obvious middle key was measured and rejected too**: `(asset, date)` gives 735 and the
+  extra 334 are A2b's cross-source lag — *a second observation is not a second acquisition*.
+  **The number had been carried through three documents unchallenged**, and it also produced the
+  design's *"2,627 repeat buyers dormant 5+ years"*, which is **219** on the corrected population.
+  ⚠️ **Before keying an arm on a relationship table, ask what one row of it MEANS** — here, one
+  observation of a conveyance, by one source.
+- **⚠️ A MANUAL OVERRIDE REPLACES THE COLUMN AN ARM READS; IT DOES NOT SIT BESIDE IT.** In a
+  multi-label world "both are true" is the tempting default, and it was wrong: **119 live entities
+  carry `owner_role='developer'` AND a human `behavioral_override` of `buyer`** (one more
+  `operator`). Those are somebody reading the gov classifier's verdict and saying *this is not a
+  developer* — which is what `coalesce(behavioral_override, owner_role)` on
+  `v_entities_effective_role` has always meant. Emitting `developer` anyway resurrects exactly the
+  machine call the human corrected: **838 → 718**. The mirror `true_owner_is_operator` flag is
+  INDEPENDENT evidence and is *not* suppressed by an override of a different value.
+  **The override rides VERBATIM** — `buyer` (124) stays `buyer` and is deliberately NOT in the
+  derived vocabulary, because remapping it to `investor_owner` hands a consumer a false positive.
+  ⚠️ **46 overrides sit on merged-away tombstones** and are excluded (425 total, 379 live).
+- **⚠️ `one_off_owner` RESTS ON `entities.entity_type`, WHICH IS WRONG IN BOTH DIRECTIONS — SURFACED,
+  NOT PATCHED.** The arm is Scott's definition against the recorded fact (person-typed, one current
+  asset, 142). Read on 20 named rows, the top ten by rent are **Jamestown $22.8M, Gates Hudson,
+  Metropolitan Life Insurance $11.8M, Gladstone Commercial, SkyREM, Samaritan's Purse** — all typed
+  `person` — and the bottom ten add `AvalonBay`, `BREIT`, `Apollo Global RE`. The mirror image is
+  live too: **979 `former_owner` rows are typed `organization` and read as individuals**
+  (`RICHARD LEBOS`, `MITCHELL IDOL`, `Kristen E Pigman`).
+  - **⚠️ AND `first_name`/`last_name` LOOKS LIKE THE CORROBORATION AND IS A RE-SPLIT OF THE SAME
+    STRING** — `Metropolitan` / `Life Insurance`, `Samaritan's` / `Purse` — and is ABSENT on a real
+    individual (`Kalven Cederberg`). That is P125's *a proxy for a fact you already hold is not a
+    measurement*, caught before it shipped as a gate. Genuinely independent signals were checked and
+    are all zero: **0 of 142 carry a `salesforce/Account` identity, an inbound `works_at` edge or an
+    `org_type`.**
+  - A name test is banned by the design **and would not have worked**: `lcc_looks_like_person` flags
+    28 of 142 and is the documented two-capitalised-tokens false positive (A2a held six real
+    companies on it). So the role is emitted as the recorded fact says and
+    `v_lcc_entity_role_ambiguity.one_off_owner_rests_on_recorded_entity_type` states that
+    "individual" is unverified. **The blast radius is a label, not a write** — all 142 also carry
+    `investor_owner`, so a wrong one removes nothing and admits nobody. Backlog **C13c**.
+- **⚠️ THE OBVIOUS VIEW SHAPE WAS 48× SLOWER ON THE ONE QUERY THE CONSUMER MAPPING ISSUES.** Eight
+  `union all` branches over a MATERIALIZED `cand` CTE cannot push `entity_id = ?` down — **a CTE
+  referenced nine times is always materialized** — so the `EXISTS (… WHERE entity_id = ? AND role =
+  ?)` probe scanned all 13,280 candidates nine times: **39,968 buffers / ~686 ms → 1,787 / ~13 ms**
+  once rewritten as ONE `cand` scan (`not materialized`) with the arms as a LATERAL VALUES list.
+  ⚠️ **That alone made the ranked scan 2.4× SLOWER** (718 → 1,759 ms), because inlining evaluates an
+  expression referenced in all eight VALUES rows eight times per candidate — 106,240 name-guard
+  calls instead of ~11,700. **Moving the guards to a single predicate over the surviving
+  (entity, arm) pairs is what made the inlined shape faster than the materialized one** (362 ms).
+  Both halves were needed; either alone regresses one shape. **Quote BUFFERS** — wall-clock on this
+  box moved 2–4× between sessions on unchanged SQL. No `loops=` subplan in either shape, so
+  materialization was not required and was not added.
+- **⚠️ CHURN ARGUES *FOR* THE VIEW, AND THE DESIGN'S NUMBER DESCRIBED ONE ARM.** 3 holdings ended and
+  1 started in 90 days — reproduced exactly — but **`purchases` gained 6,501 edges in the same
+  window**, which is what moves `repeat_buyer`. A nightly stamped column would be stale against
+  those; a view cannot be. ⚠️ `lcc_entity_portfolio_facts.updated_at` moved on **14,113 of 14,119**
+  rows (the nightly re-upsert) and is useless as a churn signal.
+- **Absence is never dormancy.** `pacing_unknown` where the date is missing (2,186 `investor_owner`,
+  1 `repeat_buyer`); the quiet bucket is `quiet_5y_plus`, never "dormant". ⚠️ **Each arm paces off
+  ITS OWN dates and their coverage differs by 33 points** — `repeat_buyer` off `effective_from`
+  (98.8% dated), `investor_owner` off `ownership_start_date` (66% of entities). So **the 50.7%
+  blindness C18 exists for belongs to `investor_owner`, not to repeat-buyer pacing**, which is a
+  correction to the design's own framing.
+- **`user_owner` is a human-confirmed lane and reads 0 by design.** 15 candidates (owner core ==
+  tenant core on a property it holds), read on named rows: **10 genuine owner-occupiers, 5 of one
+  failure shape** — an SPE/DST named after its tenant (`FSC FMC Carbondale IL DST`,
+  `USGBF NIAID LLC`, and the two new ones `NOAA Maryland LLC`, `MORGANTOWN GSA USDA, LLC`).
+  `lcc_entity_role_confirmation` is the INPUT ledger and ships empty — without it the lane is a
+  consumer with no producer. ⚠️ **`lcc_owner_name_is_not_prospected` is SURFACED, never
+  suppressing** (228 role-bearing entities carry it, Wake Forest and Mayo among them): a
+  classification is a fact about the party; whether we prospect them is a different gate.
+- **⚠️ C13's "477 + 35 ambiguous" DO NOT REPRODUCE — the SET dissolved them.** Both were artifacts of
+  the precedence ladder and of C13's org-inclusive `one_off_owner`: under a set, an entity holding
+  one asset that buys repeatedly is simply BOTH. The real residue is **298 rows** on
+  `v_lcc_entity_role_ambiguity` (142 / 129 / 15 / 12). **Say so rather than quietly reporting
+  different numbers.**
+- **Verify on the ARM POPULATIONS and the overlap matrix, never the row count** — 11,631 rows would
+  read identically if every entity carried one wrong label.
+
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
 Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration
