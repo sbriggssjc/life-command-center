@@ -7,8 +7,8 @@
 >
 > **Parent canonical page:** [`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md)
 > (the surfaces that consume the role). **Status: DESIGNED + FULLY MEASURED, NOT BUILT — blocked on
-> the five decisions in §6.** Build prompt staged:
-> `docs/claude-code/prompts/C13-owner-role-derived-classification.md`.
+> §6.** ⛔ **The staged prompt `C13` is SUPERSEDED — it encodes a single-valued role, which §2c
+> refutes.** Do not run it; it needs rewriting to the multi-label model.
 
 ## 0. Scott's constraints, and what each one settles
 
@@ -95,64 +95,88 @@ sold last year are both `former_owner` and are not the same prospect. **Expose `
 alongside the role**; do not encode a cutoff into the classification, or the role starts lying the
 day the cutoff stops matching how you work.
 
-## 2c. The corrected arms
+## 2c. ⚠️ STRUCTURAL CORRECTION — the role is MULTI-LABEL, not a single value
 
-| # | arm | evidence | population | automated? |
-|---|---|---|---:|---|
-| 1 | **`operator`** | `is_operator_not_owner` + recorded `owner_type` (P113) | 36 known | ✅ recorded flag |
-| 2 | **`user_owner`** | owner ≈ tenant **on the same property** | **13 candidates, ~10 genuine** | 👤 **human-confirmed** |
-| 3 | **`former_owner`** | held a fact that ended, holds none now | **3,795** | ✅ deterministic |
-| 4 | **`buyer`** | ≥2 `purchases` edges, no current holding | 2,478 have ≥2 edges | ✅ deterministic |
-| 5 | **`developer`** | existing classifier (`properties.developer_name`) | 715, exhausted | ✅ existing |
-| — | **`unknown`** | no qualifying evidence — an honest absence | the remainder | — |
+**Scott, 2026-08-31:** *"I think these categories can exist multiple iterations per one account."*
 
-⚠️ **There is no longer an arm that classifies the 6,308 current holders as anything.** Most are
-landlords and investors, and **the vocabulary has no word for "owns and leases out"** — which is the
-ordinary case. That is now the open question in §6, and it is a bigger gap than the one I originally
-reported.
+⚠️ **That breaks the shape of this design, not just its content.** Everything above assumed one role
+per entity resolved by a precedence ladder. **It is a SET.** An account can be an `investor_owner`
+**and** a `repeat_buyer` **and** a `former_owner` at the same time, and all three are true.
 
-## 2d. ✅ The landlord gap, sized — and it splits along Scott's own distinction
+**Measured — and the truncation would fall exactly where it hurts most:**
 
-§2c ended with *"no arm classifies the 6,308 current holders."* Measured 2026-08-31, they are **not
-one population**, and the split is the one Scott stated at the outset: *"developers treated
-differently than one-off owners, who are treated differently than buyers."*
+| | entities |
+|---|---:|
+| carry **2 or more** labels | **957** |
+| …**`investor_owner` + `repeat_buyer`** | **772** |
+| `former_owner` + `repeat_buyer` | 142 |
+| carry exactly one | 11,657 |
 
-**All 6,308 current holders:**
+**772 entities are simultaneously an owner and an active acquirer** — and Scott's own rule is that
+this combination *"might take a group from a seller prospect to a buyer prospect for our BD
+treatment depending on the pacing."* **A single-valued column would pick one label and silently
+destroy the other, on precisely the population whose dual status determines how it is worked.**
 
-| shape | entities | |
-|---|---:|---|
-| **one asset, ≤1 purchase, no past holdings** | **4,870 (77%)** | the one-off owner |
-| **two or more current assets** | **762** | **$1.47B** — the investor / portfolio owner |
-| one asset but repeat buys or past holdings | 676 | active, single-asset today |
-| SPE-shell-named | 150 (129 single-asset) | belongs to a sponsor, not standalone |
-| already carry a role | 3,091 | mostly `buyer` |
+⚠️ **So `entities.owner_role` — a scalar column — is the wrong storage.** It needs a per-entity,
+per-role record carrying evidence and dates. **The existing consumers are unaffected in kind:** every
+one of them asks `owner_role IN (...)`, which becomes *"has role X"* against the set. And
+`behavioral_override` already exists as a scalar escape hatch — **plausibly because someone
+previously felt the single column was insufficient and worked around it.**
 
-**The 3,217 that are currently `unknown` — i.e. what a classifier would actually change:**
+## 2c-i. Scott's definitions, verbatim
 
-| proposed state | entities | current rent | **contactable today** |
-|---|---:|---:|---:|
-| **`investor_owner`** — 2+ current assets | **292** | **$583.9M** | 54 |
-| **`one_off_owner`** — 1 asset, no buying activity | **2,448** | **$523.1M** | **279** |
-| single-asset but active (repeat buys or past holdings) | 477 | — | — |
-| SPE-shell-named | 35 | — | — |
+| role | Scott's words | reading |
+|---|---|---|
+| **`one_off_owner`** | *"a category of **individual investor** that only owns one of our target submarket category"* | ⚠️ **an INDIVIDUAL, one target asset** — my 2,448 counted any org with one asset, which is not this. **143 person-typed entities hold exactly one.** |
+| **`investor_owner`** | *"anyone or firm or SPE that owns for the purpose of investing and probably should include **all of our prospects in the space**"* | **deliberately BROAD** — the default for owning-to-lease. **6,469.** SPEs included. |
+| **`developer`** | *"buys and sells programmatically… pursuing a relationship with the tenant, showing sites, negotiating a lease, building for the tenant, and then usually selling to realize the arbitrage between build cost/cap and exit cap"* | ⚠️ **a BEHAVIOURAL signature — acquire → build → sell, repeatedly.** The existing classifier reads `properties.developer_name`, which is a *label*, not this behaviour. **Under-specified by what we hold; do not claim the current 715 satisfies it.** |
+| **`repeat_buyer`** | *"anyone that has acquired more than one asset in our swimlane; the more frequent and recent the acquisitions, the more relatively important"* | **≥2 acquisitions — 3,258** — plus **pacing as a weight, not a label** |
+| **`user_owner`** | *"fairly infrequent… good with it being a human determination"* | ✅ confirmed: human-confirmed lane, ~13 candidates |
 
-### ⚠️ The one-off owners are the finding, and they invert the intuition
+## 2c-ii. ⚠️ Pacing is the signal Scott cares most about, and it is 49% unmeasurable today
 
-**2,448 one-off owners carry $523.1M — nearly as much as the 292 investors' $583.9M — and they are
-five times more contactable (279 vs 54).**
+He ties BD treatment to *pacing* — frequency and recency of acquisition. Measured over
+organizations with ≥2 purchases:
 
-That is not a footnote. Scott's stated sweet spot is **single-tenant deals of $2M–$20M, reached
-through volume with repeat seller clients.** **The one-off owner of a single net-leased building
-*is* that market.** A vocabulary that had only `investor_owner` would name the smaller, less
-reachable half and leave the core of the business in `unknown`.
+| | entities |
+|---|---:|
+| repeat buyers | **2,726** |
+| …last acquisition within 2 years | **43** |
+| …within 5 years | 99 |
+| …**apparently dormant 5+ years** | **2,627** |
+| ≥5 purchases · ≥10 | 1,123 · 288 |
+| repeat buyers who are contactable | 122 |
 
-**So two states are required, not one** — and they are prospected differently, which is precisely
-why the distinction has to exist in the data rather than in an operator's head.
+⚠️ **Do NOT read 2,627 as dormant. `ownership_start_date` is present on only 7,152 of 14,119
+portfolio facts — 50.7%.** Roughly half of that "dormancy" is **missing dates, not inactivity.**
+Reporting it as pacing would be the P180 NULL-is-not-zero failure on the single dimension Scott says
+drives seller-vs-buyer treatment.
 
-⚠️ **Both are deterministic from recorded facts** (a count of current portfolio rows, a count of
-`purchases` edges). **No name test, no inference.** The SPE-shell-named 35 and the 477
-single-but-active should be **surfaced separately rather than forced into either bucket** — they
-are genuinely ambiguous and, per the accuracy-first constraint, an honest `unknown` beats a guess.
+**So pacing must be surfaced as `pacing_unknown` wherever the dates are absent — never as
+"dormant"** — and **improving `ownership_start_date` coverage is the binding constraint on the part
+of this model that matters most.** That is a data-acquisition item, not a classifier one, and it is
+newly the highest-value thread in this design.
+
+## 2c-iii. The corrected model
+
+**Per entity, a SET of roles**, each with its own evidence and dates:
+
+| role | evidence | population | automated? |
+|---|---|---:|---|
+| `operator` | `is_operator_not_owner` / recorded `owner_type` (P113) | 36 | ✅ recorded flag |
+| `user_owner` | owner ≈ tenant on the same property | 13 candidates | 👤 **human-confirmed** |
+| `investor_owner` | ≥1 current portfolio fact | **6,469** | ✅ deterministic |
+| `repeat_buyer` | ≥2 acquisitions in the swimlane **+ pacing** | **3,258** | ✅ count; ⚠️ pacing 49% blind |
+| `former_owner` | held a fact that ended, holds none now | **3,801** | ✅ deterministic |
+| `one_off_owner` | **individual** holding exactly one target asset | **143** | ✅ deterministic |
+| `developer` | ⚠️ **behavioural — not yet specified from what we hold** | 715 *(a label, not the behaviour)* | ❌ **under-specified** |
+
+⚠️ **`developer` is the one arm this design cannot yet honour.** Scott's definition is a *pattern of
+behaviour over time* — build-to-suit for a named tenant, then sell. The existing 715 come from a
+name field. **Detecting the real thing needs acquire→build→sell sequences per entity, which nobody
+has measured.** Under accuracy-first, **the honest move is to keep the existing `developer` label as
+what it is (a captured attribution) and flag the behavioural definition as unbuilt** — not to claim
+the two are the same.
 
 ## 3. It must be DERIVED, and the churn measurement says that is safe
 
@@ -236,22 +260,28 @@ which is a Consumption-Layer question for another day, **not a defect this desig
   `account-based-contact-intelligence.md`'s question — acquisitions vs disposition — and is still
   open.
 
-## 6. Open questions for Scott
+## 6. Where this stands after Scott's definitions (2026-08-31)
 
-> ⛔ **All five are BLOCKING.** The build prompt is written and staged at
-> **`docs/claude-code/prompts/C13-owner-role-derived-classification.md`** — it does not run until
-> these are answered, and **three of the five change what gets written.** Record the answers here,
-> so the next reader sees the decision and not just the outcome.
+✅ **Answered by Scott:** `user_owner` is a human-confirmed lane · `one_off_owner` is an
+**individual** with one target asset · `investor_owner` is broad and includes SPEs · `repeat_buyer`
+is ≥2 acquisitions with pacing as a weight · `developer` is a behavioural pattern ·
+**and the roles are MULTI-LABEL.**
 
+⛔ **The staged build prompt `C13` is SUPERSEDED and must not be run.** It encodes a
+precedence-ordered **single** role, which §2c refutes on 957 entities. It needs rewriting to the
+set model before it is sent.
 
-1. ✅ **SIZED in §2d — and it needs TWO states, not one.** Of the 3,217 unknown current holders:
-   **`investor_owner`** (2+ assets) = **292 / $583.9M / 54 contactable**, and **`one_off_owner`**
-   (1 asset, no buying activity) = **2,448 / $523.1M / 279 contactable**. ⚠️ **The one-off owners
-   carry nearly as much rent and are 5× more contactable — and a single net-leased building at
-   $2M–$20M IS the stated sweet spot.** Confirm both names and that they are prospected
-   differently.
-2. **`former_owner`** — confirm (3,795; 191 contactable; recency carried separately, not baked in).
-3. **`user_owner` as a human-confirmed lane** rather than an automated arm, given n=13.
-4. **View vs recomputed column** — accuracy is identical; this is a performance and
-   override-preservation trade.
-5. ✅ **P0.4 — ANSWERED in §4: no gate needed.** The newcomers belong in a BD-activation band, not in a research band; P0.4 stays at 555. **Confirm the routing.**
+**Now open, in the order they block:**
+
+1. ⚠️ **`ownership_start_date` is present on 50.7% of portfolio facts** — so **pacing, the dimension
+   Scott says drives seller-vs-buyer treatment, is half unmeasurable.** This is now the
+   highest-value item in the design and it is **data acquisition, not classification.**
+2. ⚠️ **`developer` is under-specified.** Scott defines a behaviour (build-to-suit for a named
+   tenant, then sell); we hold a name label. **Detecting the real thing needs acquire→build→sell
+   sequences, unmeasured.** Keep the existing 715 as a captured attribution; do not claim it is the
+   behaviour.
+3. **Storage shape** — a per-entity/per-role table (with evidence + dates) rather than the scalar
+   `entities.owner_role`. Consumers all ask `owner_role IN (...)`, which becomes *"has role X"*.
+4. **Whether `one_off_owner` should be dia-only.** Scott's wording says *"our target submarket
+   category (dialysis)"*; the measurement was cross-domain. **143 person-typed single-asset holders
+   fleet-wide — the dia-only subset is unmeasured.**

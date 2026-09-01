@@ -418,6 +418,35 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — Scott's definitions land: the role is MULTI-LABEL, and C13 is superseded
+
+**NOTHING BUILT. C13 ⛔ superseded before it ever ran** — which is the staging working as intended.
+Design rewritten §2c–§2c-iii and §6; **C14 / C15 / C16 filed.**
+
+⚠️ **One line changed the SHAPE of the design, not its content:** *"I think these categories can
+exist multiple iterations per one account."* Everything I had built assumed **one role per entity
+resolved by precedence.** It is a **SET**.
+
+- **Measured, and the truncation would fall exactly where it hurts:** **957 entities carry 2+
+  labels — 772 of them `investor_owner` + `repeat_buyer` simultaneously.** Scott's own rule is that
+  this combination *"might take a group from a seller prospect to a buyer prospect… depending on the
+  pacing."* **A scalar column picks one label and silently destroys the other, on precisely the
+  population whose dual status decides how it is worked.** → **C16** (storage shape).
+- **Definitions, all corrected against mine:** `one_off_owner` is an **INDIVIDUAL** with one target
+  asset (**143**, not my 2,448 orgs) · `investor_owner` is deliberately **broad**, SPEs included
+  (**6,469**) · `repeat_buyer` is ≥2 acquisitions (**3,258**) **with pacing as a weight, not a
+  label** · `user_owner` confirmed as a human lane.
+- 🔴 **C14 — and it is now the highest-value item here.** Pacing is the dimension Scott says drives
+  BD treatment, and **`ownership_start_date` is present on only 50.7% of portfolio facts.**
+  ⚠️ **The "2,627 repeat buyers dormant 5+ years" figure is roughly half MISSING DATES, not
+  inactivity** — I checked before reporting it, and reporting it as pacing would have been the P180
+  failure on the one signal that matters most. **Pacing must surface as `pacing_unknown`.** This is
+  **data acquisition, not classification.**
+- 🔴 **C15 — `developer` is under-specified.** Scott describes a *behaviour* (build-to-suit for a
+  named tenant, then sell for the cap arbitrage); we hold a **name label**. Detecting the real thing
+  needs acquire→build→sell sequences, unmeasured. **Keep the 715 as a captured attribution; do not
+  claim it is the behaviour.**
+
 ## 2026-08-31 — C13 staged: the C4a build is written and blocked on five decisions
 
 **NOTHING BUILT, and deliberately nothing more investigated.** Prompt:
