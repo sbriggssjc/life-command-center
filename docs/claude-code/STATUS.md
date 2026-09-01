@@ -169,6 +169,33 @@ design** (15 candidates read, 10 genuine / 5 SPE-named-after-tenant; the confirm
 `entity_type` defect; **C18** (`ownership_start_date`) is unchanged and still the highest-value item
 — though §7.2 corrects WHY: the 50.7% blindness belongs to `investor_owner` pacing, not to
 repeat-buyer pacing, which is 98.8% dated.
+## 2026-09-01 — B6e-ci-red14 drafted: the last 14, and the `financial_ground_truth` group is measurable after all
+
+Prompt queued: `B6e-ci-red14-adjudicate-the-last-14.md`. **The governing rule is the one this arc
+keeps paying for — establish whether the TEST or the CODE is wrong before changing either** (twice
+here a red test was stale and the code was correct), and **`executed` must stay at 3,128**.
+
+⚠️ **I had filed the three `financial_ground_truth` failures as "needs Scott, not a fix." That was
+half right and it under-specified the work.** The decision is his; **the gap is measurable now.**
+`clinic_econ_reconciled` is live and current — **81,105 rows / 8,281 clinics / FY2011–2026, a single
+`model_version_id = 21`, computed 2026-09-01**, `avg blended_rate_per_treatment 375.47` /
+`avg reconciled_revenue_per_treatment 380.14`. So the deliverable is a **three-way comparison** —
+test constant vs code output vs live reconciled value — resolving to one of: **stale test**,
+**drifted code**, or **two internally-consistent things describing different scopes** (the most
+likely answer if the numbers are close but unequal). **Nothing changes there without Scott.**
+
+The other groups: `listing_broker_update` (2) is the real product bug — diagnose and propose, **do
+not ship the flip**, because both columns exist and `available_listing_ingestor.py` deliberately
+guards the alias; `handle_natural_language_query` (2) is the known drift; `backfill_*` (3) and four
+singles are most likely straightforward and are worked first to shrink the count.
+
+Also folded in: **re-anchor the 27 latent fixed-character slice windows** in
+`test_processing_audit.py` on their AST spans. They are green today, and ⚠️ **the overshoot case is
+silent — a green guard may be asserting against the NEXT function.** A green that turns red on
+re-anchoring is a finding, not a regression.
+
+**Still explicitly out of scope: the pytest unmask.** That is `B6e-ci-unmask`, after the red clears.
+
 ## 2026-09-01 — ✅ 55 → 14 red, and the fix that "worked" was RELOCATING the damage (PR #7390, `eac8668`)
 
 | | collected | errors | executed | pass | fail |
