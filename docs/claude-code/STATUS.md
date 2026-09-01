@@ -630,6 +630,36 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — C14 RE-located (§2h): a live producer defect, not an OCR pass — §2g was wrong
+
+**NOTHING BUILT.** Design **§2h**; **C14 rewritten.** I set out to write the extraction prompt and
+**checked first, per §2g's own instruction. Three checks, each of which changed the answer.**
+
+1. **Is the date already in the row?** `deed_records.raw_payload` carries a **`recording_date` KEY on
+   4,919 of the 4,995 undated rows** — which reads as a free win. ⚠️ **It holds a VALUE on 10.**
+   4,985 are JSON `null`. **Not checking would have produced a promotion script that moved 10 rows.**
+2. **Is there a document to extract from?** ⚠️ **No.** `deed_records` are scraper/AI **metadata**
+   rows — **0 of them carry a `legal_description`** — and `property_documents` holds only **325**
+   deed documents, **all 325 already text-extracted.** **The corpus an OCR pass would read is 325
+   rows, already done — not 4,995.** §2g's framing was wrong.
+3. **Is the producer still running?** ⚠️ **Yes. `created_at` spans 2026-03-27 → TODAY.** The county
+   ingest lane (`run_county_ingest_cron`, W3.1, Railway) **is actively writing deed rows with no
+   recording date.**
+
+**So C14 is a LIVE PRODUCER DEFECT plus a re-fetch backlog:**
+
+- ⚠️ **Fix the producer first — backfilling a live producer is Class 8**, a chore repeated silently
+  forever. This is the opposite of the instinct, which is to backfill.
+- **Then measure the re-fetch. 3,413 have a `source_url`**, but W3.1/§26 document county and CoStar
+  URLs as frequently **`session_bound_or_dead`** to a datacenter fetch — **3,413 is an upper bound,
+  not a plan.**
+- **The remaining 1,582 have no document and no URL** — **not recoverable from what we hold.** An
+  honest ceiling, and it should be stated before anyone promises full date coverage.
+
+**The durable lesson, third time in this arc:** ⚠️ **a KEY is not a VALUE, a metadata ROW is not a
+DOCUMENT, and a backlog is not a backlog if its producer is still running.** Each looked settled
+until one query; §2g would have started at the wrong end of all three.
+
 ## 2026-08-31 — C14 located: it is deed DATE EXTRACTION, not data acquisition
 
 **NOTHING BUILT.** Design **§2g**; **C14 promoted 🔴 → 🟢 with a specific, bounded fix.**

@@ -262,7 +262,7 @@ function compoundStreetTokenSplit(frozenAddressToken, capturedAddressToken) {
   return null;
 }
 
-function capturedRangeContainsFrozenEndpoint(frozenAddressToken, capturedAddressToken) {
+function capturedRangeContainsFrozenNumber(frozenAddressToken, capturedAddressToken) {
   if (!frozenAddressToken || !capturedAddressToken) return null;
   const frozen = frozenAddressToken.split('|');
   const captured = capturedAddressToken.split('|');
@@ -276,7 +276,8 @@ function capturedRangeContainsFrozenEndpoint(frozenAddressToken, capturedAddress
   const rangeEnd = Number(capturedStreet[2]);
   if (rangeStart >= rangeEnd
     || frozenStreet[2] !== capturedStreet[3]
-    || (frozenNumber !== rangeStart && frozenNumber !== rangeEnd)) return null;
+    || frozenNumber < rangeStart
+    || frozenNumber > rangeEnd) return null;
   return { frozen_number: frozenNumber, range_start: rangeStart, range_end: rangeEnd };
 }
 
@@ -384,8 +385,8 @@ export function buildAscStructuredCapture(target, context = {}) {
       )
       && corroboration;
     const aliasMatch = addressAlias && corroboration;
-    const rangeEndpoint = capturedRangeContainsFrozenEndpoint(frozenComparisonToken, addressToken);
-    const rangeEndpointMatch = rangeEndpoint && corroboration;
+    const rangeContainment = capturedRangeContainsFrozenNumber(frozenComparisonToken, addressToken);
+    const rangeContainmentMatch = rangeContainment && corroboration;
     const municipalityAlias = terminalTownshipMunicipalityAlias(frozenComparisonToken, addressToken);
     const municipalityAliasMatch = municipalityAlias && exactTenantCorroboration;
     const directionalStreetTypeExtension = capturedDirectionalStreetTypeExtension(
@@ -399,7 +400,7 @@ export function buildAscStructuredCapture(target, context = {}) {
     const compoundStreetSplit = compoundStreetTokenSplit(frozenComparisonToken, addressToken);
     const facilityCorroboration = exactFacilityCorroboration(target, context);
     const compoundStreetSplitMatch = compoundStreetSplit && facilityCorroboration;
-    if (!parentBuildingMatch && !aliasMatch && !rangeEndpointMatch
+    if (!parentBuildingMatch && !aliasMatch && !rangeContainmentMatch
       && !municipalityAliasMatch && !directionalStreetTypeMatch
       && !compoundStreetSplitMatch) {
       throw new Error('Captured page does not match the active frozen ASC candidate');
@@ -433,11 +434,11 @@ export function buildAscStructuredCapture(target, context = {}) {
       corroborated_name: exactTenantCorroboration.matched_name,
       facility_name: clean(cmsIdentity.facility_name),
       second_review_required: true,
-    } : rangeEndpointMatch ? {
-      mode: 'tenant_corroborated_range_endpoint',
-      frozen_street_number: rangeEndpoint.frozen_number,
-      captured_range_start: rangeEndpoint.range_start,
-      captured_range_end: rangeEndpoint.range_end,
+    } : rangeContainmentMatch ? {
+      mode: 'tenant_corroborated_range_containment',
+      frozen_street_number: rangeContainment.frozen_number,
+      captured_range_start: rangeContainment.range_start,
+      captured_range_end: rangeContainment.range_end,
       corroboration_basis: corroboration.basis,
       corroborated_name: corroboration.matched_name,
       cms_address_preserved: clean(cmsIdentity.address),
