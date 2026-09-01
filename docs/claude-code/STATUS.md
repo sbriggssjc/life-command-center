@@ -257,6 +257,55 @@ Writeup `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`; **I2**, **Class
   people learn to merge past. **First credentialed run is an operator step.**
 - Also fixed in passing: the backlog's **D1 row had 5 cells in a 4-column table and an unescaped `|`
   inside a code span**, so GFM was silently dropping its status cell.
+## 2026-09-01 — ✅ B6d-cms-escalation SHIPPED, and its FIRST honest run found a producer green in CI and dead for 25 days
+
+`dia_producer_registry` + `v_dia_producer_health` are live. **The instrument was the deliverable; what
+it revealed on first run is the point — and it revealed more than the CMS thread did.**
+
+### 🚨 `fred_ingest` — 16 consecutive GREEN scheduled runs wrote ZERO rows
+
+**Verified independently: `economic_indicators` last took a row on 2026-08-07 — 25 days ago — and
+ZERO rows since 2026-08-10**, across **16 green GitHub Actions runs**.
+
+**Mechanism:** the module **dies at import** (`ModuleNotFoundError: postgrest`), and **`| tee`
+without `pipefail` masks the exit code**, so the workflow reports success. ⚠️ **It is not in
+`INFRASTRUCTURE.md`'s job map either** — a producer nobody had written down, failing silently, with a
+green badge.
+
+⚠️ **This is the purest instance of the class this whole arc has been about**, and it was found by
+the very rule I insisted on: **enumerate producers from the SCHEDULER, not from the run ledger.**
+`fred_ingest` writes no run row, so it is **invisible to `ingestion_tracker`** — building the
+registry from the tracker would have missed it entirely.
+
+### ⚠️ And the CMS outage is OLDER than we have been saying
+
+**`cms_ingestion.last_success_at` = 2026-04-04**, not 2026-06-25. **The 06-25 date was
+`source_last_seen` — a watermark, not a successful run.** The pipeline has not had a clean success in
+**five months**. ⚠️ **And `last_outcome` reads `started` at 2026-09-01 06:08 — another orphan forming
+right now**, with `failures_30d = 4`.
+
+⚠️ **`refreshed_since` is still 249** — unchanged since yesterday. **The check I flagged has its
+answer: the pipeline completes without finishing.**
+
+### The registry's own headline: 4 of 5 producers emit no run row at all
+
+| producer | scheduler | emits run row | state |
+|---|---|---|---|
+| `cms_ingestion` | railway cron `0 6 * * *` | ✅ | last clean success **2026-04-04**; orphan forming |
+| **`fred_ingest`** | GH Actions `30 11 * * 1-5` | ❌ | 🚨 **green, dead 25 days** |
+| `public_record_ingest` | railway cron `0 7 * * *` | ❌ | running (wrote parcel/deed 08-31) — **a failure would be invisible** |
+| `metadata_backfill_queue` | railway cron **UNCONFIRMED** | ❌ | 👤 *"either scheduled and undocumented, or never wired"* |
+| `salesforce_object_sync` | GH Actions `0 7 1 1,7 *` | ❌ | twice a year — **a failure is invisible for months** |
+
+**The view is honest about its own blindness** — every row carries a `blindness_reason`,
+`scheduler_confirmed` flags the unconfirmed one, and `cadence_basis` says `declared_schedule` rather
+than implying a measurement. **That is what makes it trustworthy on day one.**
+
+⚠️ **One design decision worth preserving:** `cms_ingestion` is mapped on `source='cms_ingestion'`
+**only** — `source='CMS'` rows are zero-duration **watermark stamps** and `source='ingestion_lock'`
+rows are the **janitor**. **Folding either in would have inflated `last_success_at` with rows that
+never moved data** — the same honest-count discipline, applied while building the instrument.
+
 ## 2026-09-01 — B6d-cms-escalation drafted: dia has five producers and no health surface over any of them
 
 **Prompt: `prompts/B6d-cms-escalation-dia-producer-health-2026-09-01.md`.** This is the answer to
