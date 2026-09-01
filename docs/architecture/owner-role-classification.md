@@ -6,7 +6,9 @@
 > framed this as a build-or-don't choice before those constraints were known.
 >
 > **Parent canonical page:** [`bd-ranking-and-priority-queue.md`](bd-ranking-and-priority-queue.md)
-> (the surfaces that consume the role). **Status: DESIGNED, NOT BUILT.**
+> (the surfaces that consume the role). **Status: DESIGNED + FULLY MEASURED, NOT BUILT — blocked on
+> the five decisions in §6.** Build prompt staged:
+> `docs/claude-code/prompts/C13-owner-role-derived-classification.md`.
 
 ## 0. Scott's constraints, and what each one settles
 
@@ -235,6 +237,12 @@ which is a Consumption-Layer question for another day, **not a defect this desig
   open.
 
 ## 6. Open questions for Scott
+
+> ⛔ **All five are BLOCKING.** The build prompt is written and staged at
+> **`docs/claude-code/prompts/C13-owner-role-derived-classification.md`** — it does not run until
+> these are answered, and **three of the five change what gets written.** Record the answers here,
+> so the next reader sees the decision and not just the outcome.
+
 
 1. ✅ **SIZED in §2d — and it needs TWO states, not one.** Of the 3,217 unknown current holders:
    **`investor_owner`** (2+ assets) = **292 / $583.9M / 54 contactable**, and **`one_off_owner`**

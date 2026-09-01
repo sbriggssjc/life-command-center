@@ -465,6 +465,30 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-08-31 — C13 staged: the C4a build is written and blocked on five decisions
+
+**NOTHING BUILT, and deliberately nothing more investigated.** Prompt:
+`docs/claude-code/prompts/C13-owner-role-derived-classification.md`. Backlog **C13 ⛔ staged**;
+design doc §6 now points at it.
+
+**C4a is fully specified and every input is measured** — the definitions (Scott's), the populations
+(292 / 2,448 / 3,795 / ≤13), the churn (3 ended, 1 started in 90 days), the guards (6 / 3 / 124),
+and the routing (§4: no gate, a BD-activation band). **There is nothing left to discover before
+building it**, so the prompt is staged rather than another measurement being run.
+
+⛔ **It does not run until the five §6 decisions are answered, and three of them change what gets
+written.** Staging it now means the answers go straight to Claude Code without another round trip —
+which is the "automate as much as we can" constraint applied to the workflow itself.
+
+**Predicted deltas are in the prompt and include the safety assertions:** `unknown` orgs ↓ ~6,600 ·
+**P0.4 unchanged at 555** · deal-timing bands unchanged (C6 removed the role from them) · brief
+little or no change (C8's resolved-owner arm already admits most). ⚠️ **If P0.4 moves, the routing
+is wrong — stop**, which is the whole point of C4f.
+
+⚠️ **Two things the prompt carries forward as unmeasured, on purpose:** the precedence overlap
+(entities that both hold and buy repeatedly — *measure it, do not assume it is small because the
+ordering looks obvious*), and a **re-measurement of the churn** before relying on derivation.
+
 ## 2026-08-31 — C4f answered: P0.4 needs no gate; the flood was a routing error
 
 **NOTHING BUILT.** `owner-role-classification.md` **§4** rewritten; **C4f ✅ answered**; new Dead-End **Class 31** (*a precondition correct on one surface is wrong on a neighbouring one*). ⚠️ **Numbered 31, not 30 — I collided again**: a parallel window took 30 for C10 hours earlier, and **the guard note I added at the top of the playbook on 2026-08-29 did not stop me, because the workflow appends at the bottom and never scrolls up.** That caveat is now in the note itself. This removes
