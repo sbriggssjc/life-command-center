@@ -442,4 +442,12 @@ from a healthy feed**, because the only instrument watching it takes a `max()`. 
 outage was at least visible as 65 days stale. It is now invisible.
 
 **Verification from here is coverage, never `status`:**
-`count(*) filter (where source_last_seen >= now() - interval '45 days') / count(*)` — today 12.9%.
+`count(*) filter (where source_last_seen >= now() - interval '45 days') / count(*)` — **2.91%**
+(249 of 8,547), measured 2026-09-01 00:23.
+
+⚠️ **Self-correction: §7 quoted 12.9% and that figure was never measured this session.** It was
+carried forward from an earlier note. It was true before **2026-08-09**, when the 2026-06-25 ingest
+still sat inside the 45-day window; those rows aged out of the bound and nothing re-derived it. The
+only clinics now within the bound are the 249 this dead pass touched, so the stated verification
+target overstated coverage by **4.4×**. *Re-measure a dated figure before quoting it* — the same
+doctrine this audit applies to everything else, missed on a number the audit itself published.
