@@ -1,5 +1,21 @@
 # Property metadata coverage (dia) — the canonical entry point
 
+> 🚨 **SUPERSEDED IN PART, SAME DAY (2026-09-01). §5 and §6 below reach the verdict "don't build",
+> and that verdict is SCOPED TO THIS QUEUE ONLY. It is WRONG as a statement about public records as
+> a SOURCE.** Scott's correction: *assessor data is an independent public-record source carrying
+> physical stats, ownership, ownership history and sales; it should be its own lane populating ALL
+> properties, which later code evaluates per field.* He is right, and scoping a source to one
+> consumer's gap list is the exact inversion **I1** exists to prevent.
+>
+> **→ Read [`public-records-source-lane.md`](public-records-source-lane.md) FIRST.** That lane is
+> already built (`parcel_records`, `tax_records`, `deed_records`, `property_public_records`,
+> `county_authority_cache`, and `county_records` registered at **priority 5 on 93 field rungs**),
+> already links **9,166 of 11,802 properties (78%)**, and **has never written a single field**.
+>
+> **Still valid on this page:** the fabrication finding (§3), invariant **I12** (§4), the queue's
+> structure (§2), and the Ollama-corpus measurement. **Do not quote §5's reach numbers as anything
+> but queue-scoped** — every denominator there is 662.
+
 > **START HERE for anything about `year_built` / `building_size` / `land_area` / `tenant` coverage,
 > the `property_metadata_backfill_queue`, the retired assessor lane, or "should we point Ollama or
 > the sidebar at this?"** Everything measured, decided and rejected on this topic lives here.

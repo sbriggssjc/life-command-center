@@ -16,7 +16,61 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
-## 2026-09-01 — ✅ FRED IS ALIVE (verified on the delta), and the metadata build-out is measured: DON'T BUILD IT
+## 2026-09-01 — 🚨 SCOTT'S CORRECTION: I scoped a SOURCE to one CONSUMER's gap list. The public-records lane is BUILT and has NEVER WRITTEN A FIELD
+
+**My "don't build" verdict below was scoped to the 662-row metadata backfill queue and is WRONG as a
+statement about public records as a source.** Scott: *"assessor data is valuable regardless of sale
+status or previous ingestion… It should be its own lane that populates all properties in the
+database that later code processes can evaluate against to find the most accurate representation of
+each property by field."* **That is exactly right, it is the inversion `I1` exists to prevent, and I
+committed it as the author of I1.** The correct denominator is every property — dia 11,802 + gov
+13,837 — not 662. A sold property's assessor record is still ownership history, still a sale, still
+physical stats.
+
+🚨 **And measuring it properly found something much bigger: the lane he is describing already
+exists, in full, and has never written one field.**
+
+- `parcel_records` (apn, assessed_value, owner_name, zoning, **building_sf, lot_sf, year_built**,
+  year_renovated, land_use, mailing_address, `raw_payload`, `data_hash`), `tax_records`,
+  `deed_records`, **`property_public_records`** (the link + confidence layer), and
+  `county_authority_cache` with **926 counties** carrying `assessor_url` / `gis_url`.
+- ⚠️ Keyed on **APN + county + state**, not `property_id` — i.e. **already designed as an
+  independent lane**, exactly as Scott specified.
+- **`county_records` is registered at priority 5 across 93 field rungs on BOTH domains** —
+  `year_built`, `building_size`, `land_area`, `lot_sf`, `zoning`, `assessed_value`,
+  `recorded_owner_*`, `ownership_history.*`, `sales_transactions.*` — outranking `om_extraction`
+  (30–50) and `costar_sidebar` (45–60).
+- **`property_public_records` links 9,166 of 11,802 dia properties (78%)**; `tax_records` holds
+  25,621 rows; the producer **ran 2026-08-31**.
+- 🚨 **`county_records` has ZERO `field_provenance` rows. Ever.** Positive-controlled in the same
+  query: `recorded_deed` has 2,681 / 371 writes. No variant spelling across 49 sources.
+- **The clinching detail: `dia.properties.year_built` has 3,586 provenance rows and the only source
+  is `salesforce`@20** — while the @5 county source sits unread in the same database holding the
+  answer.
+
+**Class 2 on the most extensively registered source in the system, and invisible to every check we
+run** — tables non-empty and growing, producer green, ladder registered, field filling from
+somewhere worse. → **PR1** (build the reconciliation consumer; no new acquisition, no new schema, no
+new ladder entry, immediate reach **9,166 properties**), **PR2** (why does one live producer return
+tax rows for 9,107 properties and parcel stats for **41**? — the tax fetcher reaches 77%, so this is
+a fetcher question, not an acquisition one), **PR3** (`confidence` is the constant 1.000 on all
+23,728 rows and `verified` is false on every one), **PR4** (the `mortgage` and `entity` legs are dead
+since 2026-05-10, hidden because the lane's other legs kept writing).
+
+🚨 **Generalising the detector across the whole ladder: 39 of 67 registered sources (58%) have never
+written a field.** `costar_cmbs_loan` **121 rungs**, `county_records` 93, `lease_document` **25 at
+priority 10**, `opencorporates`/`mi_lara` 16 each. ⚠️ **The reverse arm was run and is benign** — all
+21 write-but-unranked sources are one-shot `cleanup_run_*` tags from the May remediation; a
+one-directional result would have invited a wrong drift conclusion. ⚠️ **And `manual`@1 reading 0
+rows is NOT a protection gap** — `manual_edit` (207 rungs @1, 841 rows) and `manual_resolution` (203
+@1) carry it; checked rather than claimed. → **PR5**, playbook **Class 31**.
+
+📁 **New canonical page: `docs/architecture/public-records-source-lane.md`.**
+`property-metadata-coverage.md` keeps a supersession banner rather than being rewritten — its
+fabrication finding, I12 and Ollama measurement all stand; only its verdict and its 662-denominators
+do not.
+
+## 2026-09-01 — ✅ FRED IS ALIVE (verified on the delta), and the metadata build-out is measured: DON'T BUILD IT ⚠️ *(verdict superseded — see the entry above)*
 
 ### FRED — the fix is PROVEN
 
