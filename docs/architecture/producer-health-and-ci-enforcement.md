@@ -98,6 +98,34 @@ module that never mentions `dateutil`** — i.e. a test harness reaching into *d
 layers were all required: sys.modules objects · attributes on the real module · symbols already bound
 into `src.*` globals by a `from X import Y` executed inside the stub window.
 
+### The remaining 14 — and the one group that needs a decision, not a fix
+
+All 14 fail **in isolation**, so they are genuine test-vs-code disagreements rather than harness
+pollution. ⚠️ **`git log` cannot adjudicate them — every file traces to one squashed import merge
+(`8c67444`), so there is no "which side moved last."** The evidence has to come from the code and
+the data.
+
+| group | n | treatment |
+|---|---:|---|
+| `financial_ground_truth` | 3 | ⚠️ **measure, do not change** — see below |
+| `listing_broker_update` | 2 | a real product bug → **B6e-ci-listing-broker** |
+| `handle_natural_language_query` | 2 | known drift |
+| `backfill_*` | 3 | most likely straightforward |
+| `clinic_history` / `clinic_alert_date` / `reverse_cms_propagation` / `run_summary_gate` | 4 | one each |
+
+⚠️ **The `financial_ground_truth` three risk the `dialysis_econ_reconciled_v1` calibration if
+guessed at — but they are MEASURABLE.** `clinic_econ_reconciled` is live and current: **81,105 rows
+/ 8,281 clinics / FY2011–2026, a single `model_version_id = 21`, computed 2026-09-01**, with
+`avg blended_rate_per_treatment 375.47` and `avg reconciled_revenue_per_treatment 380.14`. **The
+right output is a three-way comparison — test constant vs code output vs live reconciled value —
+distinguishing a stale test, drifted code, and two internally-consistent things describing different
+scopes. The decision stays Scott's.**
+
+**The governing rule for all 14: establish whether the TEST or the CODE is wrong before changing
+either.** Twice in this arc a red test was stale and the code was correct; *"make the test pass"* is
+the expensive error. And **`executed` must stay at 3,128** — a fix that cuts failures by cutting what
+runs is the defect this whole arc exists to close.
+
 ### What the suite has already caught
 
 🔴 **A real product bug, within hours of first running.** `update_database.update_field` normalises a
