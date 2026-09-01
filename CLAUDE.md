@@ -602,6 +602,22 @@ pipeline's status is its **last** command unless `set -o pipefail` is set.
   — **building a producer registry from the run table rebuilds the blindness one level up.**
 - **Green CI is not a state delta.** The rule this file states for crons applies identically to
   workflows: **assert on rows written, never on the runner's exit status.**
+- 🚨 **`| tee` IS ONE MASKING IDIOM. `|| echo` IS ANOTHER, AND IT IS WORSE BECAUSE IT LOOKS
+  DELIBERATE.** The FRED sweep found Dialysis `ci.yml` using it **five times** —
+  `pytest tests/ … 2>/dev/null || echo "Tests completed…"` — so **3,042 collected tests cannot fail
+  a merge**, and `2>/dev/null` discards the traceback. **Every mutation-verified guard in that repo
+  is a regression detector no gate enforces.** ⚠️ **This is the same finding as *"no workflow runs
+  `npm test` on a PR"* in this repo, in a second repo, in a different idiom** — so **grep for the
+  masking SHAPE (`|| echo`, `| tee`, `2>/dev/null`, `continue-on-error`, `exit 0`), never for one
+  spelling.**
+- 🎯 **And the cruellest form: the repo already had the detector and had muzzled it.** Lines 137–138
+  of that same file are `python -c "import src.main" 2>/dev/null || echo` — **exactly the check that
+  would have caught FRED's `ModuleNotFoundError: postgrest`.** Twenty-five days of green badges over
+  a dead producer, with the guard sitting right there. **Before adding a detector, check whether one
+  exists and is silenced.**
+- ⚠️ **Do NOT simply remove the masking.** Gating a never-enforced suite is the documented *"never
+  green once on `main`"* trap. **Sequence: measure on `main` → fix or quarantine what is red →
+  unmask ONE LINE AT A TIME, starting with the cheapest check (the import).**
 
 ### Dead-end classes are findable on purpose — `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md`
 
