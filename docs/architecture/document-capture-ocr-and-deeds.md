@@ -322,6 +322,48 @@ gov docs assert a *"document-text-tick → lease-extractor chain"* that **is not
 **The lesson: a drain is only worth widening where something consumes the result.** The measurement
 that settles it is *"grep every read of the column,"* and it inverts the recommendation.
 
+### 🔴 POST-DOC8 RE-MEASURE, 2026-09-01 16:21 UTC — the edge half is LIVE, the JS half is NOT DEPLOYED
+
+**The tier split HAS flipped, and it is now measurable** — the DOC8 response said it was not, which
+was true when written (15:30's DocAI rows landed minutes later). Every OCR event since 15:00:
+
+| doc | tier | pages | chars | reason | `needs_ocr` |
+|---:|---|---:|---:|---|---|
+| 11 | gpt-4o | — | **116** | `thin_ocr_result` | **true** ✅ |
+| 12 | **DocAI** | 5 | **7,572** | — | false ✅ |
+| 15 | **DocAI** | 1 | 601 | — | false ✅ |
+| 17 | **DocAI** | 1 | 2,094 | — | false ✅ |
+| **24** | gpt-4o | — | **211** | `no_page_anchors_gpt4o` | 🔴 **FALSE** |
+
+**Today: 3 DocAI vs 2 gpt-4o (all-time 6 vs 20).** The DocAI rows carry real page counts and real
+text; **both gpt-4o rows carry no page count and 116 / 211 characters.** The pattern that produced
+the 9.3× gap is visible in five rows.
+
+⚠️ **THREE INDEPENDENT TELLS THAT THE RAILWAY REDEPLOY HAS NOT RUN** — the JS half of DOC8, all of
+DOC9 and DOC10's floor are merged and inert:
+
+1. **`over_docai_page_cap` has NEVER been written** (0 rows) — and a **40-page** document was hit at
+   16:00:51. The post-fix behaviour is to stop with that marker and attempt no OCR; instead it fell
+   through to gpt-4o, which is the pre-fix path.
+2. **The 16:00 tick body still carries `ocr_by_engine`** — DOC9 **removed** that field. A deployed
+   build would report `ocr_docs_by_engine` / `ocr_pages_unknown`.
+3. **Document 24 was written `needs_ocr = false` at 211 characters.** DOC10's floor (500 when the
+   page count is unknown) would have marked it.
+
+🔴 **Document 24 is the DOC10 defect recurring live, four minutes after DOC10 shipped.** 211
+characters, `needs_ocr = false`, so it satisfies `gatherPropertyText` and
+`v_lcc_cre_bov_ready` — **BOV extract will receive 211 characters as a lease, and the row can never
+be retried.** *Merged is not running*, demonstrated on the exact defect the merge was meant to close.
+
+⚠️ **And one thing to verify AFTER the redeploy, not assumed:** document 24's reason is
+`no_page_anchors_gpt4o`, **not** `thin_ocr_result`. DOC10's re-admission is a **set membership over
+reasons**, so a thin row that arrives under a different reason must still (a) be caught by the
+char-length floor and (b) land in `CRE_RETRY_REASONS`, or it will be marked and never re-admitted —
+marked-and-idle is better than covered-and-wrong, but it is not the goal.
+
+**Backlog: 691 → 682, `lowest_id_reached` = 2, sidecars 80 → 89, `needs_ocr` markers 22 (12 of them
+DOC10's backfill).**
+
 ## 1. Scott's question, answered
 
 > *"At one point there was an issue with access to deeds ingested from CoStar and I asked whether we
