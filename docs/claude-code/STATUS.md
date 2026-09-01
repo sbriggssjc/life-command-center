@@ -209,6 +209,46 @@ Writeup `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`; **I2**, **Class
   people learn to merge past. **First credentialed run is an operator step.**
 - Also fixed in passing: the backlog's **D1 row had 5 cells in a 4-column table and an unescaped `|`
   inside a code span**, so GFM was silently dropping its status cell.
+## 2026-09-01 — B6d-cms-escalation drafted: dia has five producers and no health surface over any of them
+
+**Prompt: `prompts/B6d-cms-escalation-dia-producer-health-2026-09-01.md`.** This is the answer to
+*"why did the CMS outage take two months?"*, and it is the structural half of **I4**.
+
+**Verified live:**
+
+| | gov | **dia** |
+|---|---|---|
+| producer health view | ✅ `v_pipeline_task_health` | ❌ **does not exist** |
+| producer run table | `run_log` (5,813 rows) | `ingestion_tracker` (292) |
+| producer-registry objects | ✅ | ❌ **zero** |
+| `feed_freshness_registry` | per-feed | **5 rows, TABLE-keyed** |
+| producers writing runs | — | **5 distinct**, newest 2026-09-01 |
+
+**dia runs five ingestion producers and has no surface that can say whether any is healthy.** The
+only instrument pointing at them is a freshness bound on the **output** — which structurally cannot
+distinguish *the producer failed* from *the source published nothing*. **B6a built this for gov; dia
+never got it.**
+
+✅ **The port is well-defined, and gov's view already carries the exact distinction this thread was
+about: `last_success_at` SEPARATE from `last_outcome_at`.** That is precisely what the CMS throttle
+violated — it keyed on the last *attempt* and bought 30 days of silence per failure. Plus
+`skip_reason`/`skip_declared` from B6a and `p90_gap_days` from B6d. ⚠️ **It is a port with a column
+mapping, not a copy** — gov reads `run_log`, dia has `ingestion_tracker` with different columns and a
+producer keyed on `task_name` **or** `source`.
+
+🚨 **The prompt's central trap, and it would have rebuilt the blindness one level up: ENUMERATE
+PRODUCERS FROM THE SCHEDULER, NOT FROM `ingestion_tracker`.** The tracker's five are only those that
+have **ever written a row** — *a producer that has never emitted is invisible to it*, which is Class
+21 exactly. **A scheduled producer with zero rows ever is the highest-value row that view can
+contain.**
+
+**Two honesty constraints carried in:** ⚠️ **`last_error` will be empty at first** — `error_summary`
+is NULL on **47 of 47** dia runs until `B6d-cms-step` lands — **and a view showing always-null errors
+must not be read as "no errors."** ⚠️ **`success` is not yet trustworthy on dia** (six successes
+while zero clinics refreshed), so **`last_success_at` inherits that weakness and NO alert ships until
+the view is honest** — an alerting surface over an untrustworthy `success` would manufacture false
+all-clears.
+
 ## 2026-09-01 — ✅ CLOSED. The CMS alert auto-resolved, the placeholder regression is at ZERO, and one feed_stale alert remains.
 
 **Both checks I promised, run — and both passed.**
