@@ -1289,6 +1289,52 @@ mechanism is confirmed, the rate across the remaining 691 is not, and the popula
 ⚠️ **I did not merge #1989 and was told not to.** Scott merged it 5 seconds after `npm test` went
 green, which is why the §7b baseline correction landed as a separate PR (#1990).
 
+## 2026-09-01 — C13b SHIPPED (PR #2003); it corrected THREE of my own numbers; stale files consolidated
+
+✅ **`v_lcc_entity_roles` is LIVE on LCC Opps** — verified: investor_owner 6,447 · former_owner 3,786
+· developer 718 · repeat_buyer 385 · one_off_owner 142 · buyer 124 · operator 29 · **user_owner 0 by
+design.** **10,655 entities carry ≥1 role, 946 carry ≥2, 0 duplicate pairs.** A **VIEW over the
+existing spine** per the storage decision — no table, no second cross-DB roll-up, no stamped column,
+`entities.owner_role` left in place. **P0.4 555 → 555, deal bands 621 → 621, nothing writes, no
+consumer repointed.**
+
+🔴 **THREE OF THE DESIGN'S INPUTS WERE MINE AND WERE WRONG. Recorded as playbook Class 34.**
+
+1. ⚠️ **`repeat_buyer` was 3,258 and is 401** (385 after guards) — **an 8× error carried through
+   three documents.** I counted `purchases` **EDGES**; `entity_relationships` has **no unique key on
+   `(from,to,type)`** — **a fact this repo had already written down (P177)** — and the arm is fed by
+   three sources independently. Read on named rows the difference is single-asset SPEs: *Korea
+   Investment Corporation* reading as a repeat buyer on **one property recorded twice.** The
+   `(asset,date)` middle key was measured and rejected too (735 — A2b cross-source lag).
+   ⚠️ **The knock-ons are the expensive part: "2,627 dormant 5+ years" is 219, and
+   `investor_owner`+`repeat_buyer` is 167, NOT 772 — and 772 was my headline argument for
+   multi-label.** The shape is still right (946 carry ≥2); **the argument for it was inflated 4.6×.**
+2. ⚠️ **A manual override REPLACES the column an arm reads; it does not sit beside it.** 119
+   entities carry `owner_role='developer'` AND a human override of `buyer`. In a multi-label world
+   *"both are true"* is the tempting default and it is wrong — emitting both resurrects the machine
+   call the human corrected. `developer` **838 → 718**.
+3. ⚠️ **`one_off_owner` rests on `entities.entity_type`, which is wrong in BOTH directions** —
+   Jamestown and MetLife typed `person`; 979 `former_owner` organizations reading as individuals.
+   `first_name`/`last_name` looked like corroboration and is a **re-split of the same string**
+   (P125). **Surfaced in `v_lcc_entity_role_ambiguity`, not patched — C13c.**
+
+✅ **C18 was corrected, not just carried:** the *"2,627 dormant"* figure was the same edge-count
+artifact. **Repeat-buyer pacing is 98.8% dated** (it reads `entity_relationships.effective_from`);
+**the 50.7% blindness is real and belongs to `investor_owner`.** Still the highest-value item — but
+the P180 failure is on the investor arm, **not on the repeat-buyer signal Scott cares most about.**
+
+🧹 **Consolidated the two files this round made inaccurate:**
+**`C12_C4a_DECISION_BRIEF`** — superseded banner: its three options were never chosen (the framing
+did not survive Scott's definitions), and three of its numbers are refuted (`user_owner` sized at
+thousands is **13**; `repeat_buyer` 2,478 is an edge count). Kept for its consumer-blast-radius
+table. **`bd-ranking-and-priority-queue.md`** — *"`user_owner` has no producer anywhere"* is now
+half false: the arm exists and **still reads 0 BY DESIGN**, because Scott chose a human-confirmed
+lane. ⚠️ **The count is unchanged and its MEANING is not** — *"nothing ever wrote it"* became *"13
+candidates surfaced, none confirmed yet."* **Do not "fix" it by automating it.**
+
+**Open: C13c** (`entity_type` is unreliable) · **C13d** (the consumer mapping was measured at
+126 → 130, +4/−0, and deliberately NOT applied) · **C18** · **C19** · **DOC13** (due 2026-09-02).
+
 ## 2026-09-01 — C13b unblocked: both questions answered; C19 filed (clients first, not product type)
 
 ✅ **`one_off_owner` is ALL SWIMLANES**, and the reason is doctrine rather than a detail:
