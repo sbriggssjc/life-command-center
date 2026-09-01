@@ -1,3 +1,10 @@
+> ⛔⛔ **SUPERSEDED 2026-08-31 — DO NOT RUN.** Scott's definitions arrived after this was staged and
+> **the role is MULTI-LABEL** (*"these categories can exist multiple iterations per one account"*).
+> This prompt encodes a **precedence-ordered single role**, which is refuted on **957 entities —
+> 772 of them `investor_owner` + `repeat_buyer` simultaneously**, the exact population whose dual
+> status determines BD treatment. Its populations and definitions are also stale.
+> **Read `docs/architecture/owner-role-classification.md` §2c–§2c-iii and §6 instead.**
+
 # C13 — the derived owner-role classification
 
 > ⛔ **DO NOT RUN THIS UNTIL SCOTT HAS ANSWERED §0.** Every one of those five is a doctrine call, and
