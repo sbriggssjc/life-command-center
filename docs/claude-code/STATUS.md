@@ -847,6 +847,68 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
+## 2026-09-01 — DOC1 BUILT: the CRE doc-text drain now reaches id 2
+
+**One function + one handler in `api/_shared/cre-property-doc-text.js` /
+`api/_handlers/cre-doc-text.js`. No migration, no new cron, no schema change.** Canonical page
+**`docs/architecture/document-capture-ocr-and-deeds.md`** §0 (the fix), **§7** (what moved and what
+must not), **§7b — the standing status check with its 2026-09-01 baseline**.
+
+**The diagnosis reproduced exactly before anything was touched:** population **771** · drained
+**76** · undrained **695** · ids **2 → 2317** · `newest60_done` **60**. And the undrained half is
+**100% SharePoint server-relative, the same kind of document as the drained half** — nothing about
+it made it unfetchable.
+
+**The fix:** `fetchEligibleCreDocs` walks **oldest-first** (`order=id.asc`) on a keyset cursor
+(`id=gt.<last id>`, 200/page — under the PostgREST 1000-row cap — budget 12 pages), stops at
+`limit`, and reports `scan_pages` / **`scan_capped`** / `scan_exhausted` / `scan_lowest_id` /
+`retry_admitted`. **`cap * 4` was NOT simply raised** — a bigger constant moves the jam to row N+1
+and makes it more expensive to see (P136's explicit finding).
+
+⚠️ **THE PROMPT'S §2 TOLD ME TO VERIFY SELF-EXCLUSION ON THE CODE PATH RATHER THAN FROM THE TABLE,
+AND THAT IS THE WHOLE ROUND.** The sidecar's `ocr_non_ok` / `over_ocr_cap` / `thin_ocr_result` rows
+genuinely prove that **post-fetch** failures persist a row and self-exclude. They say nothing about
+the **pre-fetch** case — and `extractDocumentText` has **exactly ONE `ok:false` return,
+`fetch_failed`** (`document-text.js:361`), on which `runPropertyDocText` returned **without writing
+anything**. Live confirmation of the mechanism: **zero `fetch_failed` rows have ever existed in that
+table.** All 771 documents are SharePoint refs fetched through the PA flow, so **one unset
+`SHAREPOINT_FETCH_URL` would have parked the entire lane on the oldest document, forever** — an
+oldest-first cursor alone would have been strictly worse than the jam it replaced.
+**Reading the table would have "confirmed" safety; reading the code path refuted it.**
+
+**So a fetch failure (and an extraction throw) writes a DATED negative marker** — `needs_ocr=true`,
+`raw_text=null`, `reason='fetch_failed'|'extract_error'` — invisible to **both** consumers
+(`gatherPropertyText` filters `needs_ocr=is.false`; `v_lcc_cre_bov_ready` counts covered only
+`AND NOT t.needs_ocr`), **and deliberately not terminal**: re-admitted after 24 h, and **each retry
+refreshes `extracted_at`, which is what makes the cursor advance** instead of re-trying the same head
+every 30 minutes (P136). `mode=jobs` is untouched — `sidecarStatus` short-circuits only on `done`.
+
+**Second defect fixed in passing: the sidecar probe failed OPEN**, treating an errored probe as
+"nothing is done" and handing every row to the drain. Harmless behind a 60-row window; a re-OCR bill
+across a full-population scan. **There is no spend guard that halts a tick**, so it fails closed now.
+
+**Deliberately NOT done** (§3 of the prompt, all held): cron 160 stays `doctype=deed` (**DOC7 —
+`property_documents.raw_text` has one deed-only consumer**); `claimPendingJobs` semantics untouched;
+`limit` cap 50 and the 22 s budget untouched; no per-doctype tier logic; **no manual bulk backfill**
+— 695 against a 15/tick cap is about a day of normal cron operation, and a hand-run is a Class 8
+chore that skips the budget.
+
+Guard **`test/cre-doc-text-window-jam.test.mjs`** — 15 tests, **11 of 11 mutations verified RED**
+(descending order · keyset removed · `scan_capped` hard-coded false · either marker removed · the
+clobber guard removed · expiry removed · the retry-reason filter removed · the probe failing open ·
+a page size above the PostgREST cap · a reference to the domain store). ⚠️ **Source assertions strip
+comments first** — the fix's own prose names `id.desc` and `fetch_failed` repeatedly, so a raw grep
+would pass over the regression it exists to catch (A5c / N18 / B1).
+
+⚠️ **NOT YET VERIFIABLE, and stated as such: this is MERGED, not RUNNING.** The tick is JS, so it
+ships on the Railway redeploy — the DB half of this change is empty. **Every number in the "after"
+column of §7 is a prediction until the first post-deploy tick.** The three that decide it:
+`scan_lowest_id` (is the walk starting at the bottom?), `ocr_by_engine` (**is `cloud_cheap` beating
+`cloud`? if gpt-4o dominates, STOP — that is the Custom-Extractor footgun at 6–14×**), and
+`bov_ready_properties` (**a rising sidecar count is not a rising consumer input** — the readiness
+view needs EVERY doc on a property covered). **The 695 have never been sampled, so their
+scanned/digital mix is still unknown.** §7b carries all four queries and the baseline.
+
 ## 2026-09-01 — DOCUMENT PIPELINE: one canonical page, and the blocker found
 
 **NOTHING BUILT.** Canonical page **`docs/architecture/document-capture-ocr-and-deeds.md`**;
@@ -867,7 +929,7 @@ There are **TWO** document stores and conflating them is why this topic keeps re
 | table | `property_documents` | `lcc_cre_property_documents` |
 | bytes column | ✅ `storage_path` | ❌ **none — `source_url` only** |
 | consumer | deed parser | **BOV extract** |
-| state | **deeds 325/325 ✅** | ⚠️ **76 of 771, permanently stuck** |
+| state | **deeds 325/325 ✅** | ⚠️ **76 of 771, permanently stuck** (FIXED next day — see the DOC1 BUILT entry above) |
 
 `fetchEligibleCreDocs` (`cre-property-doc-text.js:265-290`) reads **only the newest `cap*4`=60**
 registry rows and diffs out the done ones. Measured: **60 of 60 already done**, so `eligible` is

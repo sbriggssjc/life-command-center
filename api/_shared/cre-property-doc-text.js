@@ -44,6 +44,38 @@ const OCR_MIN_MEANINGFUL_CHARS = Number(process.env.CRE_OCR_MIN_CHARS || 120);
 // export or a finished master workbook doesn't need a text sidecar.
 export const CRE_TEXT_DOCTYPES = new Set(['lease', 'dd', 'om']);
 
+// ---------------------------------------------------------------------------
+// DOC1 (2026-09-01) — the backlog scan had a FIXED WINDOW and no cursor.
+//
+// fetchEligibleCreDocs read only the newest `cap*4` = 60 registry rows and
+// diffed out the ones already extracted. Once those 60 were all done the diff
+// was empty FOREVER: `eligible: 0` returned HTTP 200 every 30 minutes over 695
+// waiting documents (ids 2 -> 2317), while bov-extract — the lane's only
+// consumer — starved. Dead-End playbook Class 12, third instance (P135 fixed
+// window, P136 re-checking the same 120 nightly). Same signature every time:
+// green cron, honest-looking zero counters, nothing moving.
+//
+// The scan is now an ASCENDING keyset walk (oldest-first, so it reaches id 2)
+// with a PAGE BUDGET (so it terminates). Raising the old constant was refused
+// on purpose: it moves the jam to row N+1 and makes it more expensive to see.
+// ---------------------------------------------------------------------------
+
+// Page size for the keyset walk. Deliberately well under PostgREST's hard
+// 1000-row response cap — a larger stride silently SKIPS rows.
+export const CRE_SCAN_PAGE_SIZE = 200;
+
+// Page budget per tick. 12 x 200 = 2,400 registry rows, against a live
+// lease/dd/om population of 771 — so a full sweep is ~4 pages and the budget is
+// headroom, not a throttle. It exists so the walk can never become unbounded.
+const CRE_SCAN_MAX_PAGES = Math.max(1, parseInt(process.env.CRE_DOC_TEXT_SCAN_MAX_PAGES || '12', 10));
+
+// The DEFERRED-RETRY marker reasons. See writeDeferredMarker: a byte-fetch
+// failure persisted NOTHING, so oldest-first would jam on the first unfetchable
+// document. These rows self-exclude, then expire.
+export const CRE_RETRY_REASONS = Object.freeze(['fetch_failed', 'extract_error']);
+export const CRE_RETRY_AFTER_HOURS = Math.max(1, Number(process.env.CRE_DOC_TEXT_RETRY_AFTER_HOURS || 24));
+const CRE_RETRY_AFTER_MS = CRE_RETRY_AFTER_HOURS * 3600 * 1000;
+
 /**
  * Split a flat OCR/text blob into a page array when the layout tier didn't give
  * us one. DocAI/Azure layout returns real per-page text (preferred, page-anchored
@@ -194,6 +226,56 @@ async function upsertSidecar(row, deps = {}) {
 }
 
 /**
+ * THE NEGATIVE MARKER (DOC1). Verified on the code path, not from the table:
+ * `extractDocumentText` has exactly ONE `ok:false` return and it is
+ * `fetch_failed` (document-text.js:361). EVERY post-fetch failure —
+ * `ocr_non_ok`, `over_ocr_cap`, `office_unreadable`, `thin_ocr_result` — comes
+ * back `ok:true` with needs_ocr and DOES persist a sidecar row, which is what
+ * makes those self-exclude. A byte-fetch failure persisted nothing at all.
+ *
+ * Under the old newest-60 window that was invisible. Under an oldest-first scan
+ * it is a poison pill: the unfetchable document sits at the head of the queue
+ * and is re-selected every tick, forever (P136 — "a worker that leaves no trace
+ * on an empty target cannot page past it"). All 771 CRE documents are SharePoint
+ * server-relative refs fetched through the PA flow, so one unset env var would
+ * jam the whole lane on row one.
+ *
+ * So we record the fact we have: ATTEMPTED, COULD NOT FETCH, AT THIS TIME.
+ *   - `needs_ocr = true`, `raw_text = null` — invisible to BOTH consumers:
+ *     gatherPropertyText filters `needs_ocr=is.false&raw_text=not.is.null`, and
+ *     v_lcc_cre_bov_ready counts a doc covered only `AND NOT t.needs_ocr`.
+ *   - DATED via `extracted_at`, and deliberately NOT terminal: the eligible scan
+ *     re-admits it after CRE_RETRY_AFTER_HOURS, so the exclusion clears by itself
+ *     when the SharePoint flow comes back or the file reappears. Each retry
+ *     refreshes the timestamp, which is what makes the cursor advance instead of
+ *     re-trying the same head every 30 minutes.
+ *   - The `mode=jobs` lane is unaffected: sidecarStatus only short-circuits on
+ *     'done', so a marker row still re-extracts on demand.
+ *
+ * NEVER overwrites a filled sidecar (the `deps.force` path could otherwise
+ * clobber good text with a marker), and never throws.
+ */
+async function writeDeferredMarker(regRow, reason, deps = {}) {
+  if (deps.deferMarkers === false) return false;
+  const version = deps.version || CRE_DOC_TEXT_VERSION;
+  const existing = await sidecarStatus(regRow.id, version, deps).catch(() => null);
+  if (existing === 'done') return false;   // never clobber extracted text
+  const up = await upsertSidecar({
+    document_id: regRow.id,
+    cre_property_id: regRow.cre_property_id ?? null,
+    document_type: regRow.document_type || null,
+    extractor_version: version,
+    extracted_at: new Date(deps.now ? deps.now() : Date.now()).toISOString(),
+    raw_text: null,
+    method: null,
+    needs_ocr: true,
+    char_len: 0,
+    reason,
+  }, deps).catch(() => null);
+  return !!(up && up.ok);
+}
+
+/**
  * THE 2A worker. Extract-once for one CRE registry document.
  *   1. load the registry row (source_url / SharePoint ref)
  *   2. Unit-1 extractDocumentText (tiered OCR for lease/dd/om)
@@ -225,12 +307,30 @@ export async function runPropertyDocText(documentId, deps = {}) {
   try {
     built = await buildDocTextRow(regRow, deps);
   } catch (err) {
-    return { ok: false, outcome: 'error', document_id: documentId, reason: err?.message || String(err) };
+    // Same jam risk as fetch_failed below: an exception persisted nothing, so the
+    // row returns to the head of an oldest-first queue every tick. Mark it dated
+    // (24 h) rather than terminal — a genuinely transient throw costs one day of
+    // delay; a permanent lane jam costs the whole backlog.
+    const marked = await writeDeferredMarker(regRow, 'extract_error', deps);
+    return {
+      ok: false, outcome: 'error', document_id: documentId,
+      reason: err?.message || String(err),
+      retry_marked: marked, retry_after_hours: CRE_RETRY_AFTER_HOURS,
+    };
   }
 
   if (built.outcome === 'fetch_failed') {
-    // Transient — surfaced but NOT persisted, so the row stays eligible.
-    return { ok: false, outcome: 'fetch_failed', document_id: documentId, reason: built.reason, detail: built.detail };
+    // Byte fetch failed — the ONLY ok:false extractDocumentText returns. Persist a
+    // DATED, EXPIRING negative marker (see writeDeferredMarker) so the scan can
+    // page past it, and re-admit it after CRE_RETRY_AFTER_HOURS. The `detail`
+    // (why it failed) rides the tick response and the cron's stored HTTP body,
+    // not the sidecar row — the row records that and when, never a guess.
+    const marked = await writeDeferredMarker(regRow, 'fetch_failed', deps);
+    return {
+      ok: false, outcome: 'fetch_failed', document_id: documentId,
+      reason: built.reason, detail: built.detail,
+      retry_marked: marked, retry_after_hours: CRE_RETRY_AFTER_HOURS,
+    };
   }
 
   const up = await upsertSidecar(built.row, deps).catch((e) => ({ ok: false, detail: e?.message }));
@@ -255,40 +355,108 @@ export async function runPropertyDocText(documentId, deps = {}) {
 
 /**
  * The eligible queue for a drain tick: registry docs of an extractable type that
- * have NO sidecar yet at the current version (LEFT-JOIN-absent). Implemented as
- * two cheap PostgREST reads (candidate registry ids, then the sidecar ids already
- * present) diffed in JS — no view / RPC dependency, mirrors claimPendingJobs.
+ * have NO usable sidecar yet at the current version.
  *
- * Returns { ok, rows } where rows are registry rows ready for runPropertyDocText.
+ * ⚠️ DOC1 — this used to read the newest `cap*4` rows and diff them. That window
+ * saturated and `eligible` was 0 forever over 695 documents. It is now an
+ * ASCENDING KEYSET WALK: oldest id first (so it reaches the bottom of the
+ * backlog), `id=gt.<cursor>` per page (so it never re-reads a page), bounded by
+ * CRE_SCAN_MAX_PAGES (so it terminates). It stops as soon as it has `cap` rows.
+ *
+ * Oldest-first is safe from a poison pill BECAUSE every terminal outcome writes a
+ * sidecar row and the one that does not — a byte-fetch failure — now writes a
+ * dated deferred-retry marker (writeDeferredMarker). Those markers are the only
+ * sidecar rows this scan re-admits, and only once they are stale; a `done`,
+ * `ocr_non_ok` or `over_ocr_cap` row stays excluded exactly as before, so nothing
+ * re-bills DocAI for an outcome we already have.
+ *
+ * The forward lane is unchanged — freshly-registered docs arrive through the
+ * `cre.doc.text` enrichment job (cron 169, mode=jobs). This is the BACKLOG lane
+ * (cron 167, `lcc-cre-doc-text-backfill`), which is what oldest-first is for.
+ *
+ * Returns { ok, rows, scan_pages, scan_rows, scan_capped, scan_exhausted,
+ *           scan_lowest_id, scan_highest_id, retry_admitted }.
+ * ⚠️ Read `scan_capped` before reading `eligible: 0` as an empty queue.
  */
 export async function fetchEligibleCreDocs({ limit = 15, doctype = null, version } = {}, deps = {}) {
   const q = deps.opsQuery || opsQuery;
   const ver = version || CRE_DOC_TEXT_VERSION;
   const cap = Math.min(100, Math.max(1, limit));
+  const pageSize = Math.max(1, deps.scanPageSize || CRE_SCAN_PAGE_SIZE);
+  const maxPages = Math.max(1, deps.scanMaxPages || CRE_SCAN_MAX_PAGES);
+  const now = deps.now ? deps.now() : Date.now();
+  const staleBefore = now - CRE_RETRY_AFTER_MS;
 
   const typeFilter = doctype && doctype !== 'all'
     ? `&document_type=eq.${encodeURIComponent(doctype)}`
     : `&document_type=in.(${[...CRE_TEXT_DOCTYPES].join(',')})`;
 
-  // Candidate registry rows (newest first), over-fetch so we can drop already-done.
-  const reg = await q('GET',
-    `lcc_cre_property_documents?select=id,cre_property_id,file_name,document_type,source_url,source` +
-    `${typeFilter}&order=id.desc&limit=${cap * 4}`,
-    null, { countMode: 'none' });
-  if (!reg.ok || !Array.isArray(reg.data)) return { ok: false, status: reg.status, detail: reg.data };
-  if (!reg.data.length) return { ok: true, rows: [] };
+  const rows = [];
+  let cursor = 0;          // keyset: the highest registry id examined so far
+  let pages = 0;
+  let scannedRows = 0;
+  let lowestId = null;
+  let highestId = null;
+  let retryAdmitted = 0;
+  let exhausted = false;
 
-  const ids = reg.data.map((r) => r.id);
-  const idIn = ids.join(',');
-  // Which of those already have a sidecar at this version?
-  const side = await q('GET',
-    `lcc_cre_property_document_text?select=document_id&extractor_version=eq.${encodeURIComponent(ver)}` +
-    `&document_id=in.(${idIn})`,
-    null, { countMode: 'none' });
-  const done = new Set(side.ok && Array.isArray(side.data) ? side.data.map((r) => r.document_id) : []);
+  while (pages < maxPages && rows.length < cap) {
+    const reg = await q('GET',
+      `lcc_cre_property_documents?select=id,cre_property_id,file_name,document_type,source_url,source` +
+      `${typeFilter}&id=gt.${cursor}&order=id.asc&limit=${pageSize}`,
+      null, { countMode: 'none' });
+    if (!reg.ok || !Array.isArray(reg.data)) {
+      return { ok: false, status: reg.status, detail: reg.data, stage: 'registry_page', scan_pages: pages };
+    }
+    pages++;
+    if (!reg.data.length) { exhausted = true; break; }
 
-  const rows = reg.data.filter((r) => !done.has(r.id)).slice(0, cap);
-  return { ok: true, rows };
+    const ids = reg.data.map((r) => r.id);
+    cursor = ids[ids.length - 1];
+    scannedRows += ids.length;
+    if (lowestId == null) lowestId = ids[0];
+    highestId = cursor;
+
+    const side = await q('GET',
+      `lcc_cre_property_document_text?select=document_id,needs_ocr,reason,extracted_at` +
+      `&extractor_version=eq.${encodeURIComponent(ver)}&document_id=in.(${ids.join(',')})`,
+      null, { countMode: 'none' });
+    // ⚠️ FAIL CLOSED. The old code treated a failed sidecar probe as "nothing is
+    // done" and handed every row to the drain — which re-OCRs filled documents
+    // and bills DocAI per page a second time. There is no spend guard that halts
+    // a tick, so an unreadable probe must stop the scan, not widen it.
+    if (!side.ok || !Array.isArray(side.data)) {
+      return { ok: false, status: side.status, detail: side.data, stage: 'sidecar_probe', scan_pages: pages };
+    }
+    const byId = new Map(side.data.map((r) => [r.document_id, r]));
+
+    for (const r of reg.data) {
+      if (rows.length >= cap) break;
+      const sc = byId.get(r.id);
+      if (!sc) { rows.push(r); continue; }
+      const stale = sc.needs_ocr
+        && CRE_RETRY_REASONS.includes(sc.reason)
+        && Date.parse(sc.extracted_at || 0) < staleBefore;
+      if (stale) { rows.push(r); retryAdmitted++; }
+    }
+
+    if (reg.data.length < pageSize) { exhausted = true; break; }
+  }
+
+  return {
+    ok: true,
+    rows,
+    scan_pages: pages,
+    scan_rows: scannedRows,
+    // TRUE only when the PAGE BUDGET stopped a still-unfinished walk. A short
+    // batch with scan_capped=false really is an empty queue; with it true,
+    // `eligible` is a FLOOR, not a total.
+    scan_capped: !exhausted && rows.length < cap,
+    scan_exhausted: exhausted,
+    scan_lowest_id: lowestId,
+    scan_highest_id: highestId,
+    retry_admitted: retryAdmitted,
+  };
 }
 
 /**
@@ -313,4 +481,4 @@ export async function enqueueCreDocText({ documentId, crePropertyId, documentTyp
   });
 }
 
-export const __private = { fetchRegistryRow, upsertSidecar, sidecarStatus };
+export const __private = { fetchRegistryRow, upsertSidecar, sidecarStatus, writeDeferredMarker };
