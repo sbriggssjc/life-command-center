@@ -1,3 +1,11 @@
+> ✅ **RUN AND SHIPPED 2026-09-01.** `v_lcc_entity_roles` is live; writeup
+> [`../../audits/C13b_OWNER_ROLE_MULTILABEL_2026-09-01.md`](../../audits/C13b_OWNER_ROLE_MULTILABEL_2026-09-01.md),
+> canonical `docs/architecture/owner-role-classification.md` **§7**.
+> ⚠️ **Three of the populations in §1a below were corrected by measurement on the way in** —
+> `repeat_buyer` **3,258 → 401** (3,258 counts purchase EDGES), `developer` **838 → 718** (a manual
+> override REPLACES the column that arm reads), and §4's `investor_owner + repeat_buyer` **772 → 167**
+> (same edge-count origin). **Do not re-quote this prompt's numbers; read §7.**
+
 # C13b — the owner-role classification, as a SET of labels
 
 > ⛔ **This SUPERSEDES `C13-owner-role-derived-classification.md`, which must not be run** — it
