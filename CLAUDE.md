@@ -4250,6 +4250,27 @@ Related invariants from the same round:
       means the values are whatever the current producer emits — so *the cheapest consumer to build
       is exactly the one whose source nobody re-graded.* **Before wiring any registered-but-unused
       ladder source (PR5's other 38), read what its producer's external call talks to.**
+    - 🚨 **THE STATED VERIFICATION COULD NOT HAVE OBSERVED ITS OWN SUCCESS — CHECK THAT BEFORE
+      RUNNING IT.** `lcc_flush_provenance_events()` carries
+      `v_first_class := ARRAY['splink_v1','sf_link_review_human','splink_v2',
+      'sf_account_contact_expansion']` and **relabels every event whose source is not on that list
+      to `domain_trigger`.** So the PR1 success criterion — *"assert on `field_provenance where
+      source='county_records'` going non-zero"* — would have read **ZERO even from a perfectly
+      correct wiring**, because the rows land under a different source name at a rung that does not
+      exist for those fields. **Class 11 applied to a VERIFICATION rather than a detector: before
+      trusting a check, confirm the value you are asserting on can reach the column you are reading.**
+      ⚠️ **It also makes PR5's "39 sources never written" an UPPER BOUND** — anything writing through
+      this path is invisible under its own name, and `domain_trigger` carries 17,370 rows / 16,327
+      writes that nobody has decomposed. Backlog **PR8**.
+    - ⚠️ **A CORRECTION THAT IS LIVE BUT UNMERGED LEAVES THE REPO UNABLE TO REBUILD THE DATABASE —
+      "running but not merged", inverted.** Both domain PRs merged the **pre-correction** file, so
+      `main` states the retracted claim as the rationale for a live object (Dialysis's `CLAUDE.md`
+      included — the durable reference, where a wrong lesson does the most damage). And live
+      `v_gov_public_record_acquisition` column 6 is `assessed_value_zero` while the committed file's
+      is `with_owner_name`: **`CREATE OR REPLACE VIEW` is append-only for columns, so a replay from
+      `main` errors 42P16.** The loud failure is the good outcome here — but **a repo that cannot
+      rebuild its own database is not a record of it.** Use `drop view` + `create view` when a
+      correction reorders columns, and **land the correction the same day the claim ships.**
   - **⚠️ THE DOCTRINE FAILURE THAT HID IT: I SCOPED A *SOURCE* TO ONE *CONSUMER'S* GAP LIST.** The
     same-day verdict *"don't build — stale sold comps, no leverage"* measured every option against
     the 662-row metadata backfill queue. Against the real denominator — **every property, dia 11,802

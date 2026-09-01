@@ -1,7 +1,7 @@
 # C13b — the owner-role classification, as a SET of labels (2026-09-01)
 
 > **Design:** [`../architecture/owner-role-classification.md`](../architecture/owner-role-classification.md)
-> (the whole page). **Prompt:** `docs/claude-code/prompts/C13b-owner-role-multilabel.md`.
+> (the whole page). **Prompt:** `docs/claude-code/prompts/done/C13b-owner-role-multilabel.md`.
 > **Migration:** `supabase/migrations/20261005120000_lcc_c13b_entity_roles_multilabel.sql`, applied
 > live to LCC Opps (`xengecqvemvfknjvbvrq`). **Guard:**
 > `test/c13b-entity-roles-multilabel.test.mjs` (11 tests, **19/19 mutations RED**).

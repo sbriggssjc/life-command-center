@@ -520,7 +520,7 @@ is ≥2 acquisitions with pacing as a weight · `developer` is a behavioural pat
 
 ⛔ **The staged build prompt `C13` is SUPERSEDED and must not be run.** It encodes a
 precedence-ordered **single** role, which §2c refutes on 957 entities.
-✅ **RUN AND SHIPPED 2026-09-01 — see §7.** `docs/claude-code/prompts/C13b-owner-role-multilabel.md`
+✅ **RUN AND SHIPPED 2026-09-01 — see §7.** `docs/claude-code/prompts/done/C13b-owner-role-multilabel.md`
 was executed in full; multi-label, Scott's decisions recorded in its §0 so they were not re-asked,
 populations re-measured. **Four of its inputs were corrected by measurement on the way in** (§7.2
 `repeat_buyer`, §7.3 the override, §7.4 `one_off_owner`, §7.5 the ambiguity sets).

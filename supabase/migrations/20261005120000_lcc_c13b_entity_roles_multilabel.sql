@@ -1,7 +1,7 @@
 -- C13b — the owner-role classification, as a SET of labels (2026-09-01)
 --
 -- Design: docs/architecture/owner-role-classification.md (the whole page).
--- Prompt: docs/claude-code/prompts/C13b-owner-role-multilabel.md.
+-- Prompt: docs/claude-code/prompts/done/C13b-owner-role-multilabel.md.
 -- Writeup: docs/audits/C13b_OWNER_ROLE_MULTILABEL_2026-09-01.md.
 --
 -- ⚠️ SUPERSEDES the single-valued shape C13 encoded. Scott, 2026-08-31:
