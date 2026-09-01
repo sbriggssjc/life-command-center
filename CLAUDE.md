@@ -947,9 +947,30 @@ Registry: `feature_flags_registry.OCR_CLOUD_DOCAI`. Crons 160/167/169 ACTIVE. Fu
   extracts them in-process, sniffed from BYTES (the SharePoint PA flow misreports mime as pdf —
   never trust contentType). Legacy OLE `.doc` → terminal `office_no_text:legacy_doc`. Wired in both
   `runLeaseExtraction` and `extractDocumentText` BEFORE the OCR tiers; no config, byte-sniff only.
-- **Caps:** DocAI sync ~15 pages (`over_page_cap` → gpt-4o last resort), `INTAKE_OCR_MAX_BYTES` 12MB
-  default; bigger scans go off-box via the `ocr_text` resubmit seam
+- **Caps:** ⚠️ **DocAI sync is 30 pages, not 15, since DOC8 (2026-09-01)** — `docai-ocr` v23 sets
+  `imagelessMode: true` on the ProcessRequest (a **TOP-LEVEL boolean**, verified against the live v1
+  discovery document — **NOT** `processOptions.ocrConfig`, where nesting it is a silent no-op).
+  `INTAKE_OCR_MAX_BYTES` 12MB default; bigger scans go off-box via the `ocr_text` resubmit seam
   (`POST /api/intake?_route=lease-backfill&id=<id>`). Optional: `AI_OCR_MODEL=gpt-4o-mini`.
+- **⚠️ `over_page_cap` → gpt-4o WAS the documented design and it was MEASURED TO FAIL.** Across every
+  OCR row the CRE lane has produced: gpt-4o 19 rows, avg **1,579** chars, 12 under 500, minimum
+  **31**; DocAI 6 rows, avg 9,055, none under 500. **The expensive tier returned ~9× LESS text** —
+  because DocAI 502'd on the 15-page cap and every long lease fell through. The fall-through is not
+  removed (gpt-4o is still the last resort below the cap), but **above the cap the CRE worker now
+  stops with a named, dated `over_docai_page_cap` marker and attempts no OCR at all**, from a
+  pdf-parse page pre-flight. The cap is **opt-in per caller** (`ocrPageCap`, default null), so cron
+  160 and the deed lane are byte-identical.
+- **⚠️ A THIN OCR RESULT USED TO COUNT AS COVERED, AND THAT IS A CORRECTNESS DEFECT (DOC10).**
+  `gatherPropertyText` admits on `needs_ocr=is.false&raw_text=not.is.null` and `v_lcc_cre_bov_ready`
+  counts covered on `NOT needs_ocr` — **a 31-character fragment satisfied both**, so BOV extract
+  received it as the lease and it could never be retried. `reason='thin_ocr_result'` was already
+  being set and **no consumer has ever read it**. The floor is now page-aware
+  (`max(120, pages×200)`; **500 when the page count is unknown**) and writes DOC1's dated marker.
+  Backfill 2026-09-01: **12 rows / 9 properties; `v_lcc_cre_bov_ready` 7 → 4 — that number going DOWN
+  is the fix working.** ⚠️ **Read `ocr_docs_by_engine` / `ocr_pages_unknown` on the tick, never
+  `ocr_by_engine`** — it counted PAGES, gpt-4o reports none, so the spend guard read empty exactly
+  when the escalation happened (DOC9). It is REMOVED rather than redefined. Full state:
+  `docs/architecture/document-capture-ocr-and-deeds.md` §0d.
 
 #### Durable document capture-at-ingest (store the bytes, don't defer the fetch)
 

@@ -23,7 +23,14 @@
 // SAFE / IDEMPOTENT: upsert keyed on (document_id, extractor_version); a filled
 // row drops out of the queue. A scanned doc with no OCR available is recorded
 // needs_ocr=true (terminal-this-pass, sized for the OCR follow-up), NOT an error.
-// A transient byte-fetch failure is left UNpersisted so a later tick retries.
+// ⚠️ Since DOC1 a byte-fetch failure is no longer left UNpersisted — it writes a
+// dated deferred-retry marker, because oldest-first would otherwise jam on the
+// first unfetchable document forever (see writeDeferredMarker).
+// ⚠️ Since DOC8/DOC10 `needs_ocr=true` covers two MORE states, and neither is
+// terminal: a document longer than Google's synchronous OCR cap
+// (`over_docai_page_cap`, no OCR attempted, no spend) and an OCR result too thin
+// to be the document (`thin_ocr_result`, which used to be persisted needs_ocr=
+// FALSE and read as a covered lease). Both re-admit on their own expiry.
 // Deps injected → unit-testable with no network / no OpenAI key.
 // ============================================================================
 
@@ -32,13 +39,84 @@ import { extractDocumentText, meaningfulTextLen } from './document-text.js';
 
 export const CRE_DOC_TEXT_VERSION = process.env.CRE_DOC_TEXT_VERSION || 'unit1_v1';
 
-// A successful OCR whose MEANINGFUL text is below this floor is almost certainly a
-// blank/near-blank scan or a cover page (prod finding: a lease that fell through to
-// gpt-4o returned 48 chars and was marked "done"). We still persist it (re-OCR
-// wouldn't recover more), but tag reason='thin_ocr_result' so Unit 4 treats it as
-// citation-risk / review rather than trusting it. 0 disables. Digital text uses the
-// upstream DOC_TEXT_MIN_CHARS floor already; this covers the OCR path.
+// ---------------------------------------------------------------------------
+// DOC10 (2026-09-01) — A THIN OCR RESULT MUST NOT COUNT AS COVERED.
+//
+// The old rule persisted a thin result with needs_ocr=FALSE and merely tagged
+// reason='thin_ocr_result', on the theory that "re-OCR wouldn't recover more."
+// That theory was refuted by DOC8: these rows are thin because DocAI 502'd on
+// its page cap and gpt-4o returned a fragment — re-OCR through a raised cap
+// recovers the whole document.
+//
+// Worse, the tag was inert. BOTH consumers key on needs_ocr and nothing has ever
+// read `reason`: gatherPropertyText admits on `needs_ocr=is.false&raw_text=not.is.null`,
+// and v_lcc_cre_bov_ready counts a document covered on `AND NOT t.needs_ocr`. A
+// 31-CHARACTER FRAGMENT SATISFIED BOTH — so BOV extract received it as though it
+// were the lease, the property read *covered*, and it could never be retried
+// because nothing distinguished it from a real extraction. That is a correctness
+// defect, and it is worse than failing.
+//
+// A thin result now writes DOC1's dated negative marker (needs_ocr=true), which
+// is invisible to both consumers and re-admits itself after CRE_RETRY_AFTER_HOURS.
+// ⚠️ The fragment TEXT is kept, not nulled: it is the only surviving evidence of
+// what the expensive tier returned, it is what makes the backfill reversible, and
+// needs_ocr=true alone already hides the row from every consumer (verified by
+// grepping every read of this table). DOC1's marker nulls raw_text only because a
+// byte-fetch failure has no text to keep.
+//
+// ⚠️ THE FLOOR IS PAGE-AWARE, NOT A FLAT CHAR COUNT — a genuinely short one-page
+// document is not thin. But `page_count` is NULL on 79 of 80 sidecar rows and
+// `ocr_pages` only exists once DocAI has already succeeded, so a rule keyed on
+// either is inert exactly where it is needed. The key that IS available is a
+// pdf-parse page count taken at extraction time (pdfPageCountFromBuffer), which
+// works on a scanned PDF with no text layer.
+//
+// Measured over all 22 OCR rows the lane has produced (2026-09-01):
+//   - chars-per-page on the 6 DocAI successes: 601 / 1,172 / 1,514 / 2,492 /
+//     2,494 / 3,313. The lowest is 3x the 200/page floor.
+//   - the 19 gpt-4o rows carry NO page count (DocAI refused before counting), so
+//     they fall to the unknown-pages floor. Their char_len distribution has a
+//     4x gap with nothing in it: 31, 44, 44, 48, 49, 68, 116, 163, 186, 187,
+//     188, 200 ... then 783, 2251, 2670, 3521, 4062, 7014, 8375. A 500 floor
+//     sits inside that gap and separates 12 fragments from 7 real extractions.
+// The unknown-pages floor is deliberately STRICTER than a known single page:
+// "we do not know how long this is" on this lane means DocAI never answered,
+// which means we are on the tier measured to produce fragments. The cost of
+// being wrong is bounded — the document re-admits in 24 h and DOC8 means the
+// next attempt usually gets a page count.
+// ---------------------------------------------------------------------------
+
+/** Minimum meaningful chars PER PAGE before an OCR result reads as real text. */
+const OCR_MIN_CHARS_PER_PAGE = Number(process.env.CRE_OCR_MIN_CHARS_PER_PAGE || 200);
+
+/** Absolute floor when the page count IS known (a 1-page doc is not exempt). */
 const OCR_MIN_MEANINGFUL_CHARS = Number(process.env.CRE_OCR_MIN_CHARS || 120);
+
+/** Floor when the page count is UNKNOWN. See the 4x gap measured above. */
+const OCR_MIN_CHARS_UNKNOWN_PAGES = Number(process.env.CRE_OCR_MIN_CHARS_UNKNOWN_PAGES || 500);
+
+/**
+ * DOC8 — refuse OCR above this many pages rather than falling through to gpt-4o.
+ * 30 is Google's synchronous cap in imageless mode (15 without it); the edge
+ * function reports the cap in force on its GET health probe, so the two numbers
+ * are checkable against each other rather than assumed equal. 0 disables.
+ */
+export const CRE_OCR_PAGE_CAP = Number(process.env.CRE_OCR_PAGE_CAP || 30);
+
+/** The meaningful-char floor an OCR result must clear at this page count. */
+export function ocrThinFloor(pages) {
+  if (Number.isFinite(pages) && pages > 0) {
+    return Math.max(OCR_MIN_MEANINGFUL_CHARS, pages * OCR_MIN_CHARS_PER_PAGE);
+  }
+  return OCR_MIN_CHARS_UNKNOWN_PAGES;
+}
+
+/** Is this OCR result too thin to be the document? Pure; 0 floors disable it. */
+export function isThinOcrResult({ meaningfulChars, pages } = {}) {
+  const floor = ocrThinFloor(pages);
+  if (!(floor > 0)) return false;
+  return Number(meaningfulChars || 0) < floor;
+}
 
 // Doc types this worker extracts by default (the ones Unit 4 consumes). A comp
 // export or a finished master workbook doesn't need a text sidecar.
@@ -72,9 +150,20 @@ const CRE_SCAN_MAX_PAGES = Math.max(1, parseInt(process.env.CRE_DOC_TEXT_SCAN_MA
 // The DEFERRED-RETRY marker reasons. See writeDeferredMarker: a byte-fetch
 // failure persisted NOTHING, so oldest-first would jam on the first unfetchable
 // document. These rows self-exclude, then expire.
-export const CRE_RETRY_REASONS = Object.freeze(['fetch_failed', 'extract_error']);
+export const CRE_RETRY_REASONS = Object.freeze(['fetch_failed', 'extract_error', 'thin_ocr_result']);
 export const CRE_RETRY_AFTER_HOURS = Math.max(1, Number(process.env.CRE_DOC_TEXT_RETRY_AFTER_HOURS || 24));
 const CRE_RETRY_AFTER_MS = CRE_RETRY_AFTER_HOURS * 3600 * 1000;
+
+// DOC8 — a CEILING, not a transient. `over_docai_page_cap` says the document is
+// longer than the synchronous OCR can serve; nothing about tomorrow changes that,
+// so re-admitting it daily would park the 15-row batch on documents we already
+// know we cannot process. It still EXPIRES — the same marker mechanism, a
+// different expiry — so the lane self-clears if the cap is raised again or an
+// async/batch tier is added, rather than becoming a permanent tombstone nobody
+// revisits. Re-admission costs a byte fetch and a pdf-parse: ZERO OCR spend.
+export const CRE_CEILING_REASONS = Object.freeze(['over_docai_page_cap']);
+export const CRE_CEILING_RETRY_AFTER_HOURS = Math.max(1, Number(process.env.CRE_DOC_TEXT_CEILING_RETRY_AFTER_HOURS || 720));
+const CRE_CEILING_RETRY_AFTER_MS = CRE_CEILING_RETRY_AFTER_HOURS * 3600 * 1000;
 
 /**
  * Split a flat OCR/text blob into a page array when the layout tier didn't give
@@ -120,6 +209,10 @@ export async function buildDocTextRow(regRow, deps = {}) {
       mediaType: null,
       allowOcr: deps.allowOcr !== false,
       ocrTiered,
+      // DOC8: above Google's synchronous cap, stop with a named marker instead of
+      // paying gpt-4o for a fragment. Opt-in per caller; the deed lane does not
+      // set it and is unchanged.
+      ocrPageCap: deps.ocrPageCap ?? CRE_OCR_PAGE_CAP,
     },
     deps, // storageGet / fetchImpl / freeOcr / cloudCheapOcr / ocrImpl all pass through
   );
@@ -138,8 +231,13 @@ export async function buildDocTextRow(regRow, deps = {}) {
   };
 
   if (ext.needs_ocr || !ext.text) {
+    const reason = ext.reason || 'no_text_layer';
     return {
-      outcome: 'needs_ocr',
+      // DOC8: the over-cap refusal gets its OWN outcome so the tick can count it.
+      // Folding it into `needs_ocr` would hide the whole point of the pre-flight —
+      // "we did not spend on this, and here is exactly why" — in a bucket that
+      // also holds "there is no text layer and no OCR is configured."
+      outcome: reason === 'over_docai_page_cap' ? 'over_page_cap' : 'needs_ocr',
       row: {
         ...base,
         raw_text: null,
@@ -147,7 +245,9 @@ export async function buildDocTextRow(regRow, deps = {}) {
         needs_ocr: true,
         thin_text_layer: !!ext.thin_text_layer,
         char_len: 0,
-        reason: ext.reason || 'no_text_layer',
+        // The page count is the whole finding on an over-cap row; record it.
+        page_count: Number.isFinite(ext.page_count) ? ext.page_count : null,
+        reason,
       },
     };
   }
@@ -159,25 +259,38 @@ export async function buildDocTextRow(regRow, deps = {}) {
   const providedPages = ext.pages || ext.ocr_page_texts || ext.page_texts || null;
   const pages = derivePages(ext.text, providedPages);
 
-  // Thin-OCR guard: a near-empty OCR result is flagged (not silently trusted).
+  // ── DOC10 — the thin-OCR FLOOR (was a tag nothing read; now a marker) ──────
+  // Page count, best available: what the extractor learned (DocAI's own count, or
+  // the count the cheap tier reported before refusing) then the derived pages.
+  // null means UNKNOWN, never 0 — ocrThinFloor treats the two differently.
+  const knownPages = Number.isFinite(ext.ocr_pages) ? ext.ocr_pages
+    : (Number.isFinite(ext.page_count) ? ext.page_count : (pages.length || null));
   const meaningful = meaningfulTextLen(ext.text);
-  const thinOcr = ext.method === 'ocr' && OCR_MIN_MEANINGFUL_CHARS > 0 && meaningful < OCR_MIN_MEANINGFUL_CHARS;
+  const thinOcr = ext.method === 'ocr' && isThinOcrResult({ meaningfulChars: meaningful, pages: knownPages });
 
   return {
-    outcome: ext.method === 'ocr' ? 'ocr' : 'text_extracted',
+    // A thin OCR result is NOT an extraction, so it does not report as one.
+    outcome: thinOcr ? 'thin_ocr' : (ext.method === 'ocr' ? 'ocr' : 'text_extracted'),
     row: {
       ...base,
+      // ⚠️ The fragment is KEPT. needs_ocr=true alone hides it from both
+      // consumers (gatherPropertyText requires needs_ocr=is.false AND
+      // raw_text=not.is.null; v_lcc_cre_bov_ready requires NOT needs_ocr), and
+      // keeping it is what makes the marker auditable and reversible.
       raw_text: ext.text,
       method: ext.method || null,
       ocr_tier: ext.ocr_tier || null,
       ocr_engine: ext.ocr_engine || null,
       ocr_confidence: typeof ext.ocr_confidence === 'number' ? ext.ocr_confidence : null,
       ocr_pages: Number.isFinite(ext.ocr_pages) ? ext.ocr_pages : (pages.length || null),
-      page_count: pages.length || null,
+      page_count: knownPages,
       pages: pages.length ? pages : null,
       thin_text_layer: !!ext.thin_text_layer,
       char_len: ext.text.length,
-      needs_ocr: false,
+      // THE FIX. A thin result now carries DOC1's dated negative marker, so it is
+      // invisible to BOTH consumers and re-admits itself after CRE_RETRY_AFTER_HOURS
+      // — instead of a 31-character fragment reading as a covered lease forever.
+      needs_ocr: thinOcr,
       // gpt-4o transcription (tier 'cloud') has no page anchors; a thin OCR result
       // is low-confidence. Either way, tag it so Unit 4 flags citation risk.
       reason: thinOcr ? 'thin_ocr_result' : (ext.ocr_tier === 'cloud' ? 'no_page_anchors_gpt4o' : null),
@@ -348,6 +461,10 @@ export async function runPropertyDocText(documentId, deps = {}) {
     ocr_tier: built.row.ocr_tier || null,
     ocr_engine: built.row.ocr_engine || null,
     ocr_pages: built.row.ocr_pages ?? null,
+    // DOC8/DOC10: how long the document is, distinct from how many pages we were
+    // BILLED for. It is the whole finding on an over-cap row and it is what the
+    // thin floor keyed on, so the tick must be able to show it.
+    page_count: built.row.page_count ?? null,
     needs_ocr: !!built.row.needs_ocr,
     reason: built.row.reason || null,
   };
@@ -386,6 +503,7 @@ export async function fetchEligibleCreDocs({ limit = 15, doctype = null, version
   const maxPages = Math.max(1, deps.scanMaxPages || CRE_SCAN_MAX_PAGES);
   const now = deps.now ? deps.now() : Date.now();
   const staleBefore = now - CRE_RETRY_AFTER_MS;
+  const ceilingStaleBefore = now - CRE_CEILING_RETRY_AFTER_MS;
 
   const typeFilter = doctype && doctype !== 'all'
     ? `&document_type=eq.${encodeURIComponent(doctype)}`
@@ -434,9 +552,16 @@ export async function fetchEligibleCreDocs({ limit = 15, doctype = null, version
       if (rows.length >= cap) break;
       const sc = byId.get(r.id);
       if (!sc) { rows.push(r); continue; }
-      const stale = sc.needs_ocr
-        && CRE_RETRY_REASONS.includes(sc.reason)
-        && Date.parse(sc.extracted_at || 0) < staleBefore;
+      // Two expiries, ONE mechanism. A transient marker (fetch_failed / extract_error
+      // / thin_ocr_result) re-admits after CRE_RETRY_AFTER_HOURS; a CEILING marker
+      // (over_docai_page_cap — the document is longer than the synchronous OCR can
+      // serve) re-admits after CRE_CEILING_RETRY_AFTER_HOURS, so a known-unservable
+      // document cannot occupy the 15-row batch every 30 minutes forever while still
+      // self-clearing if the cap or the tiering changes.
+      const readmitAfter = sc.needs_ocr && CRE_CEILING_REASONS.includes(sc.reason)
+        ? ceilingStaleBefore
+        : (sc.needs_ocr && CRE_RETRY_REASONS.includes(sc.reason) ? staleBefore : null);
+      const stale = readmitAfter != null && Date.parse(sc.extracted_at || 0) < readmitAfter;
       if (stale) { rows.push(r); retryAdmitted++; }
     }
 

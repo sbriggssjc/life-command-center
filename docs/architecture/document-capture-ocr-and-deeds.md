@@ -9,7 +9,8 @@
 > `audit/data-flow-2026-05-30/AUDIT_document_intelligence_2026-06-20.md` (the original inventory) ·
 > `CLAUDECODE_PROMPT_deed_capture_at_ingestion.md` (the fix prompt).
 >
-> **Live-verified 2026-08-31; §0 blocker FIXED and re-measured 2026-09-01 (DOC1).**
+> **Live-verified 2026-08-31; §0 blocker FIXED and re-measured 2026-09-01 (DOC1); the spend
+> escalation and the covered-fragment defect FIXED 2026-09-01 (DOC8 / DOC9 / DOC10 — §0d).**
 >
 > ⚠️ **Every number on this page is dated. Before quoting one, run §7b — the standing status check,
 > with its 2026-09-01 baseline.**
@@ -102,7 +103,7 @@ population), stopping as soon as it has `limit` rows. It returns `scan_pages` / 
   comments first** — the fix's own prose names `id.desc` and `fetch_failed` repeatedly, so a raw
   grep would pass over the regression it exists to catch (the A5c / N18 / B1 lesson).
 
-### 🔴 POST-DOC1 RE-MEASURE, 2026-09-01 15:15 UTC — the escalation pays 6–14× MORE for ~10× LESS
+### 🟠 POST-DOC1 RE-MEASURE, 2026-09-01 15:15 UTC — the escalation pays 6–14× MORE for ~10× LESS (CAUSE FIXED, §0d)
 
 DOC1's writeup called its spend finding *"sample size is one OCR row — mechanism confirmed, rate not."*
 **Measured across every OCR row the lane has ever produced, the rate is 86% and the output is worse:**
@@ -123,7 +124,7 @@ long document falls through, and gpt-4o returns a fragment.
 route to the failing tier.** The 22 rows to date are a sample of the same population, not a
 different one.
 
-### 🔴 DOC10 — a 31-character "extraction" passes the consumer's filter and counts as COVERED
+### 🟠 DOC10 — a 31-character "extraction" passed the consumer's filter and counted as COVERED (FIXED, §0d)
 
 ⚠️ **This is a correctness defect, not a cost one, and it is worse than failing.** `gatherPropertyText`
 (`bov-extract.js:192-224`) admits on `needs_ocr=is.false&raw_text=not.is.null`, and
@@ -139,6 +140,132 @@ SET on 5 of them and the consumers do not read it.** The label exists; nothing a
 
 ⚠️ **Fix DOC8 before DOC10's floor**, or the floor will correctly reject most long documents and the
 backlog will park itself — the floor is only safe once the cheap tier can actually serve them.
+✅ **That order was kept: DOC8's edge deploy landed first (15:50 UTC), then DOC9, then DOC10's floor
+and backfill. §0d records what each one measured.**
+
+### ✅ §0d — DOC8 / DOC9 / DOC10, shipped 2026-09-01 in that order (the order is load-bearing)
+
+**DOC8 — the cheap tier's page ceiling, raised at the source.** `docai-ocr` now sets
+**`imagelessMode: true`** on the ProcessRequest, which raises Google's SYNCHRONOUS cap **15 → 30**
+pages on Enterprise Document OCR. **Deployed to LCC Opps as `docai-ocr` v23 at 15:50 UTC** — an edge
+deploy, not a Railway one, so it is live independently of the PR.
+
+- ⚠️ **The field was verified against the API, not taken from the brief.** `imagelessMode` is a
+  **TOP-LEVEL boolean on ProcessRequest**, NOT under `processOptions.ocrConfig` — read from the live
+  v1 discovery document (`documentai.googleapis.com/$discovery/rest?version=v1`, 2026-09-01):
+  `GoogleCloudDocumentaiV1ProcessRequest.imagelessMode`, *"Optional. Option to remove images from the
+  document."* `ProcessOptions` carries `ocrConfig`/`layoutConfig`/… and **no imageless field**, so
+  nesting it there is a silent no-op that leaves the cap at 15. (A 2024 Ruby-client issue,
+  googleapis/google-cloud-ruby#26951, reports the REST surface rejecting the field; it is present in
+  v1 today, and the deploy carries a fallback for the case where a processor still refuses it.)
+- **It suppresses the rendered page IMAGE only.** `Document.pages[].image` is a separate field from
+  `pages[].layout` / `.tokens` / `.textAnchor`, which is everything `pageTextsFromDoc` (clause_ref
+  page anchors) and `meanConfidence` read. Both are additionally wrapped so a shape surprise cannot
+  turn a good OCR into a 502.
+- **SAFE DEPLOY, not an assumption:** an INVALID_ARGUMENT body naming `imagelessMode` retries ONCE
+  without it, so a processor that refuses the field degrades to today's behaviour instead of breaking
+  every ≤15-page OCR. The detector is deliberately narrow — it must not swallow PAGE_LIMIT_EXCEEDED
+  and re-bill a call that cannot succeed. `DOCAI_IMAGELESS_MODE=false` is the kill switch, and the
+  GET health probe now reports `imageless_mode` + `page_cap` so the caller's pre-flight and the
+  service can be checked against each other rather than assumed equal.
+- **⚠️ 30 IS STILL A CAP, AND IT IS NOW A NAMED, DATED MARKER — never a silent fall-through.**
+  `extractDocumentText` gained an opt-in `ocrPageCap`; above it the worker writes
+  `reason='over_docai_page_cap'`, `needs_ocr=true`, `page_count=<n>` and **attempts no OCR at all**.
+  The page count comes from a **pdf-parse pre-flight** (`pdfPageCountFromBuffer`), which works on a
+  scanned PDF with no text layer — the only page count available before spending. This does **not**
+  remove the gpt-4o tier: it stays the last resort everywhere under the cap where the cheap tier
+  fails for any other reason. What it removes is the fall-through on the one class gpt-4o is
+  *measured* to fail (avg 1,579 chars, 63% under 500, minimum 31), where the DOC10 floor would reject
+  the fragment anyway.
+  ⚠️ **The cap is OFF by default (`ocrPageCap: null`), so cron 160 and the deed lane are
+  byte-identical.** Only the CRE worker opts in (`CRE_OCR_PAGE_CAP`, 30).
+- **The over-cap marker is a CEILING, on the same mechanism with a different expiry.**
+  `CRE_CEILING_RETRY_AFTER_HOURS` (720 h / 30 d) against the transient 24 h: re-admitting a
+  known-unservable document every 30 minutes would park the 15-row batch on it forever, while never
+  re-admitting it would make it a tombstone nobody revisits. Re-admission costs a byte fetch and a
+  pdf-parse — **zero OCR spend**.
+- ⚠️ **HOW MUCH OF THE BACKLOG IS 31+ PAGES IS STILL UNMEASURED, AND THE INSTRUMENT IS NEW.** Neither
+  store carries a page count: `lcc_cre_property_documents` has no size/pages column at all, and the
+  sidecar's `page_count` is populated on **4 of 87** rows. The only page evidence that has ever
+  existed is 6 DocAI successes (1, 1, 5, 5, 6, 10 pages) and one PAGE_LIMIT_EXCEEDED at 19 — **7
+  observations, of which 1 exceeded 15 and 0 exceeded 30.** That sample is far too small to size a
+  406-lease / 235-dd backlog, and a full original lease at 30+ pages is completely ordinary, so
+  **do not read "0 of 7" as "the residual is small."** What DOES measure it, from now on: the tick's
+  `over_page_cap` counter, `page_count` on every marker, and `v_lcc_cre_thin_ocr_watch`.
+
+**DOC9 — the spend counter was blind to the expensive path.** `bump()` accumulated only when
+`ocr_pages > 0`, and gpt-4o returns no page count, so the 15:00 tick reported `ocr_by_engine: {}` and
+`ocr_pages_total: 0` **while spending gpt-4o money**. The ENGINE is now counted **unconditionally**
+(per document) and PAGES only when known.
+
+- **⚠️ `ocr_by_engine` is REMOVED, not redefined.** It counted PAGES; reusing the name for a DOCUMENT
+  count would silently change what every reader thinks it says. A reader of the old key now gets
+  `undefined` — loud — instead of a plausible number meaning something else. Read
+  **`ocr_docs_by_engine`** (documents), **`ocr_pages_by_engine`** / `ocr_pages_total` (priced pages)
+  and **`ocr_pages_unknown`**.
+- **⚠️ An unknown page count is NOT reported as 0** (P180). That is the whole defect: it zeroed
+  exactly the tier being watched. `ocr_pages_total: 0` can no longer mean *"we OCR'd nothing"* when
+  it means *"we could not price what we OCR'd."*
+- **The same blindness is still live in `api/_handlers/document-text.js` and
+  `api/_handlers/lease-backfill.js`** — identical `bump()` shape, other lanes. **Not fixed here**:
+  `document-text.js` is the deed lane §5 says not to touch. Filed, named, not silently inherited.
+
+**DOC10 — a thin OCR result no longer counts as COVERED.** The floor is **page-aware**:
+`max(120, pages × 200)` when the page count is known, **500** meaningful chars when it is not. A thin
+result now writes DOC1's dated marker (`needs_ocr = true`, `reason='thin_ocr_result'`), which is
+invisible to both consumers and re-admits after 24 h.
+
+- **The floor is keyed on what is actually available.** `page_count` is NULL on 79 of 80 sidecar rows
+  and `ocr_pages` exists only once DocAI has already succeeded, so a rule keyed on either is inert
+  precisely where it is needed. The forward path takes the count from the pdf-parse pre-flight; on
+  the already-written rows there is none, which is why the **unknown-pages arm did all 12** of the
+  repairs — measured, not assumed (all 19 gpt-4o rows carry NULL pages; all 6 DocAI rows clear the
+  known-pages arm at 601–3,313 chars/page against a 200 floor).
+- **500 sits inside a 3.9× gap the data actually has:** gpt-4o char_len runs
+  31 · 44 · 44 · 48 · 49 · 68 · 116 · 163 · 186 · 187 · 188 · 200 — then jumps to 783 · 2,251 ·
+  2,670 · 3,521 · 4,062 · 7,014 · 8,375. Nothing lands between 200 and 783.
+- **⚠️ The unknown-pages floor is deliberately STRICTER than a known single page** (500 vs 200). On
+  this lane, "we do not know how long this is" means DocAI never answered, i.e. we are on the tier
+  measured to return fragments. The cost of being wrong is bounded: the document re-admits in 24 h,
+  and after DOC8 the next attempt usually gets a page count.
+- **The FRAGMENT TEXT IS KEPT, not nulled.** `needs_ocr=true` alone hides the row from both consumers
+  (verified by grepping every read of the table: `gatherPropertyText`, `v_lcc_cre_bov_ready`,
+  `ACTIVATE_unit4.sql` — all key on `needs_ocr`), and keeping it is what makes the repair auditable
+  and reversible. DOC1's marker nulls `raw_text` only because a byte-fetch failure has no text.
+- **BACKFILL APPLIED 2026-09-01 15:51 UTC** (migration `20260901120000`, batch `doc10_thin_20260901`,
+  reversible via `_lcc_doc10_thin_ocr_backfill_backup`): **12 rows / 9 properties**, char_len 31–200,
+  all unknown-pages. Re-run marks **0** (idempotent). The reversal was **RUN, not asserted** (P195) —
+  a rolled-back round trip restored all 12 byte-identically, `mismatch = 0`.
+
+| | before | after |
+|---|---:|---:|
+| `v_lcc_cre_bov_ready` | 7 | **4** |
+| consumer-visible sidecars (`needs_ocr=false ∧ raw_text≠null`) | 77 | **65** |
+| OCR rows reading COVERED | 25 | **13** |
+| `v_lcc_cre_thin_ocr_watch` still reading covered | 12 | **0** |
+| gov deeds with text (must not move) | 325/325 | **325/325** |
+| cron 160 command · crons 167/169 active | `doctype=deed` · 2 | **unchanged · 2** |
+
+- ⚠️ **`bov_ready` GOING DOWN IS THE FIX WORKING, and someone will read it as a regression.** Those
+  three properties were never covered — they were "covered" by 31–200-character fragments, and BOV
+  extract was receiving them as though they were the lease. **A covered count that includes fragments
+  is not a smaller problem than a lower one; it is a wrong one.**
+- ⚠️ **The 12 marked rows are hidden but NOT YET RETRIED.** Re-admission needs
+  `thin_ocr_result` in `CRE_RETRY_REASONS`, which is JS and ships on the Railway redeploy of the
+  merged PR. Until then they are correctly invisible and correctly untouched — which is the safe
+  half of the order, since DOC8's page pre-flight is also JS.
+- **NOT re-OCR'd:** nothing already extracted at good length. Only rows below the floor re-admit.
+
+**Guard:** `test/doc8-doc9-doc10-page-cap-and-thin-floor.test.mjs` — 31 tests, **29 of 29 mutations
+verified RED**, 0 skipped. Source assertions strip comments first (the fixes' own prose names
+`imagelessMode`, `ocr_by_engine` and `thin_ocr_result` repeatedly). Two assertions were rewritten
+after they **passed their own mutation**: `imageless: imagelessUsed` legitimately appears in both the
+success and the error response, and `ocr_pages_unknown` appears in the result initializer as well as
+the increment — both are now anchored on their BRANCH, not on presence (the B6c-dup lesson). The
+edge module is imported with a `globalThis.Deno` stub so those tests RUN rather than silently skip.
+`test/cre-doc-text-window-jam.test.mjs` changed one row deliberately: DOC1 pinned `thin_ocr_result`
+as never-re-admitted, which was correct when a thin row counted as an answer and is exactly what
+DOC10 refutes.
 
 ### ⚠️ CORRECTION — an earlier draft of this page recommended widening cron 160. That is REFUTED.
 
@@ -347,15 +474,19 @@ That is **the correct Enterprise Document OCR processor** (the exact resource id
 names as right). The secret is fine. The cause is a **19-page lease against DocAI's 15-page sync
 cap** — i.e. the documented `over_page_cap → gpt-4o last resort` behaving as designed. **Google's own
 error names the fix: imageless mode raises the cap 15 → 30**, a one-line edge-function change that
-would route this class back to the cheap tier. **Not done here** — it is an edge-function deploy, a
-different change with its own grade. Filed **DOC8**.
+would route this class back to the cheap tier. ~~**Not done here**~~ — ✅ **SHIPPED 2026-09-01 as
+DOC8 (`docai-ocr` v23); see §0d, including why the field is a TOP-LEVEL ProcessRequest boolean and
+what now happens at 31+ pages.**
 
 ⚠️ **AND THE COST TELEMETRY IS BLIND TO EXACTLY THE EXPENSIVE PATH.** That tick reported
 **`ocr_by_engine: {}` and `ocr_pages_total: 0` while spending gpt-4o money**, because
 `bump()` only accumulates when `ocr_pages > 0` and the gpt-4o path returns no page count. **The
 counter built to catch the 6–14× escalation reads empty precisely when the escalation happens** — the
-failure-looks-like-success shape, inside the spend guard itself. **Until that is fixed, read
-`items[].ocr_tier` / `ocr_engine`, NEVER `ocr_by_engine`.** Filed **DOC9**.
+failure-looks-like-success shape, inside the spend guard itself. ~~**Until that is fixed, read
+`items[].ocr_tier` / `ocr_engine`, NEVER `ocr_by_engine`.**~~ ✅ **FIXED 2026-09-01 as DOC9 (§0d):
+`ocr_by_engine` is REMOVED — read `ocr_docs_by_engine`, `ocr_pages_by_engine` and
+`ocr_pages_unknown`. ⚠️ The identical blindness is still live in `document-text.js` and
+`lease-backfill.js` (other lanes, deliberately untouched).**
 
 ⚠️ **Sample size is ONE OCR row.** The mechanism is confirmed; the RATE across the 691 is not. The
 undrained population is lease-heavy and a 16–30-page lease is ordinary, so this plausibly repeats at
@@ -392,8 +523,14 @@ select (select count(*) from pop)                                               
        (select count(*) from (select id from pop order by id desc limit 60) n
           join side s on s.document_id = n.id)                                   as newest60_done;
 
--- 2. Outcome + spend mix. BASELINE: 45 pdf_text · 14 gpt-4o ('cloud') · 3 cloud_cheap (DocAI)
---    · 7 ocr_non_ok · 4 thin_ocr_result · 3 over_ocr_cap · 0 fetch_failed · 0 extract_error.
+-- 2. Outcome + spend mix. BASELINE 2026-09-01 PRE-DOC1: 45 pdf_text · 14 gpt-4o ('cloud')
+--    · 3 cloud_cheap (DocAI) · 7 ocr_non_ok · 4 thin_ocr_result · 3 over_ocr_cap · 0 fetch_failed
+--    · 0 extract_error.
+--    ⚠️ POST-DOC10 (2026-09-01 15:51) the shape CHANGED and a naive read now misleads: all 12 thin
+--    gpt-4o rows carry `reason='thin_ocr_result'` AND `needs_ocr=true` — they are markers, not
+--    extractions. Split by needs_ocr, and read `v_lcc_cre_thin_ocr_watch` (must show 0 rows with
+--    needs_ocr=false) rather than counting `cloud` rows as covered. New reason to expect:
+--    `over_docai_page_cap` (DOC8 — over the 30-page synchronous cap, NO OCR was attempted).
 --    ⚠️ `cloud` dominating `cloud_cheap` is the Custom-Extractor footgun and bills 6–14× — STOP.
 --    ⚠️ A rising `fetch_failed` count is the SharePoint PA flow, not this worker: probe
 --       GET /api/diag?kind=env -> sharepoint_fetch_url_set.
