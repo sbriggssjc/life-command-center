@@ -411,6 +411,37 @@ written, and **v24's structured-metadata parser has never been exercised** — t
 the new cap (*"30 got 40"*) was made on **v23**. **The 16–30 page band — the entire population DOC8
 exists for — has had zero OCR events either way.** A tier-split claim needs that band.
 
+### ✅ DOC12 — 2026-09-01 18:35 UTC: the escalation is GONE. ⚠️ But say precisely WHY, because it is not the cap raise.
+
+**Every OCR event since the redeploy — 9 of 9 on DocAI, ZERO on gpt-4o.** Char lengths 33,590 ·
+21,454 · 4,378 · 4,222 · 3,462 · 2,144 · 1,633 · 1,587 · 627 — all real text, every row carrying a
+page count. **The 86%-to-gpt-4o pattern that produced the 9.3× gap is finished.**
+
+**`over_docai_page_cap` is being written — 2 rows, at 39 and 31 pages.** The marker path works: no
+OCR attempted, `needs_ocr = true`, invisible to both consumers, re-admittable. DOC8's JS half is
+exercised and correct.
+
+⚠️ **AND HERE IS THE DISTINCTION THAT MATTERS: the flip is the MARKER's doing, not the cap raise's.**
+Every successful DocAI row since the deploy is **≤12 pages — which the OLD 15-page cap served too.**
+The two documents that exceeded the cap are **31 and 39 pages, both ABOVE 30**, so they were stopped
+rather than served. **The 16–30 band — the exact population the 15 → 30 raise exists for — has still
+had ZERO successful OCR events** (`in_the_16_30_band = 1`, and that row predates the deploy).
+
+**So what is proven:** the fall-through to gpt-4o is closed, and the over-cap marker fires correctly.
+**What is NOT yet proven:** that raising 15 → 30 serves any document it could not serve before.
+**Do not quote the zero-escalation result as evidence for the cap raise** — they are two different
+changes and only one of them has been exercised. ⚠️ **A win in the metric you were watching is not
+automatically a win for the change you shipped.**
+
+**Also observed and correct:** 2 rows `legacy_doc_unsupported` (OLE `.doc` — the documented terminal
+ceiling, never fixable by OCR) and 1 `over_ocr_cap` (the bytes cap). Both marked, neither escalated.
+
+**Drain state 18:35 UTC: undrained 639 (from 695), `bov_ready` 5 → 11 — the consumer more than
+doubled.** 🔵 **DOC13's other half is still time-gated:** the 14 retry markers cross
+`CRE_DOC_TEXT_RETRY_AFTER_HOURS` (24 h) at **~16:00–16:30 UTC on 2026-09-02**. Read `retry_admitted`
+then — ⚠️ **and `marked_and_readmittable`, never the bare `needs_ocr` count**, which now also holds
+the over-cap and legacy-doc ceiling markers that must NOT re-admit.
+
 ## 1. Scott's question, answered
 
 > *"At one point there was an issue with access to deeds ingested from CoStar and I asked whether we

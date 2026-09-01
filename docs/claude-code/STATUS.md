@@ -1387,6 +1387,40 @@ mechanism is confirmed, the rate across the remaining 691 is not, and the popula
 ⚠️ **I did not merge #1989 and was told not to.** Scott merged it 5 seconds after `npm test` went
 green, which is why the §7b baseline correction landed as a separate PR (#1990).
 
+## 2026-09-01 — `user_owner` confirmed (10/4/1); DOC12 half closed, and the reason is NOT the cap raise
+
+✅ **The `user_owner` lane produced its first verdicts — 10 confirmed, 4 rejected, 1 left
+undecided.** `v_lcc_entity_roles.user_owner` **0 → 10**, multi-role **946 → 954**. Verdicts live in
+`lcc_entity_role_confirmation`, the INPUT to the view, never a derived stamp.
+
+⚠️ **The 4 rejects are ONE shape — an SPE/DST named after the tenant it houses** (`FSC FMC
+Carbondale IL DST` ← Fmc-Carbondale · `USGBF NIAID LLC` ← NIAID · `NOAA Maryland LLC` ← NOAA ·
+`MORGANTOWN GSA USDA, LLC` ← USDA) — **and `name_reads_as_spe_shell` read FALSE on ALL FOUR.** The
+SPE detector caught none of them. **The case for a human lane is now measured rather than argued: a
+person separated them in one pass; the guard that exists would have separated zero.**
+
+⚠️ **Wake Forest is `is_not_prospected` and is STILL correctly `user_owner`** — the classification
+is a fact about the party; prospecting is a separate gate. **`Mena Dialysis` left undecided on
+purpose** (tenant is *DaVita Mena Dialysis Center* — landlord or predecessor practice, undecidable
+from the record). ⚠️ Verdict vocabulary is CHECK-constrained to **`confirmed`/`rejected`**.
+
+**C4b is closed by this** — `user_owner` is no longer *"written by nothing, ever."*
+
+🟡 **DOC12 half closed — and the precise reason matters more than the win.** Since the redeploy:
+**9 of 9 OCR events on DocAI, ZERO on gpt-4o** (char lengths 33,590 · 21,454 · 4,378 … 627, all
+real), and **`over_docai_page_cap` fires correctly on 2 documents at 39 and 31 pages.** The 86%
+escalation is finished and the marker path is proven.
+
+⚠️ **But the flip is the MARKER's doing, not the cap raise's. Every successful DocAI row since
+deploy is ≤12 pages — which the OLD 15-page cap served too — and the two over-cap documents are 31
+and 39, both ABOVE 30. The 16–30 band, the exact population the 15 → 30 raise exists for, has still
+had ZERO successful OCR events.** **Do not quote the zero-escalation result as evidence for the cap
+raise: two changes shipped together and only one has been exercised.** *A win in the metric you were
+watching is not automatically a win for the change you shipped.*
+
+**Drain: undrained 695 → 639; `bov_ready` 5 → 11 — the consumer more than doubled.**
+🔵 **DOC13 is narrowed to the retry half, time-gated to ~16:00–16:30 UTC 2026-09-02.**
+
 ## 2026-09-01 — C13b SHIPPED (PR #2003); it corrected THREE of my own numbers; stale files consolidated
 
 ✅ **`v_lcc_entity_roles` is LIVE on LCC Opps** — verified: investor_owner 6,447 · former_owner 3,786
