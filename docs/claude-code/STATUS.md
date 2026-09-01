@@ -1148,7 +1148,7 @@ correctly rejects most leases and parks the backlog.
 not have caught DOC8 alone — the sidecar column is populated, the tick's own summary is not.
 **Both instruments were needed.**
 
-**Prompt staged: `DOC8-docai-page-cap-and-thin-ocr-floor.md`** (DOC8 → DOC9 → DOC10, in that order).
+~~**Prompt staged: `DOC8-docai-page-cap-and-thin-ocr-floor.md`**~~ ✅ **EXECUTED 2026-09-01 (PR #1995), prompt filed to `prompts/done/`** (DOC8 → DOC9 → DOC10, in that order — the order was kept).
 
 ## 2026-09-01 — DOCUMENT PIPELINE: one canonical page, and the blocker found
 
