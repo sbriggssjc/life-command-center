@@ -103,18 +103,40 @@ parcel-detail page, and a homepage cannot state a specific parcel's assessed val
 
 ### The evidence, with its own positive control
 
+⚠️ **A roundness statistic was published here first and it was WRONG — corrected the same day, and
+the correction is worth more than the original claim.** The first cut read *"100.0% of gov's 9,265
+model-leg assessed values are exact multiples of $100,000, against 3.8% on the CoStar leg"* and
+called that the signature of a fabricated plausible number. **It was measuring ZEROS: `0 % 100000 =
+0`.** 9,264 of those 9,265 values are exactly `0.00`. The metric was structurally unable to say
+anything about roundness — the same trap this repo documents for the P157 `reloptions` test and the
+P182 deparse grep, **committed by the author of the page that documents it**, and caught only by
+running `count(*) filter (where assessed_value = 0)` while double-checking a PR body. `zeros` and
+`positives` are now separate first-class columns on both views.
+
+**Corrected measurement:**
+
 | measurement | model leg | CoStar leg (same table) |
 |---|---:|---:|
-| gov `parcel_records` assessed values that are exact multiples of **$100,000** | **100.0%** (9,265) | **3.8%** (416) |
-| gov `tax_records`, same test | **100.0%** (3,008) | **3.8%** (416) |
+| gov `parcel_records` assessed values | 9,265 → **9,264 are `0.00`**, 1 positive | **416 positive, 0 zeros** |
+| gov `tax_records` assessed values | 3,008 → **3,007 are `0.00`**, 1 positive | 416 positive, 0 zeros |
+| dia `tax_records` assessed / tax_amount | 22,139 → **22,132 are `0`**, 7 positive | 287 positive, 0 zeros |
+| dia parcel `year_built` | 40 → **37 are `0`**, 3 real years | **0 rows carry it at all** |
 | dia `tax_records` rows with a literal `XYZ …` placeholder owner | **186** | 0 |
-| dia rows carrying `year_built` / `building_sf` / `lot_sf` | **41, all model leg** | **0** |
 | Regrid-shaped payloads anywhere | **0** | — |
 
-The CoStar leg is the control: same table, same columns, same query — **3.8% vs 100.0%**. Named
-rows from the dia model leg: `mailing_owner` = *"XYZ Dialysis Centers LLC"*, *"XYZ Healthcare
-Trust"*, and city-templated *"Santa Rosa Dialysis LLC"*, *"Houston Dialysis Holdings LLC"*, every
-value field null. gov's newest parcels are all-zero sentinels.
+**So the model leg does not invent plausible numbers — it emits almost nothing, as zeros.** That is
+a different defect and in one way a worse one: a `0` is a *positive assertion* ("assessed at $0",
+"tax of $0") that propagates into curated columns and reads as measured, whereas a NULL would have
+been honest. It is the same shape as `tax_delinquent = false` from `bool(None)`.
+
+**What the fabrication case actually rests on** — and none of it depends on the retracted statistic:
+1. **The producer has no county fetch.** A fact about the code, not a distribution.
+2. **Placeholder and templated owner names** on the dia leg: `mailing_owner` = *"XYZ Dialysis
+   Centers LLC"*, *"XYZ Healthcare Trust"*, and city-templated *"Santa Rosa Dialysis LLC"*,
+   *"Houston Dialysis Holdings LLC"*. A model generated those; a county did not.
+3. **gov `owner_name` (9,749 rows) is the recorded owner we fed the prompt, echoed back** — the
+   ORE Phase A1 finding.
+4. **0 Regrid-shaped payloads**, so the vendor path has never run.
 
 ⚠️ **"Unstamped == model output" is a MEASUREMENT here, not an assumption: zero rows are
 Regrid-shaped, so the vendor path has never run.**
@@ -123,12 +145,18 @@ Regrid-shaped, so the vendor path has never run.**
 
 `v_dia_curated_field_ai_provenance` (shipped, live):
 
-| curated field | properties tracing to the **model** leg | to the CoStar leg |
-|---|---:|---:|
-| `dia.properties.tax_year` | **8,842** | 265 |
-| `dia.properties.tax_amount` | **8,842** | 0 |
-| `dia.properties.assessed_value` | **8,682** | 262 |
-| `year_built` / `building_size` / `lot_sf` | 2 / 3 / 1 | 0 |
+| curated field | properties tracing to the **model** leg | traced value | to the CoStar leg |
+|---|---:|---|---:|
+| `dia.properties.tax_amount` | **8,842** | **all `0`** | 0 |
+| `dia.properties.assessed_value` | **8,682** | **all `0`** | 262 (positive) |
+| `dia.properties.tax_year` | **8,842** | real years (2025/26) | 265 |
+| `year_built` / `building_size` / `lot_sf` | 2 / 3 / 1 | non-zero | 0 |
+
+⚠️ **Read the `traced_value_is_zero` column, not the count.** Live on `dia.properties`:
+`assessed_value` is non-null on 8,962 rows of which **8,700 are exactly `0`** and only **262 are
+positive** — and those 262 are precisely the CoStar-traced ones. `tax_amount` is **9,025 zeros
+against 1 positive**. So the curated columns are not carrying invented figures; they are carrying
+the model leg's no-data sentinel as if it were a measurement.
 
 Two writers put it there, neither recording provenance: `Dialysis/src/sync_properties_from_sources.py`
 (tax fields, latest `tax_year`) and `trg_parcel_propagate_to_property` (physical stats, fill-blanks).
