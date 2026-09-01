@@ -16,6 +16,44 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-01 — assessor enrichment: ran it once, and the answer is DO NOT WIRE IT
+
+**`python -m src.assessor_enrichment --from-queue 25` → `processed 25, enriched 0, fields_updated 0,
+errors 0, elapsed 114.8s`.** ~4.6 s per property of real elapsed work for **zero yield** — and,
+decisively, **zero trace**. This is a *don't build* answer, and running it once before scheduling it
+is the only reason we have it.
+
+🚨 **`errors: 0` with `enriched: 0` is a worker reporting clean success while doing nothing** — the
+failure mode this whole arc is about. Had the schedule been wired first, it would have run weekly
+forever, reported no errors every time, and nobody would have known it produces nothing. Verified
+live against the state delta, not the tally:
+
+| probe | result |
+|---|---|
+| `attempts > 0` | **0 of 1,365 rows** |
+| `last_attempt_at` / `last_error` set | **0 / 0** — the columns exist and *nothing has ever written them* |
+| queue gaps after the run | `land_area` 409 · `year_built` 404 · `building_size` 108 · `tenant` 95 — **unchanged** |
+| `properties` rows written by the run | **0** (the 6 in the window are a 12:00:0x top-of-hour burst, 5 of 6 not queue members) |
+
+⚠️ **It cannot page past what it cannot mark — Dead-End Class 12, in its purest form.** P136's
+reachability harvest at least wrote proposals when it succeeded; this worker writes **nothing on
+either outcome**, so `--from-queue 25` re-selects **the same 25 rows on every future run**, spends
+the same 115 seconds, and returns the same clean zero. A schedule would have made that permanent.
+
+⚠️ **And the queue behind it is a one-shot — Class 8.** `max(enqueued_at)` is **2026-05-21**, 103
+days ago; 703 `captured` / 662 `open` and nothing has enqueued since. **Even a working worker would
+drain a frozen 662-row set and then run forever on empty.** Two defect classes stacked, plus the
+silent-success reporting: three, in one unscheduled job.
+
+**The gating question is unanswerable as built, and that is the finding.** 4.6 s/property is real
+network time, so it is *reaching* something — but with `last_error` never written we cannot
+distinguish *the assessor has nothing for these parcels* (a genuine ceiling; retire the lane) from
+*every call is failing* (a fixable adapter). **The prerequisite is not a cron, it is a marker**:
+record the attempt and the reason on every row, both outcomes, then re-run 25 and read the reasons.
+Backlog **B6d-assessor-marker** (prerequisite) → **B6d-assessor-verdict** (retire or fix, decided on
+the reasons) → **B6d-assessor-producer** (the queue has no producer; only relevant if the other two
+come out positive). **No schedule until all three resolve.**
+
 ## 2026-09-01 — B6e-fred: the sweep was the finding; the FRED fix was already merged and still has not run
 
 **`fred_ingest` has NEVER written a row** — not "dead for 25 days". `economic_indicators` has exactly

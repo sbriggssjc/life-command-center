@@ -667,6 +667,24 @@ target is permanent residue.
 - **A bigger window is not the fix.** Raising 120 → 1,000 proposes once and stalls at row
   1,001, with the failure now more expensive to see. Cursor that advances + selection that
   joins. Full class: `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md` Class 12.
+- **⚠️ THE MARKER IS ALSO THE DIAGNOSTIC — a worker with no trace cannot be GRADED, not just
+  cannot page (assessor enrichment, 2026-09-01).** P136 framed the negative marker as a *paging*
+  fix. The dia assessor drain is the purer case: `--from-queue 25` returned **`processed 25,
+  enriched 0, fields_updated 0, errors 0` in 114.8 s** — ~4.6 s/property of real elapsed work, so
+  it is reaching *something* — and it writes nothing on **either** outcome (`attempts`,
+  `last_attempt_at`, `last_error` unwritten on all 1,365 rows since the queue was minted
+  2026-05-21). So *the source genuinely has nothing for these parcels* (a real ceiling ⇒ retire the
+  lane) and *every call is failing* (a fixable adapter) are **indistinguishable from the outside**,
+  and the run is unrepeatable-with-learning: it re-selects the same 25 rows forever. **When a
+  worker escalates or abstains, the reason is the deliverable** — the same lesson P181 drew for
+  confidence on human escalations, one layer down.
+- **⚠️ RUN AN UNSCHEDULED PRODUCER ONCE BEFORE WIRING A CRON TO IT.** `errors: 0` beside
+  `enriched: 0` is the silent-success shape this file catalogues everywhere; a schedule would have
+  emitted exactly that weekly, forever, over a **one-shot queue with no enqueuer**. Three defect
+  classes (silent success · no cursor · no producer) in one job, all visible in a single manual
+  run and **none of them visible from the code, the flag, or a green cron.** The sequence is
+  strict and the schedule is last: **marker → verdict → producer → cron.** Scheduling first is how
+  the FRED, CMS and public-record producers each became silent.
 
 ### The failure mode that matters looks exactly like success
 
