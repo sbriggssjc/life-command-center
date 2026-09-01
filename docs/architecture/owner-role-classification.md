@@ -308,6 +308,57 @@ population from 343 to **1**, which is not a precision improvement but a measure
 chain we hold. **And do not "fix" the 343 by relaxing anything**; they are honest output of a rule
 that cannot currently be verified. Label them by confidence and say so.
 
+## 2g. ✅ C14 located precisely — it is DATE EXTRACTION on records we already hold
+
+I recommended following B5's pattern: find a dated source nobody has consumed. **Measured over the
+354 gov developer candidates, and the answer is neither "the data is missing" nor "the events
+postdate the lease."**
+
+| for the 354 candidate properties | |
+|---|---:|
+| have **deed records** | **351 (99%)** |
+| have sales transactions | 285 |
+| …with an `ownership_history` transfer **before** first-gen commencement | **1** |
+| …with a **deed** dated before it | **1** |
+| …with a **sale** dated before it | 14 |
+| leases that predate our earliest deed for that property | **14** |
+
+**The era is covered and the records are there.** Deeds span **1976 → 2026**; the candidate leases
+span **1997 → 2024**, comfortably inside. Only 14 leases predate any deed we hold.
+
+### ⚠️ The actual constraint: 824 of 5,819 gov deed records carry a `recording_date` — **14.2%**
+
+**So this is a DATE-EXTRACTION problem on documents already in hand, not a data-acquisition
+problem.** The deeds exist, attached to the right properties, from the right era. **What is missing
+is the date parsed off them.**
+
+That reframes C14 entirely:
+
+- ⛔ **NOT county-record acquisition** (the expensive answer, and the one C2h/B4 already warned is
+  "the most expensive conclusion available" when the tables named after the answer have not been
+  read).
+- ✅ **A deed-date extraction pass** over `deed_records`, which plugs into machinery that already
+  exists: the **document-text / Document AI OCR chain** (gov `CLAUDE.md` §26, `document-text-tick`,
+  the deed drain) and **ORE Phase 1 Unit C**, which already extracts grantor/grantee **addresses**
+  from these same deeds. **Unit C proved the parse path works on this corpus; the recording date is
+  a further field off the same documents.**
+
+⚠️ **Do NOT infer a date.** A deed with no parsed recording date must stay undated — under
+accuracy-first an honest gap beats a guessed year, and a fabricated acquisition date would corrupt
+both the developer test *and* pacing, the two things it exists to unblock.
+
+⚠️ **And re-measure before building:** 14.2% was taken on one day, and the OCR chain's crons
+(160/167/169) have a documented history of being `active=false` with the byte-fetch blocked — that
+is exactly the dated-blocker trap, so **check whether the chain is currently running before assuming
+it will pick these up.**
+
+### Why this is the right next thread
+
+**Two independent, high-value threads bottom out here** — `developer` (§2f) and pacing (§2c-ii) —
+and **both unblock from the same extraction.** It is bounded (5,819 rows), the corpus is already
+attached to properties, the parse path is proven, and it needs **no new external source and no new
+classifier.**
+
 ## 3. It must be DERIVED, and the churn measurement says that is safe
 
 ⚠️ **The accuracy constraint and the changes-over-time constraint both point at a view, not a
