@@ -102,6 +102,44 @@ population), stopping as soon as it has `limit` rows. It returns `scan_pages` / 
   comments first** — the fix's own prose names `id.desc` and `fetch_failed` repeatedly, so a raw
   grep would pass over the regression it exists to catch (the A5c / N18 / B1 lesson).
 
+### 🔴 POST-DOC1 RE-MEASURE, 2026-09-01 15:15 UTC — the escalation pays 6–14× MORE for ~10× LESS
+
+DOC1's writeup called its spend finding *"sample size is one OCR row — mechanism confirmed, rate not."*
+**Measured across every OCR row the lane has ever produced, the rate is 86% and the output is worse:**
+
+| tier | rows | avg chars | **under 500 chars** | `thin_ocr_result` |
+|---|---:|---:|---:|---:|
+| **`cloud` (gpt-4o)** | **19** | **1,579** | **12 (63%)** | 5 |
+| `cloud_cheap` (DocAI) | 3 | **14,687** | **0** | 0 |
+
+**DocAI returns 9.3× more text than gpt-4o on this corpus** (min 11,723 chars vs a gpt-4o minimum of
+**31**). This is not a marginal quality difference on a premium tier — **the expensive path is
+failing**, and DOC8 explains why: DocAI 502s on `PAGE_LIMIT_EXCEEDED` above 15 sync pages, every
+long document falls through, and gpt-4o returns a fragment.
+
+**By doctype, all-time: lease 33 drained / 16 needed OCR (48%) — 14 gpt-4o vs 2 DocAI · dd 21 / 6
+(29%) — 5 vs 1 · om 26 / 0.** ⚠️ **The undrained backlog is lease-heavy — 416 lease, 235 dd, 44 om
+— so at the observed rates it carries roughly 200 more lease OCR events and ~57 dd, ~86% of which
+route to the failing tier.** The 22 rows to date are a sample of the same population, not a
+different one.
+
+### 🔴 DOC10 — a 31-character "extraction" passes the consumer's filter and counts as COVERED
+
+⚠️ **This is a correctness defect, not a cost one, and it is worse than failing.** `gatherPropertyText`
+(`bov-extract.js:192-224`) admits on `needs_ocr=is.false&raw_text=not.is.null`, and
+`v_lcc_cre_bov_ready` counts a document covered on `AND NOT t.needs_ocr`. **A 31-char gpt-4o
+fragment satisfies both.** So 12 of 19 gpt-4o rows are handed to BOV extract as if they were the
+lease, and the property reads *covered* — the document will never be retried, because nothing
+distinguishes it from a real extraction.
+
+**A thin OCR result on a multi-page document is not an extraction.** It should write DOC1's dated
+negative marker (`needs_ocr = true`), which is invisible to both consumers and self-re-admits after
+24 h — exactly the mechanism DOC1 already built. ⚠️ **`reason='thin_ocr_result'` is already being
+SET on 5 of them and the consumers do not read it.** The label exists; nothing acts on it.
+
+⚠️ **Fix DOC8 before DOC10's floor**, or the floor will correctly reject most long documents and the
+backlog will park itself — the floor is only safe once the cheap tier can actually serve them.
+
 ### ⚠️ CORRECTION — an earlier draft of this page recommended widening cron 160. That is REFUTED.
 
 The reasoning was: 732 domain-store documents have bytes and no text, so widen `doctype=deed` to
