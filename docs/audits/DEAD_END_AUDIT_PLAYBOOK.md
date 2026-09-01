@@ -2294,6 +2294,48 @@ never enter a queue asking *"who owns this?"*
 
 ---
 
+## Class 12 — third instance (DOC1, 2026-09-01)
+
+`fetchEligibleCreDocs` (`api/_shared/cre-property-doc-text.js:265-290`) reads the **newest
+`cap*4` = 60** registry rows, diffs out the ones already extracted, and returns the remainder.
+Once those 60 are all done the diff is empty **forever**: `eligible: 0`, HTTP 200, every 30
+minutes, over **695 unreachable documents** (ids 2 → 2250) in the lane that feeds `bov-extract.js`.
+
+- **The detector is the class's own:** diff the working set across two consecutive runs. Here it is
+  even cheaper — **`newest60_already_done = 60` against `truly_undrained = 695`** settles it in one
+  query. **A saturated window and an empty queue are the same output.**
+- ⚠️ **P135 (fixed window), P136 (re-checking the same 120 nightly), now this. Knowing the class did
+  not prevent the third instance** — because each one looks like a different worker until you ask
+  *what makes the window move*.
+- **The distinguishing question against P136:** does a processed row leave the candidate set? Here
+  **yes** — failures write a sidecar row (`ocr_non_ok`, `over_ocr_cap`, `thin_ocr_result` are all
+  present), so oldest-first self-advances and no negative marker is needed. P136 needed one because
+  an empty target left no trace anywhere. **Same class, different remedy — check before copying.**
+- ⚠️ **Raising the constant is not the fix** (P136 stated this and it holds): a bigger window moves
+  the jam to row N+1 and makes it more expensive to see.
+
+## Class 33 — a drain widened where nothing consumes the result (DOC7, 2026-09-01)
+
+I recommended widening `document-text-tick` from `doctype=deed` to `all` to drain 732 documents
+that had durable bytes and no text. **The population was real, the drain was one `UPDATE cron.job`
+away, and the recommendation was wrong.**
+
+**`property_documents.raw_text` has exactly ONE consumer and it is deed-only** —
+`document-text.js:235-243`, `if (isDeed …)` → `processDeedDocument`. Every other doctype returns
+`{ outcome: 'text_extracted' }` and **nothing ever reads the column again.** Widening would have
+spent DocAI/gpt-4o money on 732 documents to fill a column nobody reads.
+
+- **The detector is one grep: every READ of the column the drain fills.** If the only reads are
+  inside the writer's own module, there is no consumer.
+- ⚠️ **A queue elsewhere asserting the chain exists is not evidence.** gov's
+  `v_gov_firm_term_reextract_queue` marks 99 sales `needs_ocr` and gov `CLAUDE.md` §26 names a
+  *"document-text-tick → lease-extractor chain"* — but `runLeaseExtraction` re-fetches bytes itself
+  and is driven from `folder_feed_seen`. **A documented chain and a wired chain are different
+  facts.**
+- **This is the producer-side mirror of Class 2** (a producer with no consumer): there, work is
+  emitted nobody works; here, a *capability* is expanded whose output nobody reads. **Both are
+  found by asking who consumes, before asking how to produce more.**
+
 ## Class 32 — a KEY is not a VALUE; a METADATA ROW is not a DOCUMENT; a BACKLOG whose producer still runs is not a backlog
 
 **Found 2026-08-31 (C14 §2h), by running three checks before writing a prompt that was already drafted in my head.**
