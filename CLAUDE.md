@@ -4124,6 +4124,25 @@ Related invariants from the same round:
   county source sits unread in the same database. **Class 2 on the most-registered source in the
   system, invisible to every check** — tables non-empty and growing, producer green, ladder
   registered, fields filling from somewhere else.
+  - **⚠️ RE-MEASURED 2026-09-01 (PR1) — THE LANE MUST NOT BE WIRED, AND THE REASON INVERTS THE
+    REMEDY ABOVE.** `src/public_record_ingest.py` on BOTH domains contains **no county record
+    fetch**: dia asks **gpt-4o to recall** parcel/tax facts from a prompt seeded with the property's
+    own address *and the owner we already hold* (its parsed result is named `gpt_parcel`); gov
+    fetches a ≤4,000-char snapshot of the assessor **portal homepage**, which cannot state a
+    parcel's assessed value. Evidence with its own control: **100.0% of gov's 9,265 unstamped
+    assessed values are exact multiples of $100,000, against 3.8% on the CoStar leg in the SAME
+    table**; 186 dia tax rows carry a literal `XYZ …` placeholder owner. **Building the consumer
+    would promote generated numbers to `county_records`, above `salesforce`@20 and every sidebar.**
+    Already curated: **8,842 properties' `tax_year`/`tax_amount` and 8,682 `assessed_value` trace to
+    the model leg**, and `tax_delinquent` is `false` on **11,802 of 11,802** because
+    `bool(None) is False` turned "the source did not say" into a negative finding.
+    **The real first step is `REGRID_API_KEY`** — `Dialysis/src/regrid_client.py` is a complete
+    vendor client, gated on that key, that has never run. Full measurement + the shipped instrument:
+    `docs/architecture/public-records-source-lane.md` §2a. Backlog **PR1a/PR1b**.
+    - ⚠️ **"It needs no new acquisition" was the tell, not the selling point.** No new acquisition
+      means the values are whatever the current producer emits — so *the cheapest consumer to build
+      is exactly the one whose source nobody re-graded.* **Before wiring any registered-but-unused
+      ladder source (PR5's other 38), read what its producer's external call talks to.**
   - **⚠️ THE DOCTRINE FAILURE THAT HID IT: I SCOPED A *SOURCE* TO ONE *CONSUMER'S* GAP LIST.** The
     same-day verdict *"don't build — stale sold comps, no leverage"* measured every option against
     the 662-row metadata backfill queue. Against the real denominator — **every property, dia 11,802
