@@ -736,6 +736,33 @@ one fixed by ranking) arriving from the producer side.
 proposals once and stalled again at row 1,001, with the failure now more expensive to see.
 The fix is a cursor that advances and a selection that joins.
 
+### 12b — the marker is the DIAGNOSTIC, not only the cursor (assessor enrichment, 2026-09-01)
+
+The purest instance found so far, and it extends the class in two directions.
+
+`python -m src.assessor_enrichment --from-queue 25` returned **`processed 25, enriched 0,
+fields_updated 0, errors 0, elapsed 114.8s`** — ~4.6 s per property of real elapsed work, so it
+is reaching *something* — and wrote **nothing on either outcome**: `attempts`, `last_attempt_at`
+and `last_error` are unwritten on **all 1,365 rows**, and have been since the queue was minted
+**2026-05-21**. Zero `properties` rows changed; the gap counts did not move.
+
+- **Worse than P136, which at least marked its successes.** This worker marks neither, so
+  `--from-queue 25` re-selects the *same 25 rows* on every future run — the identical-ids
+  diagnosis (detector step 2) without needing two runs to see it.
+- **⚠️ The marker is what makes the lane GRADEABLE, not just pageable.** Without a recorded
+  reason, *the source has no coverage for these parcels* (a real ceiling ⇒ retire the lane) and
+  *every call is failing* (a fixable adapter) are indistinguishable — and they have opposite
+  remedies. **When a worker abstains, the reason IS the deliverable** (P181, one layer down).
+- **⚠️ `errors: 0` beside `enriched: 0` is the silent-success shape** — this worker was
+  *unscheduled*, and wiring the cron the script's own header recommends would have emitted that
+  clean zero weekly, forever.
+- **Stacked with Class 8: the queue is a one-shot with no enqueuer**, so even a working drain
+  empties 662 rows once and then runs on empty. Three defect classes in one job.
+
+**Rule: run an unscheduled producer once, manually, before wiring a cron to it.** All three
+defects were visible in a single manual run and **none was visible from the code, the flag, or a
+green cron.** Sequence, strict, schedule last: **marker → verdict → producer → cron.**
+
 
 ## Class 16 — a DORMANCY claim measured on the WRAPPER instead of the FUNCTION
 
