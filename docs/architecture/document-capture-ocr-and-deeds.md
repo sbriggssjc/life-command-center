@@ -489,6 +489,42 @@ synchronous 30 — ⚠️ **but verify that against the live discovery document 
 pre-flight only runs on the OCR path, so this is the right population but a **small sample**.
 Re-measure as the backlog drains before treating the bimodality as settled.
 
+### 🔴 DOC14 SIZED, 2026-09-01 22:20 UTC — it is 100% LEASES, at 8.1%, and the prompt is staged
+
+**Re-measured on a larger sample, and the finding sharpened rather than softened:**
+
+| doctype | drained | **over cap** | rate | still undrained |
+|---|---:|---:|---:|---:|
+| **lease** | 86 | **7** | **8.1%** | **360** |
+| dd | 51 | **0** | 0% | 205 |
+| om | 30 | **0** | 0% | 39 |
+
+**Every over-cap document is a lease** — observed 31–57 pages. **Projected over the 360 undrained
+leases: ~29 more, ~36 total** that will receive no text at all.
+
+⚠️ **QUOTE 8.1%, NOT THE PAGE-COUNTED RATE.** Only OCR-path documents carry a `page_count`, so
+`over_cap ÷ page_counted_leases` reads **32%** — the wrong denominator, and it overstates this **~4×**.
+An earlier compound estimate in this session made exactly that error before it was measured directly.
+**The denominator is all drained leases.**
+
+**The bimodality now has a semantic explanation**: leases here are either **short (1–12 pages** —
+amendments, short forms) or **long (31–57** — full executed leases). **The 16–30 band holds ONE
+document in the entire corpus and it is a DD, not a lease.** So DOC8's 15 → 30 raise unlocks **zero
+leases**, and this is the population that was actually falling through — which is the DOC12 finding
+restated with the doctype attached.
+
+**Why it is the item worth doing:** `bov-extract.js` reads leases to extract the tenant, and these
+are the **full executed documents**. ⚠️ **They yield nothing while `bov_ready` climbs — the marker
+makes the gap quiet**, which is the honest-counts failure this repo catalogues, pointed at us.
+
+**Prompt: `docs/claude-code/prompts/DOC14-long-lease-ocr-async.md`.** Route is DocAI
+**async/batch**, and three constraints are written into it: ⚠️ **verify the contract against the live
+v1 discovery document** (DOC8's flag was a top-level boolean, not where the prompt put it);
+⚠️ **async cannot fit the 22 s tick** — it returns a long-running operation and writes to GCS, so it
+belongs in the **existing `mode=jobs` lane** as submit → poll → ingest, not a second worker; and
+⚠️ **if the route is unavailable, stop and say so** — splitting a lease into chunks changes what
+`extractTenantFromLease` receives, and a named honest ceiling beats a plausible workaround.
+
 ## 1. Scott's question, answered
 
 > *"At one point there was an issue with access to deeds ingested from CoStar and I asked whether we
