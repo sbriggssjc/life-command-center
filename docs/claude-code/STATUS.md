@@ -309,6 +309,54 @@ Writeup `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`; **I2**, **Class
   people learn to merge past. **First credentialed run is an operator step.**
 - Also fixed in passing: the backlog's **D1 row had 5 cells in a 4-column table and an unescaped `|`
   inside a code span**, so GFM was silently dropping its status cell.
+## 2026-09-01 — 🚨 B6e-fred's sweep found the bigger thing: Dialysis CI CANNOT FAIL on its own subject matter
+
+**The FRED fix shipped (PR #7384) and the sweep did what §3 of the prompt hoped — it outranked the
+fix.**
+
+### `B6e-ci-mask` — 3,042 tests collected, not one can fail CI
+
+Dialysis `ci.yml` uses `|| echo` **five times**:
+
+```
+pytest tests/ -v --tb=short --ignore=tests/integration/ 2>/dev/null || echo "Tests completed…"
+```
+
+**`|| echo` swallows pytest's exit code, so the step always succeeds; `2>/dev/null` discards the
+traceback.** ⚠️ **Every guard in `tests/` — including the mutation-verified B6d ones and the new
+pipefail guard — is a regression detector that no merge gate enforces.**
+
+⚠️ **This is LCC's own documented "no workflow runs `npm test` on a PR" finding, in a second repo,
+wearing a different idiom.** `| tee` was one masking form; `|| echo` is another.
+
+🎯 **And the cruellest instance is lines 137–138: `python -c "import src.main" 2>/dev/null || echo`.**
+**That is exactly the check that would have caught FRED's `ModuleNotFoundError: postgrest`.**
+**The repo already had the detector. It simply could not fail.** Twenty-five days of green badges
+over a dead producer, with the guard sitting right there, muzzled.
+
+✅ **CC did NOT flip it, and that was right.** Gating a never-enforced 3,042-test suite is the
+documented **"never green once on `main`"** trap — and whether that suite is green is *unmeasured*.
+The sequence filed is the correct one: **measure on `main` → fix or quarantine what is red → remove
+the masking ONE LINE AT A TIME, starting with the import check.** It also declined to extend the
+pipefail guard to cover `|| echo`, because that would ship a test red on every run with no safe way
+to green it.
+
+### ⚠️ FRED itself is fixed but UNPROVEN — verified: still 25 days stale
+
+`economic_indicators` newest row is **still 2026-08-07**, **0 rows since 2026-08-10**. The workflow
+fix is merged; **the producer has not yet been shown to write.** ⚠️ **"Merged is not running" — and
+here it is also "fixed is not proven."** Dispatching the workflow needs Actions-write scope Claude
+Code does not have (403), so **`B6e-fred-verify` is Scott's**: run it and confirm rows land past
+2026-08-07, then decide on backfilling the 25-day gap.
+
+### A merge resolution worth preserving as a rule
+
+Two windows answered `B6e-meta` simultaneously and both edited that backlog row; the auto-merge was
+clean and produced **two rows under one id**. ⚠️ **CC resolved it correctly: a duplicated row id is
+a MAPPING, not an addition, so "keep both" was wrong** — it kept the richer version (the one with
+the queue measurement) and folded in the single fact only its own had. **That is the YAML
+`node-version` lesson from `CLAUDE.md` §4a, applied to prose, and got right this time.**
+
 ## 2026-09-01 — Registry corrected, and the queue measured: DO NOT schedule it yet
 
 **SQL run.** `dia_producer_registry.metadata_backfill_queue` now reads **CONFIRMED UNSCHEDULED**
@@ -760,6 +808,46 @@ Claude Code.
 ⚠️ **The decisive question the force-run answers:** if it **completes**, the throttle was the last
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
+
+## 2026-08-31 — CONSOLIDATION: document capture / OCR / deeds gets ONE canonical page
+
+**NOTHING BUILT.** New canonical page **`docs/architecture/document-capture-ocr-and-deeds.md`**;
+`document-capture-and-ocr-status.md` and `UW6_REV_document_byte_capture.md` bannered as
+narrative/design rather than entry points; **DOC1–DOC5 filed.**
+
+**Scott's recollection was right and it was acted on.** He asked whether we needed to *"download
+those deeds and mortgages at ingestion and store them somewhere to be processed later."* **That was
+the diagnosis, that was the decision, and it was built** — `UW6_REV_document_byte_capture.md`,
+merged as **PR #1703 + #1707**, live in `sidebar-pipeline.js` + the extension. **1,057 of 1,177 gov
+documents (90%) now carry durable bytes.**
+
+⚠️ **THE HEADLINE, live-verified: the pipeline works and is pointed at ONE doctype.**
+
+| doctype | docs | bytes | **text** | **bytes but NO text** |
+|---|---:|---:|---:|---:|
+| **deed** | 325 | 325 | **325 (100%)** | **0** ✅ |
+| other · om · lease · brochure · dd · rest | 852 | 732 | **0** | **732** |
+
+**Cron 160 filters `doctype=deed`.** The chain is proven at 100% on deeds and simply never widened —
+so **732 documents sit in storage with bytes, OCR live, crons running every 30 minutes, and nothing
+drains them.** ⚠️ **That includes 119 LEASES, which is exactly what gov's firm-term coverage gap has
+been waiting on.** → **DOC1**, the highest-value fix on this page.
+
+⚠️ **DOC2 — and this one costs money if acted on.** `GovernmentProject/CLAUDE.md` §26 and
+`RUNBOOK_firm_term_coverage_ops_gates.md` still say *"the crons are `active=false`"* and tell the
+operator to build **a CoStar-authenticated residential-egress session**. **Verified live: crons
+160/167/169 are ACTIVE**, and the residential-egress requirement was **obviated by the extension
+in-session capture.** Cross-repo; this PR cannot fix it.
+
+Also filed: **DOC3** no cron on `doc-bytes-backfill` (85 url-only, 120 with neither today) ·
+**DOC4** extension reload is silent and per-profile (needs ≥1.0.39, current 1.0.45, no telemetry) ·
+**DOC5** brochures excluded from capture while 25 count as term-bearing.
+
+**Honest ceilings now stated in one place:** ~325 dead-URL deeds + ~1,600 docs hold expired CoStar
+tokens the server **cannot** re-fetch · **1,582 gov `deed_records` have neither a document nor a
+URL** · legacy OLE `.doc` is terminal. ⚠️ **And the conflation that keeps recurring:
+`deed_records` (5,819 metadata rows) is NOT `property_documents` (1,177 documents). The OCR-able
+deed corpus is 325 and it is done.**
 
 ## 2026-08-31 — C14 RE-located (§2h): a live producer defect, not an OCR pass — §2g was wrong
 
