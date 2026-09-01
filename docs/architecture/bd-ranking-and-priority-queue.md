@@ -26,7 +26,9 @@
 > for the state of this surface: 126 rows, gated, legible, each stating its basis; **~4 defective
 > rows remain** (C11b, C11c, one C9 split). ⚠️ **C11a is REFUTED** (sponsor↔SPE, not a defect) and
 > **C9's 45 splits touch exactly 1 sheet row** — neither is a call-sheet priority.
-> **Open and Scott's: C4a** (the pitch/bucket). **C4b** (`user_owner`) is resolved as inert.
+> **Open and Scott's: C4a** (the pitch/bucket). **C4b** (`user_owner`) is resolved as inert —
+> ⚠️ **and "inert" now means *awaiting human confirmation*, not *unproduced*: C13b (2026-09-01)
+> built the arm and its 13-candidate lane. See §5 and `owner-role-classification.md` §7.**
 > **Open, sized, unbuilt: C9** (45 true-split merge groups), **C9b** (434 edge splits), **C9a** /
 > **C10a** / **C8a** (design + dead-branch decisions), **C7a** (mailbox coverage — the precondition
 > under all of it).
@@ -131,11 +133,22 @@ cadence-gated, not opportunity-gated, not stale — **just the wrong grain** (§
 - ⚠️ **`user_owner` has no producer anywhere.** Named in the doctrine and — **still today** — in the
   **P0.4 and P0.5** arms, which C6 did not touch. **Written by nothing, ever.** Dead-End **Class 22**.
   Open as **C4b**.
+  - ✅ **SUPERSEDED IN PART, 2026-09-01 (C13b).** `v_lcc_entity_roles` now exists and **carries a
+    `user_owner` arm — which still reads 0, BY DESIGN**: Scott chose a **human-confirmed lane**
+    (*"fairly infrequent"*) over an automated one, and the confirmation ledger ships empty. **So the
+    count is unchanged and its MEANING is not** — *"nothing has ever written it"* has become *"the
+    candidates are surfaced and nobody has confirmed one yet"* (**13 candidates**, 10 genuine on
+    named rows). ⚠️ **Do NOT read the 0 as a dead arm any more, and do not "fix" it by automating
+    it** — at n=13 reading them is both cheaper and strictly more accurate than any rule.
 - **`developer` has a producer that is exhausted, not broken** —
   `lcc_developer_classification_log` = **285 rows lifetime**, candidates view down to **2 open**. It
   keys on `properties.developer_name`, so it can only find parties a domain DB already labelled.
   ⚠️ **That is the N18 view** — whose ranking N18 found was arbitrary, not knowing it sits upstream
   of the ranked call list.
+  - ⚠️ **C13b corrected the count: `developer` is 718, not 838** — because **119 entities carry
+    `owner_role='developer'` AND a human `behavioral_override` of `buyer`.** A manual override
+    **REPLACES the column an arm reads; it does not sit beside it.** Emitting both would resurrect
+    the machine call a human had already corrected.
 
 ### ✅ C8 (2026-08-29 diagnosed, SHIPPED 2026-08-31) — the role gate was on a SECOND surface
 
