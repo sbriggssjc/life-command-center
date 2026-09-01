@@ -705,3 +705,36 @@ gained 6,501 edges in the same window**, which is what moves `repeat_buyer`. So 
 negligible"* is true of the portfolio arms and false of the acquisition arm, and a nightly stamped
 column would be stale against those 6,501 while a view cannot be. ⚠️ `lcc_entity_portfolio_facts.updated_at`
 moved on **14,113 of 14,119 rows** (the nightly re-upsert) and is useless as a churn signal.
+
+
+## 8. ✅ `user_owner` CONFIRMED 2026-09-01 — the lane produced its first verdicts
+
+**10 confirmed, 4 rejected, 1 left undecided.** `v_lcc_entity_roles.user_owner` **0 → 10**;
+multi-role entities **946 → 954**. Verdicts are in `lcc_entity_role_confirmation`
+(`confirmed_by = 'scott'`), which is the INPUT to the view — never a derived stamp.
+
+**Confirmed (10)** — health systems and independent operators owning the building they treat in:
+Atlantis Healthcare Group · Centers for Dialysis Care · Northwest Kidney Centers · Michigan Kidney
+Consultants · Concerto Missouri LLC (exact core matches) · Gundersen Lutheran · Mayo Clinic Dialysis
+· Puget Sound Kidney Centers · Sanford Health (own named unit) · **Wake Forest University**.
+
+⚠️ **Wake Forest carries `is_not_prospected = true` and is STILL correctly `user_owner`.** The
+classification is a fact about the party; whether we prospect them is a separate gate. **Do not let
+the prospecting guard suppress a role.**
+
+**Rejected (4)** — and all four are ONE shape, an SPE/DST **named after the tenant it houses**:
+`FSC FMC Carbondale IL DST` ← Fmc-Carbondale · `USGBF NIAID LLC` ← NIAID · `NOAA Maryland LLC` ←
+NOAA · `MORGANTOWN GSA USDA, LLC` ← USDA.
+
+⚠️ **`name_reads_as_spe_shell` read FALSE on all four** — the SPE detector caught **none** of them
+(the documented place-named-SPE hole). **That is the empirical case for this being a human lane
+rather than a rule**, and it is now measured rather than argued: at n=15 a person separated them in
+one pass; the guard that exists would have separated zero.
+
+**Undecided (1): `Mena Dialysis` ← *DaVita Mena Dialysis Center*.** The tenant is DaVita, which
+argues landlord-leasing-to-DaVita rather than owner-occupier; it could equally be the predecessor
+practice that kept its building. **Genuinely undecidable from the record — left on the lane, not
+guessed.** An undecided candidate simply remains.
+
+⚠️ **The verdict vocabulary is CHECK-constrained to `confirmed` / `rejected`** — not
+`confirm`/`reject`. PK is `(entity_id, role)`, so a re-verdict is an UPDATE, not a second row.
