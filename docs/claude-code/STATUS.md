@@ -809,45 +809,57 @@ Claude Code.
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
 
-## 2026-08-31 — CONSOLIDATION: document capture / OCR / deeds gets ONE canonical page
+## 2026-09-01 — DOCUMENT PIPELINE: one canonical page, and the blocker found
 
-**NOTHING BUILT.** New canonical page **`docs/architecture/document-capture-ocr-and-deeds.md`**;
-`document-capture-and-ocr-status.md` and `UW6_REV_document_byte_capture.md` bannered as
-narrative/design rather than entry points; **DOC1–DOC5 filed.**
+**NOTHING BUILT.** Canonical page **`docs/architecture/document-capture-ocr-and-deeds.md`**;
+`document-capture-and-ocr-status.md` + `UW6_REV_document_byte_capture.md` bannered as
+narrative/design; **DOC1–DOC7 filed**; prompt **`DOC1-cre-doc-text-window-jam.md`** staged.
 
 **Scott's recollection was right and it was acted on.** He asked whether we needed to *"download
-those deeds and mortgages at ingestion and store them somewhere to be processed later."* **That was
-the diagnosis, that was the decision, and it was built** — `UW6_REV_document_byte_capture.md`,
-merged as **PR #1703 + #1707**, live in `sidebar-pipeline.js` + the extension. **1,057 of 1,177 gov
-documents (90%) now carry durable bytes.**
+those deeds and mortgages at ingestion and store them somewhere to be processed later."* That was
+the diagnosis and the decision — `UW6_REV_document_byte_capture.md`, merged **PR #1703 + #1707**.
+**It worked: 1,057 of 1,177 gov domain documents (90%) carry durable bytes and deeds are 325/325
+text — 100%.**
 
-⚠️ **THE HEADLINE, live-verified: the pipeline works and is pointed at ONE doctype.**
+⚠️ **THE FINDING — a green cron has been returning `eligible: 0` over 695 waiting documents.**
+There are **TWO** document stores and conflating them is why this topic keeps recurring:
 
-| doctype | docs | bytes | **text** | **bytes but NO text** |
-|---|---:|---:|---:|---:|
-| **deed** | 325 | 325 | **325 (100%)** | **0** ✅ |
-| other · om · lease · brochure · dd · rest | 852 | 732 | **0** | **732** |
+| | domain store | **CRE registry** |
+|---|---|---|
+| table | `property_documents` | `lcc_cre_property_documents` |
+| bytes column | ✅ `storage_path` | ❌ **none — `source_url` only** |
+| consumer | deed parser | **BOV extract** |
+| state | **deeds 325/325 ✅** | ⚠️ **76 of 771, permanently stuck** |
 
-**Cron 160 filters `doctype=deed`.** The chain is proven at 100% on deeds and simply never widened —
-so **732 documents sit in storage with bytes, OCR live, crons running every 30 minutes, and nothing
-drains them.** ⚠️ **That includes 119 LEASES, which is exactly what gov's firm-term coverage gap has
-been waiting on.** → **DOC1**, the highest-value fix on this page.
+`fetchEligibleCreDocs` (`cre-property-doc-text.js:265-290`) reads **only the newest `cap*4`=60**
+registry rows and diffs out the done ones. Measured: **60 of 60 already done**, so `eligible` is
+**0 forever** while **695 documents (ids 2→2250) are unreachable** — 446 leases, 256 DDs, 69 OMs
+that never reach `bov-extract.js`. Crons 167/169 have returned HTTP **200** every 30 minutes
+throughout. ⚠️ **Dead-End Class 12 for the THIRD time** (P135 fixed window, P136 re-checking the
+same 120). **Same signature every time: green cron, honest-looking zero counters, nothing moving.**
 
-⚠️ **DOC2 — and this one costs money if acted on.** `GovernmentProject/CLAUDE.md` §26 and
-`RUNBOOK_firm_term_coverage_ops_gates.md` still say *"the crons are `active=false`"* and tell the
-operator to build **a CoStar-authenticated residential-egress session**. **Verified live: crons
-160/167/169 are ACTIVE**, and the residential-egress requirement was **obviated by the extension
-in-session capture.** Cross-repo; this PR cannot fix it.
+⚠️ **And these are SharePoint paths — 100% of 1,066 rows, `/sites/TeamBriggs20/…`.** They do not
+expire, are not session-bound, and **need no residential egress.** The CoStar problem never applied
+to this store.
 
-Also filed: **DOC3** no cron on `doc-bytes-backfill` (85 url-only, 120 with neither today) ·
-**DOC4** extension reload is silent and per-profile (needs ≥1.0.39, current 1.0.45, no telemetry) ·
-**DOC5** brochures excluded from capture while 25 count as term-bearing.
+⛔ **I RETRACT MY OWN RECOMMENDATION FROM EARLIER TODAY.** I proposed widening cron 160 from
+`doctype=deed` to `all` to drain 732 domain-store documents. **Refuted, and the check I wrote into
+the page is what caught it:** `property_documents.raw_text` has **exactly one consumer and it is
+deed-only** (`document-text.js:235-243`) — every other doctype returns `text_extracted` and nothing
+reads the column again. Widening would spend DocAI/gpt-4o money to fill a column nobody reads.
+**Filed as DOC7 so it is not re-proposed.** ⚠️ My claim that this blocked gov's firm-term gap was
+also wrong — `runLeaseExtraction` re-fetches bytes itself from `folder_feed_seen` and **never reads
+`property_documents.raw_text`. The gov docs assert a chain that is not wired** (DOC3).
 
-**Honest ceilings now stated in one place:** ~325 dead-URL deeds + ~1,600 docs hold expired CoStar
-tokens the server **cannot** re-fetch · **1,582 gov `deed_records` have neither a document nor a
-URL** · legacy OLE `.doc` is terminal. ⚠️ **And the conflation that keeps recurring:
-`deed_records` (5,819 metadata rows) is NOT `property_documents` (1,177 documents). The OCR-able
-deed corpus is 325 and it is done.**
+**The lesson: a drain is only worth widening where something CONSUMES the result** — and the
+measurement that settles it is grepping every read of the column.
+
+Also filed: **DOC2** GovernmentProject docs stale and would buy unneeded egress · **DOC4** no cron
+on `doc-bytes-backfill` · **DOC5** silent per-profile extension reload · **DOC6** brochures excluded.
+
+⚠️ **Watch spend on DOC1's first run:** the pre-jam tier split was **12 rows on gpt-4o vs 3 on
+`cloud_cheap`** — the 6–14× escalation shape, predating the 2026-08-12 DocAI fix. The 695 have never
+been sampled.
 
 ## 2026-08-31 — C14 RE-located (§2h): a live producer defect, not an OCR pass — §2g was wrong
 
