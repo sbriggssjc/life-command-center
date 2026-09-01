@@ -33,6 +33,7 @@ const {
   CRE_SCAN_PAGE_SIZE,
   CRE_RETRY_REASONS,
   CRE_RETRY_AFTER_HOURS,
+  CRE_CEILING_RETRY_AFTER_HOURS,
 } = await import('../api/_shared/cre-property-doc-text.js');
 
 const WORKER_SRC = readFileSync(new URL('../api/_shared/cre-property-doc-text.js', import.meta.url), 'utf8');
@@ -249,13 +250,42 @@ describe('marker expiry — the exclusion clears itself, and only for retry reas
     const sidecar = {
       1: { needs_ocr: true, reason: 'ocr_non_ok', extracted_at: stale },
       2: { needs_ocr: true, reason: 'over_ocr_cap', extracted_at: stale },
+      // ⚠️ DOC10 CHANGED ONE ROW OF THIS TEST, DELIBERATELY. A `thin_ocr_result`
+      // written BEFORE DOC10 carries needs_ocr=FALSE — the defect itself, a
+      // 31-character fragment counting as a covered lease. The re-admission
+      // predicate requires needs_ocr, so a legacy row stays excluded here and it
+      // is the DOC10 BACKFILL, not the scan, that flips it. Post-DOC10 rows carry
+      // needs_ocr=true and ARE re-admitted (next test).
       3: { needs_ocr: false, reason: 'thin_ocr_result', extracted_at: stale },
       4: { needs_ocr: true, reason: 'no_text_layer', extracted_at: stale },
       5: { needs_ocr: false, reason: null, extracted_at: stale },
     };
     const r = await fetchEligibleCreDocs({ limit: 15 }, { opsQuery: makeOps({ ids: REG, sidecar }), now: () => NOW });
     assert.deepEqual(r.rows, [], 're-admitting these re-bills DocAI for an answer we already have');
-    assert.deepEqual([...CRE_RETRY_REASONS].sort(), ['extract_error', 'fetch_failed']);
+    assert.deepEqual([...CRE_RETRY_REASONS].sort(), ['extract_error', 'fetch_failed', 'thin_ocr_result']);
+  });
+
+  // DOC10 / DOC8 — the two new markers, on the SAME mechanism with different expiries.
+  it('re-admits a stale post-DOC10 thin marker, and holds the over-cap ceiling far longer', async () => {
+    const at = (h) => new Date(NOW - h * HOUR).toISOString();
+    const sidecar = {
+      // thin, past the 24 h transient expiry -> re-admitted (DOC8 may now serve it)
+      1: { needs_ocr: true, reason: 'thin_ocr_result', extracted_at: at(CRE_RETRY_AFTER_HOURS + 1) },
+      // thin, fresh -> held
+      2: { needs_ocr: true, reason: 'thin_ocr_result', extracted_at: at(1) },
+      // over the page cap, past the TRANSIENT expiry but NOT the ceiling one -> held.
+      // Re-admitting a known-unservable document daily would park the batch on it.
+      3: { needs_ocr: true, reason: 'over_docai_page_cap', extracted_at: at(CRE_RETRY_AFTER_HOURS + 1) },
+      // over the page cap, past the CEILING expiry -> re-admitted, so the lane
+      // self-clears if the cap is ever raised again.
+      4: { needs_ocr: true, reason: 'over_docai_page_cap', extracted_at: at(CRE_CEILING_RETRY_AFTER_HOURS + 1) },
+      5: { needs_ocr: false, reason: null, extracted_at: at(1000) },
+    };
+    const r = await fetchEligibleCreDocs({ limit: 15 }, { opsQuery: makeOps({ ids: REG, sidecar }), now: () => NOW });
+    assert.deepEqual(r.rows.map((x) => x.id), [1, 4]);
+    assert.equal(r.retry_admitted, 2);
+    assert.ok(CRE_CEILING_RETRY_AFTER_HOURS > CRE_RETRY_AFTER_HOURS,
+      'a ceiling that expires as fast as a transient is not a ceiling');
   });
 });
 
