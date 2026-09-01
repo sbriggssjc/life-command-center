@@ -1,5 +1,7 @@
 # B6d-cms — the CMS ingestion outage: a 30-day throttle on a daily cron, latched by its own crashes
 
+> 📍 **CANONICAL PAGE: [`../architecture/producer-health-and-ci-enforcement.md`](../architecture/producer-health-and-ci-enforcement.md)** — one door into the whole B6 arc (live producer state, CI enforcement status per repo, and the traps already paid for). **This file is EVIDENCE for its date.** Where it and the canonical page disagree, the page wins.
+
 **Date:** 2026-08-29 · **Repo:** `Dialysis` (code) · **DB:** dia `zqzrriwuavgrquhisnoa`
 **Parent:** `docs/audits/B6d_FEED_EXPECTATION_GRADING_2026-08-29.md` §11 · **Backlog:** `B6d-cms`
 **Status:** cause NAMED and FIXED in code. **Not verified live — the fix ships on the next Railway

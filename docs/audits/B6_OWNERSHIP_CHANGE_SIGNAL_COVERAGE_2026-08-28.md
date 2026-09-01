@@ -1,5 +1,7 @@
 # B6 — every signal that reports a change of OWNER or LESSEE, and what consumes it
 
+> 📍 **CANONICAL PAGE: [`../architecture/producer-health-and-ci-enforcement.md`](../architecture/producer-health-and-ci-enforcement.md)** — one door into the whole B6 arc (live producer state, CI enforcement status per repo, and the traps already paid for). **This file is EVIDENCE for its date.** Where it and the canonical page disagree, the page wins.
+
 **Date:** 2026-08-28 · **Kind:** AUDIT + DESIGN, nothing built · **Backlog:** `B6`
 **Parent:** B5 (in flight) · **Playbook:** `DEAD_END_AUDIT_PLAYBOOK.md` **Class 20**
 **Projects read:** gov `scknotsqkcheojiaewwh` · dia `zqzrriwuavgrquhisnoa` · LCC Opps `xengecqvemvfknjvbvrq`

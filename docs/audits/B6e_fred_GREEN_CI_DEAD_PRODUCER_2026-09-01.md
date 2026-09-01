@@ -1,5 +1,7 @@
 # B6e-fred — green in CI, dead since birth, and the sweep was the bigger finding
 
+> 📍 **CANONICAL PAGE: [`../architecture/producer-health-and-ci-enforcement.md`](../architecture/producer-health-and-ci-enforcement.md)** — one door into the whole B6 arc (live producer state, CI enforcement status per repo, and the traps already paid for). **This file is EVIDENCE for its date.** Where it and the canonical page disagree, the page wins.
+
 **Date:** 2026-09-01 · **Backlog:** `B6e-fred` · **Repo:** Dialysis · **DB:** Dialysis_DB `zqzrriwuavgrquhisnoa`
 **Contract:** `docs/os/BUILD-TURN-PROTOCOL.md` · `data-coherence-invariants.md` **I4**
 **Found by:** `v_dia_producer_health`'s first honest run (B6d-cms-escalation)

@@ -1,5 +1,7 @@
 # B6a — a SKIPPED step emits nothing, and the health view was built on emitted rows
 
+> 📍 **CANONICAL PAGE: [`../architecture/producer-health-and-ci-enforcement.md`](../architecture/producer-health-and-ci-enforcement.md)** — one door into the whole B6 arc (live producer state, CI enforcement status per repo, and the traps already paid for). **This file is EVIDENCE for its date.** Where it and the canonical page disagree, the page wins.
+
 **2026-08-28 · gov `scknotsqkcheojiaewwh` · playbook Class 21 · contract I4 · backlog B6a**
 
 B6 found four ingestion producers dead since March–April 2026 behind an all-green health

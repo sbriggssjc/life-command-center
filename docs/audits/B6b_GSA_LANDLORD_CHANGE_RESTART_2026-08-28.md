@@ -1,5 +1,7 @@
 # B6b — the GSA landlord-change detector, restarted
 
+> 📍 **CANONICAL PAGE: [`../architecture/producer-health-and-ci-enforcement.md`](../architecture/producer-health-and-ci-enforcement.md)** — one door into the whole B6 arc (live producer state, CI enforcement status per repo, and the traps already paid for). **This file is EVIDENCE for its date.** Where it and the canonical page disagree, the page wins.
+
 **Date:** 2026-08-28 · **Kind:** BUILD (gov) + diagnosis · **Backlog:** `B6b`
 **Parent:** B6 §2/§8 · B6a (instrument) · B6a-follow-up (alerting)
 **Projects:** gov `scknotsqkcheojiaewwh` · LCC Opps `xengecqvemvfknjvbvrq`
