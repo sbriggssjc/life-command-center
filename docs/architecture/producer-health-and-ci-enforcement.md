@@ -60,20 +60,51 @@ on a 401 → **B6d-sam**) from 4 at the start of the arc.
 
 ### The Dialysis milestone, and the state it leaves
 
-| | before (`73f1418`) | after (`fd724a5`) |
-|---|---|---|
-| collected | 3,110 / **5 errors** | **3,128 / 0 errors** |
-| **executed** | **0** | **3,128** |
-| duration | 22 s | 6 m 12 s |
-| conclusion | success (masked) | success (**still masked**) |
+| | collected | errors | **executed** | pass | fail |
+|---|---:|---:|---:|---:|---:|
+| `73f1418` (pre-#7389) | 3,110 | 5 | **0** | — | — |
+| `c80f778` (#7389) | 3,128 | 0 | 3,128 | 3,065 | 55 |
+| **`eac8668` (#7390)** | 3,128 | 0 | **3,128** | **3,106** | **14** |
 
-**3,065 passed · 55 failed · 7 skipped · 1 xfailed** — the first true measurement the repo has had.
-✅ The **import check is unmasked and green on a real runner**, so it is a genuine gate.
+**7 skipped · 1 xfailed throughout.** ✅ The **import check is unmasked and green on a real runner**,
+so it is a genuine gate, and **`timeout-minutes` now bounds all four jobs**, sized from a measured
+run (Tests 7 m 58 s → 20) rather than guessed — they were inheriting the **6-hour** default.
 
-⚠️ **The state is MEASURED, NOT ENFORCED, and that is sharper than the old one.** 55 real failures
-are visible on `main` and still cannot fail a merge — previously nobody could mistake the badge for a
-gate; now the job runs 3,128 real tests, reports red, and merges green. → **B6e-ci-openpyxl** (~12 of
-55 are one `openpyxl` cross-module stub leak) then **B6e-ci-unmask**, in that order.
+⚠️ **`executed` held at 3,128 across every step — nothing was hidden to make the failure count
+fall.** That is the number that makes the rest trustworthy, and it is the one to demand of any
+"we fixed the tests" claim.
+
+⚠️ **The state is still MEASURED, NOT ENFORCED.** 14 real failures are visible on `main` and cannot
+fail a merge, because the pytest line keeps its `|| echo`. → **B6e-ci-red14**, then
+**B6e-ci-unmask**, in that order. **Unmasking against known red ships a gate red on day one — the
+documented trap.**
+
+### 🎯 Two techniques from #7390 worth reusing
+
+**1. Isolation before traceback.** One `pytest <file>` per failing file split 55 into **36 pollution
+/ 19 genuine before a single traceback was read**. `test_master_sheet` + `test_work_product_base` are
+**21 passed alone, 21 failed in the suite, on identical source** — *that comparison, not the error
+text, is what proves harness-vs-product.* Error messages describe the symptom; isolation identifies
+the class. (It also corrected the estimate: the cluster was **36, not the ~12** counted from error
+strings.)
+
+**2. ⚠️ Restoring a stub RELOCATES the damage — check for that before declaring the fix.** Putting
+the genuine `openpyxl` back created a new defect: a fixture doing
+`sys.modules["openpyxl"].Workbook = DummyWorkbook` and never restoring it was **harmless while the
+module was a throwaway stub and permanently rebinds the real package once it is back.** The existing
+snapshot could not see it — **it ran at COLLECTION time; the write happens at RUN time.** The same
+shape in `dateutil` surfaced as **`quarantine_dead_ends` silently deleting 0 rows instead of 1, in a
+module that never mentions `dateutil`** — i.e. a test harness reaching into *data* behaviour. Three
+layers were all required: sys.modules objects · attributes on the real module · symbols already bound
+into `src.*` globals by a `from X import Y` executed inside the stub window.
+
+### What the suite has already caught
+
+🔴 **A real product bug, within hours of first running.** `update_database.update_field` normalises a
+broker name to `listing_broker_id` only if `resolved_field == "listing_broker_id"` — **but the alias
+is the identity mapping, so the branch is dead.** Filed, not guessed at, because both columns exist
+and flipping either side changes a write path (**B6e-ci-listing-broker**). **That is the argument for
+finishing the unmask.**
 
 ⚠️ **Do not unmask before the red is cleared** — gating a never-enforced suite is the documented
 *"never green once on `main`"* trap. **The import check is the model: unmask one line, prove it green

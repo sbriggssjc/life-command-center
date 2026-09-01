@@ -169,6 +169,86 @@ design** (15 candidates read, 10 genuine / 5 SPE-named-after-tenant; the confirm
 `entity_type` defect; **C18** (`ownership_start_date`) is unchanged and still the highest-value item
 — though §7.2 corrects WHY: the 50.7% blindness belongs to `investor_owner` pacing, not to
 repeat-buyer pacing, which is 98.8% dated.
+## 2026-09-01 — ✅ 55 → 14 red, and the fix that "worked" was RELOCATING the damage (PR #7390, `eac8668`)
+
+| | collected | errors | executed | pass | fail |
+|---|---:|---:|---:|---:|---:|
+| `73f1418` (pre-#7389) | 3,110 | 5 | **0** | — | — |
+| `c80f778` (#7389) | 3,128 | 0 | 3,128 | 3,065 | **55** |
+| **`eac8668` (#7390)** | 3,128 | 0 | **3,128** | **3,106** | **14** |
+
+**`executed` held at 3,128 across every step — nothing was hidden to make the number fall.** That
+was the one thing the prompt demanded and it is the number that makes the rest trustworthy.
+
+⚠️ **My prompt estimated the openpyxl cluster at ~12. Measured, it was 36 across three packages.**
+The estimate came from counting error *strings* in a summary; the measurement came from running each
+failing file alone.
+
+### 🎯 The triage technique is the transferable part
+
+**One `pytest <file>` per failing file split 55 into 36 pollution / 19 genuine *before a single
+traceback was read*.** `test_master_sheet` + `test_work_product_base` are **21 passed alone, 21
+failed in the suite, on identical source** — **that comparison, not the error text, is what proves
+harness-vs-product.** Error messages describe the symptom; isolation identifies the class.
+
+### 🚨 The sharp finding: restoring the real module RELOCATES the damage
+
+Putting the genuine `openpyxl` back in `sys.modules` **created a new defect**.
+`test_build_excel_summary.py`'s autouse fixture does `sys.modules["openpyxl"].Workbook =
+DummyWorkbook` and never restores it. **While `openpyxl` was a throwaway stub, that line wrote to
+garbage; once the real package is back, the same line permanently rebinds `openpyxl.Workbook`.**
+The existing `_CRITICAL_ATTR_SNAPSHOT` could not see it — **it ran at collection time and the write
+happens at run time.**
+
+**Same shape in `dateutil`**, and its symptom is the reason to care: a live write to
+`dateutil.parser.parse` surfaced as **`quarantine_dead_ends` silently deleting 0 rows instead of 1 —
+in a module that never mentions `dateutil`.** That is a *data-affecting* bug reached through a test
+harness.
+
+Three layers were all required: **sys.modules objects** (fixed 9) · **attributes on the real module**
+(24) · **symbols already bound into `src.*` globals** by a `from X import Y` executed inside the
+stub window (8).
+
+### The 14 that remain, and one real product bug
+
+**5 genuine failures fixed.** Two are the **block-slice footgun, recurred**:
+`test_processing_audit` asserted over `source[fn_start:fn_start+5000]`, and
+`sanitize_pending_update` grew to **6,845 chars in B6d-pri-reason**, so five guards at chars
+5,290–6,794 **fell outside the window over correct code.** Re-anchored on the real AST span, both
+mutation-verified RED. ⚠️ **27 more fixed-window slices remain in that file** — green today, but a
+window can *overshoot* into the next function, so **a green one may be passing on code it never
+named** → **B6e-ci-slice-window**.
+
+**14 left red, all failing in isolation** — genuine test-vs-code disagreements, not pollution.
+⚠️ **`git log` cannot adjudicate them: every file traces to one squashed import merge `8c67444`, so
+there is no "which side moved last."** Composition: `financial_ground_truth` (3 — revenue-model
+constants vs the reconciled model; **guessing risks the documented `dialysis_econ_reconciled_v1`
+calibration**), `handle_natural_language_query` (2, the known drift), `listing_broker_update` (2),
+`backfill_*` (3), and 4 singles.
+
+🔴 **One is a real product bug, filed rather than guessed at.** `update_database.update_field`
+normalises a broker name to `listing_broker_id` **only if `resolved_field == "listing_broker_id"` —
+but the alias is the identity mapping, so the branch is dead.** Both columns genuinely exist in dia
+(53 vs 34 migration references) and `available_listing_ingestor.py` explicitly guards against alias
+normalisation putting a *name* into the `_id` column, **so the identity alias is defensible and
+flipping either side changes a write path** → **B6e-ci-listing-broker**.
+
+✅ **`timeout-minutes` on all four jobs, sized from a real run** (33550677412): Tests 7 m 58 s → 20;
+Lint / Security / Build ≤1 m 50 s → 10. They were inheriting the **6-hour** default.
+
+⚠️ **Two reading traps, both flagged by CC and worth keeping.** Run 33550677412 **reports success
+while carrying all 55 failures** — the conclusion is worthless here and the job log split is the only
+real number. And **the merged PR body's figures are wrong**: it says 3,073 → 3,114 passed; the
+measured values are **3,065 → 3,106**. The body assumed `pass + fail = collected` and silently
+absorbed the **7 skipped + 1 xfailed** into the pass count. (Arithmetic confirms it: 3,114 + 14 =
+3,128 leaves no room for skips.) **The commit message and `CLAUDE.md` carry the correct figures.**
+
+⚠️ **PR #7390 was created 21:11:17 and merged 21:11:28 — eleven seconds, before CI finished.** Fifth
+instance recorded in two days.
+
+**Still masked, deliberately: the pytest line.** → **B6e-ci-unmask**, now against **14** known
+failures rather than 55.
+
 ## 2026-09-01 — ✅ THE DIALYSIS SUITE RAN FOR THE FIRST TIME IN THE REPO'S HISTORY (PR #7389)
 
 | | before (`73f1418`) | after (`fd724a5`) |
