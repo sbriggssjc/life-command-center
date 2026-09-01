@@ -584,6 +584,25 @@ restarting a dead producer. **Every number is real. Every one means something el
   refused on the **consumer** finding, which the gate grade could never have surfaced.
   **Grade the gate AND the consumer — either can disqualify.**
 
+### ⚠️ `| tee` WITHOUT `pipefail` MASKS THE EXIT CODE — A GREEN CI RUN THAT DID NOTHING (fred_ingest, 2026-09-01)
+
+`.github/workflows/fred-ingest-daily.yml` reported **16 consecutive GREEN scheduled runs** while
+writing **ZERO rows**. Verified: `dia.economic_indicators` last took a row **2026-08-07** and none
+since **2026-08-10**. **The module dies at import — `ModuleNotFoundError: postgrest` — and the step
+pipes through `| tee`, so the shell returns TEE's exit status, not Python's.** In `bash`, a
+pipeline's status is its **last** command unless `set -o pipefail` is set.
+
+- **Any CI step of the form `python -m x ... | tee log.txt` needs `set -o pipefail`** (or
+  `PIPESTATUS`), or **a crashing job is indistinguishable from a working one.**
+- ⚠️ **It was ALSO absent from `INFRASTRUCTURE.md`'s job map** — a producer nobody had written down,
+  failing silently, wearing a green badge. **The two defects compound: nothing watched it, and what
+  did watch it lied.**
+- **It was found only because the producer registry was enumerated from the SCHEDULER rather than
+  from the run ledger.** `fred_ingest` writes no run row, so it is invisible to `ingestion_tracker`
+  — **building a producer registry from the run table rebuilds the blindness one level up.**
+- **Green CI is not a state delta.** The rule this file states for crons applies identically to
+  workflows: **assert on rows written, never on the runner's exit status.**
+
 ### Dead-end classes are findable on purpose — `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md`
 
 Nine live defects were found in one session on 2026-08-22, all by accident, and every one
