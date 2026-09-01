@@ -16,6 +16,47 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-01 — B6e-fred: the sweep was the finding; the FRED fix was already merged and still has not run
+
+**`fred_ingest` has NEVER written a row** — not "dead for 25 days". `economic_indicators` has exactly
+ONE write event in its life (2026-08-07 19:59, 86 rows) and it landed **after** both of that day's
+workflow runs finished (19:47, 19:55): a hand-run. The workflow was added that day to fix a silent
+stall and has been silently stalled from its first green run.
+
+**The fix was already merged before this session** (`e0ec3fc`, PR #7383, 12:53 UTC) — deps + `set -o
+pipefail` + fail-on-stale. **It has still never executed**: today's scheduled run fired ~11:30 UTC,
+before the merge. *Merged is not running.* Next scheduled run 2026-09-02 11:30 UTC.
+
+🚨 **The sweep outranked the FRED fix, as the brief predicted.** 2 of 3 piped producer steps were
+broken. **`public-record-ingest-daily.yml` had `bash …sh 2>&1 | tee` with no pipefail** — and the
+script sets `set -euo pipefail` internally and exits non-zero correctly, so **B6d-pri's brand-new
+`EXIT_DRAIN_FAILED = 3` was being discarded one layer up by that pipe.** Fixed.
+⚠️ **A guard for this exact defect already existed and was scoped to the ONE file the previous audit
+was looking at** (`test_fred_workflow_sets_pipefail_before_piping_to_tee`), and used a file-wide
+`find()` rather than a step anchor. **A guard written for an instance does not cover the class.**
+Replaced with `tests/test_b6e_pipefail_workflow_guard.py` — class-wide, step-anchored, 10 tests,
+**7/7 mutations RED**, with its own positive control.
+
+🚨 **The operator exposure is a WRONG NUMBER, not a gap.** `economic_indicators` feeds only
+`cm_dialysis_macro_rates_m/_q` — both CM book exhibits. The views do **not** go blank: the monthly
+view still emits `2026-08-31` and the quarterly `2026-09-30`. Behind that "August" point:
+**DGS10 = 3 observations (Aug 3–5), MORTGAGE30US = 1 (Aug 6), and FEDFUNDS/UNRATE/CPIAUCSL = 0.**
+A complete-looking monthly average of the 10-year Treasury from three business days.
+👤 **Whether a book went out after 2026-08-07 is an operator check; if so it is a correction, not
+just a pipeline fix.** Nothing was regenerated.
+
+⚠️ **BLOCKER — the live re-run is operator-gated and the gap is NOT backfilled.** `workflow_dispatch`
+returned **403 (no Actions write scope)**; running it directly is impossible here (no `FRED_API_KEY`,
+no service key, and `api.stlouisfed.org` is `connect_rejected` by the proxy). The fix remains
+**unproven** until `max(economic_indicators.created_at)` advances past 2026-08-07.
+⚠️ **If the dependency fix is wrong the workflow will now go RED — that is success. Do not revert the
+pipefail to restore green.**
+
+Also: `INFRASTRUCTURE.md`'s job map gains `fred-ingest-daily.yml` (a scheduled producer nobody had
+written down) and `metadata-backfill-queue.sh`; `dia_producer_registry.notes` for `fred_ingest`
+rewritten to say *merged, not yet executed*. Writeup:
+`docs/audits/B6e_fred_GREEN_CI_DEAD_PRODUCER_2026-09-01.md`.
+
 ## 2026-09-01 — B6d-cms-escalation: dia's producer-health surface, and a workflow that was green 16 times over nothing
 
 **Shipped:** `dia_producer_registry` + `v_dia_producer_health` on Dialysis_DB
@@ -756,6 +797,46 @@ Claude Code.
 ⚠️ **The decisive question the force-run answers:** if it **completes**, the throttle was the last
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
+
+## 2026-08-31 — CONSOLIDATION: document capture / OCR / deeds gets ONE canonical page
+
+**NOTHING BUILT.** New canonical page **`docs/architecture/document-capture-ocr-and-deeds.md`**;
+`document-capture-and-ocr-status.md` and `UW6_REV_document_byte_capture.md` bannered as
+narrative/design rather than entry points; **DOC1–DOC5 filed.**
+
+**Scott's recollection was right and it was acted on.** He asked whether we needed to *"download
+those deeds and mortgages at ingestion and store them somewhere to be processed later."* **That was
+the diagnosis, that was the decision, and it was built** — `UW6_REV_document_byte_capture.md`,
+merged as **PR #1703 + #1707**, live in `sidebar-pipeline.js` + the extension. **1,057 of 1,177 gov
+documents (90%) now carry durable bytes.**
+
+⚠️ **THE HEADLINE, live-verified: the pipeline works and is pointed at ONE doctype.**
+
+| doctype | docs | bytes | **text** | **bytes but NO text** |
+|---|---:|---:|---:|---:|
+| **deed** | 325 | 325 | **325 (100%)** | **0** ✅ |
+| other · om · lease · brochure · dd · rest | 852 | 732 | **0** | **732** |
+
+**Cron 160 filters `doctype=deed`.** The chain is proven at 100% on deeds and simply never widened —
+so **732 documents sit in storage with bytes, OCR live, crons running every 30 minutes, and nothing
+drains them.** ⚠️ **That includes 119 LEASES, which is exactly what gov's firm-term coverage gap has
+been waiting on.** → **DOC1**, the highest-value fix on this page.
+
+⚠️ **DOC2 — and this one costs money if acted on.** `GovernmentProject/CLAUDE.md` §26 and
+`RUNBOOK_firm_term_coverage_ops_gates.md` still say *"the crons are `active=false`"* and tell the
+operator to build **a CoStar-authenticated residential-egress session**. **Verified live: crons
+160/167/169 are ACTIVE**, and the residential-egress requirement was **obviated by the extension
+in-session capture.** Cross-repo; this PR cannot fix it.
+
+Also filed: **DOC3** no cron on `doc-bytes-backfill` (85 url-only, 120 with neither today) ·
+**DOC4** extension reload is silent and per-profile (needs ≥1.0.39, current 1.0.45, no telemetry) ·
+**DOC5** brochures excluded from capture while 25 count as term-bearing.
+
+**Honest ceilings now stated in one place:** ~325 dead-URL deeds + ~1,600 docs hold expired CoStar
+tokens the server **cannot** re-fetch · **1,582 gov `deed_records` have neither a document nor a
+URL** · legacy OLE `.doc` is terminal. ⚠️ **And the conflation that keeps recurring:
+`deed_records` (5,819 metadata rows) is NOT `property_documents` (1,177 documents). The OCR-able
+deed corpus is 325 and it is done.**
 
 ## 2026-08-31 — C14 RE-located (§2h): a live producer defect, not an OCR pass — §2g was wrong
 

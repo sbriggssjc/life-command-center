@@ -1,3 +1,9 @@
+> 📍 **CANONICAL ENTRY POINT: [`document-capture-ocr-and-deeds.md`](document-capture-ocr-and-deeds.md)** —
+> read that first for LIVE state, the blockers and the ceilings. **This file remains the 2026-08-12
+> narrative and the DocAI runbook** (processor id, the Custom-Extractor footgun, the env matrix) and is
+> still worth reading for those. ⚠️ **Its top is four nested "superseded" boxes; the counts below are
+> 2026-08-12 and have moved.**
+
 # Document capture-at-ingest & OCR — status + the one open loop
 
 > # ✅ FINAL STATE 2026-08-12 — THE WHOLE OCR LOOP IS CLOSED AND LIVE. READ THIS, DON'T REBUILD.
