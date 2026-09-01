@@ -286,6 +286,15 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
     `break;`) or assert the BEHAVIOUR (compile the RHS and check outputs), never a literal
     that moves. And when one of these fails, DETERMINE breach-vs-stale-grep before you
     "fix" — twice this arc the red test was stale and the code was correct.**
+  - **⚠️ A FIXED-CHARACTER WINDOW (`source[fn_start:fn_start+N]`) IS THE SAME FOOTGUN AND IT
+    FAILS IN BOTH DIRECTIONS — recurred 2026-09-01 in the Dialysis repo.** `sanitize_pending_update`
+    grew to **6,845 chars** in B6d-pri-reason, so five guards asserting over `+5000` sat at chars
+    5,290–6,794 — **outside the window, red, over completely correct code.** That is the
+    UNDERSHOOT case. The **OVERSHOOT** case is worse and silent: a window that runs past the
+    function's end asserts against the NEXT function, so **a green guard may be passing on code it
+    never named.** **27 more of these are still live in that one file** (`B6e-ci-slice-window`).
+    **Anchor on the AST span, never a character count** — a byte offset is a literal that moves,
+    and a growing function is the normal case.
 - **⚠️ "REACHABLE" AND "IN THE RIGHT MODULE" ARE DIFFERENT PROPERTIES.** Unit 4 moved 7 of
   12 `_entityTab*` bodies and left five behind; every guard stayed green because the
   tab-registry guard only asks whether a tab reaches a renderer that EXISTS — and it did.
@@ -4292,15 +4301,33 @@ Related invariants from the same round:
   `<>`-exclusion trap that would have hidden live cards, and the measured refutation of P192's
   un-park and learn-from-rejects claims).
 - **On-box daily-brief narrative (Analyst's Take), R8 Stage 1:** `docs/architecture/briefing-analyst-take-onprem.md` — the first net-new on-prem GENERATION surface, its fabrication guard, and the operator gate.
+- **⚠️ A TEST HARNESS CAN REACH INTO PRODUCTION BEHAVIOUR, AND RESTORING A STUB RELOCATES THE
+  DAMAGE (2026-09-01, Dialysis #7390).** Replacing a `sys.modules` stub with the genuine package
+  **created a new defect**: a fixture doing `sys.modules["openpyxl"].Workbook = DummyWorkbook` and
+  never restoring it was harmless while the module was a throwaway stub and **permanently rebinds
+  the real package once it is back.** The existing attribute snapshot could not see it — **it ran at
+  COLLECTION time and the write happens at RUN time.** The same shape in `dateutil` surfaced as
+  **`quarantine_dead_ends` silently deleting 0 rows instead of 1, in a module that never mentions
+  `dateutil`** — a harness defect with a data outcome. **Fixing module pollution needs three layers,
+  not one: the `sys.modules` object, the ATTRIBUTES on the restored module, and symbols already
+  bound into callers' globals by a `from X import Y` executed inside the stub window.**
+  - 🎯 **And the triage technique generalises: ISOLATION BEFORE TRACEBACK.** One `pytest <file>` per
+    failing file split 55 failures into **36 pollution / 19 genuine before a single traceback was
+    read** — two files read **21 passed alone, 21 failed in the suite, on identical source**, and
+    *that comparison, not the error text, is what proves harness-vs-product.* It also corrected an
+    estimate made by counting error strings (36 actual vs ~12 estimated). **Error messages describe
+    the symptom; isolation identifies the class.**
 - **📍 PRODUCER HEALTH & CI ENFORCEMENT — one door into the whole B6 arc (fourteen audits):**
   `docs/architecture/producer-health-and-ci-enforcement.md`. **START HERE for "is our ingestion
   running / does anything watch it / does CI enforce anything".** Live producer state, the CI
   enforcement status of each repo, and the traps already paid for. ✅ **LCC verified clean
   2026-09-01** — `npm test` is a bare unmasked `run:` and a required check, all 7 workflows carry
-  `timeout-minutes`. ❌ **Dialysis: the suite now RUNS for the first time in the repo's history**
-  (3,128 collected / 0 errors / **3,128 executed**, 3,065 pass · 55 fail, 6 m 12 s) **but the pytest
-  line is still masked** — ⚠️ **measured, not enforced, which is sharper than the old state: 55 real
-  failures are on `main` and still cannot fail a merge.** ❓ government-lease unswept.
+  `timeout-minutes`. ⚠️ **Dialysis: the suite now RUNS for the first time in the repo's history and is down to 14 red**
+  (3,110 collected / 5 errors / **0 executed** → 3,128 / 0 / **3,128**; 3,065 pass · 55 fail → **3,106
+  pass · 14 fail**, `executed` held at 3,128 throughout so nothing was hidden). `timeout-minutes` now
+  bounds all four jobs, sized from a measured run. **But the pytest line is still masked** — ⚠️
+  **measured, not enforced: 14 real failures sit on `main` and cannot fail a merge**, and the suite
+  has already caught one real product bug (`B6e-ci-listing-broker`). ❓ government-lease unswept.
 - **⚠️ PUBLIC RECORDS ARE A SOURCE, NOT A GAP-FILLER — AND THE LANE IS BUILT AND HAS NEVER WRITTEN A
   FIELD (2026-09-01):** `docs/architecture/public-records-source-lane.md`. **START HERE before
   proposing anything about assessor / parcel / tax / deed data.** `county_records` is registered at
