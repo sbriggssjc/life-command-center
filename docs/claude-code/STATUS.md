@@ -16,6 +16,54 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-01 — B6d-cms-escalation: dia's producer-health surface, and a workflow that was green 16 times over nothing
+
+**Shipped:** `dia_producer_registry` + `v_dia_producer_health` on Dialysis_DB
+(`20260901120000`, applied live) — the dia half of gov's `v_pipeline_task_health`. Before it, dia
+ran **five scheduled ingestion producers and had zero producer-health objects**; the only
+instrument was a 45-day freshness bound on a downstream table. Writeup:
+[`docs/audits/B6d_cms_escalation_DIA_PRODUCER_HEALTH_2026-09-01.md`](../audits/B6d_cms_escalation_DIA_PRODUCER_HEALTH_2026-09-01.md).
+
+**The enumeration was the finding, and it outranks the view.**
+`.github/workflows/fred-ingest-daily.yml` has reported `conclusion: success` on **16 consecutive
+scheduled runs since 2026-08-10 while writing ZERO rows** — and it has **never** written a row in
+its 20-run life, despite being added on 2026-08-07 *to fix a silent FRED stall*. Root cause:
+`ModuleNotFoundError: No module named 'postgrest'` at import (the workflow installs only
+`requests python-dotenv`; both `postgrest` and `supabase` are pinned in `requirements.txt`),
+**masked by `cmd | tee` without `pipefail`** — measured directly as `exit 0` vs `exit 1`. That
+masking also defeated the script's own `sys.exit(1 if nothing written)` guard, which never ran.
+The 2026-08-07 "recovery" was a hand-run at 19:59, after both workflow runs finished (19:47,
+19:55). Three surfaces each held half the truth — GH Actions said success, the watchdog held an
+`lcc_health_alerts` row open 16 days, the workflow printed `{"status":"stale"}` in its own log
+every green run — **and nothing joined them.** Workflow fixed: deps + `set -o pipefail` +
+fail-on-stale.
+
+**Four of five dia producers write no run ledger at all** (verified by reading
+`public_record_ingest.py`, `assessor_enrichment.py`, `ingest_fred_to_dialysis.py`,
+`sf_object_sync.py` — zero `ingestion_tracker`/`run_log` writes). They read **`no_run_ledger`**
+with a CHECK-enforced `blindness_reason`: the blindness is stated, never hidden behind a proxy.
+⚠️ **Enumerating from `ingestion_tracker` would have rebuilt that blindness** — its five distinct
+`source` values are the real producer plus the janitor, the watermark writer, a one-shot and a dead
+lane.
+
+**Two readings that exist only because columns were kept separate:** `cms_ingestion` reads
+`last_success_at` **2026-04-04** against `last_rows_written_at` **2026-08-31** (no clean `success`
+since April, yet moving rows via `partial` runs); and its observed **p90 gap of 30.44 days against
+a declared 1-day cron** is the removed 30-day throttle still legible in the run history.
+
+**Verification:** positive control on three arms (`overdue` / `never_ran`, plus a **negative
+control on the same rows** reading `ok`), 0 residue. Guards
+`tests/test_b6d_cms_escalation_producer_health.py` — 14 tests, **14/14 mutations RED**. Two guard
+defects were caught by the mutation pass itself: a file-wide `exit 1` grep passed its own mutation
+(the token appears twice — re-anchored on the step), and comment-stripping proved load-bearing.
+
+⚠️ **No alert shipped, deliberately** — 50 zero-duration watermark rows still wear
+`run_status='success'`, so alerting on it would manufacture false all-clears. Follow-ups filed:
+**B6d-cms-escalation-emit** (make the four blind producers emit — the fix that turns this from a
+blindness report into monitoring), **-alert**, **-metadata** (is `metadata-backfill-queue` actually
+wired in Railway?), **-infradoc** (`INFRASTRUCTURE.md` is dated 2026-05-16 and its job map is
+missing `fred-ingest-daily` entirely).
+
 ## 2026-08-31 — B6d-cms-step second pass: the latch had two more doors, and one was open in the live watermark
 
 **Reconciled first.** The first pass shipped in a parallel window (`68da552`, PR #7381) and is on
