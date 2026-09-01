@@ -58,6 +58,68 @@ design** (15 candidates read, 10 genuine / 5 SPE-named-after-tenant; the confirm
 `entity_type` defect; **C18** (`ownership_start_date`) is unchanged and still the highest-value item
 — though §7.2 corrects WHY: the 50.7% blindness belongs to `investor_owner` pacing, not to
 repeat-buyer pacing, which is 98.8% dated.
+## 2026-09-01 — ✅ PR1a/PR1b SHIPPED across three repos — and the CI finding underneath it is now the top open item
+
+**Merged: Dialysis #7388, government-lease #396, life-command-center #2004.** Independently
+re-verified live, both domains:
+
+| column | before | after |
+|---|---|---|
+| `dia.properties.assessed_value` | 8,700 zeros / 262 positive | **0 zeros / 262 positive** |
+| `dia.properties.tax_amount` | 9,025 zeros / 1 positive | **0 zeros / 1 positive** |
+| `dia.properties.tax_delinquent` | `false` on 11,802 of 11,802 | **NULL on 11,802, 0 false, 0 true** |
+| `dia.tax_records.is_delinquent` | — | **NULL on 25,621**, `raw_payload` intact |
+| `gov.properties.tax_delinquent` | `false` on 20,495 | **NULL on 20,495** |
+| `gov.properties.assessed_value` | — | **0 zeros / 370 positive** (untouched) |
+
+**Every real value survived** — the 262 and the 1 and the 370 are exactly the non-model-traced rows,
+which is the separation PR1a required be proven before writing. Both column defaults dropped;
+reversal ledgers hold **55,148 + 20,495** rows. ⚠️ **The source tables were deliberately NOT
+cleaned** — gov `parcel_records` still shows 9,264 zeros with `raw_payload` intact, which is correct:
+that is the record of what the producer emitted, and it is the evidence.
+
+⚠️ **Correction to a number I have been quoting: gov `properties` is 20,495 rows, not 13,837.** The
+smaller figure was the non-archived count from C2e. Both are right about different questions; the
+denominator for a whole-portfolio claim is 20,495.
+
+⚠️ **THE PRODUCER IS UNVERIFIED — only the backfill is.** Newest `tax_records` / `parcel_records`
+row is still **2026-08-31 18:33**; nothing has landed since, and the Python half ships on the next
+deploy. **A one-shot backfill and a fixed producer are indistinguishable until the producer runs** —
+the N15d lesson, and it is filed rather than assumed. → **PR1e**, with the exact four-count check.
+
+### 🚨 The finding that outranks it: Dialysis CI runs ZERO tests and reports success
+
+CC read the job log instead of trusting the badge — *because `CLAUDE.md` says that badge is
+meaningless* — and found something worse than **B6e-ci-mask** as filed:
+
+```
+!!!!! Interrupted: 5 errors during collection !!!!!
+======== 1 warning, 5 errors in 18.16s ========
+Tests completed (some may have been skipped)     ← the || echo mask
+→ job conclusion: success
+```
+
+**It is not "failures are hidden." pytest aborts at collection and not a single test executes** — on
+this PR and on every `main` run sampled. So the 3,042-test figure in B6e-ci-mask is **tests
+COLLECTED in a healthy local run, not tests CI has ever attempted.** Consequences: **CC's 31 + 34 new
+mutation-verified guards have never run in CI**, and **one of the five files erroring is
+`test_b6e_pipefail_workflow_guard.py` — the pipefail guard itself.** Five files fail on `flask` /
+`geopy` environment issues; **none belongs to the changed modules**, so this is pre-existing, not
+introduced.
+
+**Correctly not fixed** — the repo's own doctrine forbids the obvious move. But it is no longer a
+vague "the suite is masked": it now has a **concrete starting measurement — 5 collection errors,
+named** — which is exactly what the *measure → fix or quarantine → unmask one line at a time*
+sequence needed to become actionable. **This is my recommended next step.**
+
+⚠️ **And #7388 merged at 18:04:07 with CI finishing 18:05:40** — merged before its own checks
+reported, the third instance of that pattern recorded in two days.
+
+📁 **Consolidation:** `B6d_pri_PUBLIC_RECORD_INGEST_REPAIR_2026-08-31.md` now carries a context
+banner — it repaired the **throughput of a generator**, and its fixes stand, but it must not be read
+as evidence the lane is healthy. **Fixing a producer's RELIABILITY says nothing about the VALIDITY of
+what it produces.**
+
 ## 2026-09-01 — 🚨 PR1 REFUSED, CORRECTLY — the lane's producer GENERATES its values. And two repos merged a retracted claim as fact.
 
 **PR1 asked for the reconciliation consumer. It was not built, and not building it is the right
