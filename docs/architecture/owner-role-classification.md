@@ -498,20 +498,62 @@ is ≥2 acquisitions with pacing as a weight · `developer` is a behavioural pat
 **and the roles are MULTI-LABEL.**
 
 ⛔ **The staged build prompt `C13` is SUPERSEDED and must not be run.** It encodes a
-precedence-ordered **single** role, which §2c refutes on 957 entities. It needs rewriting to the
-set model before it is sent.
+precedence-ordered **single** role, which §2c refutes on 957 entities.
+✅ **The rewrite is staged and ready: `docs/claude-code/prompts/C13b-owner-role-multilabel.md`** —
+multi-label, Scott's decisions recorded in its §0 so they are not re-asked, populations re-measured
+2026-09-01, and the two genuinely open questions (dia-only `one_off_owner`; storage shape) marked
+as his rather than assumed.
+
+### ✅ Both remaining questions ANSWERED 2026-09-01 — §6 has no open decisions left
+
+**`one_off_owner` is ALL SWIMLANES.** Scott: *"one_off_owner should be a treatment we use across all
+swimlanes we use in the LCC. **We are pursuing clients first, not necessarily the product type
+itself.** We use the product type and expertise to develop relationships but **we want to sell all
+net lease product.**"*
+
+⚠️ **That is doctrine, not an answer to one arm — record it as such.** Product type is a
+**relationship-development mechanism, not the target definition.** No role may be domain-scoped, and
+**any domain filter on a BD or prospecting surface is a candidate defect** rather than a given.
+(Not swept in this round; it is a lens for the next audit of those surfaces.)
+
+⚠️ **AND HIS ANSWER EXPOSES A CEILING WORTH STATING PLAINLY.** *"All swimlanes"* is the intent; **the
+spine can only express two.** `lcc_entity_portfolio_facts` carries `source_domain` values **`dia` and
+`gov` and nothing else** across all 14,119 rows. So a role computed off the spine **says "all
+swimlanes" and means dia + gov.** Any other net-lease product is **invisible to every role arm until
+a domain feeds the spine** — a ceiling in what LCC INGESTS, not in the classifier, and the label must
+never paper over it.
+
+**Storage — decided (Scott: *"your call"*): a VIEW, `v_lcc_entity_roles`, over the existing spine.**
+One row per (entity, role) with its evidence arm and dates. ⚠️ **The "roll up from all other
+databases" he reached for ALREADY EXISTS — `lcc_entity_portfolio_facts` IS that roll-up**, fed from
+gov and dia by the mirror/sync, so every arm is computable from LCC Opps alone. **A second cross-DB
+aggregation would drift from the spine the panel and the queue already read.** Derived beats stamped
+(Class 8, and his own *"isn't a one-time determination"*). ⚠️ **Profile against the handler's REAL
+query shape before shipping** — `entity_relationships` is 115,744 rows and the documented footgun is
+that `LIMIT 5` without the `ORDER BY` understated one view by ~100×. Materialize only on a
+measurement, following `lcc_priority_queue_resolved`; **never** stamp a column. `entities.owner_role`
+stays for now — 4,132 rows and `behavioral_override` read it.
 
 **Now open, in the order they block:**
 
 1. ⚠️ **`ownership_start_date` is present on 50.7% of portfolio facts** — so **pacing, the dimension
-   Scott says drives seller-vs-buyer treatment, is half unmeasurable.** This is now the
-   highest-value item in the design and it is **data acquisition, not classification.**
-2. ⚠️ **`developer` is under-specified.** Scott defines a behaviour (build-to-suit for a named
-   tenant, then sell); we hold a name label. **Detecting the real thing needs acquire→build→sell
-   sequences, unmeasured.** Keep the existing 715 as a captured attribution; do not claim it is the
-   behaviour.
+   Scott says drives seller-vs-buyer treatment, is half unmeasurable.** This is the highest-value
+   item in the design and it is **data acquisition, not classification** (backlog **C18**).
+   **Sized live 2026-09-01: 6,967 dateless facts — gov 4,575 / dia 2,392 — across 5,176 entities,
+   and 3,523 of them are CURRENT holdings** (we know the party owns it, not since when, which is
+   exactly what recency needs). ⚠️ **The ROUTE is unmeasured.** `ownership_source` carries 2,931
+   distinct values on this slice, so it is not a clean provenance bucket — the D1 producer-set diff
+   (playbook Class 20, the technique that found B5) needs a different key here. **Do not assume the
+   deed/ownership-history layer can supply these dates until someone measures the join.**
+2. ✅ **`developer` is NOT under-specified — see §2e, which supersedes this item and the §2c-i table
+   row above.** Scott's definition (*"the first owner in the chain of ownership with our target
+   tenant's first action in that building"*) **is the implemented one**: `v_gov_owner_at_first_gen`,
+   shipped 2026-05-22, five generations of it. ⚠️ **Do not build a second classifier for this
+   concept** — that is the normaliser drift this repo warns about repeatedly. If it is defective,
+   fix it in place.
 3. **Storage shape** — a per-entity/per-role table (with evidence + dates) rather than the scalar
    `entities.owner_role`. Consumers all ask `owner_role IN (...)`, which becomes *"has role X"*.
-4. **Whether `one_off_owner` should be dia-only.** Scott's wording says *"our target submarket
-   category (dialysis)"*; the measurement was cross-domain. **143 person-typed single-asset holders
-   fleet-wide — the dia-only subset is unmeasured.**
+4. ✅ **RESOLVED — `one_off_owner` is ALL swimlanes** (above). It stays at the fleet-wide **143**.
+   ⚠️ **New, and larger than this item:** *"clients first, not the product type"* means **every
+   domain filter on a BD surface is now a candidate defect.** Nobody has swept for them —
+   backlog **C19**.

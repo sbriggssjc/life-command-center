@@ -1160,6 +1160,66 @@ mechanism is confirmed, the rate across the remaining 691 is not, and the popula
 ⚠️ **I did not merge #1989 and was told not to.** Scott merged it 5 seconds after `npm test` went
 green, which is why the §7b baseline correction landed as a separate PR (#1990).
 
+## 2026-09-01 — C13b unblocked: both questions answered; C19 filed (clients first, not product type)
+
+✅ **`one_off_owner` is ALL SWIMLANES**, and the reason is doctrine rather than a detail:
+
+> *"We are pursuing **clients first, not necessarily the product type itself.** We use the product
+> type and expertise to develop relationships but **we want to sell all net lease product.**"*
+
+⚠️ **Filed as C19 because it reaches past the arm that surfaced it: every domain/swimlane filter on
+a BD or prospecting surface is now a CANDIDATE DEFECT rather than a given**, and nobody has swept
+for them.
+
+⚠️ **His answer also exposed a ceiling worth stating plainly.** *"All swimlanes"* is the intent;
+**the spine can only express two** — `lcc_entity_portfolio_facts` carries `source_domain` = **`dia`
+and `gov` and nothing else** across all 14,119 rows. So anything computed off the spine says *all
+swimlanes* and **means dia + gov.** Other net-lease product is invisible to every role arm **until a
+domain feeds the spine — a ceiling in what LCC INGESTS, not in the classifier.**
+
+✅ **Storage decided (Scott: *"your call"*): a VIEW — `v_lcc_entity_roles` over the existing spine.**
+⚠️ **The "roll up from all other databases" instinct is right and ALREADY BUILT:
+`lcc_entity_portfolio_facts` IS that roll-up**, fed from gov and dia by the mirror/sync, so every arm
+computes from LCC Opps alone. **A second cross-DB aggregation would drift from the spine the panel
+and the queue already read.** Derived beats stamped (Class 8 + his *"isn't a one-time
+determination"*); profile against the handler's REAL query shape first (115,744 edges; the
+`LIMIT 5`-without-`ORDER BY` footgun understated one view ~100×); materialize only on a measurement,
+following `lcc_priority_queue_resolved`, never a stamped column. `entities.owner_role` stays.
+
+**`C13b-owner-role-multilabel.md` now has zero open decisions and is ready to run.**
+
+🔧 **Git `index.lock` cleared** — 0 bytes, ~5 h stale, nothing staged and nothing unpushed, so a
+plain delete was safe. ⚠️ **The documented reflex cleanup (`reset --hard`) would have destroyed the
+unstaged doc edits** — `GITHUB-WORKFLOW.md` §2a.
+
+## 2026-09-01 — C13 rewritten to MULTI-LABEL (C13b staged); DOC13 standing check filed
+
+**Document pipeline: closed for now, with two questions parked on a dated check.**
+**DOC13** (due **2026-09-02 ~16:30 UTC**) resolves both on one pass — the backlog supplies the
+16–30 page documents **DOC12** needs, *and* the **14 retry markers** cross the 24 h re-admission
+window. ⚠️ **Read `retry_admitted` and `marked_and_readmittable`** — 10 of the 24 markers are
+**ceiling** markers and must NOT re-admit.
+
+**C13 is superseded; `C13b-owner-role-multilabel.md` is staged and ready.** The rewrite carries
+Scott's decisions in §0 so they are not re-asked, re-measures the populations
+(`investor_owner` **6,469 → 6,480** — which is why you re-measure rather than quote), and marks the
+two questions that remain **his**: whether `one_off_owner` is **dia-only** (his wording says *"our
+target submarket category (dialysis)"*; the 143 is fleet-wide) and the storage shape.
+
+⚠️ **Corrected an internal contradiction in `owner-role-classification.md`:** §6 item 2 still said
+`developer` was *"under-specified… nobody has measured"* while **§2e of the same page shows it is
+built, live, and five generations old** (`v_gov_owner_at_first_gen`, 2026-05-22). §6 now defers to
+§2e. **A page that argues with itself misdirects the next reader exactly as reliably as a stale
+one.**
+
+🟠 **C18 filed — the highest-value item in the owner-role design, and it is DATA ACQUISITION.**
+`ownership_start_date` covers **7,152 of 14,119 facts (50.7%)**, so **pacing — the dimension Scott
+says drives seller-vs-buyer treatment — is half unmeasurable.** Sized: **6,967 dateless facts, gov
+4,575 / dia 2,392, 5,176 entities, 3,523 of them CURRENT.** ⚠️ **2,627 repeat buyers read "dormant
+5+ years" and about half of that is missing dates, not inactivity.** ⚠️ **The route is UNMEASURED** —
+`ownership_source` has 2,931 distinct values on this slice, so the D1 producer-set diff needs a
+different key. **Do not assume the deed layer supplies these dates until the join is measured.**
+
 ## 2026-09-01 — REDEPLOY VERIFIED: DOC10 closed, one straggler repaired, DOC8's cap still unexercised
 
 **Deploy confirmed BEHAVIOURALLY** (the sandbox cannot reach Railway): a **zero-work

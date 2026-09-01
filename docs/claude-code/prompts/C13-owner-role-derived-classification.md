@@ -3,7 +3,8 @@
 > This prompt encodes a **precedence-ordered single role**, which is refuted on **957 entities —
 > 772 of them `investor_owner` + `repeat_buyer` simultaneously**, the exact population whose dual
 > status determines BD treatment. Its populations and definitions are also stale.
-> **Read `docs/architecture/owner-role-classification.md` §2c–§2c-iii and §6 instead.**
+> **RUN `C13b-owner-role-multilabel.md` INSTEAD** — the rewritten, multi-label version.
+> Background: `docs/architecture/owner-role-classification.md` §2c–§2c-iii, §2e and §6.
 
 # C13 — the derived owner-role classification
 
