@@ -1,3 +1,19 @@
+> ⛔⛔ **SUPERSEDED 2026-09-01 — DECIDED AND BUILT. Do not act on this brief's options.**
+> Its §3 offers Scott three choices (A classify-and-flood, B classify-with-a-P0.4-gate, C retire
+> `user_owner`). **He chose none of them, because the framing did not survive his own definitions:**
+> the role is **MULTI-LABEL**, `user_owner` means **owner-occupier** (~13, human-confirmed), and the
+> feared P0.4 flood **never materialised — P0.4 is 555 → 555**, because C6 had already removed the
+> role from the deal-timing bands and C13b repoints no consumer.
+>
+> ⚠️ **Three of this brief's numbers are also refuted:** its "3,217 unknown holders" framing led to
+> `user_owner` being sized at thousands (it is **13**); `repeat_buyer` at **2,478** counted purchase
+> **EDGES** and is **401** (`entity_relationships` has no unique key on `(from,to,type)`); and the
+> `investor_owner`+`repeat_buyer` overlap is **167, not 772**.
+>
+> ✅ **Read instead: [`docs/architecture/owner-role-classification.md`](../architecture/owner-role-classification.md) §7**
+> (the shipped state) and §2c (why the shape is a set). **Kept for the sizing method and the
+> consumer-blast-radius table in §2, which remain the useful part.**
+
 > 📍 **CANONICAL PAGE: [`docs/architecture/bd-ranking-and-priority-queue.md`](../architecture/bd-ranking-and-priority-queue.md) §7.**
 > **Diagnosis only — nothing written, and nothing recommended for build.**
 > 👤 **This is a DECISION BRIEF for Scott.** C4a has been open as an abstraction since 2026-08-28;

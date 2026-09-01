@@ -2471,3 +2471,35 @@ arriving here three times in one investigation.
 ⚠️ **And note the meta-lesson: §2g had already written "re-measure before building" into itself, and
 that instruction is what caught all three.** A caveat is only worth writing if the next step actually
 executes it.
+
+
+## Class 34 — an EDGE count is an OBSERVATION count, not a fact count (C13b, 2026-09-01)
+
+`repeat_buyer` was designed and documented at **3,258 entities** — *"≥2 `purchases` edges"*. Built,
+it is **401** (385 after guards). **An 8× error, carried through three documents unchallenged.**
+
+`entity_relationships` has **no unique constraint on `(from, to, type)`** — a fact this repo had
+**already written down** (P177) — and `purchases` is fed independently by `costar_sidebar`,
+`costar_deed` and `rca_deed`. So one conveyance, observed by three sources, is three edges. Read on
+named rows the 2,857 difference is **single-asset SPEs**: *Korea Investment Corporation* reading as
+a repeat buyer on **one property recorded twice**; `Stoneforge Advisors LLC by ARA` with five
+byte-identical edges on one asset.
+
+- **The detector: `count(*)` vs `count(distinct <the thing the definition names>)`.** Scott's
+  definition says *"more than one **asset**"*. The design counted rows. **Before keying any arm on a
+  relationship table, ask what ONE ROW of it MEANS** — here, one observation of a conveyance, by one
+  source.
+- ⚠️ **The obvious middle key was measured and rejected too.** `(asset, date)` gives **735**, and the
+  extra 334 are A2b's cross-source lag — **a second observation is not a second acquisition.** The
+  right key is the distinct ASSET.
+- ⚠️ **The knock-on numbers are the expensive part, because they are the ones that get quoted.**
+  *"2,627 repeat buyers dormant 5+ years"* became **219**; the `investor_owner`+`repeat_buyer`
+  overlap became **167, not 772** — and **772 was the headline justifying the multi-label shape**.
+  The shape was still right (946 entities carry ≥2 roles); **the argument for it was inflated 4.6×.**
+- **This is the counting analogue of Class 26** (*a status value is not a human verdict until you
+  name its writer*): there, ask who WROTE the value; here, ask what one ROW represents. Both are
+  answered by one query and both were skipped because the number looked plausible.
+- ⚠️ **A manual override REPLACES the column an arm reads — it does not sit beside it.** Same round:
+  **119 entities carry `owner_role='developer'` AND a human `behavioral_override` of `buyer`.** In a
+  multi-label world *"both are true"* is the tempting default and it is wrong — emitting both
+  resurrects exactly the machine call the human corrected (`developer` 838 → **718**).
