@@ -4129,13 +4129,26 @@ Related invariants from the same round:
     fetch**: dia asks **gpt-4o to recall** parcel/tax facts from a prompt seeded with the property's
     own address *and the owner we already hold* (its parsed result is named `gpt_parcel`); gov
     fetches a ≤4,000-char snapshot of the assessor **portal homepage**, which cannot state a
-    parcel's assessed value. Evidence with its own control: **100.0% of gov's 9,265 unstamped
-    assessed values are exact multiples of $100,000, against 3.8% on the CoStar leg in the SAME
-    table**; 186 dia tax rows carry a literal `XYZ …` placeholder owner. **Building the consumer
+    parcel's assessed value. Evidence: 186 dia tax rows carry a literal
+    `XYZ …` placeholder owner and others are city-templated (*"Santa Rosa Dialysis LLC"*); gov's
+    `owner_name` (9,749) is the recorded owner we fed the prompt echoed back; **0 Regrid-shaped
+    payloads**, so the vendor path has never run.
+    ⚠️ **A roundness statistic was published for this first and RETRACTED the same day: *"100.0% of
+    gov's assessed values are exact multiples of $100,000 vs 3.8% on the CoStar leg"* was measuring
+    ZEROS, because `0 % 100000 = 0` — 9,264 of the 9,265 are exactly `0.00`.** The metric was
+    structurally unable to express the question, which is the P157/P182 trap committed by the author
+    of the page documenting it, and it was caught only by running
+    `count(*) filter (where assessed_value = 0)` while double-checking a PR body. **The model leg
+    does not invent plausible numbers — it emits almost nothing, as zeros**, which then propagate
+    into curated columns as a positive assertion of `$0`. **Before quoting any modular-arithmetic or
+    roundness statistic, exclude zeros and NULLs first, and state the non-zero denominator.** **Building the consumer
     would promote generated numbers to `county_records`, above `salesforce`@20 and every sidebar.**
-    Already curated: **8,842 properties' `tax_year`/`tax_amount` and 8,682 `assessed_value` trace to
-    the model leg**, and `tax_delinquent` is `false` on **11,802 of 11,802** because
-    `bool(None) is False` turned "the source did not say" into a negative finding.
+    Already curated: **8,842 properties' `tax_amount` and 8,682 `assessed_value` trace to the model
+    leg and EVERY ONE OF THOSE TRACED VALUES IS `0`** — live, `dia.properties.assessed_value` is
+    8,700 zeros against 262 positives, and `tax_amount` 9,025 zeros against 1. Same class:
+    `tax_delinquent` is `false` on **11,802 of 11,802** because `bool(None) is False` turned "the
+    source did not say" into a negative finding. **A sentinel written into a curated numeric column
+    is a false measurement, not an absence.**
     **The real first step is `REGRID_API_KEY`** — `Dialysis/src/regrid_client.py` is a complete
     vendor client, gated on that key, that has never run. Full measurement + the shipped instrument:
     `docs/architecture/public-records-source-lane.md` §2a. Backlog **PR1a/PR1b**.
