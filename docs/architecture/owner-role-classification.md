@@ -870,3 +870,22 @@ guessed.** An undecided candidate simply remains.
 
 ⚠️ **The verdict vocabulary is CHECK-constrained to `confirmed` / `rejected`** — not
 `confirm`/`reject`. PK is `(entity_id, role)`, so a re-verdict is an UPDATE, not a second row.
+
+
+## 10. ✅ C13c SHIPPED 2026-09-01 (PR #2011) — verified live
+
+`one_off_owner` **held at 142** exactly as predicted, now split by evidence:
+
+| evidence arm | rows |
+|---|---:|
+| `individual_single_current_asset_sf_corroborated` | **13** |
+| `individual_single_current_asset_unverified` | **129** |
+| routed to `v_lcc_entity_role_ambiguity` as contradicted | **21** |
+
+⚠️ **21, not the ~15 I had read** — six further contradicted entities were found on the way in.
+`user_owner` **10** and `entities_with_role` **10,655** both unchanged, confirming the change touched
+one arm's evidence and nothing else.
+
+**The count deliberately did not fall.** 142 → 13 would have discarded `Maslow Robert C & Michele C`
+and every genuine individual simply absent from Salesforce; the split preserves them while ending the
+assertion that a $22.8M institutional manager is a one-off individual investor.
