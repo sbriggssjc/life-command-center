@@ -1160,6 +1160,42 @@ mechanism is confirmed, the rate across the remaining 691 is not, and the popula
 ⚠️ **I did not merge #1989 and was told not to.** Scott merged it 5 seconds after `npm test` went
 green, which is why the §7b baseline correction landed as a separate PR (#1990).
 
+## 2026-09-01 — REDEPLOY VERIFIED: DOC10 closed, one straggler repaired, DOC8's cap still unexercised
+
+**Deploy confirmed BEHAVIOURALLY** (the sandbox cannot reach Railway): a **zero-work
+`mode=jobs&limit=1` tick** fired through `lcc_cron_post` returned `thin_ocr` / `over_page_cap` /
+`ocr_docs_by_engine` / `ocr_pages_unknown` **with `ocr_by_engine` gone** — the DOC9/DOC10 build
+answering. ⚠️ **A tick that does no work still proves the shape; that is the cheapest deploy probe
+on this lane.**
+
+| check | result |
+|---|---|
+| **rows covered-and-thin** | ✅ **0 — the DOC10 defect is fully closed** |
+| drain | ✅ undrained **695 → 678** today, `lowest_id_reached` = 2 |
+| floor not over-firing | ✅ a **1,886-char** lease extracted clean, unmarked |
+| `bov_ready` | 7 → 4 → **5** |
+| `over_docai_page_cap` | ⚠️ **0 — deployed but UNEXERCISED** |
+
+🔧 **One straggler repaired — document 24**, written by the pre-deploy build at 16:00:51, between
+DOC10's backfill and the JS deploy: 211 chars against a floor of 500, `needs_ocr = false`. A sweep
+found **exactly one** such row fleet-wide. Set to `needs_ocr=true, reason='thin_ocr_result'` —
+**byte-identical to what `cre-property-doc-text.js:296` now writes.**
+
+⚠️ **The reason is load-bearing, and this was checked in the code before writing.**
+`CRE_RETRY_REASONS = ['fetch_failed','extract_error','thin_ocr_result']` — **`no_page_anchors_gpt4o`
+is NOT in it**, so marking the row while keeping its original reason would have made it
+**marked-and-idle forever**. Line 296 overwrites the reason when a row is thin, so every future thin
+gpt-4o result re-admits correctly. **The design is sound; doc 24 was a deploy-window artifact.**
+
+⚠️ **10 of the 24 markers are CEILING markers** (`ocr_non_ok`, `over_ocr_cap`, `office_unreadable`)
+and will never re-admit — by design, distinct from the 14 retry markers. **Read
+`marked_and_readmittable`, never the bare `needs_ocr` count.**
+
+⚠️ **STILL UNPROVEN — DOC12.** `over_docai_page_cap` has never been written and **v24's
+structured-metadata parser has never been exercised**; the only observation of the new cap
+(*"30 got 40"*) was on **v23**. **The 16–30 page band, the entire population DOC8 exists for, has
+had zero OCR events either way.** The backlog drains in ~3–4 days and will supply them.
+
 ## 2026-09-01 — DOC8/9/10 SHIPPED; edge half live, JS half MERGED AND NOT DEPLOYED
 
 **PR #1995 merged. `docai-ocr` v23 → v24 deployed to LCC Opps. DOC10's backfill applied.**
