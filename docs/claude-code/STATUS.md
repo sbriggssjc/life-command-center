@@ -70,7 +70,8 @@ halves of the fix are correct and neither was deployed for that document. Page e
 `details[].metadata` first and keeps the prose regex as a fallback (**v24**). Two mutants survived
 the first test of it, because the live body's `message` repeats the same numbers as its metadata —
 fixed by adding the discriminating case (a re-worded message with intact metadata), not by accepting
-them.
+them. ⚠️ **v24 is deployed and UNEXERCISED** — the behavioural confirmation above is v23's, and no
+DocAI call has been made since v24 landed. Deployed is not exercised.
 
 **⚠️ STILL NOT MEASURABLE, and stated rather than guessed:** (a) **`cloud_cheap` overtaking `cloud`**
 — the only post-deploy OCR event so far was that 40-page document, which is over the cap either way,

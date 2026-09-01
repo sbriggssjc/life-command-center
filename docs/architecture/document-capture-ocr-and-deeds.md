@@ -217,6 +217,11 @@ deploy, not a Railway one, so it is live independently of the PR.
   change (int64 → **string** in JSON). The prose regex stays as the fallback. **A detector keyed only
   on wording is one Google copy-edit away from silently returning null** — the same class as the
   P182 deparse trap.
+  ⚠️ **DEPLOYED IS NOT EXERCISED: v24 has served no request yet.** The behavioural confirmation above
+  is **v23**'s; v24 changes only `pageLimitFromError`, and no DocAI call has been made since it
+  landed (`function_edge_logs` for `docai-ocr` is empty after 16:05 UTC). The next over-cap event is
+  what proves it — read the tick's `page_count` on the `over_docai_page_cap` marker. Until then the
+  claim is *"tested in the guard, deployed, unexercised"*, which is not the same as *"working"*.
 
 **DOC9 — the spend counter was blind to the expensive path.** `bump()` accumulated only when
 `ocr_pages > 0`, and gpt-4o returns no page count, so the 15:00 tick reported `ocr_by_engine: {}` and
