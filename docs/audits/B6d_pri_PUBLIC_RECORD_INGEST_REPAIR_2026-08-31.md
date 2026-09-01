@@ -1,5 +1,26 @@
 # B6d-pri — a service failing ~1,950 times a day and reporting success (2026-08-31)
 
+> ⚠️ **CONTEXT ADDED 2026-09-01 (PR1) — READ THIS BEFORE ACTING ON ANYTHING BELOW.**
+> **Every defect this audit found and fixed is real. What it could not see is what the service
+> IS.** `public_record_ingest.py` **contains no county record fetch on either domain** — dia's one
+> external call asks **gpt-4o to recall** parcel and tax facts from a prompt seeded with the
+> property's own address *and the owner we already hold*; gov snapshots the assessor **portal
+> homepage**. So this audit repaired the throughput of a **generator**, not of an acquisition path.
+>
+> **Nothing here needs reverting** — a producer that runs correctly is a prerequisite either way,
+> and the fixes stand. But **do not read this page as evidence that the public-records lane is
+> healthy or worth wiring.** Its output was measured on 2026-09-01: the model leg emits almost
+> nothing, as **zeros**, which reached ~8,800 curated dia rows and every `tax_delinquent` value in
+> both domains before PR1a/PR1b nulled them.
+>
+> **Canonical page: [`../architecture/public-records-source-lane.md`](../architecture/public-records-source-lane.md).**
+> The real acquisition step is **PR1d** (`REGRID_API_KEY` — a complete vendor client that has never
+> run), not more throughput on this one.
+>
+> **The durable lesson this audit could not have drawn: fixing a producer's RELIABILITY says
+> nothing about the VALIDITY of what it produces.** Both questions have to be asked, and the second
+> one is answered by reading what the external call talks to.
+
 **Repo:** Dialysis (`src/`) · **DB:** Dialysis_DB `zqzrriwuavgrquhisnoa`
 **Evidence:** Railway logs, 2026-08-31 06:03 → 16:42, one deployment, 1,001 lines (502 error / 499 info)
 **Contract:** `docs/os/BUILD-TURN-PROTOCOL.md` · `data-coherence-invariants.md` **I4**
