@@ -1160,6 +1160,47 @@ mechanism is confirmed, the rate across the remaining 691 is not, and the popula
 ⚠️ **I did not merge #1989 and was told not to.** Scott merged it 5 seconds after `npm test` went
 green, which is why the §7b baseline correction landed as a separate PR (#1990).
 
+## 2026-09-01 — DOC8/9/10 SHIPPED; edge half live, JS half MERGED AND NOT DEPLOYED
+
+**PR #1995 merged. `docai-ocr` v23 → v24 deployed to LCC Opps. DOC10's backfill applied.**
+
+✅ **DOC8's cap fix is CONFIRMED ON BEHAVIOUR, not asserted.** The imageless flag was verified
+against the **live v1 discovery document** — it is a **top-level `ProcessRequest` boolean**, not
+`processOptions.ocrConfig`, where the prompt's own framing would have put it and where **nesting it
+would have been a silent no-op leaving the cap at 15.** Google's error then moved from *"non-imageless
+mode exceed the limit: 15 got 19"* to *"Document pages exceed the limit: **30** got 40"*.
+**Verifying an API contract against the live schema instead of the prompt is what made that real.**
+
+✅ **The tier split HAS flipped and is now measurable** (the response said it was not — true when
+written, 15:30's rows landed minutes later). Today **3 DocAI vs 2 gpt-4o**; the DocAI rows carry real
+page counts and **7,572 / 2,094 / 601** chars, both gpt-4o rows carry **no page count and 116 / 211**.
+The mechanism behind the 9.3× gap is visible in five rows.
+
+✅ **DOC10 backfill: 12 rows / 9 properties, reversal round-tripped and rolled back, `bov_ready`
+7 → 4.** ⚠️ **That number going DOWN is the fix** — three of those four were never really ready.
+
+🔴 **THE RAILWAY REDEPLOY HAS NOT RUN. Three independent tells:** `over_docai_page_cap` has **never**
+been written despite a **40-page** document at 16:00:51 · the 16:00 tick body **still carries
+`ocr_by_engine`**, which DOC9 **removed** · **document 24 was written `needs_ocr = false` at 211
+characters**, which DOC10's floor would have marked.
+
+🔴 **Document 24 is the DOC10 defect recurring live, four minutes after DOC10 shipped** — 211 chars,
+`needs_ocr = false`, so BOV extract will take it as a lease and it can never be retried.
+***Merged is not running*, demonstrated on the exact defect the merge closed.**
+
+⚠️ **Verify after the redeploy, do not assume:** doc 24's reason is **`no_page_anchors_gpt4o`, not
+`thin_ocr_result`**. DOC10 re-admits on a **set membership over reasons**, so a thin row arriving
+under a different reason must be caught by the char floor AND land in `CRE_RETRY_REASONS`, or it is
+marked and never re-admitted.
+
+**Also from DOC8, worth keeping:** `ocr_by_engine` was **removed, not redefined** — it counted
+PAGES, gpt-4o reports none, so the spend guard read `{}` exactly when the escalation happened. Read
+**`ocr_docs_by_engine`** (unconditional) and **`ocr_pages_unknown`** (P180 — unknown is never 0).
+⚠️ **31+ pages is honestly unsized: 8 page observations exist in total, 1 over 30.** That is a
+sample, not a distribution.
+
+**Backlog 691 → 682, `lowest_id_reached` = 2.**
+
 ## 2026-09-01 — DOC1 SHIPPED AND DRAINING; the spend check found a bigger problem than cost
 
 **DOC1 merged (PR #1989), deployed, verified live.** `eligible` 0 → 15 · `lowest_id_reached`
