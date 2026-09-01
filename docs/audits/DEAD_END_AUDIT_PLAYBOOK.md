@@ -736,6 +736,63 @@ one fixed by ranking) arriving from the producer side.
 proposals once and stalled again at row 1,001, with the failure now more expensive to see.
 The fix is a cursor that advances and a selection that joins.
 
+## Class 31 — a source REGISTERED on the authority ladder that has never written a field
+
+**Symptom:** none. The source's own tables are non-empty and growing, its producer is green, its
+ladder rungs are registered — and the fields it is supposed to author fill from a lower-authority
+source instead. Every component looks correct.
+
+**Detector — one anti-join, both directions:**
+
+```sql
+-- registered but never written (the finding)
+select p.source, count(*) rungs, min(p.priority) best_priority
+from field_source_priority p
+where not exists (select 1 from field_provenance fp where fp.source = p.source)
+group by p.source order by rungs desc;
+
+-- written but never registered (the known drift; v_field_provenance_unranked)
+select distinct fp.source from field_provenance fp
+where not exists (select 1 from field_source_priority p where p.source = fp.source);
+```
+
+**First run, 2026-09-01 (LCC Opps): 39 of 67 registered sources — 58% — have never written a
+field.** Head of the list by rungs:
+
+| source | rungs | best priority | |
+|---|---:|---:|---|
+| `costar_cmbs_loan` | 121 | 20 | |
+| **`county_records`** | **93** | **5** | 🚨 tables full (`property_public_records` 9,166 props / 78%), producer live 2026-08-31 → **PR1** |
+| `folder_feed_bov` / `folder_feed_master` | 28 each | 45 | |
+| `lease_document` | 25 | **10** | high authority, unused |
+| `opencorporates` / `mi_lara` | 16 each | 15 | |
+
+**The reverse direction was benign and that mattered** — all 21 write-but-unranked sources are
+one-shot `cleanup_run_*` batch tags from the May 2026 remediation, which are legitimately not ladder
+entries. **Run both arms**: a one-directional result invites the wrong conclusion about drift.
+
+**⚠️ The detector cannot tell you WHICH of two causes you have, and they need opposite fixes.**
+- *Registered ahead of a build* — the capability was planned, the rung reserved, the writer never
+  shipped (`gliner_extract`, `w9_2_internal_harvest`, `sos_registry` — the last is bot-walled and
+  documented). **Fix: nothing, or build it.**
+- *Vocabulary drift* — the writer ships under a different spelling than the rung.
+  **Fix: reconcile the name.**
+
+**Both read as zero.** Distinguish by grepping the writers for the concept, not the string.
+
+**⚠️ And check the family before claiming a protection gap.** `manual` is registered at priority 1
+with **0 rows**, which reads alarming — the top of the ladder unused. It is not: `manual_edit`
+(207 rungs @1, 841 rows) and `manual_resolution` (203 rungs @1) carry the real curation protection,
+and `manual` is vocabulary clutter. **A single unused rung inside a populated family is clutter; the
+same rung alone would be a hole.** (Noted in passing, unresolved: `manual_verify` sits at priority
+**20** with 673 rows — a human *verifying* a value ranks below one *asserting* it. Defensible, but
+nobody decided it on purpose.)
+
+**Why this class is worth a standing detector:** every other check in this repo asks whether rows
+are wrong or stale. This one asks whether a registered *authority* was ever exercised — and the
+answer is invisible from the source's own tables, from its producer's health, and from the ladder.
+The consuming field just quietly fills from something worse.
+
 ### 12b — the marker is the DIAGNOSTIC, not only the cursor (assessor enrichment, 2026-09-01)
 
 The purest instance found so far, and it extends the class in two directions.

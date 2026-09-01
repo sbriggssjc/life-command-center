@@ -4114,7 +4114,25 @@ Related invariants from the same round:
   `<>`-exclusion trap that would have hidden live cards, and the measured refutation of P192's
   un-park and learn-from-rejects claims).
 - **On-box daily-brief narrative (Analyst's Take), R8 Stage 1:** `docs/architecture/briefing-analyst-take-onprem.md` — the first net-new on-prem GENERATION surface, its fabrication guard, and the operator gate.
-- **Property metadata coverage (dia) — and the decision NOT to build:**
+- **⚠️ PUBLIC RECORDS ARE A SOURCE, NOT A GAP-FILLER — AND THE LANE IS BUILT AND HAS NEVER WRITTEN A
+  FIELD (2026-09-01):** `docs/architecture/public-records-source-lane.md`. **START HERE before
+  proposing anything about assessor / parcel / tax / deed data.** `county_records` is registered at
+  **priority 5 across 93 field rungs on BOTH domains** and has **ZERO `field_provenance` rows ever**
+  (positive-controlled: `recorded_deed` has 2,681). Meanwhile `property_public_records` links
+  **9,166 of 11,802 dia properties (78%)**, `tax_records` holds 25,621 rows, and the producer ran
+  **2026-08-31**. **`dia.properties.year_built` fills from `salesforce`@20 alone** while the @5
+  county source sits unread in the same database. **Class 2 on the most-registered source in the
+  system, invisible to every check** — tables non-empty and growing, producer green, ladder
+  registered, fields filling from somewhere else.
+  - **⚠️ THE DOCTRINE FAILURE THAT HID IT: I SCOPED A *SOURCE* TO ONE *CONSUMER'S* GAP LIST.** The
+    same-day verdict *"don't build — stale sold comps, no leverage"* measured every option against
+    the 662-row metadata backfill queue. Against the real denominator — **every property, dia 11,802
+    + gov 13,837** — the conclusion inverts. **A sold property's assessor record is still ownership
+    history, still a sale, still physical stats.** Scott's correction, and it is the exact inversion
+    **I1** exists to prevent, committed by the author of I1. **Ask what a source POPULATES, never
+    what one queue needs.**
+- **Property metadata coverage (dia) — ⚠️ its "don't build" verdict is queue-scoped and superseded
+  in part by the above:**
   `docs/architecture/property-metadata-coverage.md`. **START HERE before proposing any source for
   `year_built` / `building_size` / `land_area` gaps.** Carries the retired assessor lane, invariant
   **I12** (acres vs sq ft, 3,702 paired rows, 0 equal, ratio 43,560 on 91.1%), and **three sources
