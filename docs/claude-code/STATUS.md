@@ -16,6 +16,93 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-01 — 🚨 PR1 REFUSED, CORRECTLY — the lane's producer GENERATES its values. And two repos merged a retracted claim as fact.
+
+**PR1 asked for the reconciliation consumer. It was not built, and not building it is the right
+call.** `src/public_record_ingest.py` — the producer of `parcel_records` / `tax_records` /
+`deed_records` on **both** domains — **contains no county record fetch.** dia's one external call is
+`chat.completions.create(model="gpt-4o")` on a prompt seeded with the property's own address *and the
+owner we already hold* (the parsed result is literally named `gpt_parcel`); gov fetches a ≤4,000-char
+snapshot of the assessor **portal homepage**, which cannot state a specific parcel's assessed value.
+**Wiring that to `lcc_merge_field` would have promoted model output to `county_records`, which
+outranks `salesforce`(20), `om_extraction`(30–50) and every sidebar(45–65) on 93 rungs.**
+
+⚠️ **My PR1 prompt made this harder to catch, and that is worth recording.** It said *"no new
+acquisition, no new schema, no new ladder entry"* as a **selling point**. That phrasing describes a
+source whose producer nobody had re-graded — **"it needs no new acquisition" is the tell, not the
+recommendation.** The lesson generalises to PR5's other 38 registered-but-unwritten sources: **read
+what a producer's external call actually talks to before wiring it.**
+
+### ⚠️ A statistic was published, refuted and corrected — and I verified the correction independently
+
+The first cut claimed *"100.0% of gov's model-leg assessed values are exact multiples of $100,000
+vs 3.8% on the CoStar leg — real assessed values are not round."* **It was counting zeros
+(`0 % 100000 = 0`).** Measured live by me on gov `parcel_records`: **11,529 rows — 9,264 exactly
+`0.00`, 1,848 NULL, 417 positive, and of those positives only 17 are round = 4.1%**, statistically
+indistinguishable from the 3.8% control. **The metric was structurally unable to express the
+question** — the P157 `reloptions` / P182 deparse trap, committed on the page that documents it.
+
+**The corrected finding is different and worse: the model leg does not invent plausible numbers, it
+emits almost nothing, as zeros** — and a `0` is a *positive assertion* that propagates into curated
+columns and reads as measured, where a NULL would have been honest. Verified live on dia:
+
+| curated column | zeros | positives |
+|---|---:|---:|
+| `dia.properties.assessed_value` | **8,700** | 262 (all CoStar-traced) |
+| `dia.properties.tax_amount` | **9,025** | **1** |
+| `dia.properties.tax_delinquent` | **`false` on 11,802 of 11,802** | — |
+
+⚠️ **`tax_delinquent` is the sharpest of the three: `bool(None) is False` turned *"the source did not
+say"* into *"this property is not tax-delinquent"*, on every property in the portfolio.** A negative
+finding asserted at 100% coverage, never once measured, on a field that can reach a BOV.
+
+**What the refusal actually rests on — none of it the retracted statistic:** the producer has no
+county fetch (a fact about code); dia `tax_records` carries **186 rows with a literal `XYZ …`
+placeholder owner** plus city-templated names (*"Santa Rosa Dialysis LLC"*); gov's 9,749 `owner_name`
+values are the recorded owner we fed the prompt, echoed back (the ORE Phase A1 finding); and **0
+Regrid-shaped payloads exist**, so the vendor path has never run.
+
+### 👤 URGENT — two repos merged the PRE-CORRECTION version, and `main` cannot rebuild either DB
+
+| repo | `main` | correction | branch |
+|---|---|---|---|
+| Dialysis | `8246ded` | ❌ not an ancestor (`5a6d511`) | ✅ pushed |
+| government-lease | `86e9ba7` | ❌ not an ancestor (`70d6a07`) | ✅ pushed |
+| life-command-center | not merged | — | ✅ pushed |
+
+Two consequences, both verified:
+1. **The refuted claim is committed as the rationale for a live database object**, and in Dialysis's
+   `CLAUDE.md` — the durable reference file, where a wrong lesson does the most damage. A reader
+   learns *the model fabricates plausible round numbers* instead of *it emits zeros*.
+2. **Neither migration can be replayed.** I checked: live `v_gov_public_record_acquisition` column 6
+   is **`assessed_value_zero`**; the committed file's column 6 is `with_owner_name`. `CREATE OR
+   REPLACE VIEW` is append-only for columns, so a rebuild from `main` **errors 42P16** rather than
+   silently downgrading — the better failure mode, but **the repo is not currently a replayable
+   record of either database.** This is the §13 *"running but not merged"* hazard **inverted: the
+   correction is running and not merged.**
+
+⚠️ **Dialysis #7386 merged at 16:50:09 while its own checks finished 16:52 and 16:54** — merged ~2.5
+minutes before CI reported. Green this time; **green-after-merge is not a gate**, and it is the exact
+pattern LCC's `CLAUDE.md` already records ("merged 58 seconds after opening").
+
+### 🚨 The trap that would have hidden a wiring in EITHER direction
+
+`lcc_flush_provenance_events()` carries `v_first_class := ARRAY['splink_v1','sf_link_review_human',
+'splink_v2','sf_account_contact_expansion']` and **relabels every event whose source is not on that
+list to `domain_trigger`.** So a correct `county_records` wiring would have landed in
+`field_provenance` as `domain_trigger`, at a rung that does not exist for these fields — **while the
+verification I wrote into the PR1 prompt (`field_provenance where source='county_records'`) still
+read ZERO.** My own success criterion could not have detected success. → **PR7**.
+
+### What shipped instead — the marker, not the verdict
+
+Producer provenance stamps on both domains (`raw_payload.source`; ⚠️ **excluded from `data_hash` on
+dia**, or every row re-inserts as a duplicate — proven hash-stable with a positive control),
+`{dia,gov}_public_record_acquisition_class()` as the single owner of "which path produced this row"
+(with `ai_gpt4o_presumed` kept **distinct** from a forward stamp, so a measurement is never reported
+as a stamp), `v_{dia,gov}_public_record_acquisition`, and `v_dia_curated_field_ai_provenance`.
+Guards: 10/10 and 3/3 mutations RED, both stripping comments first.
+
 ## 2026-09-01 — 🚨 SCOTT'S CORRECTION: I scoped a SOURCE to one CONSUMER's gap list. The public-records lane is BUILT and has NEVER WRITTEN A FIELD
 
 **My "don't build" verdict below was scoped to the 662-row metadata backfill queue and is WRONG as a
