@@ -900,14 +900,31 @@ a page size above the PostgREST cap · a reference to the domain store). ⚠️ 
 comments first** — the fix's own prose names `id.desc` and `fetch_failed` repeatedly, so a raw grep
 would pass over the regression it exists to catch (A5c / N18 / B1).
 
-⚠️ **NOT YET VERIFIABLE, and stated as such: this is MERGED, not RUNNING.** The tick is JS, so it
-ships on the Railway redeploy — the DB half of this change is empty. **Every number in the "after"
-column of §7 is a prediction until the first post-deploy tick.** The three that decide it:
-`scan_lowest_id` (is the walk starting at the bottom?), `ocr_by_engine` (**is `cloud_cheap` beating
-`cloud`? if gpt-4o dominates, STOP — that is the Custom-Extractor footgun at 6–14×**), and
-`bov_ready_properties` (**a rising sidecar count is not a rising consumer input** — the readiness
-view needs EVERY doc on a property covered). **The 695 have never been sampled, so their
-scanned/digital mix is still unknown.** §7b carries all four queries and the baseline.
+✅ **VERIFIED LIVE ON THE FIRST REAL TICK — 15:00:00 UTC** (PR #1989 merged 14:56:09 by Scott,
+Railway redeployed, cron 167 fired). `eligible` **0 → 15** · **`scan_lowest_id` and
+`eligible_lowest_id` both `2` — the oldest document in the population** · `scan_pages 1` ·
+`scan_capped false` · `scanned 4` / `text_extracted 3` / `ocr 1`. Documents reached: id **2** (om,
+57,084 chars), **7** (lease, 6,935), **10** (lease, 9,492), **11** (lease, OCR). `scanned 4` against
+`eligible 15` is the 22 s budget stopping on an item boundary, reported not hidden. Backlog
+**695 → 691**, sidecars **76 → 80**, and **`bov_ready_properties` 5 → 6 — the CONSUMER moved on the
+first tick**, which is the metric that matters.
+
+🔴 **AND THE FIRST OCR ROW IS A LIVE SPEND FINDING — DOC8/DOC9, filed not fixed.** Document 11 came
+back `ocr_tier:'cloud'`, `gpt-4o-2024-08-06`, **116 chars**, `thin_ocr_result`: the 6–14× premium
+paid for nothing. ⚠️ **It is NOT the Custom-Extractor footgun this file documents, and checking the
+ERROR rather than the SYMPTOM is what separated them.** The `docai-ocr` log at 15:00:18 reads
+**`PAGE_LIMIT_EXCEEDED` — "non-imageless mode exceed the limit: 15 got 19"** against the **correct**
+Enterprise OCR processor (`5ecc6339861c88e1`). A 19-page lease over DocAI's 15-page sync cap, falling
+through to the documented gpt-4o last resort. **Google's own error names the fix: imageless mode
+raises the cap to 30** — an edge-function deploy with its own grade, hence DOC8 rather than a
+same-change patch. ⚠️ **DOC9: `ocr_by_engine` read `{}` and `ocr_pages_total` `0` on that very
+tick**, because `bump()` only accumulates when `ocr_pages > 0` and gpt-4o returns no page count —
+**the counter built to catch the escalation is blind to exactly the escalating path.** Until DOC9
+lands, read `items[].ocr_tier`, never `ocr_by_engine`. ⚠️ **Sample size is ONE OCR row** — the
+mechanism is confirmed, the rate across the remaining 691 is not, and the population is lease-heavy.
+
+⚠️ **I did not merge #1989 and was told not to.** Scott merged it 5 seconds after `npm test` went
+green, which is why the §7b baseline correction landed as a separate PR (#1990).
 
 ## 2026-09-01 — DOCUMENT PIPELINE: one canonical page, and the blocker found
 
