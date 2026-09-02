@@ -44,6 +44,65 @@ exhibits, and "the firm model is unpopulated" when it is mis-populated. **The tu
 to correct your own prior claims in place and say so plainly**, because both were caught only by
 re-measuring something that sounded right.
 
+## 2026-09-02 — AI/OCR COST STRATEGY: the free tier is designed, has a producer, and is NOT WIRED
+
+**Scott asked whether these AI calls should run local, Microsoft-native, or Google — with the
+long-term view rather than the current subtask's best objective. Inventoried the whole surface.**
+New canonical page: **`docs/architecture/ai-and-ocr-cost-strategy.md`**. Filed **OCR1–OCR6**.
+
+🔴 **THE HEADLINE: `deps.freeOcr` — Tier 1, the $0 tier — HAS NO SERVER-SIDE PRODUCER AND NO
+DEFAULT.** Both real callers build `deps` without it, so the whole Tier-1 block is skipped and
+execution falls straight through to paid. **Every OCR call this system has ever made started at a
+paid tier.** The only producer (`scripts/lease-ocr-backfill.mjs:379`) takes a **filesystem path**,
+not `{buffer, mediaType}` — **structurally incompatible with the seam** — and runs on the
+workstation. **The $0 tier exists in the design, the comments and a script, and has never once run
+in production.**
+
+🔴 **AND THE DEED LANE NEVER TIERS AT ALL** — `document-text.js:502-505` calls gpt-4o directly,
+bypassing DocAI, gated only on `OPENAI_API_KEY`. **All 325 extracted deeds went to the 6–14× tier by
+default** (OCR2).
+
+⛔ **MICROSOFT IS REFUTED, and the repo had already established why:** M365 Copilot has **no
+batch-OCR API**; Microsoft's OCR product is **Azure Document Intelligence, separately metered** (not
+in the M365 subscription); and ⚠️ **Northmarq IT BLOCKS Azure AD app registrations** — documented in
+three independent places. There is **no Azure AI client anywhere** and **no AI action in any of the
+18 Power Automate flows.** It would be a new paid vendor through a blocked auth path, for no
+advantage over DocAI. **Recorded as OCR6 so it is not re-proposed.**
+
+✅ **The LLM side is already largely local** — `qwen2.5:14b` on GaryBuilt, with **9 flags ON**
+(`OLLAMA_EXTRACTION`, `OLLAMA_CLEAN_ASSIST`, `PROPERTY_TWIN_ASSIST`, `MATCH_DISAMBIG_ASSIST`,
+`W9_3_SF_ASSIST`, `OWNERSHIP_CHAIN_DRAFT`, `DRAFT_ASSIST`, `BRIEFING_ANALYST_TAKE_ONPREM`,
+`OCR_CLOUD_DOCAI`). ⚠️ **The migration seeds say `off` and the DB says `on` — the seeds are
+authoring-time snapshots that deliberately do not update `state` on conflict. Only the DB is
+authoritative.** ⚠️ **But OCR is not an LLM task and Ollama does not do it** — conflating the two is
+the trap here.
+
+🔵 **The default cloud path may be FAILING rather than spending** (OCR3): `invokeChatProvider`
+defaults to the edge fn pinned to **`claude-sonnet-4-20250514`**, which two independent records say
+is **retired (400)** and additionally hitting *"credit balance too low."* ⚠️ **The fallback chain
+would absorb that silently into `gpt-4o-mini`** — so ~10 un-flagged call sites may be on a fallback
+nobody chose. **Measure before assuming either way.**
+
+⚠️ **No pricing constant, rate variable or spend budget exists in executable code** (OCR5). The
+~$1.50/1k figure is **comment-only in four places**, `ocr_pages` is recorded as *what we were billed
+for* and **never priced**, and **the rate itself is unverified** — the pricing page is egress-blocked
+from every environment tried.
+
+**Recommendation: ship DOC18 now (~$3.30, don't hold it), then OCR1 — an OCR endpoint on the
+GaryBuilt box behind the EXISTING tunnel + CF Access (the SOS-proxy precedent), injected at the two
+call sites where the seam already exists and is already stubbed in tests.** That makes routine OCR
+**$0/page permanently** and leaves DocAI as the escalation, which is what the design always said.
+
+⚠️ **THE RISK, NAMED NOT ASSUMED PAST: local OCR quality on executed leases is UNMEASURED.** The only
+tier comparison we hold — DocAI 14,687 avg chars vs gpt-4o 1,579 — says **gpt-4o is bad, not that
+Surya matches DocAI.** **A bake-off on 10 real leases is part of OCR1.** If local loses, Tier 1
+becomes a born-digital pre-filter and DocAI stays the workhorse — still a large and honest saving.
+
+📋 **Session handoff written:
+`docs/claude-code/prompts/HANDOFF-2026-09-02-document-ocr-and-owner-roles.md`** — carries the state,
+the open items, the git/lock procedure, the documentation and consolidation discipline, and the
+measurement traps that actually bit this session.
+
 ## 2026-09-02 — DOC17: the cap is measured against the SELECTION. The cheap route works; DOC18 staged.
 
 ✅ **Probed on a real 316-page PDF. `individualPageSelector {pages:[31..45]}` returned 200 with pages
