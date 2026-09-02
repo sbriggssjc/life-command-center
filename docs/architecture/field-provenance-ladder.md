@@ -62,6 +62,22 @@
 (`no_merge_path_caller` 13 · `reached_and_broken` 10 · `ledger_is_elsewhere` 6 · `producer_never_wired` 2 ·
 `unreached_and_broken` 2) · never-written sources **39 by design** · write-but-unregistered 21 (benign
 `cleanup_run_*`) · unranked **29** · `value_text_hash` plain + trigger, 0 null hashes, 8 break-class rows
+hashing correctly since PR12 · `field_provenance` on LCC-internal tables **0** — a
+**no-population zero**, measured 20:59 UTC 2026-09-02, 21 min after the deploy, with **0 CRE
+registrations in the window**. The CRE folder feed is **human-driven and bursty: 7 active days in
+30, last 2026-08-27**, so week-long gaps are normal, the detector cannot fail yet, and polling it is
+waste. **State the elapsed window AND the population that passed through it** — "no registration
+yet" and "the fix did not work" are the same 0 and opposite facts. `entity_relationships` stays 0
+regardless (`unreached_and_broken`) · `agency_classifier` own-name rows **0** (no-population zero — no gov
+write has fired since PR8).
+
+**Deploy state:** migrations for PR8/PR5/PR12/PR5c all applied live. ✅ **Railway CONFIRMED
+2026-09-02 20:38 UTC — `/version` = `06a3ee5de325`**, and `git merge-base --is-ancestor` puts
+`68ede28c` (PR12 JS) and `6f55491` (PR5c JS) inside it; `98248e18` likewise. ⚠️ Probe note: two
+`net.http_get` calls read as *no row* for several minutes before pg_net persisted them — **an
+unanswered probe is not a negative result**, re-read the row rather than concluding "not deployed".
+`availability-checker` edge function **fixed in source, undeployed** (PR5c-deploy).
+→ `docs/os/OPERATOR-ACTIONS.md`.
 hashing correctly since PR12 · `field_provenance` on LCC-internal tables **0** (correct until the
 fixed callers run post-redeploy; for `entities` see PR5c-entities — both writers are wired but
 neither is scheduled, so `0 → N` needs an operator run) · `agency_classifier` own-name rows **0** (no-population zero — no gov

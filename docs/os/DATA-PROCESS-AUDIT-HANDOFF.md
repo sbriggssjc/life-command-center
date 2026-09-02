@@ -66,6 +66,45 @@ and the Dialysis test suite had never executed a test in the repo's history — 
 
 ### 🔄 In flight
 
+**Nothing is with CC.** The Dialysis gate prep is DONE (#7395 + #7397): `paths-ignore` gone, Scope
+job, `Run Tests` always reports, **seen RED** (run 33647155312), docs-only path **proven**
+(#7397, 5 s), `exit code 128` **gone** from a checkout log. 👤 **Three operator steps close the B6
+CI arc:** merge #7397 → delete `claude/tmp-red-gate-proof` + `claude/tmp-docs-only-proof` in the UI
+→ require `Run Tests` on `main`. ⚠️ Ruff stays masked, correctly — **5,738 findings, not the "11"
+the first handoff said** (GitHub's ten-annotation cap; A5's `815 = 1000 − 185` again).
+**PR5c (2026-09-02) CLOSED — and it corrects PR12 §4 and PR5 §1a in place.** The cause was one
+CHECK: `field_provenance_target_database_check` accepts only `lcc_opps`/`dia_db`/`gov_db`, and
+**five call sites sent `'dia'`/`'gov'`/`'lcc'`/`'lcc_db'` → 23514 on 100% of calls** into a bare
+`catch`. **`lcc_merge_field` ALWAYS inserts a row** (write/skip/conflict), so zero rows means the
+RPC never completed — replayed rolled-back, 6 of 6 PR5 §2 sources fail, 5 with 23514; the sixth
+(`lcc_generated`) succeeds and its lane just has not run. ⚠️ **PR12 §4's "~0.03% break-class"
+measured the stored COLUMN, not the payload** — three sites `JSON.stringify` a jsonb param, so
+their rate was ~100%. All 33 rungs carry a `pr5c_verdict`; nothing retired; rung fingerprint
+unchanged. ✅ **Merged #2060 (`06a3ee5`) and DEPLOYED 20:38 UTC** (`/version` = `06a3ee5de325`).
+🚧 **Verify-next (Class 8) is STILL OPEN and its zero is a NO-POPULATION zero:** at 20:59 the six
+tables read 0 with **0 CRE registrations since the deploy**. The CRE folder feed is **human-driven,
+7 active days in 30, last one 2026-08-27** — week-long gaps are normal, so do not poll it and do
+not read the 0 as a failure. Any row on `public.lcc_cre_property_documents` is the proof.
+⚠️ `entity_relationships` stays 0 regardless (`unreached_and_broken`). ⚠️ **`availability-checker` is a THIRD deploy surface,
+fixed in source and NOT deployed** (PR5c-deploy).
+**PR12 (2026-09-02, #2057) closed** — hash fixed in place (no rewrite), 1,979 live rows since incl. 8
+break-class, all hashing. **Exposure was ~1,101, not 67** — the newline in `sales_transactions`
+narrative on NON-rung columns; the ladder-scoped census could not see it. JS failure signal
+(`provenance_failed` + alert) ships on the Railway redeploy. PR12b filed (flush watermark skips an
+errored event permanently).
+**PR5 (2026-09-02, #2051) closed with PR7** — 426 verdicts + 49 orphan markers live on
+`v_field_source_priority_triage`; no deploy gap (no `api/` change). **`never_written` stays 39 BY
+DESIGN** (rungs are soft-retired in `notes`, never deleted — "unregistered" is a different
+`lcc_merge_field` branch). Seven of the 39 are live on the property-owner ledger. PR9 → Scott.
+**PR2 verify-next (Class 8):** the dia backfill is proven (767/734/714/232 reproduce live); the
+PRODUCER is not — 0 `costar_sidebar` parcel rows since the merge and the Railway redeploy of
+`98248e18` is ✅ **CONFIRMED deployed** (2026-09-02 20:38 UTC, `/version` = `06a3ee5de325`, which
+carries it) — so the remaining PR2 gap is the PRODUCER, not the deploy. Assert on a **new**
+sidebar parcel row carrying `building_sf`, never on
+today's totals. gov backfill (1,527 rows) is Scott's call → `OPERATOR-ACTIONS.md` §3 **PR2-gov**.
+**PR8 verify-next:** `field_provenance where source='agency_classifier'` reads 0 and it is a
+no-population zero (0 unflushed gov events, last one pre-migration) — it flips on the next gov write
+that fires `gov_classify_agency()`; do not read it as broken.
 **Nothing is with CC.** What is open is DEPLOY + PRODUCER proof, not code:
 
 | verify-next | the honest reading today | what proves it |
@@ -100,7 +139,7 @@ and the Dialysis test suite had never executed a test in the repo's history — 
 ### 👤 Waiting on Scott
 
 `PR9` (should a human-confirmed clinic↔property link outrank `auto_link_*`, or stay recorded-only @20?) ·
-`PR2-gov` (run the gov parcel backfill; confirm the `98248e18` redeploy) · `B6e-ci-required-check` (Dialysis branch protection — until flipped the unmasked suite gates nothing) ·
+`PR2-gov` (run the gov parcel backfill; the `98248e18` redeploy is confirmed) · `B6e-ci-required-check` (Dialysis branch protection — until flipped the unmasked suite gates nothing) ·
 `BR1-confirm` (12 brokerages) · `B6d-sam` (re-issue `SAM_API_KEY`, 401) · `PR1d` (`REGRID_API_KEY` —
 a complete vendor client that has never run) · `I16b` (delete the dormant `life-command-center`
 Railway service) · `B6e-fred-cm-exposure` (did a book go out after 2026-08-07?).
