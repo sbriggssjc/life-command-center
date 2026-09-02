@@ -16,6 +16,43 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — PR2 SHIPPED (#2045, `98248e18`): the sidebar writer now carries the parcel stats — and the parser was the load-bearing half. PR11 re-scoped, PR12 found.
+
+**Verified live after merge (dia `zqzrriwuavgrquhisnoa`, LCC Opps):** `costar_sidebar` parcel rows
+932 — `building_sf` **767**, `lot_sf` **734**, `year_built` **714**, `zoning` **232**, **0** lots under
+100 sq ft; `field_provenance` batch **2,532** rows; `v_field_provenance_unranked` **30 → 30**;
+30 `costar_sidebar` rungs on the four parcel/tax tables. Every number in the response reproduces.
+
+- **The filed PR2 premise was refuted in the prompt itself** ("77% tax coverage" was the gpt-4o
+  leg — 25,331 APN-less rows); the real source is the sidebar and its writer built the INSERT from
+  `apn/county/state/assessed_value` only.
+- 🚨 **Fixing the writer alone would have shipped a 43,560× unit error.** CoStar's dominant lot
+  format `"1.00 (43,560 sf)"` (68% of captures) fell through `parseLotSF` → `parseSF` and read as
+  **1 sq ft**; 476 of 760 backfilled lots came through that arm. `metadata.lot_sf` holds BOTH
+  units (I12 one level up); `"0.00 (1 sf)"` is CoStar's no-data sentinel (PR1a's class).
+- **Measured ceilings of zero, stated not silent:** `tax_amount` / `land_use` / `owner_name` have
+  never appeared on any of 55,901 captures — wired, will read 0 until an assessor capture lands.
+  The 84-property `$/SF` comp residue is a **disjoint** population (0 of 84 have a sidebar parcel).
+- 🔴 **PR12 (new):** `field_provenance.value_text_hash` (`::bytea` over a jsonb string) throws
+  22P02 on any value containing a double quote; `shouldWriteField` **fails open**, so the write
+  lands and the provenance vanishes silently. One live hit (`"C" - Commercial`). Loss unmeasured.
+- **PR11 re-scoped, not built:** the marker already exists (`v_dia_public_record_acquisition` /
+  `dia_public_record_source_is_trustworthy`); what is missing is consumers filtering on it and the
+  producer gate in the Dialysis repo (a retirement decision, per §2a).
+- **gov: writer fixed, backfill NOT run** — 1,527 rows, one command, Scott's call
+  (`OPERATOR-ACTIONS.md` §3 **PR2-gov**).
+
+⚠️ **Class 8 — the backfill is proven, the PRODUCER is not.** 0 `costar_sidebar` parcel rows have
+landed on dia since the merge (last capture 2026-08-31 18:33 UTC), and the Railway redeploy carrying
+`98248e18` is unconfirmed from the sandbox. **The number that proves PR2 is a NEW sidebar parcel row
+carrying `building_sf` after the redeploy — not today's 767.** Guard:
+`test/pr2-sidebar-parcel-stats.test.mjs` (12 tests, 15/15 mutations RED; three guard defects found
+and recorded in the response: a body slice closing on a default parameter, a neighbour's copy of
+`blankOnly`, a grep matching a later `select=`). Suite 5,031 / 0.
+
+Docs: `public-records-source-lane.md` §2 (PR2/PR11/PR12 blocks, by CC) · `CLAUDE.md` public-records
+pointer · `PLANNED-BACKLOG.md` PR2 ✅ / PR11 🟡 / PR12 🔴 · handoff + OPERATOR-ACTIONS (this turn).
+Response filed to `done/`.
 ## 2026-09-02 — OCR1c: the bake-off harness has a FLOOR now. ⚠️ NO real-document verdict changed — the sample on file is still 10 arm-A documents, tesseract only, and the 77% is still uninterpretable until Scott re-runs with `--control self`.
 
 Harness-only; nothing wired; no real document run (the sandbox still cannot reach Supabase or
