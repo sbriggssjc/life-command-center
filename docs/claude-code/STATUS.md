@@ -16,6 +16,73 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — PR8 SHIPPED: the registry is the allowlist. Two of the brief's own numbers were wrong.
+
+`lcc_flush_provenance_events()`'s four-name `v_first_class` literal is **gone**. A
+`field_source_priority` row for THIS (table, field, source) is now the whole rule; anything
+unregistered still merges as `domain_trigger`, which is the honest fallback for an unranked writer
+and what keeps `v_field_provenance_unranked` meaningful. `agency_classifier` registered at the **4
+rungs it writes, @90** — the rung its rows already merged at, so the change is **name-only**.
+`v_field_provenance_effective_source` exposes the recovered name; **`field_provenance` is not
+rewritten**. Migration `20261007120000_lcc_pr8_provenance_relabel_registration.sql`, applied live to
+LCC Opps. Full suite **5,012 / 0 fail**; guards **13/13 mutations RED**.
+
+**Before/after, one session, two self-rolling-back transactions over the same live state** —
+1,521-event stratified replay, 150 per combo, covering all **15** live (source, table, field)
+combos. **Predicted: 5 combos change SOURCE, 0 decisions change. Actual: exactly that**, every
+decision count byte-identical including `dia.properties|tenant|skip=1` and
+`gov.property_agencies|government_type|superseded=106`. Decisions are identical because
+`lcc_merge_field` tests `same_priority_same_value_refresh` **before**
+`same_source_refresh_newest_wins`.
+
+🚨 **The consequence the brief did not name, and it is the one that mattered: removing a relabel
+ARMS every registered source.** `county_records` holds 93 rungs at a best rung of **5**, above
+`salesforce`@20 and every sidebar, and PR1 measured its producer to be gpt-4o recall. Under the old
+code it merged as `domain_trigger` — **no rung for those fields, so at most a blank-fill**. Under
+"the registry is the allowlist" it merges at **@5 and overrides real evidence**. The four-item
+literal was the only structural thing stopping it, and nothing else was. The refusal is now
+**explicit** (`v_never_first_class`), positive-controlled live in a rolled-back transaction: a
+synthetic `county_records` event still stores `domain_trigger`, while `qa22_…` and
+`agency_classifier` keep their own names and an unregistered writer falls back. **0 residue.**
+That is a preservation of PR1's decision, not an addition to any allowlist. **When you delete a
+suppression mechanism, enumerate what it was suppressing.**
+
+⚠️ **"The 39 is 38" is wrong — it is still 39, and the swap is the finding.** `qa22_…` leaves the
+never-written set and **`domain_trigger` enters it**: all 17,371 of its rows carry a `:evt` run id,
+so **nothing has ever actually been `domain_trigger`** — a registered source with 6 rungs that no
+producer is. PR5 re-keyed on the effective source, post-registration: **68 registered · 39 never
+written · 21 write-but-unregistered** (back to the benign `cleanup_run_*` set, because
+`agency_classifier` is now registered). Keyed on the RAW `source` it reads **40** until the next
+flush writes an `agency_classifier` row under its own name — **that new row, not today's count, is
+what proves the producer is fixed** (Class 8).
+
+⚠️ **The brief's own recovery expression was a plausible-number generator.**
+`coalesce(nullif(split_part(source_run_id,':evt',1),''), source)` is unguarded: `split_part` returns
+the **whole string** when the delimiter is absent, and it is absent on **943,916 of 1,263,825 rows**.
+Measured, it **invents 9,950 source names that do not exist** and answers the write-but-unregistered
+arm with **9,951 instead of 21**. The shape test `~ '^.+:evt[0-9]+$'` is load-bearing. Same family
+as P157 `reloptions` / P182 deparse. ⚠️ **And its guard cannot be a file-wide presence check** — the
+predicate legitimately appears twice in the view, so a grep *and a ±300-char proximity window* both
+stayed green while one site lost its guard. Found by the mutation pass, not by reading it.
+
+**Producer read, not assumed:** gov `gov_classify_agency()` is a pure `STABLE` plpgsql rule engine
+over the curated `government_agencies` lookup and `agency_enrichment_rules` patterns — **no HTTP, no
+`pg_net`, no model** — and fill-blanks. A defensible source, unlike this lane's producer.
+
+**Residual, sized:** during the transition a differing re-classification would record `conflict`
+instead of `write` (two sources at equal priority 90). Measured over the producer's whole history —
+17,277 events, 309 keys re-written, **0 keys have ever changed value**. Never once exercised;
+self-clears. That is the reason to register at 90 rather than a new rung.
+
+**Filed, not decided (PR10):** `agency_classifier` is **90** in LCC `field_source_priority` and
+`authority_rank` **30** in gov's own `field_value_provenance`. Two ladders, one source, two numbers;
+a re-rank changes which writes win and needs its own before/after. **Not done deliberately:** no
+rung for `gov.properties.agency_canonical` (0 rows written — PR7's class); `domain_trigger` rungs
+kept; `lcc_merge_field` untouched; nothing added for `county_records`.
+
+**Verify next on:** a NEW `field_provenance` row with `source='agency_classifier'` after the next
+flush (the producer's own fix, not the backfill) — and `v_field_provenance_unranked` staying at 22.
+
 ## 2026-09-02 — B6e-ci-last5 LANDED: the Dialysis pytest line is UNMASKED and green on `main` — and it is still NOT a merge gate (Dialysis PR #7393, `83d53f0`)
 
 **Read from the `main` job log (run 33642110673, job 100287516338), never the badge:**
@@ -94,8 +161,11 @@ writing 2026-07-30 → today) **+ `qa22_davita_brand_canonicalize` 94** (one-sho
 `agency_classifier` is **unregistered** — PR5's reverse arm reported 21 write-but-unregistered
 sources, "all benign `cleanup_run_*`", and could not see this 22nd because it wears the catch-all's
 name. `qa22_…` is registered and counted among the "39 never written" while 94 of its rows exist
-under the wrong label — **39 is 38**. PR8 is now a build prompt, not an audit
-(`PR8-provenance-relabel-decompose.md`). Re-measured the top-three sizes at session start too:
+under the wrong label — ~~**39 is 38**~~ ⚠️ **CORRECTED 2026-09-02 when PR8 shipped: it is still 39.**
+`qa22_…` leaves the never-written set and **`domain_trigger` enters it** — all 17,371 of its rows are
+relabels, so nothing has ever actually *been* `domain_trigger`. Post-registration, keyed on the
+effective source: **68 registered · 39 never written · 21 write-but-unregistered.** PR8 is now
+**shipped**, not a build prompt (`done/PR8-provenance-relabel-decompose.md`). Re-measured the top-three sizes at session start too:
 BR1 131/73/28/7, PR2 1,604/41/908-vs-9,107, PR5 67/39/21 — all reproduce; `recorded_deed` positive
 control 2,681 → **2,731**, still writing.
 
