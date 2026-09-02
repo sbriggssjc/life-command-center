@@ -901,7 +901,9 @@ Every cross-table field write to curated tables is observed:
   path was added without a matching `field_source_priority` entry. **Whenever you add a new writer/source to a
   curated field, register a `field_source_priority` row** or this view flags drift. ⚠️ It is a **30-day rolling
   window** and it keys on the **stored** `source`, so **it was structurally blind to a relabelled writer** — see
-  the next bullet. Live 2026-09-02: **22 rows**, not the 35 quoted below (a dated figure).
+  the next bullet. ⚠️ **It is a 30-day rolling window and it MOVES — re-measure, never quote.** Live
+  2026-09-02 it read **30**, then **29** after PR5 registered one of them; the same day's earlier
+  measurement was 22 (a dated figure), and the 35 quoted further below is older still.
 
 ### ⚠️ THE FLUSH USED TO RELABEL ANY UNBLESSED SOURCE, AND THE REGISTRY IS THE ALLOWLIST NOW (PR8, 2026-09-02)
 
@@ -941,6 +943,66 @@ merges as `domain_trigger`. Full writeup + measurements: `docs/architecture/publ
   unregistered**. ⚠️ Keyed on the RAW `source` it reads **40** until the next flush writes an
   `agency_classifier` row under its own name — **that new row, not today's count, is what proves the producer
   is fixed** (Class 8).
+### ⚠️ A RUNG WITH NO WRITES IS SEVEN DIFFERENT FACTS, AND "UNREGISTERED" IS NOT A LOW RUNG (PR5, 2026-09-02)
+
+**39 of 69 registered ladder sources have never written a `field_provenance` row — and only 14 of
+them are rungs nothing will ever exercise.** Verdict + evidence for all 39 are stamped into
+`field_source_priority.notes` and surfaced on **`v_field_source_priority_triage`**
+(`pr5_verdict`, `is_orphan_column`, `is_retired`). Writeup:
+`docs/audits/PR5_LADDER_SOURCE_TRIAGE_2026-09-02.md`.
+
+- 🚨 **SEVEN OF THE 39 ARE LIVE — ON A SECOND LADDER THAT DOES NOT WRITE `field_provenance`.**
+  `manual`, `rel_purchase`, `rel_owns`, `sf_seller`, `domain_true_owner` and
+  `gov_ownership_transition` are the property-owner authority ladder on `lcc.lcc_property_owner`
+  and carry **15,052 rows in `lcc_property_owner_evidence`** — `domain_true_owner` wrote the day of
+  the audit. They are scored by `lcc_reconcile_property_owner`, which emits no provenance. The
+  seventh, `property_sale_events`, is B6c-dup's gov trigger writing gov's own
+  `field_value_provenance`. **Before recording that a source has never written, enumerate the
+  LEDGERS, not the rows** — this is PR10 ("one source, two ladders") at seven times the size and
+  the same shape as P197.
+- 🚨 **AND `field_provenance` HAS NEVER RUN ON ANY LCC-INTERNAL TABLE.** `entities` (13 rungs),
+  `entity_relationships` (2), `lcc.lcc_property_owner` (6), `lcc.lcc_entity_portfolio_facts` (2),
+  `public.lcc_cre_properties` (7), `public.lcc_cre_property_documents` (3) — **33 rungs, 0 rows**,
+  with live `lcc_merge_field` call sites on four of the six (backlog **PR5c**).
+- 🚨 **"UNREGISTERED" IS NOT A LOW RUNG — IT IS A DIFFERENT BRANCH OF `lcc_merge_field`**, so you
+  cannot register OR de-register a source without changing behaviour. Unregistered: fills a blank
+  (`unregistered_source_filling_blank`), can **never** override a value
+  (`unregistered_source_with_existing_value`), and is itself overridable by anyone
+  (`replacing_unregistered_source`). A 72-combination rolled-back replay measured **four** decision
+  classes changing from ONE registration — including a real **loss** of blank-filling, because once
+  both priorities are known the function never consults the null again. **So never "tidy up" the
+  ladder by deleting a dead-looking rung; soft-retire it in `notes` instead.**
+- **⚠️ A DETECTOR'S GRAIN DECIDES WHAT IT CAN SEE.** The write-but-unregistered arm keyed on SOURCE
+  reads 21 (all benign `cleanup_run_*` tags) and **cannot see `costar_sidebar` →
+  `gov.properties.government_type`**, because that source is registered on 73 other rungs. At
+  (table, field, source) grain — what `v_field_provenance_unranked` keys on — that gap is 1 of
+  **30**. Both numbers are correct and neither is the other.
+- **⚠️ A LOGICAL PREFIX IS NOT A SCHEMA.** `to_regclass('lcc.lcc_property_owner')` is NULL because
+  `lcc.` is a logical database prefix exactly like `dia.`/`gov.`. The `target_table` values with no
+  physical table are `comp_provenance`, `comparable_sales`, `deal_provenance`, `listing_provenance`
+  and bare `properties` — **526,192 provenance rows** between them, Salesforce-side logical
+  namespaces. Reading the prefix as a schema flags six healthy tables and misses five real ones.
+- **⚠️ A RUNG WITH NO PRODUCER IS NOT AUTOMATICALLY A DEFECT.** `gliner_extract`'s 9 rungs were kept
+  ON PURPOSE after W5.1b measured that lane ~80% entity-wrong and demoted it to log-only — and the
+  reason lived only in a code comment where no ladder audit would ever find it. **When a rung is
+  deliberately unexercised, put the reason in `notes`.**
+- **⚠️ PR7 IS 19 ORPHAN (table, column) PAIRS / 49 RUNGS, NOT 1 — AND SPLITTING BY *WHEN THE WRITES
+  STOPPED* IS WHAT MAKES IT READABLE.** Only `gov.properties.recorded_owner_name` is LIVE (28 writes
+  in 30 days). `gov.sales_transactions.buyer_name` (7,916 rows) and `.seller_name` (6,039) look like
+  catastrophic live drift and stop dead at **2026-07-29**, because the gov branch of the sidebar was
+  corrected to write `buyer`/`seller` — which run to 2026-09-02. **13,955 rows of apparent drift are
+  historical residue and only the dates say so.** Standing check:
+  `scripts/check-field-source-priority-columns.mjs` — ⚠️ an **operator-run** script, NOT a merge
+  gate (neither domain schema is derivable from this repo, and no database can see both the rungs
+  and the columns); it probes via PostgREST 42703 and **aborts rather than reporting a table clean**
+  on any other error.
+- **⚠️ ANCHOR A PARSE ON A TOKEN, NEVER AN OFFSET.** The triage view's first cut read
+  `split_part(notes,'PR5:',2)` and silently returned NULL for the 26 rungs the PR7 marker stamps in
+  front — **400 rungs verdicted before the regex, 426 after**, with `county_records` reading 92 of
+  its own 93.
+- **Verify on `v_field_source_priority_triage`, never on the never-written count** — that count only
+  moves when a producer runs, so it correctly stays 39 after a triage that deleted nothing.
+
 - **`v_field_provenance_actionable`** / `v_field_provenance_current` / `v_field_provenance_conflicts` — drive
   the Decision Center provenance lanes.
 
@@ -1861,7 +1923,7 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
 - **`entities.email` / `entities.phone` had NO `field_source_priority` ladder** until migration
   `20260903120000` (manual@1 → salesforce@20 → `domain_owner_contact`@55 → costar_sidebar@60), so every
   writer to them was invisible to the provenance doctrine. Register a row when you add another.
-  (`v_field_provenance_unranked` returns **22** rows for other tables — pre-existing drift; it is a 30-day rolling window, so re-measure rather than quoting this number. Was 35 when written.)
+  (`v_field_provenance_unranked` returns **29** rows for other tables — pre-existing drift; it is a 30-day rolling window, so re-measure rather than quoting this number. It has read 35, 22 and 30 on different days.)
 - **TrafficMetrix table-as-contact-list misparse (Prompt 89).** A CoStar/sidebar capture once parsed a
   property page's TrafficMetrix traffic-count TABLE as a contact list — street names / column labels
   ("Collection Street", "Traffic Vol", "Made with TrafficMetrix") minted as PERSON entities, all stamped
