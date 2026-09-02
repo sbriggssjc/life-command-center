@@ -33,6 +33,10 @@
 | **CRE registry drain** | undrained **771 → 426**, sidecar **345**, `scan_lowest_id` **2** — reaches the oldest document. |
 | **consumer** | **`bov_ready` 5 → 37.** BOV extract is receiving real leases, DDs and OMs. |
 | **OCR tier** | ✅ **22+ events since redeploy, 100% DocAI, ZERO gpt-4o.** The 9.3×-worse escalation is closed. |
+| **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (18 at 31–50pp, 24 at >50pp, max 141) — **DOC17 probes the cheap route; DOC14 is the fallback.** |
+| **retry markers** | 17 (`thin_ocr_result` 14, `fetch_failed` 3). `retry_admitted` is **0 and that is correct** — see DOC13 below. |
+
+**Open, in priority order: DOC17** (a one-call probe that decides between no-GCS and the full GCS build) · **DOC14** (the fallback; blocked on Scott — GCS persistence + confidentiality) · ⛔ **DOC16 REFUTED** ·
 | **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (re-measured 2026-09-02; **18 at 31–50pp, 24 at >50pp**, max 141) — DOC14, blocked on an operator prerequisite. ⚠️ DOC16 was the proposed way round it and is **refuted** — see the DOC16 GATE section. |
 | **retry markers** | 17 (`thin_ocr_result` 14, `fetch_failed` 3). `retry_admitted` is **0 and that is correct** — see DOC13 below. |
 
@@ -952,6 +956,52 @@ its page range on the row and must never count as complete coverage in any count
 
 **DOC14 is not withdrawn — with DOC16 refuted it is once again the only route on the table**, and
 the confidentiality decision it needs is **live again, not deferred.**
+
+### 🔴 DOC16 REFUTED 2026-09-02 — but on a branch nobody predicted, and my "lossless" claim INVERTS
+
+**The gate ran and the sync path DOES accept a page selector** — `ProcessRequest.processOptions` →
+`ProcessOptions` with `individualPageSelector {pages}` (1-indexed), `fromStart`, `fromEnd`; the proto
+scopes that oneof to *"online processing with ProcessDocument"*. Read from the live v1 discovery
+document (rev 20260820), **not** inferred from the repo's `imagelessMode` comment.
+
+**The constraint is somewhere neither DOC16 nor its STOP clause anticipated.** Google's Limits page:
+
+> *"To extend the maximum page limit… up to 30, enable `imageless_mode`… **This extended limit is
+> only applicable when processing pages contiguously starting from page 1.**"*
+
+**The 30-page cap applies to the SELECTION — but only when the selection starts at page 1.** So
+DOC16's second call, pages 31–50, **cannot claim it by construction** — and that call was the
+load-bearing half: the entire difference between **~30 pages ≈ 54,000 chars** and **~50 pages ≈
+90,000 chars**, and 90,000 is what the "lossless on the consumer's terms" argument rested on.
+
+⚠️ **AND THE CONSEQUENCE INVERTS THAT CLAIM RATHER THAN SHRINKING IT.** A 30-page-only route drops
+pages 31–50 for **all 42** over-cap documents — **~36,000 chars, ≈40% of the consumer's 90,000-char
+window** — content `extractTenantFromLease` genuinely reads. **DOC16 §4 said this route was lossless
+on the consumer's terms. That is now false and is corrected here rather than left standing.**
+
+⚠️ **The discovery document states NO page limits at all** — it is a schema, not a quota surface.
+**That zero is a property of the instrument, not evidence** (Class 11), and the DOC16 run said so
+rather than reading it as permission.
+
+**Re-measured: the population is 42, not 40** — 18 at 31–50pp, 24 at >50pp, max 141. Chars/page
+reproduces at **1,808 avg / 1,732 median** over 85 rows.
+
+### 🟢 DOC17 — ONE API call decides between "no GCS at all" and the full GCS build
+
+**Left unsettled, and settleable only by a live call:** is a **non-page-1** selection measured
+against the **selection** or the **document total**? On a 141-page PDF, does
+`individualPageSelector {pages: [31..45]}` — 15 pages, within the **base** limit, no imageless —
+succeed? **Google's docs say nothing**, and the only error we hold (DOC8's
+`{page_limit: 30, pages: 40}`) **was taken with no selector, so it does not discriminate.**
+
+**If it succeeds**, a multi-call sync route reaches ~50 pages with **no GCS, no IAM, no new vendor
+surface and no confidentiality decision.** **If it fails**, sync tops out at 30 pages and DOC14's
+GCS decision becomes genuinely necessary — ⚠️ **now with its alternative honestly priced: 30 pages
+captures ~60% of the consumer's window.**
+
+⚠️ **The probe MUST carry a positive control** (`fromStart: 15` on the same document, which must
+succeed). **Without it, a failure cannot be told from a selector that is silently ignored** — the
+DOC8 no-op shape. Prompt: `docs/claude-code/prompts/DOC17-page-selector-probe.md`.
 
 ## 1. Scott's question, answered
 
