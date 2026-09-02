@@ -9,7 +9,7 @@ baseline, arm B 5 over the cap) + 3 synthetic fixtures. **Engines that actually 
 
 | engine | result | cause | fix |
 |---|---|---|---|
-| surya 0.22.1 | FAILED ×18 | runs its VLM in a `surya-vllm` Docker container; Docker daemon not running; a CPU vLLM container would be very slow anyway | **run on GaryBuilt** (Linux + RTX), not the workstation |
+| surya 0.22.1 | FAILED ×18 | runs its VLM in a `surya-vllm` Docker container; Docker daemon not running; a CPU vLLM container would be very slow anyway | **run on GaryBuilt** (⚠️ a WINDOWS box with an RTX — "Linux" here was wrong), not the workstation |
 | paddleocr 3.7.0 | FAILED ×18 | `paddlepaddle` (the engine) is not installed — `pip install paddleocr` pulls only the wrapper | `pip install paddlepaddle` |
 | ocrmypdf | not installed | — | optional |
 | tesseract 5.5 | ran on all 18 | — | — |
