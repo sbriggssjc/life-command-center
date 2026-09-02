@@ -33,7 +33,7 @@
 | **🔴 the live gap** | **40 documents carry `over_docai_page_cap` and get NO text at all** — DOC14, blocked on an operator prerequisite. |
 | **retry markers** | 17 (`thin_ocr_result` 14, `fetch_failed` 3). `retry_admitted` is **0 and that is correct** — see DOC13 below. |
 
-**Open, in priority order: DOC14** (blocked on Scott — GCS + a confidentiality decision) ·
+**Open, in priority order: DOC16** (page-range sync — probably removes the need for GCS entirely; rests on one API question) · **DOC14** (the fallback; blocked on Scott — GCS + a confidentiality decision) ·
 **DOC13-watch** (retry starvation, benign today) · **DOC2** (cross-repo stale docs) · **DOC3**
 (gov firm-term chain not wired) · **DOC4/5/6**.
 
@@ -824,6 +824,56 @@ drain, the retry lane **never runs**. That is Class 12's shape one level up — 
 **a lower-priority lane that can starve indefinitely.** Today it is fine (426 drains in ~2 days).
 **Verify `retry_admitted` goes non-zero as `undrained` approaches 0** — and if the folder feed keeps
 it permanently non-empty, the retry lane needs a reserved slot rather than the remainder.
+
+### 🟢 DOC16 (2026-09-02) — the consumer truncates at ~50 pages, so the GCS build is probably unnecessary
+
+**Before approving the confidentiality decision DOC14 needs, two facts were measured and they change
+the question.**
+
+**1. `bov-extract.js:147` slices lease text at 90,000 characters before prompting.** Measured on our
+corpus: **1,799 chars/page average, median 1,727 → 90,000 chars ≈ 50 pages.** **The consumer never
+reads past ~page 50 of any lease, however it was extracted.**
+
+| over-cap band | docs | pages | what a FULL extract buys |
+|---|---:|---|---|
+| **31–50pp** | **16** | 31–49 (avg 39) | all of it — genuinely used |
+| **51+pp** | **24** | 51–141 (avg 63) | ⚠️ **nothing past ~page 50 — discarded** |
+
+⚠️ **For 60% of the population, the entire GCS batch build delivers text `extractTenantFromLease`
+throws away.** Input bucket **and** output bucket, IAM, a service-agent grant, a lifecycle rule, an
+upload path for every SharePoint byte-stream, an LRO job table — for discarded characters.
+
+**2. ⚠️ The confidentiality delta is NARROWER than it first appeared.** `document-text.js:262` sends
+`content_base64` of the **whole file**, and deployed `docai-ocr` v24 passes it through as
+`rawDocument`. **Google DocAI already receives every under-cap lease in full, today.** What batch
+adds is **persistence at rest in a GCS bucket** — still a real decision, but a **different and much
+narrower one** than *"may Google see our leases."* **That reframing is load-bearing and was nearly
+missed.**
+
+**The alternative: two sync calls per document, pages 1–30 and 31–50, concatenated into one
+`raw_text`** — ~50 pages ≈ 90,000 chars, **exactly what the consumer can use, with no GCS and no new
+data-at-rest exposure.** Prompt: `docs/claude-code/prompts/DOC16-page-range-sync-ocr.md`.
+
+⚠️ **IT RESTS ON ONE UNVERIFIED ASSUMPTION, AND THE PROMPT SAYS SO FIRST:** does DocAI's sync
+`process` accept a page selector, and **does the 30-page imageless cap apply to the SELECTION or to
+the document's total page count?** **If the latter, the route is impossible — stop and fall back to
+DOC14.** The repo sends **no `processOptions` at all** today, and ⚠️ the existing comment about
+`imagelessMode` being top-level is about a **different field** and is **not evidence** about where a
+page selector belongs (DOC8's exact lesson).
+
+⚠️ **This is NOT the "chunking" DOC14 §6 forbade — the distinction is the point.** That warning was
+against splitting the **analysis** and reassembling answers. This splits the **OCR call** and
+produces **one contiguous text**; the consumer sees a single `raw_text` truncated at the same 90,000
+chars it truncates at anyway.
+
+⚠️ **The honest residual: `raw_text` is not read only by `extractTenantFromLease`.** The `abstract`
+block asks for **renewal options, early termination, default cure, holdover, key lease risks** —
+clauses that routinely sit in the **back half** of a long lease. For a 141-page document, pages
+51–141 are simply not captured. **That is a real ceiling, must be recorded on the row, and a
+`partial_extract` must never count as complete coverage.**
+
+**DOC14 is not withdrawn — it is the fallback**, and the confidentiality decision is **deferred, not
+answered.**
 
 ## 1. Scott's question, answered
 

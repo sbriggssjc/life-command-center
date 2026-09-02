@@ -16,6 +16,42 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — DOC16 staged: the consumer truncates at ~50 pages, so the GCS build is probably unnecessary
+
+**I was about to take Scott a confidentiality decision. Two measurements first, and they changed the
+question.**
+
+**1. `bov-extract.js:147` slices lease text at 90,000 characters before prompting.** Our corpus runs
+**1,799 chars/page (median 1,727) → 90,000 ≈ 50 PAGES.** **The consumer never reads past ~page 50 of
+any lease, however it was extracted.** Against the 40 over-cap documents: **16 are 31–50pp (fully
+used) and 24 are 51–141pp** — ⚠️ **so for 60% of the population the entire GCS batch build delivers
+text `extractTenantFromLease` throws away.**
+
+**2. ⚠️ The confidentiality delta is much narrower than it appeared.** `document-text.js:262` already
+sends `content_base64` of the **whole file**, and deployed `docai-ocr` v24 passes it through as
+`rawDocument` — **Google already receives every under-cap lease in full, today.** Batch adds
+**persistence at rest in a bucket**, not disclosure. **Still a real decision, but a different one —
+and I would have put the wrong question to Scott.**
+
+**DOC16 staged: two sync calls, pages 1–30 and 31–50, concatenated into one contiguous `raw_text`** —
+~50 pages ≈ 90,000 chars, **exactly what the consumer can use, with no GCS, no IAM, no new vendor
+surface.** ⚠️ **NOT the analysis-chunking DOC14 §6 forbade** — that warned against splitting the
+*analysis*; this splits the *OCR call* and yields one contiguous text.
+
+⚠️ **It rests on ONE unverified question and the prompt leads with it:** does the 30-page imageless
+cap apply to the page **SELECTION** or the document **TOTAL**? **If the total, the route is
+impossible — stop and fall back to DOC14.** The repo sends **no `processOptions` at all** today, and
+⚠️ the existing `imagelessMode` comment is about a **different field** and is **not evidence** about
+where a page selector belongs — **DOC8's exact lesson, written into the prompt so it is not repeated.**
+
+⚠️ **Honest residual, recorded not buried:** `raw_text` is not read only by `extractTenantFromLease`.
+The `abstract` block wants **renewal options, early termination, default cure, holdover, key lease
+risks** — clauses that routinely sit in the **back half** of a long lease. Pages 51+ are not
+captured, and **a `partial_extract` row must never count as complete coverage.**
+
+**DOC14 is not withdrawn — it is the fallback, and the confidentiality decision is DEFERRED, not
+answered.**
+
 ## 2026-09-02 — DOC14 blocked on a CONFIDENTIALITY decision; DOC13 answered; the sizing moved ~2×
 
 **DOC14 stopped at the operator prerequisite and built nothing — the intended outcome.** The async
