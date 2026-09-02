@@ -127,6 +127,85 @@ eight-entry dated worklog a new reader would have to read backwards. Live: deeds
 **771 → 426** · **`bov_ready` 5 → 37** · **22+ OCR events, 100% DocAI, zero gpt-4o** · 🔴 **40
 documents getting no text at all.**
 
+## 2026-09-01 — DE1 + BR1 + BR2 drafted as one prompt, and Unit 3 carries a hard prerequisite
+
+`DE1-BR1-BR2-confidence-gate-and-broker-identity.md`. Three units, ordered smallest-and-independent
+first, each shippable alone.
+
+**Unit 1 (DE1)** gates the two CM econ exhibits on **`payer_mix_source = 'hcris_form_265_11'`** — the
+FACT — rather than on `confidence_tier`, its proxy. ⚠️ **The expected result is NO CHANGE today**, and
+that is the point: it proves the gate is additive. **A view whose output moves today would mean it
+was already admitting modeled rows, which is a bigger finding.** The `HAVING count(*) >= 1000` stays,
+because it guards a different thing.
+
+**Unit 2 (BR1)** types the person/firm split. ⚠️ **Recorded facts before regexes** — `company`,
+`broker_company_id` and `contact_id` (1,916 populated) all carry evidence, and the
+two-capitalised-tokens name heuristic has already cost this codebase real companies. **Undecidable
+rows stay undecided.**
+
+🚨 **Unit 3 (BR2) has a hard prerequisite I nearly missed while sequencing this.**
+`B6e-ci-last5-decisions-resolved.md` is **still queued, not run** — and it carries the `update_field`
+producer fix. **Backfilling the broker FK while that producer is still broken is a one-shot repair of
+a live producer, the Class 8 failure this repo documents over and over.** So the prompt requires
+**either landing the producer fix in the same change, or stopping at the plan and saying so.** It may
+not ship the backfill alone.
+
+**Deliberately out of scope: BR4 (the 143 duplicate-name groups).** Deduping before the firm link is
+populated would merge two real people at the same firm — resolving the firm is what makes a duplicate
+visible or explains it away.
+
+## 2026-09-01 — Broker + Medicare storage audited and CANONICALISED, so neither gets re-flagged as a bug
+
+Scott: *"clean the broker and firm name storage so it's cleanly shown everywhere… be sure to update
+this finding in all documentation so we don't flag it as an error in future chat either way…
+document the same for medicare… anything else that would get us closer to accurate."* Two new
+canonical pages, both leading with **what is NOT a defect**:
+`broker-and-firm-identity.md` and `dialysis-economics-and-medicare-data.md`.
+
+### Broker — yes, clean it, but it is a MODELLING job, not string cleaning
+
+🚨 **`broker_name` is not a name field. It is a composite** — `;` on **344 of 2,425** broker rows and
+**778 sales rows**, carrying at least three different facts: `Acre Advisors; Reid` (firm ; agent),
+`Adrian Mendoza; Sean Sharko; Austin Weisenbeck` (a three-agent team), and `Avison Young; Barnes`
+alongside `AY; Barnes` — **the same firm, spelled out and abbreviated.** ⚠️ **49 rows carry `&` and
+no `;` and are mostly REAL firm names** (`Lee & Associates`) — the P158a hazard again: **an `&` is
+part of a name, not a separator.**
+
+⚠️ **So "clean the strings" would destroy information.** A co-listing is a real fact; collapsing it
+asserts something false. **The model already exists** — `broker_companies` (131 rows), `brokers`
+(2,425), `broker_company_id` — and it is **7.6% populated**, while **299 `broker_name` values look
+like a firm** and **177 have `broker_name` == `company`**. Parse into it; keep the raw string as
+evidence. → `BR1`–`BR5`.
+
+✅ **Recorded as explicitly NOT a defect: `listing_broker_id` set with the name NULL is 0 of 4,783.**
+Both-columns is the existing design, not a new requirement.
+
+### Medicare — the accuracy answer is a column nobody filters on
+
+**`clinic_econ_reconciled.confidence_tier` separates measured from modeled.** FY2021–2024 is
+**98% `hcris_form_265_11` / high** (26,021 rows, 6,590 clinics). 🚨 **FY2026 holds ZERO
+`hcris_form_265_11` rows — 659 `partial_plus_default` + 65 `national_default`, all `low`** — because
+2026 cost reports have not been filed. **Its "73.66% Medicare / $297.87 blended" is the fallback
+signature, not a market shift**, and that signature is stable across every year it appears
+(~$295–301 / 65–75%), which makes it very easy to read as a trend.
+
+⚠️ **A year chart including FY2026 shows the blended rate going ~375 → ~298 and reads as a 20% rate
+collapse.** **Latent, not live** — `cm_dialysis_clinic_econ_trend_y` tops out at 2024 — **and its
+only protection is `HAVING count(*) >= 1000`, a magnitude proxy, with FY2026 sitting at 724.** → `DE1`.
+
+⚠️ **I nearly published the opposite finding.** My first audit used
+`definition ILIKE '%confidence_tier%'` and reported three views as "careful"; that matches the
+**SELECT projection**, not a filter. Re-tested for the predicate: **exactly 1 of 8 econ views has
+`confidence_tier` in a WHERE clause.** The P182 deparse-grep trap, committed while auditing for
+precisely that class — and caught only because the trend view's actual output stopped at 2024 and
+did not match my alarm.
+
+Also recorded as **not defects**, so they stop being re-raised: the flat blended rate (−0.6% over
+four years — what drifts is payer mix), `RATES_2025` == `CMS_2023_RATES`, `facility_patient_counts`
+being an ~annual CMS reporting series rather than a nightly feed, and future-dated `snapshot_date`
+values being CMS fiscal-period convention. **What would genuinely improve accuracy is `DE1`–`DE4`**,
+of which DE1 is the only one with a path to a client deliverable.
+
 ## 2026-09-01 — C13c SHIPPED: `one_off_owner` carries its confidence, and the fourth column answered
 
 **Live on LCC Opps.** `one_off_owner` **142 = 13 `_sf_corroborated` + 129 `_unverified`** — the

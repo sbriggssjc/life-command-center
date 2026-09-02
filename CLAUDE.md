@@ -4319,6 +4319,33 @@ Related invariants from the same round:
     *that comparison, not the error text, is what proves harness-vs-product.* It also corrected an
     estimate made by counting error strings (36 actual vs ~12 estimated). **Error messages describe
     the symptom; isolation identifies the class.**
+- **📍 DIALYSIS ECONOMICS & MEDICARE — read before flagging any revenue/rate/payer-mix figure:**
+  `docs/architecture/dialysis-economics-and-medicare-data.md`. **`clinic_econ_reconciled.confidence_tier`
+  separates MEASURED from MODELED and almost nothing filters on it — only 1 of 8 econ views has it in
+  a WHERE clause.** ✅ **Recorded as NOT defects so they are not re-opened:** the blended rate is
+  genuinely flat (−0.6% across FY2021–24; what drifts is payer mix), `RATES_2025` == `CMS_2023_RATES`
+  is defensible **and the two names are kept deliberately**, `facility_patient_counts` is an ~annual
+  CMS reporting series rather than a nightly feed, and a future-dated `snapshot_date` is CMS
+  fiscal-period convention. 🚨 **The thing to know: FY2026 holds ZERO `hcris_form_265_11` rows — 100%
+  default fallback — so its "73.66% Medicare / $297.87 blended" is the fallback signature, not a
+  market shift.** A year chart including it reads as a 20% rate collapse. **Latent, not live**
+  (`cm_dialysis_clinic_econ_trend_y` tops out at 2024), and its only guard is `HAVING count(*) >=
+  1000` — a magnitude proxy; **FY2026 is at 724.** → `DE1`.
+  - ⚠️ **`definition ILIKE '%confidence_tier%'` REPORTS THE OPPOSITE OF THE TRUTH** — it matches the
+    SELECT projection, and three views were nearly recorded as "careful" on that basis. **Test for
+    the predicate (`WHERE … confidence_tier`), and treat a comfortable result as a bug signal**
+    (P182, committed while auditing for exactly this class).
+- **📍 BROKER & FIRM IDENTITY — read before flagging a broker name or a null `listing_broker_id`:**
+  `docs/architecture/broker-and-firm-identity.md`. **`broker_name` is NOT a name field — it is a
+  composite** holding one person, one firm, firm+agent, or a whole listing team (`;` on 344 of 2,425
+  broker rows and **778 sales rows**). ✅ **NOT a defect: the name is kept BESIDE the id by design** —
+  `listing_broker_id` set with the name NULL is **0 of 4,783**, so both-columns is the existing
+  pattern, not a new requirement. The real gaps: the firm FK is **7.6% populated**, **1,930 sales
+  carry a name with no FK** (528 distinct), and **299 `broker_name` values are firms**. ⚠️ **"Clean
+  the strings" is the wrong instinct and destroys information** — a co-listing is a real fact; parse
+  into the model that already exists and keep the raw string as evidence. **80% (422 of 528) resolves
+  on an exact case-insensitive match; the residue is abbreviations, surnames and co-listings and must
+  NOT be fuzzy-matched.** → `BR1`–`BR5`.
 - **📍 PRODUCER HEALTH & CI ENFORCEMENT — one door into the whole B6 arc (fourteen audits):**
   `docs/architecture/producer-health-and-ci-enforcement.md`. **START HERE for "is our ingestion
   running / does anything watch it / does CI enforce anything".** Live producer state, the CI

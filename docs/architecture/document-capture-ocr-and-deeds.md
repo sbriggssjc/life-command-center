@@ -13,7 +13,10 @@
 > escalation and the covered-fragment defect FIXED 2026-09-01 (DOC8 / DOC9 / DOC10 — §0d).
 > DOC14 (the 31–59 page leases that get NO text) is 🛑 **BLOCKED on an operator prerequisite** —
 > the async contract is verified, the GCS buckets and their IAM do not exist, and nothing was
-> built. Read the DOC14 BLOCKED section before proposing anything about long-document OCR.**
+> built. ⛔ **DOC16, which proposed to make DOC14 unnecessary, is REFUTED at its own gate
+> (2026-09-02) — the extended 30-page cap is "only applicable when processing pages contiguously
+> starting from page 1", so its pages-31–50 call cannot exist. DOC14 is the route again.**
+> Read the DOC16 GATE and DOC14 BLOCKED sections before proposing anything about long-document OCR.**
 >
 > ⚠️ **Every number on this page is dated. Before quoting one, run §7b — the standing status check,
 > with its 2026-09-01 baseline.**
@@ -34,6 +37,12 @@
 | **retry markers** | 17 (`thin_ocr_result` 14, `fetch_failed` 3). `retry_admitted` is **0 and that is correct** — see DOC13 below. |
 
 **Open, in priority order: DOC17** (a one-call probe that decides between no-GCS and the full GCS build) · **DOC14** (the fallback; blocked on Scott — GCS persistence + confidentiality) · ⛔ **DOC16 REFUTED** ·
+| **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (re-measured 2026-09-02; **18 at 31–50pp, 24 at >50pp**, max 141) — DOC14, blocked on an operator prerequisite. ⚠️ DOC16 was the proposed way round it and is **refuted** — see the DOC16 GATE section. |
+| **retry markers** | 17 (`thin_ocr_result` 14, `fetch_failed` 3). `retry_admitted` is **0 and that is correct** — see DOC13 below. |
+
+**Open, in priority order: DOC14** (blocked on Scott — GCS + a confidentiality decision; it is the
+route again now that DOC16 is refuted) · ~~DOC16~~ (**closed, refuted at its gate — do not re-propose
+the two-call design without re-reading the DOC16 GATE section**) ·
 **DOC13-watch** (retry starvation, benign today) · **DOC2** (cross-repo stale docs) · **DOC3**
 (gov firm-term chain not wired) · **DOC4/5/6**.
 
@@ -825,7 +834,7 @@ drain, the retry lane **never runs**. That is Class 12's shape one level up — 
 **Verify `retry_admitted` goes non-zero as `undrained` approaches 0** — and if the folder feed keeps
 it permanently non-empty, the retry lane needs a reserved slot rather than the remainder.
 
-### 🟢 DOC16 (2026-09-02) — the consumer truncates at ~50 pages, so the GCS build is probably unnecessary
+### ⛔ DOC16 GATE — REFUTED 2026-09-02, and the refutation is NOT the branch the prompt predicted
 
 **Before approving the confidentiality decision DOC14 needs, two facts were measured and they change
 the question.**
@@ -836,8 +845,12 @@ reads past ~page 50 of any lease, however it was extracted.**
 
 | over-cap band | docs | pages | what a FULL extract buys |
 |---|---:|---|---|
-| **31–50pp** | **16** | 31–49 (avg 39) | all of it — genuinely used |
-| **51+pp** | **24** | 51–141 (avg 63) | ⚠️ **nothing past ~page 50 — discarded** |
+| **31–50pp** | **18** | 31–50 | all of it — genuinely used |
+| **51+pp** | **24** | 51–141 | ⚠️ **nothing past ~page 50 — discarded** |
+
+⚠️ **Re-measured 2026-09-02: the population is 42, not 40, and the first band is 18, not 16.** The
+chars/page figure reproduces (**85 extracted rows: mean 1,808, median 1,732**), so the ~50-page
+consumer window is confirmed. **Quote 42/18/24.**
 
 ⚠️ **For 60% of the population, the entire GCS batch build delivers text `extractTenantFromLease`
 throws away.** Input bucket **and** output bucket, IAM, a service-agent grant, a lifecycle rule, an
@@ -850,30 +863,99 @@ adds is **persistence at rest in a GCS bucket** — still a real decision, but a
 narrower one** than *"may Google see our leases."* **That reframing is load-bearing and was nearly
 missed.**
 
-**The alternative: two sync calls per document, pages 1–30 and 31–50, concatenated into one
-`raw_text`** — ~50 pages ≈ 90,000 chars, **exactly what the consumer can use, with no GCS and no new
-data-at-rest exposure.** Prompt: `docs/claude-code/prompts/DOC16-page-range-sync-ocr.md`.
+**The proposed alternative was two sync calls per document, pages 1–30 and 31–50, concatenated into
+one `raw_text`** — ~50 pages ≈ 90,000 chars, with no GCS and no new data-at-rest exposure. Prompt:
+`docs/claude-code/prompts/DOC16-page-range-sync-ocr.md`. **It does not survive its own gate.**
 
-⚠️ **IT RESTS ON ONE UNVERIFIED ASSUMPTION, AND THE PROMPT SAYS SO FIRST:** does DocAI's sync
-`process` accept a page selector, and **does the 30-page imageless cap apply to the SELECTION or to
-the document's total page count?** **If the latter, the route is impossible — stop and fall back to
-DOC14.** The repo sends **no `processOptions` at all** today, and ⚠️ the existing comment about
-`imagelessMode` being top-level is about a **different field** and is **not evidence** about where a
-page selector belongs (DOC8's exact lesson).
+#### The page-selector contract, as READ (not inferred)
+
+**Live v1 discovery document, `https://documentai.googleapis.com/$discovery/rest?version=v1`,
+revision `20260820`, read 2026-09-02:**
+
+- `GoogleCloudDocumentaiV1ProcessRequest.processOptions` → `GoogleCloudDocumentaiV1ProcessOptions`,
+  described *"Inference-time options for the process API"*. So **the synchronous `process` method
+  does accept a page selector.**
+- `ProcessOptions` carries **`individualPageSelector`** (`{ pages: int32[] }`, *"Indices of the pages
+  (starting from 1)"*), **`fromStart`** (int32, *"Only process certain pages from the start. Process
+  all if the document has fewer pages."*) and **`fromEnd`** (int32).
+- The proto (`googleapis/google/cloud/documentai/v1/document_processor_service.proto`) puts those
+  three in a `oneof page_range` and states the block **"only applies to online processing with
+  ProcessDocument"** — i.e. the selector is *designed for* the sync path, not batch.
+- ✅ **`imagelessMode` is confirmed a TOP-LEVEL `ProcessRequest` boolean and the page selector is
+  NOT beside it** — they are different fields at different levels. This was read from the schema;
+  the existing DOC8 comment was **not** used as evidence, per the prompt's instruction.
+
+#### ⚠️ The decisive half: the cap applies to the SELECTION — but ONLY from page 1
+
+**The discovery document states no page limits at all** (it is a schema, not a quota surface —
+grepping it for page-limit language returns nothing, and that zero is a property of the instrument).
+The limit lives in Google's **Limits** page, which states:
+
+> *"To extend the maximum page limit for online and synchronous requests up to 30, enable
+> `imageless_mode` in `ProcessRequest`. **This extended limit is only applicable when processing
+> pages contiguously starting from page 1.**"*
+
+⚠️ **So DOC16 §2's question was a false dichotomy, and that is why the answer refutes the route
+without triggering the route's own stop clause.** The cap is **not** evaluated against the document
+total — which is the branch §2 said would kill it — **and it is not evaluated against an arbitrary
+selection either.** It is evaluated against a selection **that begins at page 1**.
+
+**The consequence is exact and fatal to the design:**
+
+| call | selection | contiguous from p1? | extended 30pp cap |
+|---|---|---|---|
+| **1** | pages 1–30 (`fromStart: 30`) | yes | ✅ applicable |
+| **2** | **pages 31–50** | **no** | ❌ **explicitly not applicable** |
+
+**Call 2 is the whole argument.** Call 1 alone yields ~30 pages ≈ **54,000 chars against the
+consumer's 90,000-char window** — 60% of it — and for the **18 documents at 31–50 pages it would
+discard pages 31–50, which §4 of the prompt itself names as where renewal, early termination,
+default cure and holdover clauses sit.** The prompt's central claim, *"on the consumer's terms this
+is lossless"*, holds only if call 2 exists. It does not.
+
+#### What is left unmeasured, and why it was not guessed at
+
+**One question remains genuinely open: for a selection that does NOT start at page 1, is the base
+15-page online limit measured against the selection or against the document total?** Google states
+nothing about it; the only limit sentence tied to a selection is the from-page-1 one. If it were
+measured against the selection, a `1–30` + `31–45` pair would reach ~45 pages ≈ 81,000 chars and
+DOC16 would be revivable in modified form.
+
+⚠️ **That was NOT assumed in either direction.** It is settleable only by a live probe, and a live
+probe is not available from the sandbox: there are **no GCP/DocAI credentials in the environment**,
+and the deployed `docai-ocr` v24 **sends no `processOptions` at all**, so it cannot answer the
+question without a production redeploy. `docs.cloud.google.com` is **blocked by the egress proxy**,
+so the Limits text above was triangulated across three independent searches rather than fetched.
+**Recorded as unmeasured rather than resolved by inference — that is the DOC8 lesson applied to the
+successor prompt.**
+
+⚠️ **And one number the DOC8 marker already carries is consistent with either answer, so it settles
+nothing:** the live error `"Document pages exceed the limit: 30 got 40"` with
+`metadata = { page_limit: "30", pages: "40" }` was produced by a request carrying **no selector**,
+where selection and total are the same thing.
+
+#### Verdict
+
+**DOC16 is CLOSED. DOC14 is the route again, and the confidentiality decision it needs is live
+again — it was deferred on the strength of a premise that did not hold.** ⚠️ **Do not re-propose
+the two-call design.** A single `fromStart: 30` call remains technically available and was
+deliberately **not** built: it converts all 42 rows but delivers ~54,000 of 90,000 usable chars and
+is lossy for the entire population rather than lossless for any of it — a materially different
+deliverable from the one DOC16 argued for, and a call for Scott rather than a default.
 
 ⚠️ **This is NOT the "chunking" DOC14 §6 forbade — the distinction is the point.** That warning was
 against splitting the **analysis** and reassembling answers. This splits the **OCR call** and
 produces **one contiguous text**; the consumer sees a single `raw_text` truncated at the same 90,000
 chars it truncates at anyway.
 
-⚠️ **The honest residual: `raw_text` is not read only by `extractTenantFromLease`.** The `abstract`
+⚠️ **The honest residual that survives the refutation, because it applies to ANY page-capped route
+including a future one:** `raw_text` is not read only by `extractTenantFromLease`. The `abstract`
 block asks for **renewal options, early termination, default cure, holdover, key lease risks** —
-clauses that routinely sit in the **back half** of a long lease. For a 141-page document, pages
-51–141 are simply not captured. **That is a real ceiling, must be recorded on the row, and a
-`partial_extract` must never count as complete coverage.**
+clauses that routinely sit in the **back half** of a long lease. **Any partial extract must record
+its page range on the row and must never count as complete coverage in any count.**
 
-**DOC14 is not withdrawn — it is the fallback**, and the confidentiality decision is **deferred, not
-answered.**
+**DOC14 is not withdrawn — with DOC16 refuted it is once again the only route on the table**, and
+the confidentiality decision it needs is **live again, not deferred.**
 
 ### 🔴 DOC16 REFUTED 2026-09-02 — but on a branch nobody predicted, and my "lossless" claim INVERTS
 
