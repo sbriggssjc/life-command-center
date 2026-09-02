@@ -64,7 +64,7 @@ model. It is a legitimate **free pre-filter / fallback and it removes the page c
 a DocAI replacement on field quality. ⚠️ **The engines the decision was meant to rest on — surya
 and PaddleOCR — have still produced ZERO results, and both are now known to be un-runnable on the
 Windows workstation** (Docker-hosted VLM; a paddlepaddle CPU runtime bug). **The deciding run is on
-the GaryBuilt box (Linux + RTX), and it has not happened.**
+the GaryBuilt box (⚠️ WINDOWS + RTX, not Linux), and it has not happened.**
 
 ## 5. A finding that is not about OCR at all
 
@@ -77,7 +77,7 @@ improves BOV extract regardless of which OCR wins → backlog **EXT1**.
 ## 6. Next
 
 1. **GaryBuilt run** (Scott): surya + paddle + tesseract, `--control self`, same 15 documents — the
-   run that decides OCR1b. Surya needs Docker on the box; paddle needs the Linux wheel.
+   run that decides OCR1b. Surya needs Docker on the box; paddle needs the GPU wheel (the Windows CPU path is what failed).
 2. **EXT1** (CC, independent of OCR): rent basis + quoted dates in the extractor, with the
    self-agreement floor as the before/after metric.
 3. OCR1b stays unwritten until (1) reports.
