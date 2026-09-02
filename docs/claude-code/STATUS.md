@@ -55,6 +55,65 @@ build or lose 40% of the window"* but **"a GCS build or nine cheap sync calls."*
 🧹 **Consolidation: the DOC backlog went 19 rows → 11.** ⚠️ **DOC8 and DOC9 each had TWO rows** (as
 DOC13 did last round). Eight resolved items are now one summary line pointing at the canonical page;
 **every open item keeps its full detail and nothing was lost.**
+## 2026-09-02 — DE1/BR1/BR2 shipped, and MY "latent, not live" call was wrong (Dialysis PR #7392)
+
+| unit | outcome |
+|---|---|
+| **DE1** | both CM econ exhibits gated on `payer_mix_source`; **both MOVED** |
+| **BR1** | 2,425 rows typed from recorded facts; **nothing written**, 72 mints withheld |
+| **BR2** | producer fix **+** 846-row backfill together; `name_set_id_null` 1,930 → **1,084**, `id_set_name_null` held at **0** |
+
+### 🚨 The correction, and it is mine
+
+I wrote *"latent, not live — do not describe it as a current book error"* into the prompt and into
+the canonical page. **It was wrong, and CC measured it before acting on my premise.**
+
+I reasoned about FY2026 alone — correctly excluded by `HAVING count(*) >= 1000` at 724 rows — and
+concluded the exhibits were protected. **But modeled rows exist in EVERY year**: 523
+`partial_plus_default` across FY2021–24, 210 in FY2024 alone. **The year threshold never guarded
+against them.** Verified live after the fix:
+
+- `cm_dialysis_clinic_econ_trend_y`: FY2024 clinic count **6,754 → 6,536**, avg revenue/clinic
+  **$3,476,458 → $3,584,713 (+3.1%)**.
+- 🚨 `cm_dialysis_operator_unit_economics` was **LIVE-WRONG**: it filters on `is_current_year`, which
+  spans **FY2011–2026**, so it served the FY2026 fallback husks directly. **Satellite's
+  revenue/clinic was understated by 41%** and several operator margins roughly halved.
+
+**The lesson: a year-based guard and a quality-based guard are not substitutes.** I treated a
+row-count threshold as if it protected against modeled data; it protected against thin years, and
+the two populations only partly overlap.
+
+⚠️ **And CC rejected the obvious confound rather than assuming it** — modeled ≠ merely stale.
+Measured-but-stale clinics look normal ($3.42M, 8,742 treatments/yr); modeled rows are damaged in
+**both** vintages (stale = husks at **27 treatments/yr**, recent = the $301.85 fallback signature).
+**Gating on the fact is right; gating on vintage would not have been.**
+
+### 🚨 Second correction: the firm registry is MIS-populated, not merely unpopulated
+
+My page said *"the model is right, it is unpopulated."* Measured on `broker_companies` (131 rows):
+**73 (56%) contain a `;`**, 28 are single-token abbreviations (`ay`, `cb`, `acre`, `cook`), 9 read as
+person names, and **7 are the `colliers%` family**. Live: **`cbre; smyth & colliers; patel`** minted
+as one company; `colliers`, `colliers international` and five `colliers; <agent>` rows as separate
+firms; `colin cornell` as a company. **The composite defect was written into the firm table too, so
+the real distinct-firm count is far below 131** — and any matcher pointed at this registry will
+attach agents to composite pseudo-firms. Both canonical pages corrected in place.
+
+### Also worth keeping
+
+- **`contacts.entity_type` is NULL on all 1,916 rows** — useless as a typing instrument, and CC
+  graded it *before* relying on it rather than after.
+- **CC caught its own masking twice**: `| tail -30` hid pytest's summary behind a module's `atexit`
+  output, and a background shell's cwd made `tests/` unresolvable while the shell still reported
+  success. **Same class as the `| tee` defect this whole arc is about** — its numbers now come from
+  a file rather than a pipe.
+
+### ⚠️ OPEN — the suite reads 39 failed against a documented baseline of 14
+
+None of the 39 touches broker, `listing_broker`, `update_field` or the econ views, and
+`test_listing_broker_update` (9 tests, 5/5 mutations RED) passes inside the full run. But
+**isolation cannot adjudicate it** — the same 12 files give 7 failures alone and ~34 inside the
+suite, which is the documented cross-module stub pollution. The apples-to-apples baseline run was
+still in flight. **Do not treat 14 → 39 as a regression or as noise until that lands.** → `B6e-ci-baseline39`.
 
 ## 2026-09-02 — DOC16 REFUTED on an unpredicted branch; my "lossless" claim inverts; DOC17 probes the decider
 

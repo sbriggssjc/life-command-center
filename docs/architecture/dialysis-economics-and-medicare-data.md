@@ -80,19 +80,32 @@ signature.** The fallback is stable and distinctive across every year it appears
 the SELECT projection. **Three views were nearly recorded as "careful" on that basis.** Test for the
 predicate (`WHERE … confidence_tier`), and treat a comfortable result as a bug signal (P182).
 
-### ✅ Currently SAFE, and by accident of magnitude
+### ✅ FIXED 2026-09-02 (DE1) — and my "latent, not live" call was WRONG
 
-`cm_dialysis_clinic_econ_trend_y` tops out at **2024** and does **not** show FY2025/2026 today. Its
-only protection is **`HAVING count(*) >= 1000`** — a row-count threshold, not a confidence filter.
-**FY2026 has 724 rows. At 1,000 it enters the CM exhibit, 100% low-confidence, and the trend line
-breaks.**
+Both CM econ exhibits are now gated on **`payer_mix_source = 'hcris_form_265_11'`** — the fact, not
+`confidence_tier`, its proxy. **Both views MOVED, so this was a live error, not a latent one.**
 
-> **This is latent, not live. Do not report it as a current book error.** But the guard is a
-> magnitude proxy for *"is this year complete"*, not a statement about data quality, and it will
-> stop holding on its own.
+⚠️ **The error in the original analysis, recorded because it is instructive.** I reasoned about
+FY2026 alone — which the trend view's `HAVING count(*) >= 1000` does exclude at 724 rows — and
+concluded the exhibits were safe. **But modeled rows exist in EVERY year** (523 `partial_plus_default`
+across FY2021–24, 210 in FY2024 alone). The year filter never protected against them.
 
-**Recommended fix (`DE1`): gate the CM econ exhibits on `confidence_tier`, not on row count** — or,
-better, on `payer_mix_source = 'hcris_form_265_11'`, which is the fact the tier is a proxy for.
+| exhibit | effect of the gate |
+|---|---|
+| `cm_dialysis_clinic_econ_trend_y` | FY2024 clinic count **6,754 → 6,536**; avg revenue/clinic **$3,476,458 → $3,584,713 (+3.1%)** — the modeled rows were dragging every year's average down |
+| `cm_dialysis_operator_unit_economics` | 🚨 **LIVE-WRONG** — it filters on `is_current_year`, which spans **FY2011–2026**, so it was serving the FY2026 fallback husks directly. **Satellite's revenue/clinic was understated by 41%**, and several operator margins were roughly halved |
+
+**The confound was tested and rejected, which is what makes the gate safe:** modeled ≠ merely stale.
+Measured-but-stale clinics look normal (avg $3.42M, 8,742 treatments/yr); the modeled rows are
+damaged in **both** vintages — stale ones are husks at **27 treatments/yr**, recent ones carry the
+$301.85 fallback signature. **Gating on the fact is correct; gating on vintage would not have been.**
+
+**`HAVING count(*) >= 1000` is retained** — it guards a different thing (a year too thin to average
+at all), and two guards with stated purposes beat one doing double duty.
+
+> **The transferable lesson: a year-based guard and a quality-based guard are not substitutes.** I
+> treated the row-count threshold as though it were protecting against modeled data. It was
+> protecting against thin years, and the two populations only partly overlap.
 
 ## 5. Medicare coverage — the rest of the picture
 
