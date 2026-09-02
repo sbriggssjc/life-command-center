@@ -61,7 +61,7 @@ test('all three runtime layers enforce the shared record boundary', () => {
     entry.matches.some((match) => match.includes('costar.com'))
   );
   assert.equal(costarScript.js[0], 'shared/property-identity.js');
-  assert.equal(manifest.version, '1.0.46');
+  assert.equal(manifest.version, '1.0.47');
 
   const content = readFileSync(join(ROOT, 'extension/content/costar.js'), 'utf8');
   const background = readFileSync(join(ROOT, 'extension/background.js'), 'utf8');
@@ -72,4 +72,9 @@ test('all three runtime layers enforce the shared record boundary', () => {
   assert.match(background, /senderTabKey !== incomingKey/);
   assert.match(sidepanel, /Capture blocked — CoStar record changed/);
   assert.match(sidepanel, /validateCostarContext\(liveCtx\)/);
+  assert.match(
+    sidepanel,
+    /costar_property_id: domain === 'costar'[\s\S]*LccPropertyIdentity\.costarPropertyId\(liveCtx\.page_url\)/,
+    'ASC attach payload must carry the validated CoStar source-record ID',
+  );
 });
