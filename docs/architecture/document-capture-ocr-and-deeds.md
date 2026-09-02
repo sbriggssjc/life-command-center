@@ -38,12 +38,12 @@ gap" / "retry markers" rows and two "Open" lists; collapsed to one.)*
 | **CRE registry drain** | undrained **771 → 401**, consumer-visible sidecars **289**, `scan_lowest_id` **2** — reaches the oldest document. |
 | **consumer** | **`bov_ready` 5 → 43**, `lcc_cre_bov_extraction` **25**. BOV extract is receiving real leases, DDs and OMs. |
 | **OCR tier** | ✅ **88 DocAI events since the 2026-09-01 15:00 redeploy; gpt-4o = 2, both in the first two ticks (15:00 and 16:00 on 09-01, `thin_ocr_result` fragments of 116 / 211 chars — the exact waste shape DOC8 closed) and ZERO since 16:01.** ⚠️ The earlier "ZERO gpt-4o since redeploy" wording was true of the window it was read in and is corrected here. |
-| **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (18 at 31–50pp, 24 at >50pp, max 141) — **unmoved.** ✅ DOC17 measured the cheap route OPEN; ✅ **DOC18 BUILT AND MERGED (PR #2032)** — ⚠️ **MERGED IS NOT RUNNING: re-measured 2026-09-02, migration `20260902120000` is NOT applied (0 of 3 partial-extract columns, no `lcc-cre-doc-text-longdoc` cron, no `v_lcc_cre_longdoc_backlog`) and the Railway redeploy is unconfirmed.** Until both land the 42 stay where they are. |
+| **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (18 at 31–50pp, 24 at >50pp, max 141) — **unmoved.** ✅ DOC17 measured the cheap route OPEN; ✅ **DOC18 LIVE 2026-09-02 14:40 UTC** — PR #2032 merged, `/version` = `f8d42593`, migration `20260902120000` applied and censused (3 columns · cron `lcc-cre-doc-text-longdoc` active · `v_lcc_cre_longdoc_backlog` = 42 / pages 31–141 / 0 unknown), ungated dry run returned correct plans (39pp → `[1..30]+[31..39]`). **The cron now takes one document per tick at :07/:37 — read `v_lcc_cre_longdoc_backlog` and the partial count, never the tick's tally.** |
 | **retry markers** | 17 (`thin_ocr_result` 14, `fetch_failed` 3). `retry_admitted` is **0 and that is correct** — see DOC13 below. |
 
-**Open, in priority order: DOC18 — apply `20260902120000`, redeploy both Railway services, then
-run the ungated dry run `GET /api/intake?_route=cre-doc-text-tick&mode=longdoc` before the cron
-spends anything** (see the DOC18 section for the verification queries) · **OCR1** (the local-OCR
+**Open, in priority order: DOC18 — LIVE, verify on the first ticks** (see the DOC18 section for the
+verification queries; still owed: boundary text at pages 30/31 and 45/46 on three real leases,
+measured cost, and the `over_ocr_cap` byte-size residual) · **OCR1** (the local-OCR
 bake-off — if it wins, DOC18's partial ceiling and DOC14 both become unnecessary) · **DOC14** (👤
 Scott — probably close now that sync reaches the whole window) · ✅ **DOC17 ANSWERED** · ⛔ **DOC16
 REFUTED (consequence superseded; do not re-propose the two-call design without re-reading the DOC16

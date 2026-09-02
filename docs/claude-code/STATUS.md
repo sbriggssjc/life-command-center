@@ -16,6 +16,29 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — DOC18 LIVE (migration applied, deploy confirmed, dry run correct); OCR1 prompt corrected before send
+
+- **Deploy confirmed** by `/version` = `f8d42593` (the `main` tip after #2034), not by a handler
+  probe. **Migration `20260902120000` applied from Cowork** and censused: 3 columns, cron
+  `lcc-cre-doc-text-longdoc` active, `v_lcc_cre_longdoc_backlog` = 42 / pages 31–141 / 0 unknown.
+  ⚠️ Order was writer-first (Railway auto-deploys on merge); safe only because the non-windowed
+  payload carries no new keys. **Ungated dry run** (`mode=longdoc&limit=3` via `pg_net` + the vault
+  key): plans correct on docs 61/80/91 — first segment 30, every later segment ≤15.
+- ⚠️ **`'vercel'` is a dead LABEL, not a dead host** — `lcc_cron_post` routes anything not `'edge'`
+  to the Railway URL. The two existing cre-doc-text crons still say `'vercel'` and are fine.
+- **OCR1 prompt corrected in place before sending — three defects:** (1) **the sample it asked
+  for cannot exist** — the longest DocAI baseline is exactly 30 pages *because* of the cap, so
+  "≥3 leases over 30pp with a baseline" is structurally empty; split into arm A (head-to-head,
+  ten named ids) and arm B (over-cap leases 319/320/200/61, graded on consumer-field coherence,
+  no baseline); (2) **the sandbox cannot reach the PDFs or the baselines** (DOC17/18 measured
+  `http=000`), so CC builds the harness and proves it on a synthetic fixture, Scott runs it on
+  the box; (3) `extractTenantFromLease` calls a model — same model both arms, recorded. Two
+  drifted line refs fixed (the `deps.freeOcr` seam is ~:631, not :328; `rawDocument` is in the
+  edge fn, not `document-text.js`).
+- `bakeoff/` added to `.gitignore` (it will hold client lease text). The arm-A baselines are NOT
+  pre-exported — a 538k-char SQL result does not belong in a chat transcript; the harness fetches
+  them itself on the workstation (`--fetch-baselines`, §6b).
+
 ## 2026-09-02 — DOC18 reconciled: merged (#2032), NOT running; §7b re-measured; six backlog ID defects fixed
 
 **DOC18 came back and is merged** (`e5c8f34e`, PR #2032). Claude Code had already written the
