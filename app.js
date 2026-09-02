@@ -2610,7 +2610,7 @@ document.getElementById('bizSubTabs')?.addEventListener('click', (e) => {
     } else if (typeof loadMarketing === 'function') {
       const el = document.getElementById('bizPageInner');
       if (el) el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading prospects...</p></div>';
-      loadMarketing().then(() => renderDomainProspects('all_other'));
+      loadMarketing().then(() => renderDomainProspectsIfCurrent('all_other'));
     } else {
       renderBizContent();
     }
@@ -2631,7 +2631,7 @@ document.getElementById('govInnerTabs')?.addEventListener('click', (e) => {
     } else if (typeof loadMarketing === 'function') {
       const el = document.getElementById('bizPageInner');
       if (el) el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading prospects...</p></div>';
-      loadMarketing().then(() => renderDomainProspects('government'));
+      loadMarketing().then(() => renderDomainProspectsIfCurrent('government'));
     }
   } else {
     renderGovTab();
@@ -2647,7 +2647,7 @@ function goToGovTab(tabName) {
     else if (typeof loadMarketing === 'function') {
       const el = document.getElementById('bizPageInner');
       if (el) el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading prospects...</p></div>';
-      loadMarketing().then(() => renderDomainProspects('government'));
+      loadMarketing().then(() => renderDomainProspectsIfCurrent('government'));
     }
   } else {
     renderGovTab();
@@ -2674,7 +2674,7 @@ document.getElementById('diaInnerTabs')?.addEventListener('click', (e) => {
     if (_mktOpportunitiesLoaded) {
       renderDomainProspects('dialysis');
     } else if (typeof loadMarketing === 'function') {
-      loadMarketing().then(() => renderDomainProspects('dialysis'));
+      loadMarketing().then(() => renderDomainProspectsIfCurrent('dialysis'));
     }
   } else if (typeof diaDataLoaded !== 'undefined' && diaDataLoaded) {
     renderDiaTab();
@@ -2693,7 +2693,7 @@ document.getElementById('govTabGroups')?.addEventListener('click', (e) => {
   syncDomainTabGroup('government', currentGovTab);
   if (currentGovTab === 'prospects') {
     if (_mktOpportunitiesLoaded) renderDomainProspects('government');
-    else if (typeof loadMarketing === 'function') loadMarketing().then(() => renderDomainProspects('government'));
+    else if (typeof loadMarketing === 'function') loadMarketing().then(() => renderDomainProspectsIfCurrent('government'));
   } else {
     renderGovTab();
   }
@@ -2710,7 +2710,7 @@ document.getElementById('diaTabGroups')?.addEventListener('click', (e) => {
     renderBizContent();
   } else if (currentDiaTab === 'prospects') {
     if (_mktOpportunitiesLoaded) renderDomainProspects('dialysis');
-    else if (typeof loadMarketing === 'function') loadMarketing().then(() => renderDomainProspects('dialysis'));
+    else if (typeof loadMarketing === 'function') loadMarketing().then(() => renderDomainProspectsIfCurrent('dialysis'));
   } else if (typeof diaDataLoaded !== 'undefined' && diaDataLoaded) {
     renderDiaTab();
   } else if (typeof loadDiaData === 'function') {
@@ -2831,7 +2831,7 @@ function renderBizContent() {
     } else if (typeof loadMarketing === 'function') {
       const innerEl = document.getElementById('bizPageInner');
       if (innerEl) innerEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading prospects...</p></div>';
-      loadMarketing().then(() => renderDomainProspects('all_other'));
+      loadMarketing().then(() => renderDomainProspectsIfCurrent('all_other'));
       return;
     }
   }
@@ -4619,6 +4619,35 @@ function renderProspectCardsHTML(items, options = {}) {
  * Render a full prospect subtab for a given domain.
  * Called by dialysis.js, gov.js, and the All Other section.
  */
+// UX20 (2026-09-02) — a late async render must not overwrite a tab the
+// operator has already left.
+//
+// Deals opens on its group default, Pipeline (the `prospects` tab), whose
+// loader is loadMarketing() — the slowest load in the app (~11.8k rows of
+// v_opportunity_domain_classified, documented). Clicking another Deals sub-tab
+// mid-load correctly switched currentDiaTab and re-rendered, and then the
+// in-flight loadMarketing().then(...) resolved and wrote Pipeline back into the
+// shared #bizPageInner unconditionally. That is the "jumps back to Pipeline"
+// Scott reported: not a navigation bug, a last-writer-wins race on one
+// container.
+//
+// Every deferred prospects render now re-checks that its own tab is still the
+// current one at RESOLVE time. A render into an explicit containerId is exempt
+// (it is not writing the shared page container).
+function prospectsRenderStillWanted(domain) {
+  if (typeof currentBizTab === 'undefined') return true;
+  if (domain === 'dialysis')   return currentBizTab === 'dialysis'   && currentDiaTab === 'prospects';
+  if (domain === 'government') return currentBizTab === 'government' && currentGovTab === 'prospects';
+  if (domain === 'all_other')  return currentBizTab === 'other';
+  return true;
+}
+function renderDomainProspectsIfCurrent(domain, containerId) {
+  if (containerId) return renderDomainProspects(domain, containerId);
+  if (!prospectsRenderStillWanted(domain)) return '';
+  return renderDomainProspects(domain, containerId);
+}
+window.renderDomainProspectsIfCurrent = renderDomainProspectsIfCurrent;
+
 function renderDomainProspects(domain, containerId) {
   const el = containerId ? document.getElementById(containerId) : document.getElementById('bizPageInner');
   if (!el) return '';
@@ -7388,6 +7417,25 @@ function _todayBdFallback(msg) {
 // actionable cadences, $X = sum of their rank_value (in-reach value); both are
 // the workable set, never raw producer output. Reuses the cadence_dashboard
 // action — same data the focus session works.
+// UX1 (2026-09-02) — turn "unavailable" into a stated cause. The four ways
+// this tile can fail need four different fixes (an auth expiry, a server 500
+// carrying the DB's own message, a client-side 12 s fuse, and a transport
+// error), and until now they were one indistinguishable sentence on screen.
+function _outreachFailureReason(res) {
+  if (!res) return 'no response';
+  if (res._timedOut) return 'timed out after 12s in the browser';
+  if (res.status === 401 || res.status === 403) return 'not authorised (HTTP ' + res.status + ') — try signing in again';
+  if (res.ok === false && res.status) {
+    const detail = (res.data && (res.data.detail || res.data.error)) || res.error || '';
+    return 'HTTP ' + res.status + (detail ? ': ' + String(typeof detail === 'string' ? detail : JSON.stringify(detail)).slice(0, 160) : '');
+  }
+  if (res.error) return String(res.error).slice(0, 160);
+  if (res.data && res.data.ok === false) {
+    return String(res.data.error || res.data.detail || 'server reported failure').slice(0, 160);
+  }
+  return 'unrecognised response shape';
+}
+
 let _outreachOnrampLoaded = false;
 let _outreachOnrampInFlight = false;
 async function renderOutreachOnramp(force) {
@@ -7401,10 +7449,21 @@ async function renderOutreachOnramp(force) {
   try {
     const res = await Promise.race([
       opsApi('/api/operations?action=cadence_dashboard&limit=200'),
-      new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: 'timeout' }), 12000)),
+      new Promise((resolve) => setTimeout(() => resolve({ ok: false, _timedOut: true }), 12000)),
     ]);
     if (!res.ok || !res.data || !res.data.ok) {
-      el.innerHTML = '<div class="nba-empty">Outreach list unavailable. <button class="retry-btn" onclick="renderOutreachOnramp(true)">Retry</button></div>';
+      // UX1 (2026-09-02): this used to render ONE string for a 401, a 500, a
+      // client timeout and a network error, so "Outreach list unavailable"
+      // could not be diagnosed without reproducing it. The source view is
+      // healthy — v_bd_cadence_dashboard measured 2,119 ms / 313 actionable
+      // rows against a 12 s client fuse and an 8 s PostgREST timeout — so the
+      // failure is in the REQUEST path, and which one it is decides the fix.
+      // Name it. A handler that discards the reason turns a one-line fix into
+      // an outage of unknown duration.
+      el.innerHTML = '<div class="nba-empty">Outreach list unavailable — '
+        + esc(_outreachFailureReason(res))
+        + '. <button class="retry-btn" onclick="renderOutreachOnramp(true)">Retry</button></div>';
+      console.error('renderOutreachOnramp failed:', _outreachFailureReason(res), res);
       return;
     }
     _outreachOnrampLoaded = true;
@@ -7421,7 +7480,10 @@ async function renderOutreachOnramp(force) {
       + 'onclick="navTo(\'pagePriorityQueue\');setTimeout(function(){if(typeof renderOutreachFocus===\'function\')renderOutreachFocus();},300)">'
       + '▶ Start working →</button>';
   } catch (e) {
-    el.innerHTML = '<div class="nba-empty">Outreach list unavailable. <button class="retry-btn" onclick="renderOutreachOnramp(true)">Retry</button></div>';
+    el.innerHTML = '<div class="nba-empty">Outreach list unavailable — '
+      + esc((e && e.message) ? String(e.message).slice(0, 160) : 'request threw')
+      + '. <button class="retry-btn" onclick="renderOutreachOnramp(true)">Retry</button></div>';
+    console.error('renderOutreachOnramp threw:', e);
   } finally {
     _outreachOnrampInFlight = false;
   }

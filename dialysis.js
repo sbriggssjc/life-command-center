@@ -91,7 +91,7 @@ let diaPropertiesSearch = '';
 let diaPropertiesPage = 0;
 let diaPropertiesSort = { col: 'address', dir: 'asc' };
 let diaPropertiesStateFilter = '';
-let diaPropertiesSummary = null;     // { states, withSFCount, avgSF, total }
+let diaPropertiesSummary = null;     // { states, withSFCount, medianSF, p95SF, total }
 let diaPropertiesRequestId = 0;      // race-condition guard
 const DIA_PROPERTIES_PAGE_SIZE = 25;
 
@@ -116,7 +116,15 @@ let diaVerificationSummaryLoading = false;
 // by 'all' | 'evidence' | 'cron' to match the breakout in the summary card.
 let diaRecentVerifications = null;
 let diaRecentVerificationsLoading = false;
-let diaRecentVerificationsFilter = 'all';
+// UX11 (2026-09-02): default to the EVIDENCE lane, not 'all'. Measured on dia:
+// of 1,400 verification rows in the last 7 days, 1,400 are the cron's
+// method='auto_scrape'/check_result='inferred_active' timer advance whose note
+// reads "auto-scrape: no sale evidence in 3y window, timer advanced" — which is
+// why every row in this feed said "no update". The feed was honest; opening it
+// on 'all' meant the operator met 100% machine no-ops and learned to ignore the
+// surface. The evidence lane is the human-relevant one (last evidence row:
+// 2026-08-06), and when it is empty that emptiness is the finding.
+let diaRecentVerificationsFilter = 'evidence';
 let diaIntakeQueue = null;
 let diaIntakeLoading = false;
 let diaIntakeIdx = 0;
@@ -1617,11 +1625,26 @@ function renderDiaActionItemsInner() {
       detail: 'Renewal / sale-leaseback windows opening — prioritize outreach on these owners',
       action: 'Review leases', tab: 'leases' });
   }
-  const onMarket = (typeof diaAvailListings !== 'undefined' && Array.isArray(diaAvailListings)) ? diaAvailListings.length : 0;
+  // UX10 (2026-09-02): READ THE CANONICAL SET. This tile used to count
+  // diaAvailListings (v_available_listings, the broader lifecycle-flag set —
+  // 462 rows live) while Deals > Sales > Availables filters membership by
+  // v_dia_on_market (the T9d canonical CURRENT on-market set — 207 live). Two
+  // surfaces, two views, one question: measured 461 vs 207, a 2.2x
+  // disagreement on the same Overview the operator reads first. The canonical
+  // rows are already loaded in the main Promise.all (diaData.onMarketRows);
+  // diaAvailListings stays the fallback ONLY until that load lands, and the
+  // tile names which set it is showing so the number can never be read as the
+  // other one.
+  const _omCanonical = (typeof diaData !== 'undefined' && Array.isArray(diaData.onMarketRows))
+    ? diaData.onMarketRows : null;
+  const onMarket = _omCanonical
+    ? _omCanonical.length
+    : ((typeof diaAvailListings !== 'undefined' && Array.isArray(diaAvailListings)) ? diaAvailListings.length : 0);
   if (onMarket > 0) {
     bd.push({ icon: '🏷️', color: '#34d399', urgency: 'info',
       title: fmtN(onMarket) + ' dialysis propert' + (onMarket > 1 ? 'ies' : 'y') + ' on market',
-      detail: 'Active listings — acquisition targets / competitive positioning for your pipeline',
+      detail: (_omCanonical ? 'Currently on market (canonical set) — ' : 'Active listings (pending canonical load) — ')
+        + 'acquisition targets / competitive positioning for your pipeline',
       action: 'View listings', tab: 'sales' });
   }
 
@@ -9768,15 +9791,34 @@ async function _loadDiaPropertiesSummary() {
     }
     states.sort();
 
-    // Compute avg SF from pre-filtered rows (only rows with building_size > 0)
+    // UX31 (2026-09-02): report the MEDIAN, not the mean.
+    //
+    // "Building size looks too large" was correct and it was not a unit error
+    // (the I12 acres/sq-ft class) — building_size is genuinely square feet.
+    // It is a SHAPE error. Measured live over the 8,607 dia properties with a
+    // size: median 8,646 sf (right for a dialysis clinic), mean 24,044 sf,
+    // max 2,507,852. 357 rows carry the RBA of the whole medical-office
+    // building the clinic occupies a suite in, and the mean is dragged 2.78x
+    // by them — so the tile asserted that a typical clinic is 24,044 sf when
+    // it is 8,646. The median is the honest central value for this
+    // distribution, and the p95 rides in the sub-label so the long tail is
+    // visible rather than averaged away.
     var withSFCount = sfRows.length;
-    var sfSum = 0;
+    var sfVals = [];
     for (var j = 0; j < sfRows.length; j++) {
-      sfSum += parseFloat(sfRows[j].building_size);
+      var _v = parseFloat(sfRows[j].building_size);
+      if (isFinite(_v) && _v > 0) sfVals.push(_v);
     }
-    var avgSF = withSFCount > 0 ? Math.round(sfSum / withSFCount) : 0;
+    sfVals.sort(function (a, b) { return a - b; });
+    var medianSF = 0, p95SF = 0;
+    if (sfVals.length) {
+      var mid = Math.floor(sfVals.length / 2);
+      medianSF = Math.round(sfVals.length % 2 ? sfVals[mid] : (sfVals[mid - 1] + sfVals[mid]) / 2);
+      p95SF = Math.round(sfVals[Math.min(sfVals.length - 1, Math.floor(sfVals.length * 0.95))]);
+    }
 
-    diaPropertiesSummary = { states: states, withSFCount: withSFCount, avgSF: avgSF, total: stateRows.length };
+    diaPropertiesSummary = { states: states, withSFCount: withSFCount,
+                             medianSF: medianSF, p95SF: p95SF, total: stateRows.length };
 
     // Update DOM in-place without full re-render
     var statesValEl = document.getElementById('diaPropStatesValue');
@@ -9785,8 +9827,9 @@ async function _loadDiaPropertiesSummary() {
     if (statesSubEl) statesSubEl.textContent = states.slice(0, 5).join(', ') + (states.length > 5 ? '...' : '');
     var sfValEl = document.getElementById('diaPropSFValue');
     var sfSubEl = document.getElementById('diaPropSFSub');
-    if (sfValEl) sfValEl.textContent = avgSF > 0 ? fmtN(avgSF) : '\u2014';
-    if (sfSubEl) sfSubEl.textContent = withSFCount + ' with SF data';
+    if (sfValEl) sfValEl.textContent = medianSF > 0 ? fmtN(medianSF) : '\u2014';
+    if (sfSubEl) sfSubEl.textContent = withSFCount + ' with SF data'
+      + (p95SF > 0 ? ' \u00b7 p95 ' + fmtN(p95SF) : '');
     // Populate state dropdown if not yet populated
     var sel = document.getElementById('diaPropsStateSelect');
     if (sel && sel.options.length <= 1) {
@@ -9866,9 +9909,10 @@ async function renderDiaProperties() {
     color: 'green', id: 'diaPropStatesValue', subId: 'diaPropStatesSub'
   });
   html += infoCard({
-    title: 'Avg Building SF',
-    value: summary ? (summary.avgSF > 0 ? fmtN(summary.avgSF) : '\u2014') : '...',
-    sub: summary ? summary.withSFCount + ' with SF data' : 'loading',
+    title: 'Median Building SF',
+    value: summary ? (summary.medianSF > 0 ? fmtN(summary.medianSF) : '\u2014') : '...',
+    sub: summary ? (summary.withSFCount + ' with SF data'
+                    + (summary.p95SF > 0 ? ' \u00b7 p95 ' + fmtN(summary.p95SF) : '')) : 'loading',
     color: 'purple', id: 'diaPropSFValue', subId: 'diaPropSFSub'
   });
   html += '</div>';
@@ -10888,6 +10932,120 @@ function buildDiaLoansHTML() {
 
 let diaPlayersView = 'operators';
 let diaBuyers = null;        // lazy-loaded from sales_transactions
+// The exact column lists the Players tab asks sales_transactions for. Named
+// constants so the guard test can assert them against the real dia schema:
+// buyer_name / buyer_type / seller_name exist; seller_type DOES NOT.
+const DIA_BUYER_SELECT  = 'buyer_name,buyer_type,sold_price,sale_date,cap_rate,property_id';
+const DIA_SELLER_SELECT = 'seller_name,sold_price,sale_date,cap_rate,property_id';
+
+// Non-null => the last Players load FAILED. A failed load must never render as
+// a zero (that is exactly how UX29 hid 2,142 sellers for months).
+let diaPlayersError = null;
+function _diaPlayersErrorBanner() {
+  if (!diaPlayersError) return '';
+  return '<div class="dia-info-card dia-info-red" style="padding:12px 14px;margin-bottom:12px;font-size:12px;color:var(--text2)">'
+    + 'This list could not be loaded, so the figures below are not a measurement of the data. '
+    + escapeHtmlSafe(String(diaPlayersError).slice(0, 240)) + '</div>';
+}
+
+// ---------------------------------------------------------------------------
+// UX28/UX29 (2026-09-02) — the Players tab grouping key and its failure mode.
+//
+// UX29: the sellers arm selected a column that DOES NOT EXIST. dia
+// sales_transactions carries buyer_name, buyer_type and seller_name but NO
+// seller_type — so PostgREST answered 42703, diaQuery laundered the non-OK
+// response into [], diaQueryAll broke out of its page loop on a short page,
+// the catch never fired, and the tile rendered "Total Sellers 0 / in dataset"
+// over 2,142 real sellers and $13.48B of volume. The buyers arm differs by
+// exactly that one column, which is why buyers worked and sellers did not.
+// Every select here is now asserted against a named column list.
+//
+// UX28: the grouping key was name.trim().toUpperCase(), so any punctuation or
+// spacing difference minted a second party. Measured on the live top-50 by
+// volume, "Sumitomo Bank Leasing And Finance Inc" (78 deals / $267.7M) sat at
+// rank 1 and "Sumitomo Bank Leasing and Finance, Inc" (60 deals / $199.2M) at
+// rank 4 — one buyer, split, with $199M filed under a phantom.
+//
+// The key is lower() THEN strip non-alphanumerics, with NO token removal —
+// the identity-safe comparator (lcc_ownership_chain_name_key / A2), never the
+// fuzzy-pairing one that reduces "Realty Income Corporation" to the empty
+// string. It merges only names that are provably the same string modulo
+// punctuation. Semantic duplicates ("Realty Income Corp" vs "Realty Income
+// Corporation", "Smbc Leasing And Finance" vs "Smfg") are deliberately NOT
+// merged here: those are entity-resolution judgements that belong to the
+// human-confirm merge lane, not to a tile.
+function _diaPartyKey(name) {
+  const raw = String(name == null ? '' : name).trim();
+  const tight = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
+  // A name with no alphanumeric content cannot be keyed this way; fall back to
+  // the old key so such a row stays its own party rather than collapsing every
+  // punctuation-only name into one.
+  return tight || raw.toUpperCase();
+}
+
+// Fold rows into one entry per party. Keeps the most complete spelling seen
+// (most frequent, then longest) as the display name and reports how many raw
+// spellings were folded, so a collapsed row is visible rather than silent.
+function _diaGroupParties(rows, nameField, typeField) {
+  const map = {};
+  (rows || []).forEach(r => {
+    const nm = r && r[nameField];
+    if (!nm || !String(nm).trim()) return;
+    const key = _diaPartyKey(nm);
+    if (!map[key]) map[key] = { name: String(nm).trim(), _spellings: {}, type: typeField ? r[typeField] : null,
+                                deals: 0, volume: 0, prices: [], capRates: [], records: [] };
+    const g = map[key];
+    const disp = String(nm).trim();
+    g._spellings[disp] = (g._spellings[disp] || 0) + 1;
+    g.deals++;
+    g.volume += (Number(r.sold_price) || 0);
+    if (r.cap_rate) { const _cr = parseFloat(r.cap_rate); if (isFinite(_cr)) g.capRates.push(_cr < 1 ? _cr * 100 : _cr); }
+    if (typeField && !g.type && r[typeField]) g.type = r[typeField];
+    g.records.push(r);
+  });
+  return Object.values(map).map(g => {
+    const sp = Object.keys(g._spellings);
+    g.name = sp.sort((a, b) => (g._spellings[b] - g._spellings[a]) || (b.length - a.length))[0];
+    g.variants = sp.length;
+    delete g._spellings;
+    return g;
+  }).sort((a, b) => b.volume - a.volume);
+}
+
+// A folded party says so. UX28 merges only punctuation/spacing variants of one
+// spelling; the operator should be able to see that two rows became one.
+function _diaVariantNote(g) {
+  const n = Number(g && g.variants) || 1;
+  if (n < 2) return '';
+  return '<span style="margin-left:6px;font-size:10px;color:var(--text3)" title="'
+    + n + ' spellings of this name folded into one party">(' + n + ' spellings)</span>';
+}
+
+// Honest scope tiles. "Total Sellers" counts the whole dataset while the deal
+// and volume figures are the top-50 SHOWN — UX27: two tiles side by side, two
+// populations, titles that did not say so. Every title now carries its own
+// scope and the dataset-wide totals are reported alongside.
+function _diaPartyTiles(label, all, top, color) {
+  const topDeals  = top.reduce((s, x) => s + x.deals, 0);
+  const topVolume = top.reduce((s, x) => s + x.volume, 0);
+  const allDeals  = all.reduce((s, x) => s + x.deals, 0);
+  const allVolume = all.reduce((s, x) => s + x.volume, 0);
+  const folded    = all.reduce((s, x) => s + ((x.variants || 1) - 1), 0);
+  let h = '<div class="dia-grid dia-grid-4" style="gap: 12px; margin-bottom: 20px;">';
+  h += infoCard({ title: label + ' (all)', value: fmtN(all.length),
+                  sub: fmtN(allDeals) + ' deals \u00b7 ' + fmt(allVolume, 'currency') + ' total'
+                       + (folded > 0 ? ' \u00b7 ' + fmtN(folded) + ' spelling variants folded' : ''),
+                  color: color });
+  h += infoCard({ title: 'Top ' + label.replace(/s$/, ''), value: top[0] ? (String(top[0].name).substring(0, 30) || '\u2014') : '\u2014',
+                  sub: top[0] ? fmt(top[0].volume, 'currency') + ' volume' : '', color: 'green' });
+  h += infoCard({ title: 'Avg Deal Size (top 50)', value: fmt(Math.round(topVolume / Math.max(1, topDeals)), 'currency'),
+                  sub: 'across the ' + fmtN(top.length) + ' shown below', color: 'cyan' });
+  h += infoCard({ title: 'Deals (top 50)', value: fmtN(topDeals),
+                  sub: 'of ' + fmtN(allDeals) + ' in dataset', color: 'purple' });
+  h += '</div>';
+  return h;
+}
+
 let diaSellers = null;       // lazy-loaded from sales_transactions
 let diaBrokers = null;       // lazy-loaded from sale_brokers/brokers/sales_transactions (joined client-side)
 let diaPlayersLoading = false;
@@ -11052,38 +11210,26 @@ function renderDiaPlayers() {
       diaPlayersLoading = true;
       (async () => {
         try {
-          const buyersRaw = await diaQueryAll('sales_transactions', 'buyer_name,buyer_type,sold_price,sale_date,cap_rate,property_id');
-          // Group by buyer_name
-          const buyerMap = {};
-          buyersRaw.forEach(r => {
-            if (r.buyer_name) {
-              const key = r.buyer_name.trim().toUpperCase();
-              if (!buyerMap[key]) buyerMap[key] = { name: r.buyer_name, type: r.buyer_type, deals: 0, volume: 0, prices: [], capRates: [], records: [] };
-              buyerMap[key].deals++;
-              buyerMap[key].volume += (r.sold_price || 0);
-              if (r.cap_rate) { var _cr = parseFloat(r.cap_rate); buyerMap[key].capRates.push(_cr < 1 ? _cr * 100 : _cr); }
-              buyerMap[key].records.push(r);
-            }
-          });
-          diaBuyers = Object.values(buyerMap).sort((a, b) => b.volume - a.volume);
+          // throwOnError: a non-OK response must reach the catch below. Without
+          // it diaQuery returns [] and an empty tile is indistinguishable from
+          // a real zero — the UX29 failure, one arm over.
+          const buyersRaw = await diaQueryAll('sales_transactions', DIA_BUYER_SELECT, { throwOnError: true });
+          diaBuyers = _diaGroupParties(buyersRaw, 'buyer_name', 'buyer_type');
+          diaPlayersError = null;
           diaPlayersLoading = false;
           renderDiaTab();
         } catch (err) {
           console.error('Error loading buyer data:', err);
+          diaBuyers = [];
+          diaPlayersError = err && err.message ? String(err.message) : 'request failed';
           diaPlayersLoading = false;
+          renderDiaTab();
         }
       })();
     } else if (diaBuyers) {
       const top50 = diaBuyers.slice(0, 50);
-      const totalVolume = top50.reduce((s, b) => s + b.volume, 0);
-      const totalDeals = top50.reduce((s, b) => s + b.deals, 0);
-
-      html += '<div class="dia-grid dia-grid-4" style="gap: 12px; margin-bottom: 20px;">';
-      html += infoCard({ title: 'Total Buyers', value: fmtN(diaBuyers.length), sub: 'in dataset', color: 'blue' });
-      html += infoCard({ title: 'Top Buyer', value: top50[0] ? (top50[0].name.substring(0, 30) || '—') : '—', sub: top50[0] ? fmt(top50[0].volume) + ' volume' : '', color: 'green' });
-      html += infoCard({ title: 'Avg Deal Size', value: fmt(Math.round(totalVolume / Math.max(1, totalDeals))), sub: 'across top 50', color: 'cyan' });
-      html += infoCard({ title: 'Total Deals', value: fmtN(totalDeals), sub: 'transactions (top 50)', color: 'purple' });
-      html += '</div>';
+      html += _diaPlayersErrorBanner();
+      html += _diaPartyTiles('Buyers', diaBuyers, top50, 'blue');
 
       html += '<div class="table-wrapper"><div class="data-table">';
       html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
@@ -11098,7 +11244,7 @@ function renderDiaPlayers() {
       top50.forEach((b, idx) => {
         const avgCapRate = b.capRates.length > 0 ? b.capRates.reduce((s, cr) => s + cr, 0) / b.capRates.length : 0;
         html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(b.records[0]) + ', "sales-transaction")\'>';
-        html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + entityLink(b.name, 'contact', null, 'dialysis') + '</div>';
+        html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + entityLink(b.name, 'contact', null, 'dialysis') + _diaVariantNote(b) + '</div>';
         html += '<div style="flex: 1;">' + esc(b.type || '—') + '</div>';
         html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + b.deals + '</div>';
         html += '<div style="flex: 1; text-align: right;">' + fmt(b.volume, 'currency') + '</div>';
@@ -11116,43 +11262,31 @@ function renderDiaPlayers() {
       diaPlayersLoading = true;
       (async () => {
         try {
-          const sellersRaw = await diaQueryAll('sales_transactions', 'seller_name,seller_type,sold_price,sale_date,cap_rate,property_id');
-          // Group by seller_name
-          const sellerMap = {};
-          sellersRaw.forEach(r => {
-            if (r.seller_name) {
-              const key = r.seller_name.trim().toUpperCase();
-              if (!sellerMap[key]) sellerMap[key] = { name: r.seller_name, type: r.seller_type, deals: 0, volume: 0, prices: [], capRates: [], records: [] };
-              sellerMap[key].deals++;
-              sellerMap[key].volume += (r.sold_price || 0);
-              if (r.cap_rate) { var _cr = parseFloat(r.cap_rate); sellerMap[key].capRates.push(_cr < 1 ? _cr * 100 : _cr); }
-              sellerMap[key].records.push(r);
-            }
-          });
-          diaSellers = Object.values(sellerMap).sort((a, b) => b.volume - a.volume);
+          // UX29: seller_type is NOT a column on dia sales_transactions. Asking
+          // for it 42703'd every request and the tile read 0 / $0 over 2,142
+          // sellers. There is no stored seller type, so the table below does
+          // not claim one.
+          const sellersRaw = await diaQueryAll('sales_transactions', DIA_SELLER_SELECT, { throwOnError: true });
+          diaSellers = _diaGroupParties(sellersRaw, 'seller_name', null);
+          diaPlayersError = null;
           diaPlayersLoading = false;
           renderDiaTab();
         } catch (err) {
           console.error('Error loading seller data:', err);
+          diaSellers = [];
+          diaPlayersError = err && err.message ? String(err.message) : 'request failed';
           diaPlayersLoading = false;
+          renderDiaTab();
         }
       })();
     } else if (diaSellers) {
       const top50 = diaSellers.slice(0, 50);
-      const totalVolume = top50.reduce((s, s2) => s + s2.volume, 0);
-      const totalDeals = top50.reduce((s, s2) => s + s2.deals, 0);
-
-      html += '<div class="dia-grid dia-grid-4" style="gap: 12px; margin-bottom: 20px;">';
-      html += infoCard({ title: 'Total Sellers', value: fmtN(diaSellers.length), sub: 'in dataset', color: 'red' });
-      html += infoCard({ title: 'Top Seller', value: top50[0] ? (top50[0].name.substring(0, 30) || '—') : '—', sub: top50[0] ? fmt(top50[0].volume) + ' volume' : '', color: 'green' });
-      html += infoCard({ title: 'Avg Deal Size', value: fmt(Math.round(totalVolume / Math.max(1, totalDeals))), sub: 'across top 50', color: 'cyan' });
-      html += infoCard({ title: 'Total Deals', value: fmtN(totalDeals), sub: 'transactions (top 50)', color: 'purple' });
-      html += '</div>';
+      html += _diaPlayersErrorBanner();
+      html += _diaPartyTiles('Sellers', diaSellers, top50, 'red');
 
       html += '<div class="table-wrapper"><div class="data-table">';
       html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
-      html += '<div style="flex: 2;">Seller Name</div>';
-      html += '<div style="flex: 1;">Type</div>';
+      html += '<div style="flex: 3;">Seller Name</div>';
       html += '<div style="flex: 1; text-align: right;">Deals</div>';
       html += '<div style="flex: 1; text-align: right;">Total Volume</div>';
       html += '<div style="flex: 1; text-align: right;">Avg Cap Rate</div>';
@@ -11162,8 +11296,7 @@ function renderDiaPlayers() {
       top50.forEach((s2, idx) => {
         const avgCapRate = s2.capRates.length > 0 ? s2.capRates.reduce((s, cr) => s + cr, 0) / s2.capRates.length : 0;
         html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(s2.records[0]) + ', "sales-transaction")\'>';
-        html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + entityLink(s2.name, 'contact', null, 'dialysis') + '</div>';
-        html += '<div style="flex: 1;">' + esc(s2.type || '—') + '</div>';
+        html += '<div style="flex: 3;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + entityLink(s2.name, 'contact', null, 'dialysis') + _diaVariantNote(s2) + '</div>';
         html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + s2.deals + '</div>';
         html += '<div style="flex: 1; text-align: right;">' + fmt(s2.volume, 'currency') + '</div>';
         html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + pct(avgCapRate / 100) + '</div>';

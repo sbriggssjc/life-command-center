@@ -87,9 +87,31 @@ async function renderMetricsPage() {
   }
 
   // Team overview (manager only)
+  //
+  // UX48 (2026-09-02): this roster rendered every row of v_manager_overview —
+  // 42 live, of which 38 are mailbox aliases (email local-parts title-cased),
+  // system mailboxes (Noreply, Support, Powerautomatenoreply), one literal
+  // " <>", and three duplicate zero-activity "Scott Briggs" rows beside the
+  // real owner. They are correspondence counterparties that were minted into
+  // users + workspace_memberships, not people on the team.
+  //
+  // is_team_member comes from the view and is the RECORDED FACT (presence in
+  // lcc_users, the LCC person registry — 4 active people), never a guess about
+  // the shape of a name. Rows without it are not deleted and keep their access;
+  // they are collapsed behind an honest count, so the roster answers "who is on
+  // my team" and the suppression is stated rather than silent.
   if (oversightRes.ok && oversightRes.data?.team?.length) {
+    const _allTeam = oversightRes.data.team;
+    // A view that predates the UX48 migration has no is_team_member at all;
+    // undefined must not read as false and hide the whole roster.
+    const _flagged = _allTeam.some(m => m.is_team_member !== undefined);
+    const _team    = _flagged ? _allTeam.filter(m => m.is_team_member) : _allTeam;
+    const _hidden  = _allTeam.length - _team.length;
     html += '<div class="widget"><div class="widget-title">Team Overview</div>';
-    oversightRes.data.team.forEach(member => {
+    if (!_team.length) {
+      html += '<div class="q-item-meta">No team members on file in the LCC person registry.</div>';
+    }
+    _team.forEach(member => {
       const initials = (member.display_name || '??').split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
       html += `<div class="team-row">
         <div class="team-avatar">${esc(initials)}</div>
@@ -105,6 +127,12 @@ async function renderMetricsPage() {
         </div>
       </div>`;
     });
+    if (_hidden > 0) {
+      html += `<div class="q-item-meta" style="margin-top:8px">`
+        + `${_hidden} non-member account${_hidden === 1 ? '' : 's'} with workspace access not shown `
+        + `(mailbox aliases and system mailboxes minted by correspondence ingestion). `
+        + `Access is unchanged; they are absent from the LCC person registry.</div>`;
+    }
     html += '</div>';
   }
 
