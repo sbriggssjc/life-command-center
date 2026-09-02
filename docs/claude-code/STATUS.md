@@ -44,6 +44,45 @@ exhibits, and "the firm model is unpopulated" when it is mis-populated. **The tu
 to correct your own prior claims in place and say so plainly**, because both were caught only by
 re-measuring something that sounded right.
 
+## 2026-09-02 — OCR1 staged as a BAKE-OFF, and the cost case does not survive the numbers
+
+**Scott asked for the cheapest, highest-quality OCR source we can build. Measured it first, and the
+justification I had been carrying is wrong.**
+
+| method | tier | docs | avg chars | **billed pages** |
+|---|---|---:|---:|---:|
+| `pdf_text` — **free** | — | **140** | 38,664 | 34 |
+| `office_text` — **free** | — | **45** | 32,935 | 0 |
+| **`ocr`** | **DocAI** | **91** | **13,801** | **574** |
+| `ocr` | gpt-4o | 20 | 1,511 | — |
+
+🔴 **185 of 362 documents (51%) already extract FREE. Only 111 ever needed OCR. Total DocAI spend to
+date: 574 billed pages ≈ $0.86** — corpus scale $23–53. **So cost is NOT the case for local OCR, and
+the prompt leads with that rather than burying it.** Anyone arguing it on savings is arguing from a
+number that does not support it.
+
+🟢 **The real prize is that a local engine has NO PAGE CAP.** ⚠️ **Every hard problem in this arc —
+DOC8, DOC14, DOC16, DOC17, DOC18 — was about Google's 15/30-page limit, not money.** Five prompts, a
+refuted design, a blocked GCS build and a live probe, all to work around a cap a local engine simply
+does not have. **It dissolves the class, including DOC18's partial-extract ceiling and DOC14
+entirely.** Then **confidentiality** (today the complete PDF of every under-cap lease is sent to
+Google) and **resilience** (⚠️ this session lost time to a credit-balance 400 on the Anthropic path).
+
+**Prompt staged: `OCR1-local-ocr-bakeoff.md` — exploratory, measures before building.** ⚠️ **The
+metric is FIELD AGREEMENT from `extractTenantFromLease`, never `char_len`** — a garbled OCR produces
+plenty of characters, and **this repo was already burned by exactly that**: gpt-4o's 1,511-char rows
+passed every count-based check while being useless. Sample ≥10 documents that actually needed OCR
+(**not `pdf_text` rows, which would flatter both sides**), including ≥3 leases over 30pp. Runs on the
+**GaryBuilt box** behind the existing tunnel + CF Access — ⚠️ **a dedicated service token, never the
+ollama one** — and must **fail soft to DocAI**, with "the box is down" distinguishable from "the
+document has no text." **Wiring is OCR1b, only if the bake-off measures a winner. Losing is a
+legitimate outcome and is recorded so it is not re-proposed.**
+
+📋 **The handoff now carries a recommended order:** DOC18 (reconcile) → **OCR1** → OCR2 → OCR1b (if
+OCR1 wins) → OCR3 → then the BD thread (C18, C19). ⚠️ **And a standing instruction: if OCR1 wins,
+revisit DOC18's ceiling and DOC14 immediately** — carrying a workaround past the thing that removed
+the need for it is its own failure.
+
 ## 2026-09-02 — AI/OCR COST STRATEGY: the free tier is designed, has a producer, and is NOT WIRED
 
 **Scott asked whether these AI calls should run local, Microsoft-native, or Google — with the

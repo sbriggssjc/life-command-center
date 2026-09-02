@@ -43,17 +43,26 @@ against the SELECTION, not the document.**
 ≥1 role, 954 with ≥2**, derived from the spine as a VIEW, never stamped. `user_owner` confirmed at
 **10** (10 confirmed / 4 rejected / 1 undecided).
 
-**🟢 The next strategic item is OCR1**, and it is the answer to Scott's cost question: **Tier 1 free
-OCR is designed, has a producer, and is NOT WIRED** — so every OCR call this system has ever made
-started at a paid tier. See `ai-and-ocr-cost-strategy.md` §0.
+**🟢 The next strategic item is OCR1 — a bake-off, prompt staged at
+`docs/claude-code/prompts/OCR1-local-ocr-bakeoff.md`.** Tier 1 free OCR is designed, has a producer,
+and is **NOT WIRED** (`deps.freeOcr` has no server-side producer), so every OCR call has always
+started at a paid tier.
+
+⚠️ **BUT DO NOT ARGUE IT ON COST, AND THE PROMPT SAYS SO FIRST.** Measured: **185 of 362 documents
+(51%) already extract FREE**, only **111 ever needed OCR**, and **total DocAI spend to date is 574
+billed pages ≈ $0.86** (corpus scale: $23–53). **The real prize is that a local engine has NO PAGE
+CAP** — ⚠️ **every hard problem in this arc (DOC8, DOC14, DOC16, DOC17, DOC18) was about Google's
+15/30-page limit, not money.** Five prompts, a refuted design, a blocked GCS build and a live probe,
+all to work around a page cap that a local engine simply does not have. Then **confidentiality**
+(today the complete PDF of every under-cap lease is sent to Google) and **resilience**.
 
 ## 4. Open items, in priority order
 
 | id | what |
 |---|---|
-| **DOC18** | 🔄 **in flight** — three-call sync extract |
-| **OCR1** | 🟢 **the durable fix** — wire Tier 1 free OCR on the GaryBuilt box. ⚠️ **A bake-off is part of it: local OCR quality on leases is UNMEASURED.** |
-| **OCR2** | 🔴 the deed lane never tiers — calls gpt-4o directly, bypassing DocAI |
+| **DOC18** | 🔄 **in flight** — three-call sync extract. **Reconcile its response first.** |
+| **OCR1** | 🟢 **THE RECOMMENDED NEXT BUILD — an exploratory BAKE-OFF, not a build.** Local engine vs DocAI on ≥10 real OCR'd documents (≥3 leases over 30pp). ⚠️ **The metric is FIELD AGREEMENT from `extractTenantFromLease`, never `char_len`** — a garbled OCR produces plenty of characters, and gpt-4o's 1,511-char rows passed every count-based check while being useless. **Justify on the PAGE CAP and confidentiality, not cost.** Wiring is **OCR1b**, only if this measures a winner. |
+| **OCR2** | 🔴 the deed lane never tiers — calls gpt-4o directly, bypassing DocAI. **All 325 deeds went to the 6–14× tier.** Small and self-contained; good pairing with OCR1. |
 | **C18** | 🟠 `ownership_start_date` is 50.7%, so **pacing** — the dimension Scott says drives seller-vs-buyer treatment — is half unmeasurable. ⚠️ **The route is UNMEASURED.** |
 | **C19** | 🟠 *"clients first, not the product type"* ⇒ **every domain filter on a BD surface is a candidate defect**; nobody has swept |
 | **OCR3/4/5** · **DOC2/3/4/5/6/15** · **C13d** | see the backlog |
@@ -169,6 +178,18 @@ traps, each of which actually bit:**
 2. **Re-measure before quoting anything** — §7b of the document page is the standing status check,
    and every number in these docs is dated.
 3. **Ask Scott whether DOC18 has come back**, and reconcile its response if so.
-4. **Then propose OCR1** — the durable answer to his cost question — ⚠️ **leading with the bake-off,
-   because local OCR quality on executed leases is unmeasured and the saving is not real if the text
-   is not usable.**
+4. **Then run OCR1** (`docs/claude-code/prompts/OCR1-local-ocr-bakeoff.md`) — ⚠️ **leading with its
+   §0, because the cost case does not survive the numbers and the prompt says so.** The case is the
+   **page cap** and **confidentiality**. **Field agreement is the deliverable; character counts are
+   context.**
+
+### Recommended order after DOC18
+
+**OCR1** (bake-off — decides whether the whole page-cap problem class goes away) → **OCR2** (the
+un-tiered deed lane; small, independent, and a live 6–14× waste) → **OCR1b** *only if OCR1 wins* →
+**OCR3** (is the default cloud path failing rather than spending?) → then the BD thread: **C18**
+(pacing blindness) and **C19** (domain filters as candidate defects).
+
+⚠️ **If OCR1 measures a clear win, revisit DOC18's partial-extract ceiling and DOC14 immediately** —
+a local engine with no page cap makes both unnecessary, and leaving them standing would be carrying
+a workaround past the thing that removed the need for it.
