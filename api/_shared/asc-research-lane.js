@@ -57,6 +57,7 @@ export function normalizeAscAddressToken({ address, city, state, zip } = {}) {
     .replace(/\b(DRIVE|DR)\b/g, 'DR')
     .replace(/\b(LANE|LN)\b/g, 'LN')
     .replace(/\b(CIRCLE|CIR)\b/g, 'CIR')
+    .replace(/\b(PARKWAY|PKWY|PKY)\b/g, 'PKWY')
     // USPS Publication 28 standardizes COVE as CV. Keep the source address
     // unchanged in the capture; this token is comparison-only.
     .replace(/\b(COVE|CV)\b/g, 'CV')
@@ -79,7 +80,7 @@ export function normalizeAscAddressToken({ address, city, state, zip } = {}) {
 }
 
 function hasAscSublocation(address) {
-  return /\b(?:suite|ste|unit|\d+(?:st|nd|rd|th)\s+floor|floor\s+[a-z0-9-]+|fl\s+[a-z0-9-]+)\b/i
+  return /\b(?:suite|ste|unit|building|bldg|\d+(?:st|nd|rd|th)\s+floor|floor\s+[a-z0-9-]+|fl\s+[a-z0-9-]+)\b/i
     .test(clean(address));
 }
 
@@ -99,7 +100,7 @@ function uspsCoveSuffixEquivalence(targetIdentity = {}, context = {}) {
 
 export function normalizeAscBuildingAddressToken(identity = {}) {
   const address = clean(identity.address).replace(
-    /\s*,?\s*\b(?:\d+(?:st|nd|rd|th)\s+floor|floor\s+[a-z0-9-]+|fl\s+[a-z0-9-]+|suite|ste|unit)\b.*$/i,
+    /\s*,?\s*\b(?:\d+(?:st|nd|rd|th)\s+floor|floor\s+[a-z0-9-]+|fl\s+[a-z0-9-]+|building|bldg|suite|ste|unit)\b.*$/i,
     '',
   ).trim();
   return normalizeAscAddressToken({ ...identity, address });
@@ -363,6 +364,40 @@ function approvedParentAddressAlias(target, capturedAddressToken) {
   }) || null;
 }
 
+function approvedOperatingIdentityAlias(target, context, capturedAddressToken) {
+  const aliases = Array.isArray(target.cms_evidence?.approved_operating_identity_aliases)
+    ? target.cms_evidence.approved_operating_identity_aliases
+    : [];
+  const facilityName = normalizeTenantIdentityName(target.cms_identity?.facility_name);
+  const capturedNames = new Set(contextTenantNames(context));
+  for (const alias of aliases) {
+    if (alias?.status !== 'approved'
+      || alias?.reason_code !== 'legal_entity_operating_identity_same_site'
+      || alias?.address_token !== capturedAddressToken
+      || normalizeTenantIdentityName(alias?.cms_facility_name) !== facilityName
+      || !clean(alias?.authorized_by)
+      || !/^\d{4}-\d{2}-\d{2}T/.test(clean(alias?.authorized_at))) continue;
+    const operatingNames = (Array.isArray(alias.operating_names) ? alias.operating_names : [])
+      .map(normalizeTenantIdentityName).filter(Boolean);
+    const matchedName = operatingNames.find((name) => capturedNames.has(name));
+    if (!matchedName) continue;
+    const citations = Array.isArray(alias.evidence_citations) ? alias.evidence_citations : [];
+    const officialHosts = new Set();
+    for (const citation of citations) {
+      if (clean(citation?.source).toLowerCase() !== 'official_operator') continue;
+      try {
+        const url = new URL(clean(citation?.url));
+        if (url.protocol === 'https:') officialHosts.add(url.hostname.toLowerCase());
+      } catch {
+        // Invalid citations cannot authorize an identity alias.
+      }
+    }
+    if (officialHosts.size < 2) continue;
+    return { ...alias, matched_operating_name: matchedName };
+  }
+  return null;
+}
+
 export function assertAscResearchImport({ release_id, selection_fingerprint, candidate_pool_fingerprint, candidates } = {}) {
   for (const [name, value] of Object.entries({ release_id, selection_fingerprint, candidate_pool_fingerprint })) {
     if (!SHA256_RE.test(clean(value).toLowerCase())) throw new Error(`${name} must be a lowercase SHA-256 fingerprint`);
@@ -442,6 +477,11 @@ export function buildAscStructuredCapture(target, context = {}) {
     const corroboration = exactTenantCorroboration
       || singleTenantOrganizationFamilyCorroboration(target, context);
     const addressAlias = approvedParentAddressAlias(target, addressToken);
+    const operatingIdentityAlias = approvedOperatingIdentityAlias(
+      target,
+      context,
+      addressToken,
+    );
     const parentBuildingMatch = hasAscSublocation(cmsIdentity.address)
       && buildingAddressTokensAgree(
         normalizeAscBuildingAddressToken(cmsIdentity),
@@ -449,6 +489,12 @@ export function buildAscStructuredCapture(target, context = {}) {
       )
       && corroboration;
     const aliasMatch = addressAlias && corroboration;
+    const operatingIdentityAliasMatch = operatingIdentityAlias
+      && hasAscSublocation(cmsIdentity.address)
+      && buildingAddressTokensAgree(
+        normalizeAscBuildingAddressToken(cmsIdentity),
+        normalizeAscBuildingAddressToken(context),
+      );
     const rangeContainment = capturedRangeContainsFrozenNumber(frozenComparisonToken, addressToken);
     const rangeContainmentMatch = rangeContainment && corroboration;
     const controlledFacilityAlias = controlledAscFacilityAlias(target, context);
@@ -469,12 +515,21 @@ export function buildAscStructuredCapture(target, context = {}) {
     const compoundStreetSplit = compoundStreetTokenSplit(frozenComparisonToken, addressToken);
     const facilityCorroboration = exactFacilityCorroboration(target, context);
     const compoundStreetSplitMatch = compoundStreetSplit && facilityCorroboration;
-    if (!parentBuildingMatch && !aliasMatch && !rangeContainmentMatch && !multiSignalRangeMatch
+    if (!parentBuildingMatch && !aliasMatch && !operatingIdentityAliasMatch
+      && !rangeContainmentMatch && !multiSignalRangeMatch
       && !municipalityAliasMatch && !directionalStreetTypeMatch
       && !compoundStreetSplitMatch) {
       throw new Error('Captured page does not match the active frozen ASC candidate');
     }
-    identityMatch = multiSignalRangeMatch ? {
+    identityMatch = operatingIdentityAliasMatch ? {
+      mode: 'approved_operating_identity_parent_building',
+      alias_reason_code: operatingIdentityAlias.reason_code,
+      cms_facility_name_preserved: clean(cmsIdentity.facility_name),
+      captured_operating_name: operatingIdentityAlias.matched_operating_name,
+      cms_sublocation_preserved: clean(cmsIdentity.address),
+      captured_building_address: clean(context.address),
+      second_review_required: true,
+    } : multiSignalRangeMatch ? {
       mode: 'controlled_multisignal_range_identity',
       frozen_street_number: rangeContainment.frozen_number,
       captured_range_start: rangeContainment.range_start,
