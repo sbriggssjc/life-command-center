@@ -60,3 +60,6 @@ logs/
 email_export/
 *.pst
 *.ost
+
+# OCR1 bake-off inputs — client lease text, never committed
+bakeoff/

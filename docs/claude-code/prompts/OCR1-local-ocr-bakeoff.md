@@ -38,15 +38,17 @@ that does not support it — say so instead.**
    build and a live probe, all to work around **15/30 pages per call**. A local engine has **no cap
    at all**, and it dissolves the entire class of problem. **This is the real prize.**
 2. 🟢 **Confidentiality.** Today the complete PDF of every under-cap lease is sent to Google
-   (`document-text.js:262` → `rawDocument`). Local means **client lease text never leaves the
+   (`ocrCloudCheap` in `document-text.js` → the `docai-ocr` edge fn → `rawDocument` in the
+   ProcessRequest). Local means **client lease text never leaves the
    building** — which is also the concern that blocked DOC14.
 3. 🔵 **Resilience.** No vendor credit balance, no retired-model 400s, no quota surface. ⚠️ **This
    session already lost time to a "credit balance too low" on the Anthropic path** (OCR3).
 
 ## 1. The seam already exists — and that is the surprising part
 
-`api/_shared/document-text.js:328-347` reads `deps.freeOcr` as Tier 1, **and nothing has ever passed
-it.** No default; both real callers build `deps` without it. **It is already stubbed in
+`api/_shared/document-text.js` reads `deps.freeOcr` as Tier 1 (the seam is at ~`:631-633`, the
+design comment at ~`:204` — ⚠️ grep for `deps.freeOcr`, do not trust a line number), **and nothing
+has ever passed it.** No default; both real callers build `deps` without it. **It is already stubbed in
 `test/document-text.test.mjs`** (lines 161, 178, 246, 258, 268), so the contract is known and tested.
 
 ⚠️ **The existing producer cannot be reused as-is.** `scripts/lease-ocr-backfill.mjs:379`
@@ -110,7 +112,53 @@ distinct from "the document has no text."**
 | **local is close but weaker on scans** | 🟡 **Tier 1 as a born-digital / clean-scan pre-filter, DocAI as the escalation.** Still removes the cap for the documents it handles. Say which documents it can and cannot take. |
 | **local loses badly** | 🔴 **Say so plainly and stop.** DocAI stays the workhorse, DOC18 stands, and this is recorded so it is not re-proposed. **That is a legitimate and useful outcome.** |
 
-## 6. Report back
+## 6. ⚠️ EXECUTION REALITY — added 2026-09-02 after re-measuring; overrides §2 where they conflict
+
+**6a. The sample §2 asks for does not exist, by construction.** "≥3 leases over 30 pages with a
+DocAI baseline" is impossible: the 30-page cap is *why* longer documents have no DocAI text.
+Measured 2026-09-02, the longest `cloud_cheap` baseline is **exactly 30 pages** (doc 336), then
+26/26/25/25. So the bake-off has TWO arms with different deliverables:
+
+| arm | documents | what is measured |
+|---|---|---|
+| **A — head-to-head** (DocAI baseline exists) | `lcc_cre_property_document_text` where `method='ocr' and ocr_tier='cloud_cheap' and not needs_ocr`, take the 10 longest: doc ids **336, 425, 431, 255, 327** (leases 30/26/26/25/25pp), **386, 343, 228** (DDs 20/16/15pp), **436, 299** (leases 16pp) | field agreement, local vs DocAI, per §2 |
+| **B — beyond the cap** (NO DocAI baseline) | over-cap leases **319 (141pp), 320 (118pp), 200 (63pp), 61 (39pp)** | does local return coherent `extractTenantFromLease` fields from the WHOLE document, and are the back-half clauses (renewal / early termination / default cure / holdover) legible? Once DOC18's partials land, pages 1–50 of these gain a DocAI baseline — compare that slice too. |
+
+Arm B is the one that decides the page-cap argument, and it has no baseline to agree with —
+**say so, and grade it on consumer-field coherence and a human read of named clauses, not on a
+number.**
+
+**6b. The sandbox cannot reach the inputs.** DOC17 and DOC18 both measured `http=000` to
+`*.supabase.co` and Railway from Claude Code's sandbox; the PDFs are SharePoint server-relative
+refs fetched only through the Power Automate flow (`SHAREPOINT_FETCH_URL`, a Railway env var), and
+the DocAI baselines live in `lcc_cre_property_document_text.raw_text`. **So the deliverable
+splits:**
+
+1. **You build the harness**: `scripts/ocr-bakeoff.mjs`. Input: a folder `bakeoff/<document_id>/`
+   holding `source.pdf` and, for arm A, `docai.txt`. It probes the engines on PATH (the
+   `lease-ocr-backfill.mjs` probe order — `surya`, `paddleocr`, `ocrmypdf`, `tesseract`+`pdftoppm`;
+   ⚠️ **which of those the sandbox actually has is a measurement — report it**), writes
+   `local.<engine>.txt`, runs `extractTenantFromLease` over every text with the SAME injected
+   `deps.invokeExtractionAI`, and emits `agreement.json` + `agreement.md` (per document, per field,
+   per engine, plus wall-clock per page and engine version). **Prove it in-sandbox on a synthetic
+   fixture** — render a PDF of known text (and a deliberately degraded copy) so the harness's own
+   plumbing is verified before it meets a real lease.
+2. **Scott runs it** on the workstation or the GaryBuilt box, where the PDFs, Ollama and the GPU are.
+   Give the harness a `--fetch-baselines` step that pulls `raw_text` for the arm-A ids from
+   `lcc_cre_property_document_text` (PostgREST, `extractor_version='unit1_v1'`, the LCC Opps service
+   key from the local env) into `bakeoff/<id>/docai.txt` — the workstation can reach Supabase, the
+   sandbox cannot. Scott supplies only the PDFs. ⚠️ `bakeoff/` is git-ignored: it holds client
+   lease text and must never be committed.
+
+**6c. `extractTenantFromLease` needs a MODEL.** It calls `invokeExtractionAI` (`bov-extract.js:39`,
+`:249`). The field comparison is only fair if both texts go through the **same** model and prompt
+— record the model in the report. In the sandbox that means a stub; the real run uses the box's
+Ollama. ⚠️ The §4 gpt-4o ban is about OCR arms; the extraction model is a separate choice, but
+**it must be identical across arms**.
+
+**6d. Line numbers in this prompt have already drifted once** (see §1) — anchor on symbol names.
+
+## 7. Report back
 
 - **The field-agreement table** — per document, per field, local vs DocAI. This is the deliverable.
 - **Which engine(s)** you ran, versions, and GPU/CPU, with per-page wall-clock.
