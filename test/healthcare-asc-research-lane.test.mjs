@@ -668,6 +668,65 @@ test('approved same-parcel conflicts preserve service and mailing addresses with
   );
 });
 
+test('candidate-scoped CoStar record and parcel pin resolves a tenantless same-address conflict', () => {
+  const conflict = {
+    status: 'approved',
+    reason_code: 'service_location_mailing_address_same_parcel_source_record',
+    frozen_address_token: '5058 S FLORIDA AVE|TESTVILLE|FL|33813',
+    captured_address_token: '5050 S FLORIDA AVE|TESTVILLE|FL|33813',
+    parcel_number: '23-29-12-000000-021160',
+    costar_property_id: '11349159',
+    authorized_by: 'research_owner',
+    authorized_at: '2026-09-02T12:00:00Z',
+    evidence_citations: [
+      { source: 'official_facility_registry', url: 'https://registry.example/asc-location' },
+      { source: 'licensed_property_public_record', url: 'https://property.example/public-record' },
+    ],
+  };
+  const target = {
+    candidate_fingerprint: sha('f'),
+    address_token: conflict.frozen_address_token,
+    cms_identity: {
+      facility_name: 'Synthetic Ospine Surgical Center',
+      address: '5058 S Florida Ave', city: 'Testville', state: 'FL', zip: '33813',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Ospine LLC'],
+      approved_same_parcel_address_conflicts: [conflict],
+    },
+  };
+  const medicalRecord = {
+    source: 'costar',
+    page_url: 'https://product.costar.com/detail/all-properties/11349159/public-record',
+    costar_property_id: '11349159',
+    address: '5050 S Florida Ave', city: 'Testville', state: 'FL', zip: '33813',
+    parcel_number: '23-29-12-000000-021160',
+    square_footage: '3,500',
+  };
+  const built = buildAscStructuredCapture(target, medicalRecord);
+  assert.equal(built.identity_match.mode, 'approved_same_parcel_address_conflict');
+  assert.equal(built.identity_match.corroboration_basis, 'costar_source_record_and_parcel_pin');
+  assert.equal(built.identity_match.costar_property_id, '11349159');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...medicalRecord, costar_property_id: '49694' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, {
+      ...medicalRecord,
+      parcel_number: '23-29-12-000000-021150',
+    }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...medicalRecord, source: 'rca' }),
+    /does not match/,
+  );
+});
+
 test('building ranges contain a frozen street number only with exact location and tenant corroboration', () => {
   const target = {
     candidate_fingerprint: sha('9'),
