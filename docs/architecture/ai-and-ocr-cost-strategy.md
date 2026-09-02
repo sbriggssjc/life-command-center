@@ -105,13 +105,45 @@ code.** The `~$1.50/1k pages` figure is **comment-only**, in four places. `ocr_p
 about **compounding**: re-OCR for a second BOV, revisiting a lease, a growing corpus. **A $0 tier
 compounds to $0; a $50 tier compounds.**
 
+## 4a. 🔴 MEASURED 2026-09-02 — cost is NOT the case for local OCR, and saying so is the point
+
+**Across the whole CRE sidecar (362 rows):**
+
+| method | tier | docs | avg chars | **billed pages** |
+|---|---|---:|---:|---:|
+| `pdf_text` — digital layer, **free** | — | **140** | 38,664 | 34 |
+| `office_text` — docx/xlsx, **free** | — | **45** | 32,935 | 0 |
+| **`ocr`** | **DocAI** | **91** | **13,801** | **574** |
+| `ocr` | gpt-4o | 20 | 1,511 | — |
+| marker / no extract | — | 66 | 0 | 0 |
+
+**185 of 362 documents (51%) already extract for FREE.** Only **111 ever needed OCR**, and total
+DocAI spend to date is **574 billed pages ≈ $0.86.**
+
+⚠️ **So the cost argument for Tier 1 does not survive contact with the numbers, and this page's §5
+recommendation is corrected accordingly.** At corpus scale it is **$23–53**. **Anyone arguing local
+OCR on savings is arguing from a number that does not support it.**
+
+**The arguments that DO hold, in order of strength:**
+
+1. 🟢 **NO PAGE CAP — this is the real prize.** ⚠️ **Every hard problem in this arc — DOC8, DOC14,
+   DOC16, DOC17, DOC18 — was about Google's page limit, not money.** Five prompts, a refuted design,
+   a blocked GCS build and a live probe, to work around **15/30 pages per call**. A local engine has
+   **no cap**, and it dissolves the whole class of problem — including DOC18's partial-extract
+   ceiling and DOC14 entirely.
+2. 🟢 **Confidentiality.** Today the complete PDF of every under-cap lease goes to Google
+   (`document-text.js:262`). Local means client lease text **never leaves the building** — the same
+   concern that blocked DOC14.
+3. 🔵 **Resilience.** No credit balance, no retired-model 400s, no quota surface. ⚠️ **This session
+   lost time to exactly that on the Anthropic path** (OCR3).
+
 ## 5. 🟢 The recommendation
 
 **Ship DOC18 now, then wire Tier 1 on GaryBuilt. Do not route OCR to Microsoft.**
 
 1. **DOC18 (staged) — the three-call sync route.** ~$3.30 clears all 42 over-cap documents. **Do not
    hold it for the strategic work**; it is cheap, measured and unblocks the consumer today.
-2. **🟢 THE DURABLE ITEM — wire Tier 1 (`OCR1`).** Stand an OCR endpoint on the GaryBuilt box
+2. **🟢 THE DURABLE ITEM — `OCR1`, and it is a BAKE-OFF FIRST, not a build.** ⚠️ **Justify it on the PAGE CAP and confidentiality, NOT on cost (§4a).** Stand an OCR endpoint on the GaryBuilt box
    (Surya / PaddleOCR / ocrmypdf-Tesseract, all already named in the design) behind the **existing**
    tunnel + CF Access, and inject `deps.freeOcr` at the two server call sites. **The seam already
    exists and is tested** (`test/document-text.test.mjs` stubs it). This makes routine OCR **$0/page
