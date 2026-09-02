@@ -16,6 +16,43 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — DOC16 REFUTED on an unpredicted branch; my "lossless" claim inverts; DOC17 probes the decider
+
+**The gate ran and the sync path DOES accept a page selector** — `processOptions` →
+`individualPageSelector {pages}` / `fromStart` / `fromEnd`, read from the live v1 discovery document
+(rev 20260820), **not** inferred from the repo's `imagelessMode` comment.
+
+⚠️ **But the constraint sits where neither DOC16 nor its own STOP clause looked.** Google's Limits
+page: the 30-page extended cap *"is only applicable when processing pages contiguously **starting
+from page 1**."* So DOC16's second call — pages 31–50 — **cannot claim it by construction**, and that
+call was the load-bearing half: the whole difference between **~54,000** and **~90,000 chars**.
+
+🔴 **AND MY §4 CLAIM INVERTS RATHER THAN SHRINKS.** I wrote that this route was *"lossless on the
+consumer's terms."* A 30-page-only route drops pages 31–50 across **all 42** documents — **~36,000
+chars, ≈40% of the consumer's 90,000-char window**, content `extractTenantFromLease` genuinely reads.
+**Corrected in place rather than left standing.**
+
+⚠️ **Good instrument discipline in the run, worth keeping:** the discovery document states **no page
+limits at all**, and that was read as **a property of the instrument (a schema, not a quota surface),
+not as permission** — Class 11, caught rather than cashed.
+
+**Re-measured: the population is 42, not 40** (18 at 31–50pp, 24 at >50pp, max 141); chars/page
+reproduces at 1,808 / 1,732 over 85 rows. Live now: undrained **419**, `bov_ready` **39**, gpt-4o
+escalations still **0**.
+
+🟢 **DOC17 staged — ONE API call decides between "no GCS at all" and the full GCS build.** The
+unsettled question: **is a NON-page-1 selection measured against the selection or the document
+total?** Google's docs are silent, and DOC8's `{page_limit:30, pages:40}` **was taken with no
+selector, so it does not discriminate.** ⚠️ **The probe carries a mandatory positive control**
+(`fromStart:15` on the same document, which must succeed) — **without it a failure cannot be told
+from a silently-ignored selector**, which is the DOC8 no-op shape exactly. ⚠️ **Probe only; build
+nothing either way.**
+
+**Succeeds** → multi-call sync reaches ~50 pages with no GCS, no IAM, no new vendor surface and **no
+confidentiality decision at all.** **Fails** → sync caps at 30 pages, **DOC14 becomes genuinely
+necessary**, and Scott's decision gets weighed against an honestly priced alternative: **30 pages
+captures ~60% of the consumer's window.**
+
 ## 2026-09-02 — DOC16 staged: the consumer truncates at ~50 pages, so the GCS build is probably unnecessary
 
 **I was about to take Scott a confidentiality decision. Two measurements first, and they changed the
