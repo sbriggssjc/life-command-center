@@ -16,6 +16,20 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — EXT1 deploy confirmed; the box bake-off graded NO GPU engine (two install misses); harness Windows-python fix; duplicate rows merged
+
+- **EXT1 is deployed**: `985d322` is an ancestor of live `30eaced2` (cache-busted `/version`). The
+  floor re-run that MEASURES it is still Scott's (`--control self --engines tesseract`).
+- **Box run (19:00 UTC):** `paddle.utils.run_check()` printed *"works well on 1 CPU"* — the CPU wheel,
+  not `paddlepaddle-gpu`, so the identical oneDNN/PIR failure ×18; surya's `SURYA_INFERENCE_BACKEND`
+  setting exists and was not tried; tesseract byte-identical to the workstation. **Still no GPU engine
+  graded.** Corrected steps on `OPERATOR-ACTIONS.md`. ⚠️ Corrected my own claim in four places
+  earlier today: GaryBuilt is **Windows**, not Linux.
+- **Harness:** `--self-test` now tries `python3` → `python` → `py` (the box had `python` + Pillow one
+  line away and skipped). Self-test + 32 guards green in the sandbox.
+- **Consolidation:** the two windows each wrote an EXT1 and an OCR1 backlog row — merged to one of
+  each (dedupe grep clean). EXT1 prompt + responses → `done/`.
+
 ## 2026-09-02 — EXT1 SHIPPED (`de6daca`): the lease extractor QUOTES; the code annualizes and resolves dates. ⚠️ The floor movement is PREDICTED — the measurement is Scott's re-run.
 
 - **What changed.** `leasePrompt` no longer asks for an answer, it asks for a quote:
