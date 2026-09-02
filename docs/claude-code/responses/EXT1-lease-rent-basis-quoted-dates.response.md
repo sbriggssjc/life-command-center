@@ -3,7 +3,7 @@
 **Shipped.** `api/_shared/bov-extract.js` (prompt + three pure resolvers + the wiring),
 `scripts/ocr-bakeoff.mjs` (the offline stub now speaks the new shape), guard
 `test/ext1-lease-rent-basis-quoted-dates.test.mjs` — **21 tests, 20/20 mutations RED**.
-Full suite **5,101 pass / 0 fail / 6 skipped**. No migration, no backfill, no OCR change.
+Full suite **5,102 pass / 0 fail / 6 skipped**. No migration, no backfill, no OCR change.
 
 ## 1. The prompt diff
 
