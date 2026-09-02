@@ -169,6 +169,37 @@ with UX-T2). **UX13a** deferred to user onboarding. EXT1b sent to CC.
 - Full suite **5,102 pass / 0 fail / 6 skipped**. Record:
   `responses/EXT1-lease-rent-basis-quoted-dates.response.md`.
 
+## 2026-09-02 — PR5c-entities SHIPPED (#2066, `e9c74357`): the two `entities` contact writers consult the ladder — and it buys RECORDING, not protection, because every rung is `record_only`.
+
+**Verified live:** `field_provenance where target_table='entities'` **0** (correct — neither writer
+has a cron, `SF_CONTACT_WRITEBACK` is `off`); all ten `email`/`phone` rungs `enforce_mode='record_only'`
+(`manual_edit`/`manual_resolution`@1 → `salesforce`@20 → `domain_owner_contact`@55 → `costar_sidebar`@60);
+unranked **29**; 0 provenance-failure alerts. CI green on the merged SHA — CC checked the run on
+`b71fde0f`, not the one it validated (`3093f846`), because the merge UI added a second commit; merged
+**7 s after** the required suite went green.
+
+- **Wiring a ladder onto a table with an empty ledger cannot protect a curated value it has never
+  seen** — `lcc_merge_field` compares against `field_provenance`, not the live column, so the first
+  call on every field returns `no_prior_provenance ⇒ write`. And under `record_only`,
+  `shouldWriteField` records a `skip` and the write proceeds anyway. **Read the enforce mode before
+  predicting any behaviour change**; this is the prerequisite for grading a gate, not the gate.
+- **A grep does not find the writers of a column** — grep 24 sites / 13 files, AST walk **41 / 16**;
+  per-file column unions mis-labelled `bridge-handlers-salesforce.js` as an `email`/`phone` PATCHer
+  when only its CREATE path carries them. Count with a parser, read the payload per SITE.
+- **Where the writer has its own ledger (`metadata.field_sources`), a field the ladder drops must
+  lose its stamp there too** — that stamp is what the writer reads next run (the PR10 two-ladders shape).
+- **Two premature `check_suite.completed` webhooks** (one 46 s before the test job started) — read
+  as "CI passed" either would have been wrong. Verified against the runs each time.
+- **Filed:** `PR5c-enforce` (all ten rungs `record_only`; ungradeable until the ledger has history)
+  and **`PR5c-entities-b`** (`bridge-handlers-salesforce.js`, ~336 SF contacts/30d, unwired — the
+  nearer win because it runs daily). JS ships on the Railway redeploy (`e9c74357`).
+
+**Verify-next:** post-deploy, an operator tick of `owner-contact-propagate` → `entities` rows `0 → N`
+split by source/decision. Guard `test/pr5c-entities-ladder-wiring.test.mjs` (14 tests, 17/17
+mutations RED). Docs: `docs/audits/PR5c_entities_LADDER_WIRED_2026-09-02.md` · ladder page §3/§4 ·
+`CLAUDE.md` invariant list · backlog (all by CC). Handoff §3 rewritten this turn into a verify-next
+ledger (the closed-PR narrative now lives on the ladder page only). Prompt + response filed to `done/`.
+
 ## 2026-09-02 — PR5c CLOSED (#2060, `06a3ee5d`): the 33 zero-row LCC-internal rungs were one CHECK constraint — five callers sent a `target_database` outside the vocabulary and failed 23514 on 100% of calls, silently.
 
 **Verified live on LCC Opps after the merge:** all **33** rungs carry a `pr5c_verdict` —
