@@ -333,6 +333,53 @@ design** (15 candidates read, 10 genuine / 5 SPE-named-after-tenant; the confirm
 `entity_type` defect; **C18** (`ownership_start_date`) is unchanged and still the highest-value item
 — though §7.2 corrects WHY: the 50.7% blindness belongs to `investor_owner` pacing, not to
 repeat-buyer pacing, which is 98.8% dated.
+## 2026-09-01 — Both blocking decisions RESOLVED ON MEASUREMENT, and the rate answer is better than either option offered
+
+Scott's direction: *"the most accurate determination possible… we don't want to lose valuable
+information but we want connected and clean and accurate data."* **Neither question needed an
+opinion — both were answerable against the live database.** Prompt queued:
+`B6e-ci-last5-decisions-resolved.md`.
+
+### Decision 1 — the rate vintage: keep BOTH constants, and the real defect is elsewhere
+
+Measured on `clinic_econ_reconciled` (`model_version_id = 21`, computed 2026-09-01), avg blended
+rate per treatment by FY: **2021 375.44 · 2022 374.97 · 2023 374.27 · 2024 373.24.** **A −0.6% drift
+over four years, and what moves is PAYER MIX, not rate** (Medicare 35.04% → 35.71%).
+
+**So identical values for `RATES_2025` and `CMS_2023_RATES` are defensible — but keep them as two
+named constants.** Collapsing costs nothing today and **permanently destroys the ability to express
+a divergence** when CMS does move. That is Scott's *"don't lose valuable information"* applied to a
+constant rather than a row. And the test-side one-liners are safe: **the code is within 0.3% of the
+reconciled model; the test is 12.5% high.**
+
+🚨 **The finding that outranks the question as asked: FY2025 has 61 rows and FY2026 has 724, against
+~6,700/yr for 2021–2024 — and FY2026 reads 73.66% Medicare against a ~35% baseline.** Those are not
+rate vintages, they are **thin partial-year populations with a different composition**, and a
+ground-truth test calibrated against them is calibrating on noise. ⚠️ **An assertion averaging over
+`fiscal_year >= 2021` drifts on its own as the thin years fill, with no code change.** Each
+assertion must state its population.
+
+### Decision 2 — the broker path: the design question is already settled by the data
+
+`dia.sales_transactions`, 4,783 rows: **name set 2,111 · id set 181 · name-with-no-id 1,930 ·
+id-with-no-name 0 · 528 distinct unresolved names.**
+
+🎯 **`id_set_name_null = 0` settles it.** On all 181 rows that carry an id, **the name was kept
+too** — the intended pattern is BOTH columns, and it simply stopped being applied. *"Don't lose
+valuable information"* is not a new requirement here; it is the existing design being restored.
+
+**And the resolution is far more tractable than 1,930 suggests.** The FK target `brokers` holds
+**2,425 rows**, and **422 of 528 names (80%) match `broker_name` exactly, case-insensitively** — no
+fuzzy matching, no identity guessing. Tier 2 (`normalized_name` 373 / `company` 209) takes the
+remainder where unambiguous; **everything else goes to a review lane.**
+
+⚠️ **The residue's shape is the argument against ever fuzzy-matching it**: `Avison Young; Barnes` and
+`AY; Barnes` (multi-broker co-listings *plus* an abbreviation), `Anthony Falcone` / `Babcock`
+(individuals), and **`4802 D Dialysis, LLC` — a property name misparsed into the broker slot.** A
+fuzzy matcher would confidently attach the wrong firm to several. **Grouping-for-review ≠
+identity-for-write**, again. And **a multi-broker string is a real fact, not a defect** — record that
+it is one rather than picking half of it.
+
 ## 2026-09-01 — ✅ 14 → 5, the 6 false-green guards were real, and both remaining blockers are now SIZED decisions (PR #7391, `5d464dd`)
 
 | | executed | pass | fail |
