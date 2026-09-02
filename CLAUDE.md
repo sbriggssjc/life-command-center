@@ -1076,6 +1076,70 @@ them are rungs nothing will ever exercise.** Verdict + evidence for all 39 are s
 - **Verify on `v_field_source_priority_triage`, never on the never-written count** — that count only
   moves when a producer runs, so it correctly stays 39 after a triage that deleted nothing.
 
+### ⚠️ A DERIVED COLUMN CAN REFUSE A VALUE THE TABLE IS SUPPOSED TO HOLD — AND THE WRITER FAILS OPEN (PR12, 2026-09-02)
+
+`field_provenance.value_text_hash` was `GENERATED ALWAYS AS
+encode(sha224(coalesce(value::text,'')::bytea),'hex')`. `value` is **jsonb**, jsonb renders
+**backslash** escapes (`\"` `\n` `\t` `\r` `\b` `\f` `\uXXXX`), and bytea's **escape** input
+format accepts only `\\` and `\ooo` — so the cast raised **22P02 and aborted the entire
+`lcc_merge_field()` call**. The curated write still landed, because `shouldWriteField` catches a
+non-ok RPC and fails open. **A hash nobody reads was deciding which provenance rows exist.**
+Full measurement: `docs/audits/PR12_PROVENANCE_QUOTE_LOSS_2026-09-02.md`.
+
+- **⚠️ NEVER CAST TEXT TO `bytea` TO FEED A DIGEST — USE `convert_to(t,'UTF8')`.** `t::bytea`
+  *parses* backslash escapes; `convert_to` takes the bytes. Two consequences, and the second is
+  quieter: an invalid escape **errors**, and a valid one (`\\`) silently **collapses**, so the hash
+  no longer describes the text. Swept across all three projects over generated columns, defaults,
+  function bodies, CHECK constraints, expression indexes and views: **this was the only first-party
+  instance** (the rest is Supabase `vault`/`pgsodium`, which already do it correctly). Guarded
+  class-wide by `test/pr12-provenance-hash-and-failure-signal.test.mjs`.
+- **⚠️ THE BREAK SET IS NOT "QUOTES" — and the members nobody expects are the ones that bite.**
+  `"`, newline, tab, CR, backspace, formfeed and any control char, **including inside a jsonb object's
+  or array's string members**. It does NOT break on a jsonb object's own delimiter quotes
+  (`{"a": "b"}` carries no backslash) or on non-ASCII. Rule, validated 14/14 against the live cast:
+  **after collapsing `\\` pairs, any remaining backslash errors.** A backlog row that names one
+  character is describing a symptom, not the population — derive the population from the mechanism.
+- **⚠️ `LIKE '%\%'` DOES NOT MEAN "CONTAINS A BACKSLASH" — backslash is LIKE's own escape
+  character**, so that pattern means *"ends with a literal `%`"*. It returned a clean, confirming
+  **0** on the first census arm. Use `strpos()`, which has no escape semantics, and **positive-control
+  the query shape** — the control fired on all 1,270,785 rows while the real arms read 0. Same family
+  as the P157 `reloptions` and P182 deparse traps, committed while auditing for exactly that class.
+- **⚠️ `ALTER COLUMN ... DROP EXPRESSION` IS METADATA-ONLY — the rewrite was avoidable.**
+  `DROP COLUMN` + `ADD COLUMN ... GENERATED ... STORED`, and PG17's `SET EXPRESSION`, both rewrite the
+  whole table (here 1,270,785 rows / 1,025 MB on a 5,804 MB database whose worst failure is disk-full
+  → sign-in lockout, with **free disk not measurable from SQL or the MCP surface**). `DROP EXPRESSION`
+  converts the generated column to a plain column **in place and retains the data** — probed live:
+  `pg_relation_filenode` unchanged, values byte-identical. Pair it with a BEFORE trigger. ⚠️ The
+  trigger must assign **unconditionally**: that is the one guarantee `GENERATED ALWAYS` gave for free
+  (a caller cannot supply the column) and the one a trigger has to earn.
+- **⚠️ PROVE THE BACKFILL IS A NO-OP RATHER THAN RUNNING ONE.** 0 of 1,270,785 stored values contain
+  a backslash, so the new expression reproduces every hash byte-for-byte — the **whole population**,
+  not a 10k sample — verified after apply at 0 mismatches with the mutated-expression control at
+  1,270,785. A backfill of 1.27M rows would have cost ~500 MB of bloat to change nothing.
+- **⚠️ AND DO NOT BACKFILL THE LOST PROVENANCE.** The source, confidence and run id of a historical
+  write cannot be reconstructed; a fabricated provenance row is worse than a missing one. Record the
+  loss as a number and a date.
+- **⚠️ THE HISTORICAL LOSS IS STRUCTURALLY UNMEASURABLE, AND THE THREE NUMBERS MEAN DIFFERENT
+  THINGS.** Exposure **79** ladder-governed values · **12 proven SAFE** (their writer passes a jsonb
+  **ARRAY**, which renders with no backslash — the census assumed `to_jsonb(col::text)` and therefore
+  over-counts wherever a caller passes structured jsonb) · **67 residual** · **1 demonstrated loss**
+  (a writer is known to have tried). A break-class value later overwritten with a clean one **leaves
+  nothing behind**, so 67 is a snapshot of current exposure, never a running total. **Say which of
+  the three a number is.**
+- **A GATE THAT FAILS OPEN MUST STILL LEAVE A TRACE.** `shouldWriteField` keeps failing open — losing
+  a curated value is worse than losing its provenance — but now records the **DB's own SQLSTATE and
+  message** (never `http_<status>`; a status code cannot name a cause — the "a 409 is not necessarily
+  a conflict" rule), counts it, and opens a deduped
+  `lcc_health_alerts(alert_kind='provenance_write_failed')`. **Read `provenance_failed`, never
+  `recorded`.**
+- **⚠️ A SOURCE DETECTOR MUST BLANK STRING LITERALS AS WELL AS COMMENTS, AND COMMENTS COME FIRST.**
+  The fix's own `COMMENT ON COLUMN … IS '…value::text::bytea…'` names the banned shape inside a
+  **quoted string**, so a comments-only stripper reported the defect it had just removed. Blanking
+  literals first is worse than not blanking — a bare apostrophe in prose opens a string that swallows
+  the code behind it. And the historical migration that legitimately still states the old expression
+  is exempted **by path**, with a companion test asserting the exemption still matches something so
+  the allowlist cannot rot into a lie.
+
 - **`v_field_provenance_actionable`** / `v_field_provenance_current` / `v_field_provenance_conflicts` — drive
   the Decision Center provenance lanes.
 
@@ -4756,12 +4820,15 @@ Related invariants from the same round:
       `owner_name` are wired and will read 0: those keys have **never appeared on any of 55,901
       entity captures**, and `tax_amount` is present as a KEY in all 932 parcel `raw_payload`s and
       non-null on 0 — a second store confirming the same zero.
-    - 🔴 **`field_provenance` CANNOT STORE A VALUE CONTAINING A DOUBLE QUOTE, AND IT FAILS
-      SILENTLY.** `value_text_hash` is `GENERATED AS encode(sha224((value)::text::bytea),'hex')`;
-      a jsonb string renders inner quotes with backslashes and `::bytea` rejects them **22P02**,
-      aborting the whole `lcc_merge_field` call — while `shouldWriteField` catches and **fails
-      open**, so the write proceeds and the provenance is lost with no signal. Backlog **PR12**;
-      the size of the historical loss is unmeasured.
+    - ✅ **`field_provenance` COULD NOT STORE A VALUE CONTAINING A DOUBLE QUOTE — FIXED 2026-09-02
+      (PR12). The lasting lesson is in the next bullet; this one is the record.**
+      `value_text_hash` was `GENERATED AS encode(sha224((value)::text::bytea),'hex')`; jsonb renders
+      backslash escapes and bytea's escape parser accepts only `\\`/`\ooo`, so the cast raised
+      **22P02 and aborted the whole `lcc_merge_field` call** while `shouldWriteField` caught it and
+      **failed open** — the curated write landed, the provenance vanished, no signal. This backfill's
+      2,532-of-2,533 is the **only demonstrated loss in the system**. Now a plain column owned by a
+      BEFORE trigger using `convert_to(...,'UTF8')`. Writeup:
+      `docs/audits/PR12_PROVENANCE_QUOTE_LOSS_2026-09-02.md`.
     - ⚠️ **"It needs no new acquisition" was the tell, not the selling point.** No new acquisition
       means the values are whatever the current producer emits — so *the cheapest consumer to build
       is exactly the one whose source nobody re-graded.* **Before wiring any registered-but-unused
