@@ -84,6 +84,46 @@
 - Full suite **5,102 pass / 0 fail / 6 skipped**. Record:
   `responses/EXT1-lease-rent-basis-quoted-dates.response.md`.
 
+## 2026-09-02 — PR12 SHIPPED (#2057, `68ede28c`): `field_provenance` no longer drops values with quotes/newlines — fixed WITHOUT a 1 GB table rewrite — and the exposure was 16× the row's number.
+
+**Verified live on LCC Opps after the merge:** `value_text_hash.attgenerated = ''` (plain column,
+1 BEFORE trigger); `field_provenance` **1025 MB, unchanged** (no rewrite); **1,979 rows** written by
+live producers since the migration, **8 break-class** (backslash-rendering values), **0 null
+hashes**; `provenance_write_failed` alerts **0**; unranked **29**. ⚠️ **The JS half (the
+`provenance_failed` counter + alert) ships on the Railway redeploy — the fix itself is already in
+force in the DB.** Confirm `/version` ≥ `68ede28c` alongside PR2's `98248e18`.
+
+- **The defect was every backslash-rendering character, not the double quote**: `"`, newline, tab,
+  CR, backspace, formfeed, control chars, including inside jsonb object/array string members.
+  Rule validated 14/14 against the live cast. **The dominant population is the NEWLINE in ordinary
+  narrative** — `dia.sales_transactions.notes` 927/2,969 (31%), `sale_notes_raw` 60/447, gov
+  `sale_notes_raw` 47/269 ⇒ **~1,101 exposed today**, on columns that are NOT rungs. The
+  ladder-scoped census (as the prompt asked) read 67 and structurally could not see them —
+  `lcc_merge_field` is called for unregistered pairs too. **My census scope was the error.**
+- **Three numbers, three meanings:** exposure 79 ladder-governed · 12 proven SAFE (writer passes a
+  jsonb ARRAY, no backslash) · **1 demonstrated loss** (PR2's zoning). Cumulative historical loss
+  is **structurally unmeasurable** — an overwritten break-class value leaves nothing.
+- **No rewrite:** `ALTER COLUMN … DROP EXPRESSION` is metadata-only (probed: `pg_relation_filenode`
+  unchanged, values byte-identical) → plain column + BEFORE trigger over `convert_to(…,'UTF8')`.
+  0 of 1,270,785 stored values contain a backslash, so every hash reproduces — verified over the
+  **whole population**, mutated-expression control at 1,270,785. The prompt's sizing premise
+  (a 1.26M-row rewrite) was wrong; the disk-full → sign-in-lockout risk made finding this matter.
+- **PR5c is NOT explained by PR12** — `entities.name` 23/69,462 break-class (0.03%), 0 on every
+  other LCC-internal column; a dropped stamp would need ~100%. **PR5c is gradeable now.**
+- **`::bytea` sweep, three projects:** this was the only first-party instance.
+- **Three measurement traps, all caught by positive controls:** `LIKE '%\%'` returned a
+  confirming 0 (backslash is LIKE's escape); `to_jsonb(col::text)` over a jsonb column read
+  **100%** (`sale_notes_extracted` 250/250 — real 0/0); and the ladder scope above.
+- **Filed:** **PR12a** (the 67 residual, unmeasurable total) · **PR12b** (new this turn:
+  `lcc_flush_provenance_events` advances `max_event_id` past an errored event — permanent skip).
+- Guard `test/pr12-provenance-hash-and-failure-signal.test.mjs` (12 tests, 17/17 mutations RED;
+  the fix's own `COMMENT ON` literal named the banned shape — literals blanked, comments first).
+  CI 5,099 / 5,093 / 0 fail.
+
+Docs: `docs/audits/PR12_PROVENANCE_QUOTE_LOSS_2026-09-02.md` · lane page §2 · `CLAUDE.md` PR12 block ·
+backlog PR12 ✅ / PR12a / PR5c re-worded (by CC); PR12b, handoff, CURRENT-STATE, OPERATOR-ACTIONS this
+turn. Prompt + response filed to `done/`.
+
 ## 2026-09-02 — PR5 SHIPPED (#2051, `d8beb555`): the 39 never-written ladder sources are triaged IN THE DATABASE, 25 of them are not defects, and 7 are live on a second ledger. PR7 re-measured 1 → 19 orphan pairs. PR9 stated for Scott.
 
 **Verified live on LCC Opps after the merge:** `field_source_priority` **2,141** rungs (+1, the

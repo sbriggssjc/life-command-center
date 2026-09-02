@@ -75,7 +75,12 @@ The ladder itself is TRIAGED (PR5, 2026-09-02): 2,141 rungs / 68 sources; **426 
 never-written sources only 14 are dead — 7 are live on the property-owner ledger, which writes no
 `field_provenance`, and **33 rungs on LCC-internal tables have never been exercised** (PR5c).
 → `docs/architecture/public-records-source-lane.md`, `docs/audits/PR5_LADDER_SOURCE_TRIAGE_2026-09-02.md`;
-backlog PR1d (`REGRID_API_KEY`), PR5a–e, PR7a–b, PR9 (Scott), PR11, PR12.
+`field_provenance` can hold ANY value since PR12 (2026-09-02): `value_text_hash` is a plain column
+owned by a BEFORE trigger (`convert_to`), no rewrite, 1025 MB unchanged; before it every
+backslash-rendering value (quotes, **newlines** — ~1,101 exposed, mostly `sales_transactions`
+narrative) aborted `lcc_merge_field` and the JS failed open silently. The failure is now counted
+(`provenance_failed`) and alerted (`provenance_write_failed`) — that half awaits the Railway redeploy.
+→ backlog PR1d (`REGRID_API_KEY`), PR5a–e, PR7a–b, PR9 (Scott), PR11, PR12a–b.
 
 ### Comms → context
 Outlook/Teams intake → `activity_events` / `email_bodies` → deal attribution → correspondence
