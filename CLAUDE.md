@@ -1116,9 +1116,30 @@ Full measurement: `docs/audits/PR12_PROVENANCE_QUOTE_LOSS_2026-09-02.md`.
   a backslash, so the new expression reproduces every hash byte-for-byte — the **whole population**,
   not a 10k sample — verified after apply at 0 mismatches with the mutated-expression control at
   1,270,785. A backfill of 1.27M rows would have cost ~500 MB of bloat to change nothing.
+- **✅ VERIFY ON THE PRODUCER, NOT THE BACKFILL (Class 8) — and here it was available immediately.**
+  Within two hours of the migration live producers wrote **1,254 provenance rows, 8 of them
+  break-class, all hashing correctly**. That is what says the *writer* is fixed rather than the table
+  being momentarily tidy — and it is a stronger check than the wall clock, because the break-class
+  rows are the ones that could not have existed the day before.
 - **⚠️ AND DO NOT BACKFILL THE LOST PROVENANCE.** The source, confidence and run id of a historical
   write cannot be reconstructed; a fabricated provenance row is worse than a missing one. Record the
   loss as a number and a date.
+- **🚨 A CENSUS SCOPED TO "LADDER-GOVERNED COLUMNS" MISSES MOST OF IT — `lcc_merge_field` IS CALLED
+  FOR UNREGISTERED (table, field) PAIRS TOO.** The registered-rung census said 67; the *post-fix*
+  check found **8 break-class rows written within two hours of the migration**, live `costar_sidebar`
+  writes of `dia.sales_transactions.notes` / `sale_notes_raw` — multi-line OM narrative, on columns
+  that are **not rungs**, so the census structurally could not see them. Re-measured: dia `notes`
+  **927 of 2,969 (31%)**, dia `sale_notes_raw` 60/447, gov `sale_notes_raw` 47/269 ⇒ **~1,101
+  exposed, a 16× correction to my own headline.** **The dominant population is the NEWLINE in
+  ordinary narrative text, not the quoted owner name the defect was filed under.** When a detector's
+  scope comes from a registry, ask what the code path does for things the registry does not list.
+- **⚠️ CHECK A COLUMN'S TYPE BEFORE BELIEVING A BREAK-RATE — the same over-count bit three times.**
+  `to_jsonb(col::text)` is faithful for a **text** column and wrong for one the caller passes as
+  jsonb: `sale_notes_extracted` first read **250/250 and 184/184 — 100%**, the implausibly-clean
+  number that should stop you (Class 11), and its real count is **0/0** because it is jsonb. The same
+  error made 12 of the 79 registered "losses" into proven non-losses (their writer passes a jsonb
+  ARRAY, which renders with no backslash). **The predicate has to match what the caller actually
+  hands the function, not what the column happens to hold.**
 - **⚠️ THE HISTORICAL LOSS IS STRUCTURALLY UNMEASURABLE, AND THE THREE NUMBERS MEAN DIFFERENT
   THINGS.** Exposure **79** ladder-governed values · **12 proven SAFE** (their writer passes a jsonb
   **ARRAY**, which renders with no backslash — the census assumed `to_jsonb(col::text)` and therefore

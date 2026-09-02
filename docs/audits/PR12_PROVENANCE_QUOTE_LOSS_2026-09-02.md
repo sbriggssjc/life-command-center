@@ -93,6 +93,41 @@ The residue is real curated data, not junk: `DOUBLE "Z" BROADCASTING, INC.`,
 in `properties.address`. Now that the writer is fixed these re-record on the next write; nothing is
 backfilled (§7).
 
+### 3a. ⚠️ The 79 answers the question as posed and is NOT the exposure — `lcc_merge_field` is called for UNREGISTERED fields too
+
+Found by the *post-fix* check, not by the census: **8 break-class rows were written within two hours
+of the migration** — live `costar_sidebar` writes of `dia.sales_transactions.notes` and
+`sale_notes_raw`, multi-line OM narrative, every one of which would have raised 22P02 and been lost
+the day before. All 8 hashed correctly.
+
+Those columns are **not `field_source_priority` rungs**, so a census scoped to "ladder-governed
+columns" — which is what was asked for — **structurally could not see them**. `lcc_merge_field` is
+called for unregistered (table, field) pairs as well; it just takes the
+`unregistered_source_filling_blank` / `..._with_existing_value` branch. Re-measured on the free-text
+columns that provenance demonstrably writes:
+
+| column | type | non-null | break-class |
+|---|---|---:|---:|
+| dia `sales_transactions.notes` | text | 2,969 | **927 (31%)** |
+| dia `sales_transactions.sale_notes_raw` | text | 447 | **60** |
+| gov `sales_transactions.sale_notes_raw` | text | 269 | **47** |
+| dia / gov `sales_transactions.sale_notes_extracted` | **jsonb** | 250 / 184 | **0 / 0** |
+
+⚠️ **`sale_notes_extracted` is the 12-jsonb-arrays trap for the third time in this audit.** The
+`to_jsonb(col::text)` predicate first read **250 of 250 and 184 of 184 — 100%**, which is precisely
+the implausibly-clean number that should stop you. It is a **jsonb** column, so the caller passes it
+directly and its real break count is **0 / 0**. *Check the column's TYPE before believing a
+break-rate; the predicate must match what the caller actually hands `lcc_merge_field`.*
+
+**Corrected exposure: 67 registered + 1,034 unregistered free-text = ~1,101 currently-exposed values,
+against the 67 this document reported one section earlier.** That is a **16× correction to my own
+headline**, and the direction is the important part: the dominant population is not the quoted owner
+name the backlog row named, it is the **newline** in ordinary multi-line narrative text, on
+free-text columns nobody registered. `notes` at 31% is the real shape of this defect.
+
+It is also not exhaustive — these are the free-text columns provenance is *known* to write. Sized in
+backlog **PR12a**.
+
 ---
 
 ## 4. PR5c is NOT explained by PR12
