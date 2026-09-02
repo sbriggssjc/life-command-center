@@ -25,6 +25,7 @@ The frozen ASC research run has exposed reusable classes rather than isolated ba
 - compound street names represented with or without an internal space;
 - historical frozen tokens produced by an earlier normalizer version;
 - a correct building supported by an explicit facility or tenant, but not by address alone;
+- a CMS legal entity represented in the property source by a separately branded operating identity;
 - a source legitimately having no matching record;
 - stale sidebar candidate state after completion or navigation; and
 - database functions whose output columns become ambiguous as their implementation evolves.
@@ -80,6 +81,12 @@ Facility corroboration is not approximate name similarity. It must be an explici
 approved deterministic alias. When multiple source properties share the location, address-only acceptance is
 prohibited.
 
+An operating-identity alias must be candidate-scoped, bind the preserved CMS legal name to an allow-listed
+operating name at one exact normalized building address, carry an authorizer and timestamp, and cite at least
+two independent official HTTPS hosts. It may support a parent-building attachment only when the captured
+tenant exactly equals an allow-listed operating name. It never becomes a global name rewrite, and every use
+requires second review.
+
 ## 5. Shared component boundaries
 
 | Component | Responsibility | Must not do |
@@ -134,9 +141,9 @@ Every proposed equivalence follows the same lifecycle:
 7. monitor aggregate outcomes by rule version; and
 8. retire or supersede the rule without deleting prior decisions.
 
-The golden corpus must include suites/floors, parent buildings, same-address campuses, ranges, controlled
-multi-signal facility/owner identity, directionals,
-suffixes, municipality aliases, compound streets, postal extensions, historical tokens, and deliberately
+The golden corpus must include suites/floors, building designators, parent buildings, same-address campuses,
+ranges, controlled multi-signal facility/owner identity, directionals, suffixes, municipality aliases,
+compound streets, legal/operating-name pairs, postal extensions, historical tokens, and deliberately
 confusable facilities. Every positive fixture needs at least one nearby negative control capable of exposing
 over-normalization.
 
