@@ -67,6 +67,7 @@ adding more.** Without it, the rotation you eventually do is against a moving ta
 | **I19** | **Assign owners for PA flows and edge functions** — the deployment runbook literally says `TBD`. (`FLOW-REGISTRY.yaml` does record you as owner for all 17 baseline flows; **PA5**'s three unregistered flows are the gap.) |
 | **I3** | **Supavisor pooler move** (txn-mode 6543). ⚠️ Was filed *only* as a pointer into a file being archived — **a pointer into an archive is not a filing.** |
 | **J1 (P1c)** | **The multi-owner ownership edge** — one SPE resolving to **N** true owners with roles (JV partner, GP/LP, DST beneficiary). Needs your model of how you think about JV ownership before anyone builds it. |
+| **PR2-gov** | **Run the gov parcel-stat backfill?** `node scripts/pr2-backfill-sidebar-parcel-stats.mjs --domain government --apply` — 1,527 `costar_sidebar` parcel rows with 0 stats, ceiling 1,230 SF / 1,192 year built / 1,155 lot / 310 zoning. Same fixed parser, reversible by batch tag. Left un-run on 2026-09-02 rather than widen a dia-scoped change; nothing blocks it. **Also confirm the Railway redeploy carries `98248e18`** (`/version`) — until it does, new sidebar captures still drop the stats. |
 | ~~**AUTH**~~ | ✅ **SETTLED 2026-08-29 — not a decision any more.** `GET /api/diag?kind=auth-ready` returned `lcc_env: production`, `enforcing: true`; `/api/*` IS auth-enforced and `CURRENT-STATE.md` §1 was corrected. *(Row closed 2026-09-02; it had outlived the answer by four days.)* |
 
 ---
