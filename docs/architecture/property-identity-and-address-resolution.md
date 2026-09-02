@@ -26,6 +26,7 @@ The frozen ASC research run has exposed reusable classes rather than isolated ba
 - historical frozen tokens produced by an earlier normalizer version;
 - a correct building supported by an explicit facility or tenant, but not by address alone;
 - a CMS legal entity represented in the property source by a separately branded operating identity;
+- a certified service-location address differing from a property source's mailing or situs label on the same parcel;
 - a source legitimately having no matching record;
 - stale sidebar candidate state after completion or navigation; and
 - database functions whose output columns become ambiguous as their implementation evolves.
@@ -86,6 +87,12 @@ operating name at one exact normalized building address, carry an authorizer and
 two independent official HTTPS hosts. It may support a parent-building attachment only when the captured
 tenant exactly equals an allow-listed operating name. It never becomes a global name rewrite, and every use
 requires second review.
+
+A same-parcel address-conflict alias must also be candidate-scoped. It binds one frozen service-location
+token to one captured property token and one exact parcel identifier, requires an exact captured facility or
+enrollment-organization tenant, and cites both an official facility registry and the licensed property public
+record. Parcel agreement without tenant corroboration is insufficient. The capture preserves both addresses,
+the parcel identifier, and any square-footage disagreement, and always requires second review.
 
 ## 5. Shared component boundaries
 

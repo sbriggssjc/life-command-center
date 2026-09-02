@@ -96,7 +96,7 @@ Frame: `LCC-SYSTEM-MAP.md`
 
 ## F. Property identity resolver  (ASC proving ground)
 - 🟡 **F1. Finish the frozen 50-property ASC sample** under the restricted workflow; preserve missingness and second-review flags.
-- 🟡 **F2. Extract the approved ASC rules into a lane-neutral pure matcher and de-identified golden corpus.** Include building designators and candidate-scoped legal/operating-name aliases; no fuzzy matching or canonical promotion.
+- 🟡 **F2. Extract the approved ASC rules into a lane-neutral pure matcher and de-identified golden corpus.** Include building designators, candidate-scoped legal/operating-name aliases, and same-parcel service-location/mailing-address conflicts; no fuzzy matching or canonical promotion.
 - ⚪ **F3. Add sidebar component diagnostics and explicit worklist refresh/advance state.** Show the failed address/facility component and safe next action.
 - ⚪ **F4. Run read-only shadow replay across approved lanes.** Measure collisions, changed decisions, and second-review burden before any additional activation.
 
