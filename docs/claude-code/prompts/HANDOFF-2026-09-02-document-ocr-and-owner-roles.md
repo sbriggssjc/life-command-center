@@ -62,7 +62,7 @@ all to work around a page cap that a local engine simply does not have. Then **c
 |---|---|
 | **DOC18** | 🔄 **in flight** — three-call sync extract. **Reconcile its response first.** |
 | **OCR1** | 🟢 **THE RECOMMENDED NEXT BUILD — an exploratory BAKE-OFF, not a build.** Local engine vs DocAI on ≥10 real OCR'd documents (≥3 leases over 30pp). ⚠️ **The metric is FIELD AGREEMENT from `extractTenantFromLease`, never `char_len`** — a garbled OCR produces plenty of characters, and gpt-4o's 1,511-char rows passed every count-based check while being useless. **Justify on the PAGE CAP and confidentiality, not cost.** Wiring is **OCR1b**, only if this measures a winner. |
-| **OCR2** | 🔴 the deed lane never tiers — calls gpt-4o directly, bypassing DocAI. **All 325 deeds went to the 6–14× tier.** Small and self-contained; good pairing with OCR1. |
+| **OCR2** | 🟡 ~~the deed lane never tiers~~ **REFUTED 2026-09-02** — it tiers; the "325 to gpt-4o" predates DocAI. Re-scoped: **deed rows carry no OCR provenance**, so the tier mix is unauditable. Prompt `OCR2-deed-lane-ocr-provenance.md`. |
 | **C18** | 🟠 `ownership_start_date` is 50.7%, so **pacing** — the dimension Scott says drives seller-vs-buyer treatment — is half unmeasurable. ⚠️ **The route is UNMEASURED.** |
 | **C19** | 🟠 *"clients first, not the product type"* ⇒ **every domain filter on a BD surface is a candidate defect**; nobody has swept |
 | **OCR3/4/5** · **DOC2/3/4/5/6/15** · **C13d** | see the backlog |
