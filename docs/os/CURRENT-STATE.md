@@ -86,7 +86,8 @@ into a bare catch (PR5c, fixed via `provenanceTargetDatabase()`; the edge-functi
 own deploy). **`lcc_merge_field` always inserts a row, so zero rows = the call never completed.**
 The two `entities` contact writers consult the ladder since PR5c-entities — **recording only**: all ten
 `email`/`phone` rungs are `record_only`, and a ladder over an empty ledger cannot protect a value it has
-never seen. Nothing is scheduled to exercise it.
+never seen. Nothing is scheduled to exercise the two propagate/writeback writers; the Salesforce bridge
+CREATE path (the daily one, ~12 rows/day) records since #2072. ✅ Railway `/version` = `886cdf86` (22:08 UTC).
 → **`docs/architecture/field-provenance-ladder.md`** (canonical); backlog PR1d (`REGRID_API_KEY`), PR5a–e, PR5c-entities/-signal/-deploy, PR7a–b, PR9 (Scott), PR11, PR12a–b.
 
 ### Comms → context
