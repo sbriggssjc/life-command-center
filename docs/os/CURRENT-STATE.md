@@ -84,6 +84,9 @@ narrative) aborted `lcc_merge_field` and the JS failed open silently. The failur
 is NOT part of the rung lookup — five callers sent other strings and failed 23514 on every call
 into a bare catch (PR5c, fixed via `provenanceTargetDatabase()`; the edge-function copy awaits its
 own deploy). **`lcc_merge_field` always inserts a row, so zero rows = the call never completed.**
+The two `entities` contact writers consult the ladder since PR5c-entities — **recording only**: all ten
+`email`/`phone` rungs are `record_only`, and a ladder over an empty ledger cannot protect a value it has
+never seen. Nothing is scheduled to exercise it.
 → **`docs/architecture/field-provenance-ladder.md`** (canonical); backlog PR1d (`REGRID_API_KEY`), PR5a–e, PR5c-entities/-signal/-deploy, PR7a–b, PR9 (Scott), PR11, PR12a–b.
 
 ### Comms → context

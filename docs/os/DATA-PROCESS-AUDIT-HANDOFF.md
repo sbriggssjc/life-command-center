@@ -52,42 +52,31 @@ and the Dialysis test suite had never executed a test in the repo's history — 
   the job log. `baseline39` closed by supersession (`main` at `ff712e0` measured **3**, never 39).
   ⚠️ **Not yet a merge gate — see 🔄 below.**
 
+- **The provenance ladder arc (2026-09-02, PR8 → PR5/PR7 → PR12 → PR5c → PR5c-entities)** — all
+  closed, all live-verified, all on one canonical page: **`docs/architecture/field-provenance-ladder.md`**
+  (§3 dated live state, §4 arc index, §5 the lessons verbatim). Headlines only: the registry is the
+  allowlist (PR8); 39 never-written sources triaged, 25 not defects, 7 live on a second ledger (PR5);
+  the `::bytea` hash silently lost every quoted/newlined value, fixed with no rewrite, exposure ~1,101
+  not 67 (PR12); 33 zero-row internal rungs were five callers sending an invalid `target_database`
+  — `lcc_merge_field` always inserts, so zero rows = the call never completed (PR5c); the two
+  `entities` contact writers now consult the ladder — recording only, every rung is `record_only`
+  (PR5c-entities).
+- **PR2** — the sidebar writer dropped the parcel stats it was handed; the lot parser read acres as
+  sq ft (43,560×). dia backfilled (767/734/714/232); gov writer fixed, backfill Scott's call.
+
 ### 🔄 In flight
 
-**Nothing is with CC.** The Dialysis gate prep is DONE (#7395 + #7397): `paths-ignore` gone, Scope
-job, `Run Tests` always reports, **seen RED** (run 33647155312), docs-only path **proven**
-(#7397, 5 s), `exit code 128` **gone** from a checkout log. 👤 **Three operator steps close the B6
-CI arc:** merge #7397 → delete `claude/tmp-red-gate-proof` + `claude/tmp-docs-only-proof` in the UI
-→ require `Run Tests` on `main`. ⚠️ Ruff stays masked, correctly — **5,738 findings, not the "11"
-the first handoff said** (GitHub's ten-annotation cap; A5's `815 = 1000 − 185` again).
-**PR5c (2026-09-02) CLOSED — and it corrects PR12 §4 and PR5 §1a in place.** The cause was one
-CHECK: `field_provenance_target_database_check` accepts only `lcc_opps`/`dia_db`/`gov_db`, and
-**five call sites sent `'dia'`/`'gov'`/`'lcc'`/`'lcc_db'` → 23514 on 100% of calls** into a bare
-`catch`. **`lcc_merge_field` ALWAYS inserts a row** (write/skip/conflict), so zero rows means the
-RPC never completed — replayed rolled-back, 6 of 6 PR5 §2 sources fail, 5 with 23514; the sixth
-(`lcc_generated`) succeeds and its lane just has not run. ⚠️ **PR12 §4's "~0.03% break-class"
-measured the stored COLUMN, not the payload** — three sites `JSON.stringify` a jsonb param, so
-their rate was ~100%. All 33 rungs carry a `pr5c_verdict`; nothing retired; rung fingerprint
-unchanged. **Verify-next (Class 8):** a `field_provenance` row on
-`public.lcc_cre_property_documents` after the next CRE folder-feed registration, POST-deploy —
-the live count correctly stays 0 until then. ⚠️ **`availability-checker` is a THIRD deploy surface,
-fixed in source and NOT deployed** (PR5c-deploy).
-**PR12 (2026-09-02, #2057) closed** — hash fixed in place (no rewrite), 1,979 live rows since incl. 8
-break-class, all hashing. **Exposure was ~1,101, not 67** — the newline in `sales_transactions`
-narrative on NON-rung columns; the ladder-scoped census could not see it. JS failure signal
-(`provenance_failed` + alert) ships on the Railway redeploy. PR12b filed (flush watermark skips an
-errored event permanently).
-**PR5 (2026-09-02, #2051) closed with PR7** — 426 verdicts + 49 orphan markers live on
-`v_field_source_priority_triage`; no deploy gap (no `api/` change). **`never_written` stays 39 BY
-DESIGN** (rungs are soft-retired in `notes`, never deleted — "unregistered" is a different
-`lcc_merge_field` branch). Seven of the 39 are live on the property-owner ledger. PR9 → Scott.
-**PR2 verify-next (Class 8):** the dia backfill is proven (767/734/714/232 reproduce live); the
-PRODUCER is not — 0 `costar_sidebar` parcel rows since the merge and the Railway redeploy of
-`98248e18` is unconfirmed. Assert on a **new** sidebar parcel row carrying `building_sf`, never on
-today's totals. gov backfill (1,527 rows) is Scott's call → `OPERATOR-ACTIONS.md` §3 **PR2-gov**.
-**PR8 verify-next:** `field_provenance where source='agency_classifier'` reads 0 and it is a
-no-population zero (0 unflushed gov events, last one pre-migration) — it flips on the next gov write
-that fires `gov_classify_agency()`; do not read it as broken.
+**Nothing is with CC.** What is open is DEPLOY + PRODUCER proof, not code:
+
+| verify-next | the honest reading today | what proves it |
+|---|---|---|
+| Railway redeploy of `98248e18` / `68ede28c` / `06a3ee5d` / `e9c74357` | unconfirmed from the sandbox | `/version` + `git merge-base --is-ancestor` |
+| PR2 producer | 0 `costar_sidebar` parcel rows since the merge | a NEW dia sidebar parcel row carrying `building_sf` |
+| PR5c callers | `field_provenance` on the six internal tables = 0, correctly | a row on `public.lcc_cre_property_documents` after the next CRE folder-feed registration, post-deploy |
+| PR5c-entities | `target_table='entities'` = 0, correctly — neither writer has a cron; `SF_CONTACT_WRITEBACK` is `off` | an operator tick of `owner-contact-propagate`, post-deploy → `0 → N` split by source/decision |
+| PR8 | `source='agency_classifier'` = 0 — no-population zero | the next gov write that fires `gov_classify_agency()` |
+| PR5c-deploy | `availability-checker` edge fn fixed in source, undeployed | `list_edge_functions.updated_at` after the merge → 👤 Scott |
+| Dialysis CI gate | prep DONE (#7395 + #7397: `paths-ignore` gone, Scope job, seen RED, docs-only proven) | 👤 three operator steps: merge #7397 → delete the two `claude/tmp-*` branches → require `Run Tests`. ⚠️ Ruff stays masked, correctly — **5,738** findings, not "11" (annotation cap). |
 
 ### 🔴 Next, in recommended order
 
@@ -96,15 +85,11 @@ that fires `gov_classify_agency()`; do not read it as broken.
    person names, 7 are the Colliers family. **`cbre; smyth & colliers; patel` is minted as one
    company.** Start with **`BR1-confirm`** — 12 brokerage-evidenced orgs ready for a one-decision
    human confirm.
-2. **`PR5c-entities`** — the 13 `entities` rungs are the one PR5c population with no fix yet:
-   **no `lcc_merge_field` call site anywhere passes `p_target_table='entities'`**, while a dozen
-   paths PATCH the table. Cheapest real fix is routing the `email`/`phone` writers
-   (`owner-contact-propagate.js`, `contact-writeback.js`) through `shouldWriteField`, which already
-   speaks the vocabulary. Siblings: **`PR5c-signal`** (PR12's failure counter cannot see the five
-   direct callers — 0 open alerts over a 100%-failing population) and **`PR5c-avail-field`**
-   (the dia `availability_scraper` rung names `status`; the writer writes `is_active`).
-   **Prompt drafted: `docs/claude-code/prompts/PR5c-entities-provenance-callers.md`.** Canonical
-   page for the whole ladder topic is now `docs/architecture/field-provenance-ladder.md`.
+2. **`PR5c-entities-b`** — `_shared/bridge-handlers-salesforce.js` is the highest-traffic `entities`
+   `email`/`phone` writer (~336 SF contacts/30d, create-path only) and is unwired; it runs DAILY,
+   which is why it outranks `PR5c-enforce` (all ten rungs `record_only` — ungradeable until the
+   ledger has history, which needs a tick nobody schedules). Siblings still filed: `PR5c-signal`,
+   `PR5c-avail-field`. **Prompt drafted: `docs/claude-code/prompts/PR5c-entities-b-salesforce-create-path.md`.**
 3. **`PR5d`** — `costar_cmbs_loan`: 121 rungs, the ladder's largest source, for a capture arm with
    0 rows on either domain (`loans.data_source`). Is the CoStar CMBS tab ever captured, or is the
    arm unreachable? One grep of the extension + one count.
