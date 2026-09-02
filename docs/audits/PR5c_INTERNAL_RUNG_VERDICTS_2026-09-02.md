@@ -204,8 +204,28 @@ transaction. Residue after rollback: **0**.
 
 **⚠️ Verify on the PRODUCER, not on this replay (Class 8).** The number that says the callers are
 fixed is a `field_provenance` row appearing on `public.lcc_cre_property_documents` after the next
-CRE folder-feed registration, post-deploy. Until the Railway redeploy carries this change the live
-count correctly stays 0 — *merged is not running*.
+CRE folder-feed registration, post-deploy.
+
+✅ **DEPLOYED — merged as `06a3ee5` and live at 20:38 UTC 2026-09-02** (`/version` =
+`06a3ee5de325`; `git merge-base --is-ancestor 6f55491 06a3ee5de325` → true).
+
+🚧 **AND THE PRODUCER CHECK IS STILL OPEN — the 0 is a NO-POPULATION zero, not a failure.**
+Measured 20:59 UTC, 21 minutes after the deploy: `field_provenance` on the six tables **0**, and
+**0 CRE registrations have occurred in that window**. The detector cannot fail yet.
+
+**⚠️ Size the wait before reading the zero.** The CRE folder feed is **human-driven and bursty, not
+scheduled**: 7 active days in the last 30 (08-06, 08-07, 08-09, 08-13, 08-20, 08-21, 08-27), and
+the last registration was **2026-08-27 — six days before the fix shipped**. Gaps of a week are
+normal, so a zero is uninformative until a registration actually runs, and polling for it is waste.
+**State the elapsed window AND the population that passed through it** (B6a / N15d) — "no
+registration yet" and "the fix did not work" are the same 0 and opposite facts.
+
+The check, when one lands: `select target_table, count(*), max(recorded_at) from field_provenance
+where target_table in ('public.lcc_cre_properties','public.lcc_cre_property_documents')
+group by 1` — it was 0 at merge time, so **any** row is the proof.
+
+⚠️ `entity_relationships` will stay 0 regardless: its lane is `unreached_and_broken`, and
+`prior_owner_link` has produced 2 rows in its life. Do not fold it into the same expectation.
 
 ---
 
