@@ -1,5 +1,17 @@
 # DOC16 — process long leases by PAGE RANGE on the sync path, and skip GCS entirely
 
+> ⛔ **CLOSED 2026-09-02 — REFUTED AT ITS OWN §2 GATE. DO NOT EXECUTE THIS PROMPT.**
+> The page selector exists on the sync path exactly as §2 hoped (`processOptions.individualPageSelector`
+> / `fromStart` / `fromEnd`, verified against the live v1 discovery document, revision `20260820`).
+> **But the 30-page imageless cap is "only applicable when processing pages contiguously starting from
+> page 1"**, so §3's second call — pages 31–50 — cannot claim it. That call is the whole argument;
+> without it the route yields ~30 pages ≈ 54,000 chars against a 90,000-char consumer window, and §4's
+> "lossless on the consumer's terms" claim fails. **Neither §2 branch fired: the cap is not measured
+> against the document total, and it is not measured against an arbitrary selection either.**
+> Full reading, the one question left unmeasured, and why it was not guessed at:
+> `docs/architecture/document-capture-ocr-and-deeds.md` → **DOC16 GATE**.
+> **DOC14 is the route again.** Population re-measured: **42 rows (not 40), 18 at 31–50pp, 24 at >50pp.**
+
 > ⛔ **This SUPERSEDES `DOC14-long-lease-ocr-async.md` as the next step.** DOC14 is not wrong — it is
 > **blocked on a confidentiality decision that this route makes unnecessary.** Keep it staged; if
 > DOC16's premise fails verification (§2), DOC14 is the fallback.
