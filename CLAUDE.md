@@ -170,6 +170,13 @@ Two durable lessons from the fix, both expanded in
 - **`lcc_cron_post()`** reads the API key from Supabase Vault and POSTs via `pg_net` to Railway (`/api/*`) or
   Edge endpoints. pg_cron on LCC Opps runs the scheduled sweeps (queue/decision refresh, health checks,
   offload, syncs, reconciles). Grep the history file for the exact schedule of a named job.
+  - ⚠️ **`target = 'vercel'` in an old migration or cron command is a LABEL, not a host (retired
+    2026-09-02).** After Vercel was retired the function routed every non-`edge` target to the
+    Railway URL, but 50 of 155 jobs still said or defaulted to `'vercel'`, and the C1 audit read one
+    of them as "posts to the retired host". Migration `20260902140000` set the default to
+    `'railway'`, relabelled all 36 explicit commands live, and keeps `'vercel'` as a silent alias so
+    a replayed migration cannot break. **A dead label that reads like a live endpoint will be
+    misread by whoever meets it next — retire the label, don't just document it.**
 
 ### ⚠️ `unified_contacts` LIVES IN TWO PROJECTS — read the `CONTACTS_HUB` flag first
 
@@ -3442,8 +3449,12 @@ with an active Ollama pre-rank (cron 213) and **59 human verdicts recorded**. It
   query (`sf_link_candidate` → `PATCH true_owners.salesforce_id`) turns "build a consumer" into
   "retire a duplicate surface". The generalisation of A5's *read a handler's direction before
   counting it as a consumer*: **`sf-link-reconcile.js` runs domain→LCC and no cron calls it**, and
-  the one cron in the family (`cron.job` 48 `lcc-sf-link-tick`) is `active=false` **and posts to
-  `'vercel'`**, the host retired 2026-07-20 that P194 proved still answers.
+  the one cron in the family (`cron.job` 48 `lcc-sf-link-tick`) is `active=false`. ~~and posts to
+  `'vercel'`, the host retired 2026-07-20~~ ⚠️ **CORRECTED 2026-09-02: that reading was wrong.**
+  `'vercel'` was only ever a LABEL on `lcc_cron_post` — the function routes every non-`edge` target
+  to the Railway URL from the vault, and never to Vercel after the retirement. The label was
+  retired the same day (see the `lcc_cron_post` footgun below); P194's stale-host finding concerns
+  the Chrome extension's hard-coded URLs, not pg_cron.
 - **⚠️ A LANE'S PREDICATE AND ITS ONLY WRITER CAN BE ON DIFFERENT COLUMNS, AND NOTHING ERRORS.**
   The gov lane reads `unified_contacts.sf_account_id`; the verdict writes
   `recorded_owners.sf_account_id`. Measured: **1,961 gov owners are already linked, 1,292 still
