@@ -770,6 +770,19 @@ drained 6; `HTTP 200 []` from a view anon cannot read; cron 136/137 green daily 
 writing nothing. **Assert on the STATE DELTA — rows written, queue drained, population changed — never
 on the worker's own tally, its exit status, or "the cron is active".**
 
+### The operator doctrine for every surface (Scott, 2026-09-02 app review)
+
+Stated five ways across 41 screenshots and recorded once: **the human sees the minimum effective
+dose.** A card earns a human only when the step is one only a human can take — **send the email,
+make the call, spend money, reach a source the code cannot (SOS bot-wall, a county), or a judgement
+no rule can make.** Everything else runs outside human view and the system propels itself until it
+cannot. **Buyers are pursued by SHOWING them deals; linking a buyer contact to Salesforce is
+plumbing.** The priority queue is **seller prospecting** — $2.5M–$25M, newer lease, a reason to
+sell, an owner not yet reached. An SF link is a marker, never evidence we are prospecting someone;
+the truth is who we have *actively* and *ever* touched, across the whole ownership chain. Every tab
+answers one question exactly. **Full catalog + queue: `docs/architecture/app-ux-review-2026-09-02.md`,
+backlog §P16.** → belongs in the canon (UX0).
+
 ### Producer/Consumer (Consumption Layer)
 
 LCC produces work (research tasks, cadences, decisions, queue rows, inbox items) at ingestion scale and
