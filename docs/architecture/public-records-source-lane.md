@@ -247,26 +247,96 @@ finding rather than a rank.
   and every removed expression, so a raw grep would match the explanation and pass over a
   regression.
 
-### ⚠️ The trap that would have hidden a wiring either way
+### ⚠️ The trap that would have hidden a wiring either way — CLOSED by PR8 (2026-09-02)
 
-`lcc_flush_provenance_events()` carries `v_first_class := ARRAY['splink_v1','sf_link_review_human',
-'splink_v2','sf_account_contact_expansion']` and **relabels every event whose source is not on it to
-`domain_trigger`**. So emitting `source='county_records'` into `provenance_event_log` today would
-land in `field_provenance` as `domain_trigger` — **at a rung that does not exist for these fields** —
-while a verification querying `field_provenance where source='county_records'` **still read zero**.
-Keeping `county_records` off that allowlist is the correct state; adding it is a deliberate act that
-belongs with a real acquisition path, never as plumbing. Pinned by the LCC guard.
+**The trap as it stood.** `lcc_flush_provenance_events()` carried
+`v_first_class := ARRAY['splink_v1','sf_link_review_human','splink_v2','sf_account_contact_expansion']`
+and **relabelled every event whose source was not on it to `domain_trigger`**. So emitting
+`source='county_records'` into `provenance_event_log` landed in `field_provenance` as
+`domain_trigger` — **at a rung that does not exist for these fields** — while a verification
+querying `field_provenance where source='county_records'` **still read zero**.
 
-✅ **`domain_trigger` DECOMPOSED 2026-09-02 — the original source name survives in
-`source_run_id`** (`v_src || ':evt' || id`), so the relabel is recoverable without touching the
-append-only table. Live: **17,371 rows = `agency_classifier` 17,277** (gov `government_type` on
-four tables, still writing today) **+ `qa22_davita_brand_canonicalize` 94** (one-shot, 2026-07-30).
-⚠️ **`agency_classifier` is not registered in `field_source_priority` at all** — a write-but-
-unregistered source PR5's reverse arm could not see, because it wears `domain_trigger`'s name. And
-`qa22_…` *is* registered and sits in PR5's "39 never written" while 94 of its rows exist under the
-wrong label. **PR5's detector must key on `coalesce(split_part(source_run_id,':evt',1), source)`,
-and the 39 is 38.** → backlog **PR8** (build: registered-for-this-field ⇒ own name; an append-only
-effective-source view; never a rewrite).
+✅ **`domain_trigger` DECOMPOSED 2026-09-02 — the original source name survives in `source_run_id`**
+(`v_src || ':evt' || id`), so the relabel is recoverable without touching the append-only table.
+Live: **17,371 rows, and 17,371 of 17,371 carry a `:evt` run id** — i.e. *every* row wearing that
+name is a relabel. `agency_classifier` **17,277** (gov `government_type` on four tables, last write
+2026-09-02 — LIVE) + `qa22_davita_brand_canonicalize` **94** (one-shot, 2026-07-30).
+
+✅ **PR8 SHIPPED 2026-09-02** (`supabase/migrations/20261007120000_lcc_pr8_provenance_relabel_registration.sql`,
+applied live to LCC Opps). The literal is gone: **a `field_source_priority` row for THIS
+(table, field, source) IS the allowlist**; anything unregistered still merges as `domain_trigger`,
+which is the honest fallback for an unranked writer and what keeps `v_field_provenance_unranked`
+meaningful. `agency_classifier` is registered at the four rungs it writes, **@90 — the rung its rows
+already merged at**, so the outcome is unchanged and only the name is corrected.
+`v_field_provenance_effective_source` exposes the recovered name; **`field_provenance` is not
+rewritten.** Guards: `test/provenance-relabel-registration.test.mjs` (7 tests) +
+`test/public-records-lane-not-wired.test.mjs` (3), **13/13 mutations RED.**
+
+- **⚠️ REMOVING THE RELABEL *ARMS* EVERY REGISTERED SOURCE, AND ONE OF THEM MUST NOT BE ARMED.**
+  This is the consequence the PR8 brief did not name, and it inverts the note above. Under the old
+  code a `county_records` event merged as `domain_trigger`, which has **no rung for those fields**,
+  so `lcc_merge_field` could at most `unregistered_source_filling_blank` — it could never override.
+  Under "the registry is the allowlist" it merges at **county_records@5**, above `salesforce`@20,
+  `om_extraction`(25–50) and every sidebar(45–65), and **overrides real evidence**. The relabel was
+  the only structural thing keeping a model-generated source off the ladder; nothing else was.
+  So the refusal is now **EXPLICIT** — `v_never_first_class text[] := ARRAY['county_records']` —
+  rather than an accident of a four-item literal. **That is a preservation of PR1's decision, not an
+  addition to any allowlist.** Retire the entry only together with a real acquisition path
+  (`REGRID_API_KEY` → `regrid_client.py`, **PR1d**), never as plumbing. Positive-controlled live in a
+  rolled-back transaction, 0 residue: a synthetic `county_records` event still stores
+  `source='domain_trigger'`, while `qa22_…` and `agency_classifier` keep their own names and an
+  unregistered writer falls back.
+- **⚠️ THE OBVIOUS RECOVERY EXPRESSION IS WRONG AND RETURNS A PLAUSIBLE NUMBER.**
+  `coalesce(nullif(split_part(source_run_id,':evt',1),''), source)` — the form this page previously
+  prescribed — **is unguarded: `split_part` returns the WHOLE string when the delimiter is absent,
+  and it is absent on 943,916 of the 1,263,825 rows.** Measured, it **invents 9,950 source names
+  that do not exist**, and re-keying PR5's write-but-unregistered arm on it returns **9,951 instead
+  of 21**. The correct form requires the full shape:
+  `case when source_run_id ~ '^.+:evt[0-9]+$' then split_part(source_run_id,':evt',1) else source end`.
+  Same family as the P157 `reloptions` and P182 deparse traps — a predicate structurally unable to
+  express the question answers with a plausible number instead of an error. **Both recovery sites in
+  the view carry their own guard, and the test counts them**: a ±300-char proximity check read the
+  neighbour's guard and let a dropped one survive (found by the mutation pass, not by reading it).
+- **⚠️ "THE 39 IS 38" IS WRONG — IT IS STILL 39, AND THE REASON IS THE FINDING.** `qa22_…` leaves
+  the never-written set, and **`domain_trigger` enters it**: all 17,371 of its rows are relabels, so
+  under the effective source **nothing has ever actually been `domain_trigger`** — a registered
+  source with 6 rungs that no producer is. PR5 re-keyed and post-registration:
+  **68 registered · 39 never written · 21 write-but-unregistered** (back to the original benign
+  `cleanup_run_*` set, because `agency_classifier` is now registered).
+  ⚠️ Keyed on the RAW `source` the never-written count reads **40** until the next flush writes an
+  `agency_classifier` row under its own name — **that new row, not today's count, is what proves the
+  producer is fixed** (Class 8).
+- **⚠️ `v_field_provenance_unranked` is 22, not the 35 quoted in `CLAUDE.md`** — it is a 30-day
+  rolling window, so it moves. Unchanged at **22 → 22** across this migration, which is the point:
+  registering `agency_classifier` is load-bearing, not cosmetic. Without it, new rows would start
+  arriving under an unregistered name and the drift detector would light up.
+- **The producer was read, not assumed.** gov `sql/20260601_gov_type_3tier_classification.sql` ::
+  `gov_classify_agency()` is a pure `STABLE` plpgsql rule engine over the curated
+  `government_agencies` lookup and `agency_enrichment_rules` patterns — **no HTTP, no `pg_net`, no
+  model, no external call of any kind** — and its trigger only classifies when no value exists
+  (fill-blanks). It is a defensible source, unlike this lane's producer.
+- **⚠️ Filed, not decided: `agency_classifier` is ranked 90 in LCC `field_source_priority` and
+  `authority_rank` 30 in gov's own `field_value_provenance`.** Two ladders disagreeing about one
+  source is a real question; a re-rank changes which writes WIN and needs its own before/after.
+  → backlog **PR10**.
+- **⚠️ The residual, sized rather than papered over.** During the transition a record's newest
+  `write` row is still labelled `domain_trigger`. If `agency_classifier` re-classified that record to
+  a **different** value, the ladder would see two sources at equal priority 90 and record `conflict`
+  where it previously recorded `same_source_refresh_newest_wins` → write. Measured over the
+  producer's whole history: **17,277 events, 309 keys re-written (1,352 events), 0 keys have ever
+  changed value.** The path is real and has never once been exercised; it self-clears as each
+  record's newest row takes the new name. That is the reason to register at 90 rather than a new rung.
+- **Before/after, one session, two self-rolling-back transactions over the same live state**
+  (1,521-event stratified replay, 150 per combo, covering all 15 live (source, table, field) combos):
+  **predicted 5 combos change SOURCE and 0 decisions change; actual exactly that** — every decision
+  count byte-identical, including `dia.properties|tenant|skip=1` and
+  `gov.property_agencies|government_type|superseded=106`. Decisions are identical because
+  `lcc_merge_field` tests `same_priority_same_value_refresh` **before**
+  `same_source_refresh_newest_wins`.
+- **Not done, deliberately:** no rung for `gov.properties.agency_canonical` (`agency_classifier` has
+  written **0** rows to it — the 2 events there are `qa24_`/`qa30_canonicalize_agency` and both were
+  skipped as markers; a rung nobody can exercise is **PR7**'s class). The `domain_trigger` rungs are
+  **kept**. `lcc_merge_field` is untouched.
 
 ### The corrected sequence
 

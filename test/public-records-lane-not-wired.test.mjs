@@ -71,30 +71,59 @@ test('no api/ code calls lcc_merge_field with the county_records source', () => 
     'docs/architecture/public-records-source-lane.md before removing this guard.');
 });
 
-test('county_records is absent from the provenance-flush first-class allowlist', () => {
-  // The trap, and it cuts BOTH ways. lcc_flush_provenance_events() relabels
-  // every event whose source is not on `v_first_class` to 'domain_trigger'.
-  // So emitting source='county_records' into provenance_event_log today would
-  // land in field_provenance as 'domain_trigger' -- at a rung that does not
-  // exist for these fields -- while a verification querying
-  // `field_provenance where source='county_records'` still read zero.
+test('county_records is REFUSED its own identity by the shipped flush body', () => {
+  // The trap, and it cuts BOTH ways. Until PR8 (2026-09-02),
+  // lcc_flush_provenance_events() relabelled every event whose source was not
+  // on a four-name `v_first_class` literal to 'domain_trigger'. So emitting
+  // source='county_records' landed in field_provenance as 'domain_trigger' --
+  // at a rung that does not exist for these fields, so at most a blank-fill --
+  // while a verification querying `field_provenance where source='county_records'`
+  // still read zero.
   //
-  // Keeping it OFF the allowlist is therefore the correct state while the
-  // producer is model output. Adding it is a deliberate act that must happen
-  // together with a real acquisition path, not as plumbing.
-  const sqlFiles = readdirSync(join(ROOT, 'supabase', 'migrations'))
+  // PR8 replaced that literal with "registered for this (table, field) => keep
+  // your own name". county_records holds 93 rungs across 18 tables at a best
+  // rung of 5 -- above salesforce(20), om_extraction(25-50) and every
+  // sidebar(45-65) -- so under the new rule it would merge at 5 and OVERRIDE
+  // real evidence rather than merely fill a blank. The relabel was the only
+  // structural thing keeping a model-generated source off the ladder, so the
+  // refusal is now EXPLICIT: `v_never_first_class`.
+  //
+  // Retiring that entry is a deliberate act that belongs with a real
+  // acquisition path (REGRID_API_KEY -> regrid_client.py, backlog PR1d),
+  // never as plumbing. Verified live 2026-09-02 against the shipped function:
+  // a synthetic county_records event still stores source='domain_trigger'.
+  const DEFINES = /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+public\.lcc_flush_provenance_events/i;
+  const stripSql = (src) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--.*$/gm, ' ');
+
+  const dir = join(ROOT, 'supabase', 'migrations');
+  const defining = readdirSync(dir)
     .filter((f) => f.endsWith('.sql'))
-    .map((f) => join(ROOT, 'supabase', 'migrations', f));
-  const allowlistFiles = sqlFiles.filter((f) =>
-    /v_first_class/.test(readFileSync(f, 'utf8')));
-  assert.ok(allowlistFiles.length > 0,
-    'v_first_class allowlist not found — lcc_flush_provenance_events may have been renamed; re-verify the relabel behaviour');
-  for (const f of allowlistFiles) {
-    const body = readFileSync(f, 'utf8');
-    const m = body.match(/v_first_class[^;]*?ARRAY\[([^\]]*)\]/s);
-    if (!m) continue;
-    assert.ok(!/county_records/.test(m[1]),
-      `county_records is on the flush allowlist in ${f.replace(ROOT, '')} — ` +
-      'that arms the ladder for a producer that generates its values');
-  }
+    .sort()
+    .map((f) => ({ name: f, src: readFileSync(join(dir, f), 'utf8') }))
+    .filter((m) => DEFINES.test(stripSql(m.src)));
+
+  assert.ok(defining.length > 0,
+    'no migration defines lcc_flush_provenance_events -- it may have been ' +
+    'renamed; re-verify the relabel behaviour before touching this guard');
+
+  // Only the NEWEST definition ships. Asserting over every migration that ever
+  // defined it would keep passing on superseded bodies (P197).
+  const { name, src } = defining[defining.length - 1];
+  const code = stripSql(src);
+
+  const deny = code.match(/v_never_first_class[^;]*ARRAY\[([^\]]*)\]/s);
+  assert.ok(deny,
+    `${name}: the shipped flush body declares no v_never_first_class deny set. ` +
+    'Removing the old allowlist without it ARMS county_records at priority 5 ' +
+    'for a producer that asks gpt-4o to recall parcel facts.');
+  assert.match(deny[1], /'county_records'/,
+    `${name}: county_records is no longer refused its own identity -- that ` +
+    'promotes model output above salesforce, om_extraction and every sidebar. ' +
+    'If a real county adapter now exists, re-grade the lane and update ' +
+    'docs/architecture/public-records-source-lane.md before removing this guard.');
+
+  assert.ok(/NOT\s*\(\s*v_src\s*=\s*ANY\s*\(\s*v_never_first_class\s*\)\s*\)/.test(code),
+    `${name}: v_never_first_class is declared but not consulted by the ` +
+    'merge-source gate -- a deny set nothing reads is not a defence');
 });

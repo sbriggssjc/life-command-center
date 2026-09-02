@@ -842,7 +842,48 @@ Every cross-table field write to curated tables is observed:
   application paths consult it. In `record_only` mode UPDATEs still run.
 - **`v_field_provenance_unranked`** — schema-drift detector. **Should return 0 rows** — non-zero means a writer
   path was added without a matching `field_source_priority` entry. **Whenever you add a new writer/source to a
-  curated field, register a `field_source_priority` row** or this view flags drift.
+  curated field, register a `field_source_priority` row** or this view flags drift. ⚠️ It is a **30-day rolling
+  window** and it keys on the **stored** `source`, so **it was structurally blind to a relabelled writer** — see
+  the next bullet. Live 2026-09-02: **22 rows**, not the 35 quoted below (a dated figure).
+
+### ⚠️ THE FLUSH USED TO RELABEL ANY UNBLESSED SOURCE, AND THE REGISTRY IS THE ALLOWLIST NOW (PR8, 2026-09-02)
+
+`lcc_flush_provenance_events()` (the async `provenance_event_log` → `field_provenance` drain) carried a
+**four-name literal** and merged every other event under the placeholder name `domain_trigger`. Live before the
+fix: **17,371 rows wore that name and 17,371 of 17,371 carried a `:evt` run id** — *every one was a relabel;
+nothing has ever actually been `domain_trigger`.* Decomposed: **`agency_classifier` 17,277** (gov
+`government_type` on four tables, still writing) + **`qa22_davita_brand_canonicalize` 94**. Fixed by
+`supabase/migrations/20261007120000_lcc_pr8_provenance_relabel_registration.sql` (applied live): **a
+`field_source_priority` row for THIS (table, field, source) IS the allowlist**; anything unregistered still
+merges as `domain_trigger`. Full writeup + measurements: `docs/architecture/public-records-source-lane.md` §2a.
+
+- **⚠️ A RELABELLING DRAIN DEFEATS EVERY DETECTOR KEYED ON `source`, IN BOTH DIRECTIONS AT ONCE.**
+  `agency_classifier` was a **live, unregistered** writer of 17,277 rows that the *write-but-unregistered* arm
+  could not see (it wore `domain_trigger`'s name), while `qa22_…` — registered — sat in the *registered-but-
+  never-written* arm with 94 rows on the ground. **One relabel, both arms wrong, no error anywhere.** Before
+  trusting any producer census, ask whether the write path preserves the writer's name.
+- **⚠️ REMOVING A RELABEL *ARMS* EVERY REGISTERED SOURCE — that is the consequence, not a side effect.**
+  `county_records` holds 93 rungs at a best rung of **5**, above `salesforce`@20 and every sidebar, and PR1
+  measured its producer to be gpt-4o recall. Under the relabel it merged as `domain_trigger`, which has no rung
+  for those fields, so it could at most **fill a blank**; under "the registry is the allowlist" it would merge
+  at @5 and **override real evidence**. The relabel was the only structural thing stopping it. The refusal is
+  now explicit (`v_never_first_class`), positive-controlled live. **When you delete a suppression mechanism,
+  enumerate what it was suppressing** — the four-item literal was doing a job nobody had written down.
+- **⚠️ `split_part(source_run_id, ':evt', 1)` IS NOT A RECOVERY — IT IS A PLAUSIBLE NUMBER GENERATOR.**
+  `split_part` returns the **whole string** when the delimiter is absent, and it is absent on **943,916 of the
+  1,263,825 rows**. Unguarded it **invents 9,950 source names that do not exist** and answers the
+  write-but-unregistered arm with **9,951 instead of 21**. Require the full shape
+  `~ '^.+:evt[0-9]+$'` first. Same family as the P157 `reloptions` and P182 deparse traps.
+- **⚠️ AND THE GUARD FOR IT CANNOT BE A FILE-WIDE PRESENCE CHECK.** The shape predicate legitimately appears
+  **twice** in the view (`effective_source` and `was_relabelled`), so a grep — *and a ±300-char proximity
+  window, which reads the neighbour's guard* — both stay green while one site loses its guard. Found by the
+  mutation pass, not by reading it. The B6c-dup lesson, one layer in: **anchor per column and count the sites.**
+- **`domain_trigger` is now a registered source that nothing has ever been** — it swaps INTO PR5's
+  never-written set as `qa22_…` swaps out, which is why **"the 39 is 38" is wrong and it is still 39**.
+  Post-registration, keyed on the effective source: **68 registered · 39 never written · 21 write-but-
+  unregistered**. ⚠️ Keyed on the RAW `source` it reads **40** until the next flush writes an
+  `agency_classifier` row under its own name — **that new row, not today's count, is what proves the producer
+  is fixed** (Class 8).
 - **`v_field_provenance_actionable`** / `v_field_provenance_current` / `v_field_provenance_conflicts` — drive
   the Decision Center provenance lanes.
 
@@ -1754,7 +1795,7 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
 - **`entities.email` / `entities.phone` had NO `field_source_priority` ladder** until migration
   `20260903120000` (manual@1 → salesforce@20 → `domain_owner_contact`@55 → costar_sidebar@60), so every
   writer to them was invisible to the provenance doctrine. Register a row when you add another.
-  (`v_field_provenance_unranked` still returns **35** rows for other tables — pre-existing drift.)
+  (`v_field_provenance_unranked` returns **22** rows for other tables — pre-existing drift; it is a 30-day rolling window, so re-measure rather than quoting this number. Was 35 when written.)
 - **TrafficMetrix table-as-contact-list misparse (Prompt 89).** A CoStar/sidebar capture once parsed a
   property page's TrafficMetrix traffic-count TABLE as a contact list — street names / column labels
   ("Collection Street", "Traffic Vol", "Made with TrafficMetrix") minted as PERSON entities, all stamped
