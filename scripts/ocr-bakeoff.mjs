@@ -36,7 +36,13 @@
 //   node scripts/ocr-bakeoff.mjs --fetch-baselines 336,431,425,327,255,386,343,299,436,228
 //
 //   # 2. drop the PDFs in as bakeoff/<id>/source.pdf, then:
-//   node scripts/ocr-bakeoff.mjs --run
+//   node scripts/ocr-bakeoff.mjs --run --control self
+//
+//   ⚠️ --control self IS NOT OPTIONAL IF YOU INTEND TO QUOTE A RATE. It runs the
+//   SAME model twice on the SAME DocAI text and scores run 2 against run 1, which
+//   is the FLOOR every engine rate is read against. Without it a 77% agreement
+//   rate cannot be told apart from a model that disagrees with itself 23% of the
+//   time on identical text. The report says so, loudly, when the control is absent.
 //
 //   # plumbing proof, no real documents, no model, no network:
 //   node scripts/ocr-bakeoff.mjs --self-test
@@ -105,21 +111,69 @@ const CLAUSE_VOCAB = {
 // ---------------------------------------------------------------------------
 // Field normalization + comparison
 // ---------------------------------------------------------------------------
+//
+// ⚠️ A COMPARATOR ARTIFACT IS NOT AN OCR FINDING. OCR1's first real run scored
+// 11 non-agreements over 47 fields and READING them showed four were the
+// comparator, not the engines: two were `Kohl’s` vs `Kohl's` (one side emits a
+// curly apostrophe, the other straight — the same tenant), two were `""` vs
+// `null` (both mean "not found", scored `candidate_only`). Every rate this
+// harness prints is normalized FIRST. The RAW pair is still reported on every
+// disagreement (renderReport §"Disagreements and misses, named"), so a
+// normalization can never hide a difference a human would call real.
+
+/**
+ * Unicode punctuation → ASCII, plus whitespace collapse. Quotes, apostrophes,
+ * dashes and non-breaking spaces differ between OCR engines for reasons that
+ * have nothing to do with whether the text was read correctly.
+ */
+export function normalizePunctuation(value) {
+  return String(value)
+    .replace(/[\u2018\u2019\u201A\u201B\u2032\u00B4\u0060]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F\u2033]/g, '"')
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, '-')
+    .replace(/[\u00A0\u2007\u202F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * "The source did not state this" wearing several spellings. A model returns
+ * `""`, the literal string `null`, `N/A`, or a dash placeholder for the SAME
+ * fact; scoring one against another reports `candidate_only` where there is no
+ * disagreement at all.
+ *
+ * ⚠️ NARROW BY DESIGN — the measured set (`""`, `null`, `N/A`, `—`) plus the
+ * dash family normalizePunctuation already collapses onto `-`. This is NOT a
+ * general "looks empty" test: widening it is how a real value gets silently
+ * nulled, which would inflate both_null and hide a genuine miss. Note `0` is a
+ * value, never a sentinel.
+ */
+export function isNullSentinel(value) {
+  if (value == null) return true;
+  const s = normalizePunctuation(value);
+  if (!s) return true;
+  return /^(?:null|n\/a|-+)$/i.test(s);
+}
 
 /** Normalize one graded value for COMPARISON by type. Raw values are always reported. */
 export function normalizeField(type, value) {
-  if (value == null || value === '') return null;
+  if (isNullSentinel(value)) return null;
+  const s = normalizePunctuation(value);
   if (type === 'number') {
-    const n = typeof value === 'number' ? value : Number(String(value).replace(/[$,\s]/g, ''));
-    return Number.isFinite(n) ? n : null;
+    // Strip currency, thousands separators and a trailing unit ("14,250 sf").
+    const n = Number(s.replace(/\bsf\b/gi, '').replace(/[$,\s]/g, ''));
+    // ⚠️ ROUNDED, NOT TOLERANCED. 412500.4 and 412500 are one rent read two
+    // ways; 412500 and 412600 are a DIGIT ERROR — exactly what the bake-off
+    // exists to catch — and must stay a disagreement.
+    return Number.isFinite(n) ? Math.round(n) : null;
   }
   if (type === 'date') {
-    const m = String(value).match(/(\d{4})-(\d{2})-(\d{2})/);
-    return m ? `${m[1]}-${m[2]}-${m[3]}` : String(value).trim().toLowerCase() || null;
+    const m = s.match(/(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : s.toLowerCase() || null;
   }
   // string (tenant name / lease type): case + punctuation + whitespace insensitive.
-  const s = String(value).toLowerCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
-  return s || null;
+  const out = s.toLowerCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+  return out || null;
 }
 
 /**
@@ -166,6 +220,76 @@ export function scoreDocument(baselineTenant, candidateTenant, fields = GRADED_F
     both_null_fields: tally.both_null,
     agreement_rate: decided ? tally.agree / decided : null,
   };
+}
+
+/**
+ * THE FLOOR. Roll up the per-document self-control scores — the SAME model run
+ * twice on the SAME DocAI text — into a per-field self-agreement rate.
+ *
+ * ⚠️ AN ENGINE'S RATE MEANS NOTHING WITHOUT THIS ROW. OCR1's first run reported
+ * 77% tesseract-vs-DocAI field agreement over 10 documents and the number had no
+ * interpretation: 2 of the 11 non-agreements were MODEL arithmetic on text both
+ * sides carried verbatim, and 4 date disagreements were "cause UNKNOWN without a
+ * model self-agreement control". If the model disagrees with itself 20% of the
+ * time on identical text, a 77% engine rate is a WIN, not a loss.
+ *
+ * ⚠️ TWO INDEPENDENT CALLS, NOT temperature=0. The point is to measure the model
+ * AS THE HARNESS USES IT. Pinning the seed would measure a configuration nobody
+ * runs and report a floor of 100% that the real pipeline never achieves.
+ *
+ * `self_disagree` folds `disagree` + `candidate_only` + `baseline_only`: run 2
+ * finding a value run 1 did not is the model failing to agree with itself. The
+ * raw four-way tally survives in the JSON. `both_null` is EXCLUDED from the
+ * denominator, exactly as it is for the engines, so the two rates are comparable.
+ */
+export function summarizeSelfControl(scores, fields = GRADED_FIELDS) {
+  const perField = {};
+  for (const f of fields) {
+    perField[f.label] = { self_agree: 0, self_disagree: 0, self_both_null: 0, self_rate: null };
+  }
+  const used = (scores || []).filter(Boolean);
+  for (const sc of used) {
+    for (const f of fields) {
+      const v = sc.verdicts?.[f.label]?.verdict;
+      if (!v) continue;
+      const slot = perField[f.label];
+      if (v === 'agree') slot.self_agree += 1;
+      else if (v === 'both_null') slot.self_both_null += 1;
+      else slot.self_disagree += 1;
+    }
+  }
+  let agree = 0; let disagree = 0; let bothNull = 0;
+  for (const f of fields) {
+    const t = perField[f.label];
+    const decided = t.self_agree + t.self_disagree;
+    // ⚠️ null, never 1.0 — a field both runs left null was not measured (the
+    // both-null trap, one layer up).
+    t.self_rate = decided ? t.self_agree / decided : null;
+    agree += t.self_agree; disagree += t.self_disagree; bothNull += t.self_both_null;
+  }
+  const decided = agree + disagree;
+  return {
+    documents: used.length,
+    per_field: perField,
+    overall: {
+      self_agree: agree,
+      self_disagree: disagree,
+      self_both_null: bothNull,
+      self_rate: decided ? agree / decided : null,
+    },
+  };
+}
+
+/**
+ * An engine rate read against the floor, in PERCENTAGE POINTS.
+ *
+ * ⚠️ Returns null — never 0 — when either side has no decided field. 0 reads as
+ * "at parity with the model"; the truth is "not measured" (P180: NULL is not
+ * zero, and a lane summary is where that bites).
+ */
+export function deltaVsSelf(rate, selfRate) {
+  if (rate == null || selfRate == null) return null;
+  return Number(((rate - selfRate) * 100).toFixed(1));
 }
 
 /**
@@ -218,6 +342,63 @@ export function clauseLegibility(text) {
 // one is workstation-only and returns no per-page text, so this re-does it.)
 // ---------------------------------------------------------------------------
 
+/**
+ * ⚠️ SHOW THE END OF stderr, NEVER THE BEGINNING. The first real run reported 36
+ * engine failures whose printed reason was a `RequestsDependencyWarning` — the
+ * first line every one of them emits — which hid BOTH real causes (surya: the
+ * Docker daemon was not running; paddleocr: `paddlepaddle` was not installed).
+ * A tool writes its warnings first and its cause last.
+ */
+export function stderrTail(text, n = 300) {
+  const s = String(text || '').replace(/\s+$/, '');
+  if (!s.trim()) return '';
+  return s.length <= n ? s : `…${s.slice(-n)}`;
+}
+
+/**
+ * Decide whether an engine can actually run here, from FACTS gathered by the
+ * caller. Pure so it can be graded without a machine that has (or lacks) any of
+ * these — the two states that cost the first run 36 failures are the two the
+ * probe could not previously express.
+ *
+ * ⚠️ `paddleocr --version` SUCCEEDING DOES NOT MEAN THE ENGINE WORKS.
+ * `pip install paddleocr` installs the WRAPPER; the engine is `paddlepaddle`,
+ * a separate package. Without it every document fails at import.
+ *
+ * ⚠️ A tri-state is required, not a boolean: `paddleRuntime === null` means we
+ * could not check (no python on PATH) and must NOT be read as "not installed".
+ */
+export function classifyEngineAvailability(engine, facts = {}) {
+  const {
+    binaryPresent, rasterizerPresent, paddleRuntime, suryaNeedsServer, dockerReachable,
+  } = facts;
+  if (!binaryPresent) return { available: false, note: 'not installed' };
+  if (engine === 'tesseract' && rasterizerPresent === false) {
+    return { available: false, note: 'missing pdftoppm (poppler-utils) — cannot rasterize a PDF' };
+  }
+  if (engine === 'paddleocr') {
+    if (paddleRuntime === false) {
+      return {
+        available: false,
+        note: 'wrapper only — `paddleocr` is on PATH but the `paddle` runtime is not: pip install paddlepaddle',
+      };
+    }
+    if (paddleRuntime == null) {
+      return { available: true, note: 'paddle runtime UNVERIFIED (no python on PATH) — may fail at import' };
+    }
+  }
+  if (engine === 'surya' && suryaNeedsServer) {
+    if (dockerReachable === false) {
+      return {
+        available: false,
+        note: 'runs a VLM server via Docker — Docker daemon not reachable; intended for the GPU box',
+      };
+    }
+    return { available: true, note: 'runs a VLM server via Docker — intended for the GPU box' };
+  }
+  return { available: true, note: null };
+}
+
 const ENGINE_BINARIES = {
   surya: 'surya_ocr',
   paddleocr: 'paddleocr',
@@ -248,16 +429,59 @@ function binaryVersion(cmd) {
 export function probeEngines() {
   const out = {};
   for (const [engine, bin] of Object.entries(ENGINE_BINARIES)) {
-    const available = binaryAvailable(bin);
-    const entry = { binary: bin, available, version: available ? binaryVersion(bin) : null };
+    const binaryPresent = binaryAvailable(bin);
+    const facts = { binaryPresent };
+    const entry = { binary: bin, version: binaryPresent ? binaryVersion(bin) : null };
     if (engine === 'tesseract') {
+      facts.rasterizerPresent = binaryAvailable('pdftoppm');
       entry.needs = 'pdftoppm';
-      entry.rasterizer_available = binaryAvailable('pdftoppm');
-      entry.available = available && entry.rasterizer_available;
+      entry.rasterizer_available = facts.rasterizerPresent;
     }
+    if (engine === 'paddleocr' && binaryPresent) {
+      facts.paddleRuntime = pythonModuleImportable('paddle');
+      entry.paddle_runtime = facts.paddleRuntime;
+    }
+    if (engine === 'surya' && binaryPresent) {
+      facts.suryaNeedsServer = suryaNeedsServer();
+      entry.needs_vlm_server = facts.suryaNeedsServer;
+      if (facts.suryaNeedsServer) {
+        facts.dockerReachable = dockerReachable();
+        entry.docker_reachable = facts.dockerReachable;
+      }
+    }
+    const verdict = classifyEngineAvailability(engine, facts);
+    entry.available = verdict.available;
+    entry.note = verdict.note;
     out[engine] = entry;
   }
   return out;
+}
+
+/**
+ * Can this machine `import <mod>` in python? Returns null — NOT false — when
+ * there is no python on PATH: "we could not check" and "it is missing" are
+ * different facts and must not read the same.
+ */
+function pythonModuleImportable(mod) {
+  for (const py of ['python3', 'python']) {
+    const r = spawnSync(py, ['-c', `import ${mod}`], { encoding: 'utf8' });
+    if (r.error && r.error.code === 'ENOENT') continue;
+    return r.status === 0;
+  }
+  return null;
+}
+
+/** Does this surya build drive a VLM server (vllm / llama.cpp) rather than run in-process? */
+function suryaNeedsServer() {
+  const r = spawnSync('surya_ocr', ['--help'], { encoding: 'utf8' });
+  if (r.error) return false;
+  return /vllm|llama[._]?cpp|ocr[_-]?server/i.test(`${r.stdout || ''}${r.stderr || ''}`);
+}
+
+function dockerReachable() {
+  const r = spawnSync('docker', ['info'], { encoding: 'utf8', timeout: 15000 });
+  if (r.error) return false;
+  return r.status === 0;
 }
 
 function meanConfidenceFromTsv(tsv) {
@@ -289,7 +513,7 @@ function tesseractOcr(pdfPath, scratch, { maxPages = 0, dpi = 200 } = {}) {
   if (maxPages > 0) argv.push('-f', '1', '-l', String(maxPages));
   argv.push(pdfPath, prefix);
   const ppm = run('pdftoppm', argv);
-  if (ppm.status !== 0) return { ok: false, reason: `pdftoppm_exit_${ppm.status}:${(ppm.stderr || '').slice(0, 160)}` };
+  if (ppm.status !== 0) return { ok: false, reason: `pdftoppm_exit_${ppm.status}:${stderrTail(ppm.stderr)}` };
 
   const pages = []; const confs = [];
   for (let pg = 1; pg <= 2000; pg++) {
@@ -319,7 +543,7 @@ function ocrmypdfOcr(pdfPath, scratch) {
   const r = run('ocrmypdf', ['--force-ocr', '--sidecar', sidecar, '--output-type', 'pdf', pdfPath, out]);
   if (r.error && r.error.code === 'ENOENT') return { ok: false, reason: 'ocrmypdf_not_installed' };
   if (r.status !== 0 && !existsSync(sidecar)) {
-    return { ok: false, reason: `ocrmypdf_exit_${r.status}:${(r.stderr || '').slice(0, 200)}` };
+    return { ok: false, reason: `ocrmypdf_exit_${r.status}:${stderrTail(r.stderr)}` };
   }
   const raw = existsSync(sidecar) ? readFileSync(sidecar, 'utf8') : '';
   const text = raw.trim();
@@ -345,7 +569,7 @@ function suryaOcr(pdfPath, scratch) {
   const r = run('surya_ocr', [pdfPath, '--output_dir', out]);
   if (r.error && r.error.code === 'ENOENT') return { ok: false, reason: 'surya_not_installed' };
   const js = findFile(out, (n) => n === 'results.json') || findFile(out, (n) => n.endsWith('.json'));
-  if (!js) return { ok: false, reason: `surya_no_output:${(r.stderr || '').slice(0, 160)}` };
+  if (!js) return { ok: false, reason: `surya_no_output:${stderrTail(r.stderr)}` };
   let parsed;
   try { parsed = JSON.parse(readFileSync(js, 'utf8')); } catch { return { ok: false, reason: 'surya_bad_json' }; }
   const pages = []; const confs = [];
@@ -393,7 +617,7 @@ function paddleOcr(pdfPath, scratch) {
     } catch { /* not json */ }
   }
   const text = lines.join('\n').trim();
-  if (!text) return { ok: false, reason: `paddleocr_no_text:${(r.stderr || '').slice(0, 160)}` };
+  if (!text) return { ok: false, reason: `paddleocr_no_text:${stderrTail(r.stderr)}` };
   const mean = confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : null;
   return {
     ok: true, text, pages: null, engine: 'paddleocr',
@@ -522,15 +746,17 @@ async function extractFrom(text, pages, invoke, extractTenantFromLease) {
 }
 
 async function runBakeoff(opts) {
-  const { dir, engines, useStub, only, maxPages, dpi } = opts;
+  const { dir, engines, useStub, only, maxPages, dpi, control } = opts;
   const probe = probeEngines();
   const runnable = engines.filter((e) => probe[e]?.available);
 
   console.log('\n=== ENGINES ===');
   for (const [e, p] of Object.entries(probe)) {
     const mark = p.available ? '✔' : '✗';
-    const extra = p.needs && !p.rasterizer_available ? `  (missing ${p.needs})` : '';
-    console.log(`  ${mark} ${e.padEnd(10)} ${p.version || (p.available ? '' : 'not installed')}${extra}`);
+    // ⚠️ The NOTE is the deliverable when an engine cannot run — "not installed"
+    // on a binary that IS on PATH is what produced 36 identical failures.
+    const note = p.note ? `  — ${p.note}` : '';
+    console.log(`  ${mark} ${e.padEnd(10)} ${p.version || ''}${note}`);
   }
   if (!runnable.length) {
     console.error('\nNo OCR engine available on PATH. Install one (see docs/UW4_LEASE_OCR.md) and re-run.');
@@ -568,6 +794,7 @@ async function runBakeoff(opts) {
 
     // Baseline side (arm A only).
     let baseline = null;
+    let control_run = null;
     if (arm === 'A') {
       const btext = readFileSync(baselinePath, 'utf8');
       const bpages = existsSync(join(d, 'docai.pages.json'))
@@ -587,6 +814,25 @@ async function runBakeoff(opts) {
         console.log('       These would read both_null on every row. Fix GRADED_FIELDS keys before believing any rate.');
       }
       console.log(`    baseline google_docai   ${baseline.text_stats.chars} chars  extract=${baseline.ok ? 'ok' : bres?.reason}`);
+
+      // ⚠️ THE CONTROL: the SAME model, the SAME prompt, the SAME DocAI text,
+      // a SECOND independent call — scored with the SAME scoreDocument. This is
+      // the floor every engine rate below is read against. Without it a raw
+      // agreement percentage is uninterpretable (OCR1 §2).
+      if (control === 'self' && baseline.ok && baseline.tenant) {
+        const cres = await extractFrom(btext, bpages, invoke, extractTenantFromLease);
+        control_run = {
+          ok: !!cres?.ok, reason: cres?.reason || null,
+          tenant: cres?.ok ? cres.tenant : null, model: cres?.model || null,
+          score: cres?.ok ? scoreDocument(baseline.tenant, cres.tenant) : null,
+        };
+        const cs = control_run.score;
+        console.log(`    self-control  run2 of the same model on the same text  `
+          + (cs ? `agree=${cs.tally.agree}/${cs.decided_fields} (both_null ${cs.both_null_fields})`
+            : `extract=${control_run.reason}`));
+      } else if (control === 'self') {
+        control_run = { ok: false, reason: 'baseline_extract_failed', tenant: null, model: null, score: null };
+      }
     }
 
     const candidates = [];
@@ -611,6 +857,16 @@ async function runBakeoff(opts) {
         tenant: eres?.ok ? eres.tenant : null, model: eres?.model || null,
       };
       if (arm === 'A' && baseline?.tenant) entry.score = scoreDocument(baseline.tenant, entry.tenant);
+      // ⚠️ ARM B HAS NO BASELINE, SO A COUNT IS ALL IT CAN REPORT — AND A COUNT
+      // CANNOT BE READ. "5/6 fields found" at OCR confidence 68 on a title/docs
+      // bundle is indistinguishable from 5/6 on a clean lease until somebody
+      // reads the VALUES. They already exist in memory; carry them out.
+      // (`bakeoff/` is git-ignored — these are client lease values and never
+      // leave the box. The response/ copy stays values-free.)
+      entry.graded_values = Object.fromEntries(
+        GRADED_FIELDS.map((f) => [f.label, entry.tenant?.[f.key] ?? null]),
+      );
+      entry.fields_found = GRADED_FIELDS.filter((f) => !isNullSentinel(entry.tenant?.[f.key])).length;
       candidates.push(entry);
       console.log(`    ${engine.padEnd(12)} ${stats.chars} chars  ${pagesRead ?? '?'}pp  `
         + `${(ocr.elapsed_ms / 1000).toFixed(1)}s (${perPage == null ? '?' : Math.round(perPage)}ms/pp)  `
@@ -620,14 +876,17 @@ async function runBakeoff(opts) {
 
     results.push({
       document_id: id, arm, source_pages: sourcePages, meta,
-      baseline, candidates,
+      baseline, control: control_run, candidates,
     });
   }
 
+  const controlScores = results.filter((r) => r.arm === 'A').map((r) => r.control?.score || null);
   const report = {
     generated_at: new Date().toISOString(),
     model: modelLabel,
     model_is_stub: useStub,
+    control_mode: control || 'none',
+    self_control: control === 'self' ? summarizeSelfControl(controlScores) : null,
     graded_fields: GRADED_FIELDS.map((f) => f.label),
     engines_probed: probe,
     engines_run: runnable,
@@ -665,12 +924,56 @@ export function renderReport(rep) {
 
   L.push('## Engines');
   L.push('');
-  L.push('| engine | available | version |');
-  L.push('|---|---|---|');
+  L.push('| engine | available | version | note |');
+  L.push('|---|---|---|---|');
   for (const [e, p] of Object.entries(rep.engines_probed)) {
-    L.push(`| \`${e}\` | ${p.available ? 'yes' : 'no'} | ${p.version || '—'} |`);
+    L.push(`| \`${e}\` | ${p.available ? 'yes' : 'no'} | ${p.version || '—'} | ${p.note || '—'} |`);
   }
   L.push('');
+
+  // -------------------------------------------------------------------------
+  // THE FLOOR, printed ABOVE the engine tables on purpose. A reader who meets a
+  // 77% engine rate before meeting the model's own self-agreement has already
+  // formed an opinion the number cannot support.
+  // -------------------------------------------------------------------------
+  L.push('## Model self-agreement control — the floor');
+  L.push('');
+  if (rep.control_mode !== 'self') {
+    L.push('🔴 **NOT RUN** (`--control self` was not passed). There is no floor, so every');
+    L.push('engine rate below is UNINTERPRETABLE: a disagreement between the DocAI text and');
+    L.push('the local text may be the OCR or may be the model, and nothing here can tell them');
+    L.push('apart. Re-run with `--control self` before quoting any rate.');
+    L.push('');
+  } else {
+    const sc = rep.self_control;
+    L.push('The SAME model, the SAME prompt, the SAME DocAI text, run TWICE and scored with the');
+    L.push('SAME comparator. **An engine\'s rate is only meaningful relative to this row.**');
+    L.push('');
+    L.push('⚠️ Two independent calls — deliberately NOT `temperature=0`. This measures the model');
+    L.push('as the harness uses it; pinning a seed would report a 100% floor the pipeline never has.');
+    L.push('');
+    if (rep.model_is_stub) {
+      L.push('> 🔴 The stub extractor is DETERMINISTIC, so this control is 100% by construction.');
+      L.push('> It proves the control is plumbed end to end and is NOT a measurement of any model.');
+      L.push('');
+    }
+    L.push(`Documents controlled: **${sc?.documents ?? 0}**`);
+    L.push('');
+    L.push('| field | self-agree | self-disagree | both_null | **self-rate** |');
+    L.push('|---|---:|---:|---:|---:|');
+    for (const f of rep.graded_fields) {
+      const t = sc?.per_field?.[f];
+      const rate = t?.self_rate == null ? '—' : `${(t.self_rate * 100).toFixed(0)}%`;
+      L.push(`| \`${f}\` | ${t?.self_agree ?? 0} | ${t?.self_disagree ?? 0} | ${t?.self_both_null ?? 0} | **${rate}** |`);
+    }
+    const ov = sc?.overall;
+    L.push(`| **all fields** | ${ov?.self_agree ?? 0} | ${ov?.self_disagree ?? 0} | ${ov?.self_both_null ?? 0} `
+      + `| **${ov?.self_rate == null ? '—' : `${(ov.self_rate * 100).toFixed(0)}%`}** |`);
+    L.push('');
+    L.push('⚠️ A field whose self-rate is `—` was never decided by either run: it has no floor,');
+    L.push('so the engine rate for that field cannot be read either.');
+    L.push('');
+  }
 
   const armA = rep.documents.filter((d) => d.arm === 'A');
   if (armA.length) {
@@ -708,12 +1011,18 @@ export function renderReport(rep) {
     for (const [eng, fields] of Object.entries(byEngine)) {
       L.push(`**${eng}**`);
       L.push('');
-      L.push('| field | agree | disagree | local-only | docai-only | both_null | rate |');
-      L.push('|---|---:|---:|---:|---:|---:|---:|');
+      L.push('| field | agree | disagree | local-only | docai-only | both_null | rate | **rate − self** |');
+      L.push('|---|---:|---:|---:|---:|---:|---:|---:|');
       for (const f of rep.graded_fields) {
         const t = fields[f];
         const dec = t.agree + t.disagree + t.candidate_only + t.baseline_only;
-        L.push(`| \`${f}\` | ${t.agree} | ${t.disagree} | ${t.candidate_only} | ${t.baseline_only} | ${t.both_null} | ${dec ? `${((t.agree / dec) * 100).toFixed(0)}%` : '—'} |`);
+        const rate = dec ? t.agree / dec : null;
+        const selfRate = rep.self_control?.per_field?.[f]?.self_rate ?? null;
+        // ⚠️ null renders as `—` ("no floor / not measured"), never as 0 ("at parity").
+        const delta = deltaVsSelf(rate, selfRate);
+        const deltaCell = delta == null ? '—' : `${delta > 0 ? '+' : ''}${delta.toFixed(1)} pp`;
+        L.push(`| \`${f}\` | ${t.agree} | ${t.disagree} | ${t.candidate_only} | ${t.baseline_only} | ${t.both_null} `
+          + `| ${rate == null ? '—' : `${(rate * 100).toFixed(0)}%`} | **${deltaCell}** |`);
       }
       L.push('');
     }
@@ -746,7 +1055,7 @@ export function renderReport(rep) {
     for (const d of armB) {
       for (const c of d.candidates) {
         if (!c.ok) { L.push(`| ${d.document_id} | ${d.source_pages ?? '?'} | ${c.engine} | — | — | — | — | **FAILED** ${c.reason} | — |`); continue; }
-        const found = GRADED_FIELDS.filter((f) => c.tenant && c.tenant[f.key] != null && c.tenant[f.key] !== '').length;
+        const found = c.fields_found ?? GRADED_FIELDS.filter((f) => !isNullSentinel(c.tenant?.[f.key])).length;
         L.push(`| ${d.document_id} | ${d.source_pages ?? '?'} | ${c.engine} | ${c.pages_read ?? '?'} | ${found} | ${c.clauses.found_count} `
           + `| ${c.ms_per_page == null ? '—' : (c.ms_per_page / 1000).toFixed(1)} | ${c.text_stats.chars} | ${c.text_stats.wordlike_ratio} |`);
       }
@@ -760,6 +1069,27 @@ export function renderReport(rep) {
       if (!c.ok) continue;
       L.push(`| ${d.document_id} | ${c.engine} | `
         + BACK_HALF_CLAUSES.map((k) => (c.clauses[k].found ? `${c.clauses[k].position}` : '—')).join(' | ') + ' |');
+    }
+    L.push('');
+    // ⚠️ THE VALUES, NOT THE COUNT. A "fields found /6" score is not readable —
+    // a garbled read that produces six plausible-looking wrong values scores the
+    // same as a clean one. This table is the only way to tell them apart, and it
+    // is why doc 407 (5/6 at confidence 68) needed a human eye.
+    L.push('### Field values as read (arm B — no baseline exists to check them against)');
+    L.push('');
+    L.push('⚠️ Nothing here is verified. These are what the consumer returned from the local');
+    L.push('text; read them for plausibility. A confident-looking value from a poor scan is the');
+    L.push('failure mode a count cannot show.');
+    L.push('');
+    L.push('| doc | engine | ocr conf | ' + rep.graded_fields.join(' | ') + ' |');
+    L.push('|---|---|---:|' + rep.graded_fields.map(() => '---').join('|') + '|');
+    for (const d of armB) for (const c of d.candidates) {
+      if (!c.ok) continue;
+      const vals = rep.graded_fields.map((f) => {
+        const v = c.graded_values?.[f];
+        return v == null || v === '' ? '—' : String(v).replace(/\|/g, '\\|').slice(0, 60);
+      });
+      L.push(`| ${d.document_id} | ${c.engine} | ${c.ocr_confidence ?? '—'} | ${vals.join(' | ')} |`);
     }
     L.push('');
   }
@@ -851,8 +1181,18 @@ print("ok")
   for (const d of [cleanDir, degradedDir, noisyDir]) mkdirSync(d, { recursive: true });
   const r = run('python3', ['-c', py,
     join(cleanDir, 'source.pdf'), join(degradedDir, 'source.pdf'), join(noisyDir, 'source.pdf')]);
+  if (r.error?.code === 'ENOENT') {
+    return { ok: false, reason: 'python3 is not on PATH', fix: 'install Python 3 and put python3 on PATH' };
+  }
   if (r.status !== 0) {
-    return { ok: false, reason: `fixture_render_failed: ${(r.stderr || '').slice(0, 300)}` };
+    const err = stderrTail(r.stderr);
+    // ⚠️ NAME THE FIX, not just the failure. The first real run's --self-test on
+    // Windows reported the missing dependency honestly and stopped there, so the
+    // operator had to go read the traceback to learn it was one pip install.
+    const fix = /No module named ['"]?PIL/i.test(err)
+      ? 'pip install pillow'
+      : 'render the fixture manually, or run --self-test on a box with python3 + Pillow';
+    return { ok: false, reason: `fixture_render_failed: ${err}`, fix };
   }
   // The clean fixture doubles as arm A: its "baseline" is the ground truth text,
   // so a perfect OCR scores 100% and any OCR error shows up as a disagreement.
@@ -869,12 +1209,17 @@ async function selfTest(dir) {
   if (!fx.ok) {
     console.error(`✗ ${fx.reason}`);
     console.error('  Needs python3 + Pillow to render the fixture. Honest skip — not a pass.');
+    console.error(`  FIX: ${fx.fix}`);
     process.exit(3);
   }
   console.log('Fixture rendered: FIXTURE-clean (arm A, ground-truth baseline) + FIXTURE-degraded (arm B)\n');
   const rep = await runBakeoff({
     dir, engines: ['surya', 'paddleocr', 'ocrmypdf', 'tesseract'],
     useStub: true, only: ['FIXTURE-clean', 'FIXTURE-degraded', 'FIXTURE-noisy'], maxPages: 0, dpi: 200,
+    // ⚠️ The self-control runs here too — but the stub is DETERMINISTIC, so it
+    // scores 100% by construction. That proves the plumbing carries a control
+    // end to end; it says NOTHING about the real model's floor.
+    control: 'self',
   });
 
   // Assertions — the plumbing claims this harness makes about itself.
@@ -917,6 +1262,25 @@ async function selfTest(dir) {
       !!nc?.score && (nc.score.tally.disagree + nc.score.tally.baseline_only + nc.score.tally.candidate_only) > 0],
     ['the noisy copy scores strictly below the clean copy',
       !!nc?.score && !!cc?.score && nc.score.agreement_rate < cc.score.agreement_rate],
+    // --- the OCR1c control -------------------------------------------------
+    // ⚠️ These prove the control is PLUMBED, not that any floor is 100%. The
+    // stub extractor is deterministic, so it agrees with itself by construction.
+    ['the self-agreement control ran on every arm-A document',
+      rep.control_mode === 'self'
+      && rep.documents.filter((d) => d.arm === 'A').every((d) => !!d.control?.score)],
+    ['the control is scored with the SAME comparator as the engines (both_null excluded)',
+      !!clean?.control?.score
+      && clean.control.score.decided_fields === clean.control.score.tally.agree
+        + clean.control.score.tally.disagree + clean.control.score.tally.candidate_only
+        + clean.control.score.tally.baseline_only],
+    ['the report carries a per-field self-rate for every graded field',
+      !!rep.self_control && GRADED_FIELDS.every((f) => f.label in rep.self_control.per_field)],
+    ['the deterministic stub agrees with itself (plumbing only, NOT a model floor)',
+      rep.self_control?.overall?.self_rate === 1],
+    // --- arm B values ------------------------------------------------------
+    ['arm B carries the field VALUES, not only a count',
+      rep.documents.filter((d) => d.arm === 'B').every((d) => d.candidates.every(
+        (c) => !c.ok || (c.graded_values && GRADED_FIELDS.every((f) => f.label in c.graded_values)))) ],
   ];
   console.log('\n=== SELF-TEST ASSERTIONS ===');
   let failed = 0;
@@ -924,7 +1288,10 @@ async function selfTest(dir) {
     console.log(`  ${pass ? '✔' : '✗'} ${name}`);
     if (!pass) failed += 1;
   }
-  console.log(`\nclean:    ${cc?.text_stats.chars} chars · clauses ${cc?.clauses.found_count}/4 · wordlike ${cc?.text_stats.wordlike_ratio} · agree ${cc?.score?.tally.agree}/${cc?.score?.decided_fields}`);
+  const sr = rep.self_control?.overall?.self_rate;
+  console.log(`\ncontrol:  model self-agreement floor ${sr == null ? '—' : `${(sr * 100).toFixed(0)}%`} `
+    + `over ${rep.self_control?.documents ?? 0} arm-A docs (STUB — deterministic, plumbing only)`);
+  console.log(`clean:    ${cc?.text_stats.chars} chars · clauses ${cc?.clauses.found_count}/4 · wordlike ${cc?.text_stats.wordlike_ratio} · agree ${cc?.score?.tally.agree}/${cc?.score?.decided_fields}`);
   console.log(`noisy:    ${nc?.text_stats.chars} chars · clauses ${nc?.clauses.found_count}/4 · wordlike ${nc?.text_stats.wordlike_ratio} · agree ${nc?.score?.tally.agree}/${nc?.score?.decided_fields} · disagree ${nc?.score?.tally.disagree}`);
   console.log(degradedFailed
     ? `degraded: OCR FAILED (${degraded.candidates.map((c) => c.reason).join('; ')}) — the extreme of "worse"`
@@ -938,7 +1305,7 @@ async function selfTest(dir) {
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const a = { dir: 'bakeoff', engines: null, model: 'real', only: null, maxPages: 0, dpi: 200, mode: null, ids: null };
+  const a = { dir: 'bakeoff', engines: null, model: 'real', only: null, maxPages: 0, dpi: 200, mode: null, ids: null, control: null };
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
     if (t === '--run') a.mode = 'run';
@@ -950,6 +1317,7 @@ function parseArgs(argv) {
     else if (t === '--only') a.only = String(argv[++i] || '').split(',').map((s) => s.trim()).filter(Boolean);
     else if (t === '--max-pages') a.maxPages = Number(argv[++i]) || 0;
     else if (t === '--dpi') a.dpi = Number(argv[++i]) || 200;
+    else if (t === '--control') a.control = String(argv[++i] || '').trim() || null;
   }
   return a;
 }
@@ -965,11 +1333,15 @@ async function main() {
   mkdirSync(dir, { recursive: true });
   if (a.mode === 'fetch') return fetchBaselines(a.ids, dir);
   if (a.mode === 'self-test') return selfTest(dir);
+  if (a.control && a.control !== 'self') {
+    console.error(`Unknown --control mode '${a.control}'. The only mode is 'self'.`);
+    process.exit(2);
+  }
   return runBakeoff({
     dir,
     engines: a.engines || ['surya', 'paddleocr', 'ocrmypdf', 'tesseract'],
     useStub: a.model === 'stub',
-    only: a.only, maxPages: a.maxPages, dpi: a.dpi,
+    only: a.only, maxPages: a.maxPages, dpi: a.dpi, control: a.control,
   });
 }
 

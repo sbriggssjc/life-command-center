@@ -16,6 +16,45 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — OCR1c: the bake-off harness has a FLOOR now. ⚠️ NO real-document verdict changed — the sample on file is still 10 arm-A documents, tesseract only, and the 77% is still uninterpretable until Scott re-runs with `--control self`.
+
+Harness-only; nothing wired; no real document run (the sandbox still cannot reach Supabase or
+SharePoint). `scripts/ocr-bakeoff.mjs` + `test/ocr-bakeoff.test.mjs`. Writeup:
+`docs/audits/OCR1_LOCAL_OCR_BAKEOFF_2026-09-02.md` **§8**; response
+`docs/claude-code/responses/OCR1c-bakeoff-harness-self-agreement-control.response.md`.
+
+**Four changes, each guarded (30 tests, 0 fail; 25/25 new mutations RED; full suite 5,038 pass / 0 fail):**
+
+1. **Comparator artifacts normalized** — curly quotes/apostrophes, en/em dashes, NBSP, whitespace;
+   `""` / `null` / `N/A` / `—` → null BEFORE the both-null decision; numbers strip a trailing `sf`.
+   **4 of the first run's 11 non-agreements were this, not OCR.** ⚠️ Rounding is **not** a
+   tolerance — `412500` vs `412600` stays a disagreement, and the sentinel list is narrow on purpose
+   (`0` is a value; `Nullarbor Holdings LLC` is a name), both mutation-verified.
+2. **`--control self`** — the model run TWICE on the same DocAI text, scored with the SAME
+   `scoreDocument` and the same both-null exclusion, printed ABOVE the engine tables with
+   `rate − self` per field. Two independent calls, deliberately **not** `temperature=0`.
+   `deltaVsSelf` returns **null, never 0**, when there is no floor. A run without it prints a red
+   *NOT RUN* banner instead of a bare rate. Cost: 10 extra model calls/run.
+3. **Failure reporting** — `stderrTail` shows the LAST 300 chars (the first 160 were the same
+   `RequestsDependencyWarning` on **all 36** first-run failures and hid BOTH real causes); the probe
+   now separates *wrapper only* (`pip install paddlepaddle`) / *cannot check* / *needs a Docker VLM
+   server → the GPU box*; `--self-test` names `pip install pillow`. **Positive-controlled live** with
+   a fake `paddleocr` on PATH — the workstation's exact state, now reported instead of run 18 times.
+4. **Arm B carries the VALUES** (`graded_values`/`fields_found` + a report table) — a `5/6 found` at
+   confidence 68 is unreadable as a count.
+
+⚠️ **Two guard defects the mutation pass found, both new to this repo's collection:** a detector for
+a CODE shape must **blank string literals as well as comments** (the rendered report says
+*"deliberately NOT `temperature=0`"* in a pushed string, so the anti-pinning grep went RED over
+correct code); and the **order is load-bearing — comments FIRST, then literals**, because a bare
+apostrophe in prose opens a string the blanker never closes and swallows real code behind it. That
+is how the positive-control mutation for that very assertion survived its first run.
+
+👤 **Scott:** `pip install paddlepaddle`, then
+`node scripts/ocr-bakeoff.mjs --run --engines tesseract,paddleocr --control self` on the staged 15.
+Read the floor table first, then `rate − self`, then the named disagreements. Surya still belongs on
+GaryBuilt.
+
 ## 2026-09-02 — B6e-ci-required-check-prep LANDED (Dialysis #7395 + #7397): the gate has been seen RED, the docs-only path is proven, and MY "11 ruff errors" was an annotation cap. PR8 reconciled: the producer half is an EMPTY-WINDOW zero.
 
 ### Dialysis — verified from the PR bodies' run ids, not the response (which was captured mid-run)
