@@ -15,8 +15,13 @@
 > **Nothing was wired.** `deps.freeOcr` still has no server-side producer. The live drain, the 42
 > `over_docai_page_cap` markers and the DOC18 work are untouched.
 
-**Deliverables:** `scripts/ocr-bakeoff.mjs` (harness, 15 self-test assertions green against a real
-engine) · `test/ocr-bakeoff.test.mjs` (11 guards, **9/9 mutations RED**).
+> ✅ **UPDATE 2026-09-02 — OCR1c HARDENED THE HARNESS (§8 below). No real-document verdict changed:
+> the sample on file is still 10 arm-A documents, tesseract only.** The 77% agreement rate that run
+> produced remains **uninterpretable until `--control self` is run**, which is exactly what OCR1c
+> added. **Re-run command in §8.6.**
+
+**Deliverables:** `scripts/ocr-bakeoff.mjs` (harness, 20 self-test assertions green against a real
+engine) · `test/ocr-bakeoff.test.mjs` (30 guards, **9/9 then 25/25 mutations RED**).
 
 ---
 
@@ -256,3 +261,131 @@ that has not been run. What exists so far:
 The honest next step is Scott running §6. **If local loses badly, "DocAI stays the workhorse and this
 is recorded so it is not re-proposed" is a legitimate outcome** — the harness is built to be able to
 say that.
+
+
+---
+
+# 8. OCR1c — the model self-agreement control, and three things the first run could not report (2026-09-02)
+
+**Harness-only. Nothing was wired, no real document was run** (the sandbox still cannot reach
+Supabase or SharePoint). `tesseract 5.3.4 + poppler-utils` were re-installed here so the self-test
+exercises a real engine rather than a stub; **Pillow had to be `pip install`ed, which is the same
+gap §8.3 fixes on the operator side.**
+
+## 8.1 Why the 77% had no meaning
+
+The first real run scored **36 agree / 11 non-agree / 12 both-null over 47 graded fields**. Reading
+the eleven — rather than counting them — found **at least 6 were harness or model artifacts**:
+2 were `Kohl's` vs `Kohl’s`, 2 were `""` vs `null` scored `candidate_only`, 2 were the MODEL doing
+different arithmetic on text both sides carried verbatim, and 4 date disagreements had **no
+attributable cause at all** without knowing how much the model disagrees with itself.
+
+**So the number that was missing is the FLOOR.** If the model, run twice on the identical DocAI
+text, agrees with itself 80% of the time, then tesseract's 77% is a WIN. If it agrees 99%, 77% is a
+loss. The harness could not tell those apart, and neither could any reader.
+
+## 8.2 `--control self` — the floor, printed above every engine table
+
+For each arm-A document the harness now runs `extractTenantFromLease` **a second time on the DocAI
+text** and scores run 2 against run 1 with the **same `scoreDocument`**, the same both-null
+exclusion, the same normalizer. `summarizeSelfControl` rolls it up per field; the report prints it
+**above** the engine tables with the sentence *"an engine's rate is only meaningful relative to this
+row"*, and the per-field engine table gained a **`rate − self`** column.
+
+- **Two independent calls, deliberately NOT `temperature=0`.** Pinning a seed would measure a
+  configuration nobody runs and report a 100% floor the pipeline never has. A guard fails on any
+  `temperature`/seed pinning appearing in CODE.
+- **`self_disagree` folds `disagree` + `candidate_only` + `baseline_only`.** Run 2 finding a value
+  run 1 did not is the model failing to agree with itself, not a win for anybody; counting only
+  `disagree` reads the floor higher than it is.
+- **`both_null` is excluded from the denominator, on the SAME rule as the engines** — otherwise the
+  two rates are not comparable and the subtraction is meaningless.
+- **`deltaVsSelf` returns `null`, never 0, when either side has no decided field.** 0 reads as *at
+  parity with the model*; the truth is *not measured* (P180).
+- **A report generated WITHOUT the control says so in red**, rather than printing a bare rate a
+  reader will take at face value.
+- **Cost: 10 extra model calls per run**, on the box.
+
+⚠️ **On the stub the floor is 100% by construction** (the offline extractor is deterministic). The
+self-test asserts exactly that and labels it *plumbing only, NOT a model floor*.
+
+## 8.3 The comparator artifacts, normalized — and the line that was NOT crossed
+
+`normalizePunctuation` maps curly quotes/apostrophes, en/em dashes and NBSP to ASCII and collapses
+whitespace. `isNullSentinel` treats `""`, `null`, `N/A` and a dash placeholder as "the source did
+not state this", **before** the both-null / candidate-only decision. Numbers additionally strip a
+trailing `sf` unit and round.
+
+- ⚠️ **Rounding is not a tolerance.** `412500.4` and `412500` are one rent read two ways;
+  **`412500` vs `412600` stays a DISAGREEMENT** — that digit error is the whole reason the bake-off
+  exists. Guarded, and mutation-verified by turning the round into a 1,000-unit bucket.
+- ⚠️ **The sentinel list is narrow ON PURPOSE.** `0` is a value. `Nullarbor Holdings LLC` and
+  `N/A Property Group` are names. Widening it is how a genuine miss gets hidden as `both_null`, so a
+  guard mutates `isNullSentinel` into a general "looks empty" test and goes red.
+- **The RAW pair is still reported on every disagreement**, so a normalization can never hide a
+  difference a human would call real.
+
+## 8.4 Failure reporting — the 36 identical warnings
+
+`stderrTail` shows the **last 300 characters**, because the first 160 were a
+`RequestsDependencyWarning` on **all 36** first-run failures and hid **both** real causes. Every
+engine failure reason was repointed at it; a guard greps for any `stderr…slice(0, N)` returning.
+
+The probe now answers a question it previously could not:
+
+| engine | before | after |
+|---|---|---|
+| `paddleocr` wrapper present, `paddle` runtime absent | `available: true` → 18 failures | **`available: false`** — *"wrapper only … pip install paddlepaddle"* |
+| `paddleocr`, no python on PATH | — | `available: true`, note **UNVERIFIED** (tri-state: *cannot check* ≠ *missing*) |
+| `surya` needing a VLM server, Docker down | `available: true` → 18 failures | **`available: false`** — *"runs a VLM server via Docker … intended for the GPU box"* |
+| `surya`, Docker up | — | **`available: true`** — the GPU box must still be able to run it |
+
+⚠️ **Positive-controlled live, not only in the pure classifier**: a fake `paddleocr` on PATH that
+answers `--version` and has no runtime reproduces the workstation's exact state and the probe now
+reports *"wrapper only … pip install paddlepaddle"* instead of running it 18 times.
+
+`--self-test` names the fix (`FIX: pip install pillow`) rather than reporting the failure and
+stopping — classified from the stderr, with a generic fallback and a distinct message when `python3`
+itself is absent.
+
+## 8.5 Arm B carries the VALUES, not only a count
+
+`5/6 fields found` at OCR confidence 68 on a title/docs bundle is indistinguishable from 5/6 on a
+clean lease **until somebody reads the values**. They already existed in memory; every candidate now
+carries `graded_values` + `fields_found` into `agreement.json`, and the report renders a *"Field
+values as read"* table stating plainly that nothing in it is verified. `fields_found` uses the
+sentinel rule, so an `N/A` no longer counts as a field found.
+
+*(`bakeoff/` is git-ignored — these are client lease values and never leave the box. This page and
+the response file stay values-free.)*
+
+## 8.6 The re-run, and what it will and will not settle
+
+```
+pip install paddlepaddle
+node scripts/ocr-bakeoff.mjs --run --engines tesseract,paddleocr --control self
+```
+
+Read, in this order: the **self-agreement floor** table · then each engine's `rate − self` column ·
+then the named disagreements. Surya still belongs on the GaryBuilt box (Linux + RTX), where the
+probe will now say so instead of failing 18 times.
+
+**⚠️ This changes no verdict about local OCR.** The sample on file is still **10 real arm-A
+documents, tesseract only**, and no row of OCR1 §5 is selected. What changed is that the next run's
+number will be readable.
+
+## 8.7 Guards (`test/ocr-bakeoff.test.mjs`, 30 tests, 25/25 new mutations RED)
+
+Comments are stripped before every source assertion — the fix's own prose names `.slice(0, 160)`,
+the sentinel spellings and `works_at`-style banned tokens repeatedly while explaining them (A5c /
+N18).
+
+⚠️ **AND ONE ASSERTION NEEDED THE LITERALS BLANKED TOO, WHICH IS A NEW CASE.** The rendered report
+says, in a pushed string, that the control is *"deliberately NOT `temperature=0`"* — so the
+anti-seed-pinning grep matched the sentence explaining the rule and went RED over correct code on
+its first run. **A detector for a CODE shape must blank string literals as well as comments.**
+
+⚠️ **And the ORDER is load-bearing: comments FIRST, then literals.** A bare apostrophe in ordinary
+prose (*"the engine's output"*) opens a string the blanker never closes correctly and swallows real
+code behind it — which is exactly how the positive-control mutation for that assertion **survived
+its first mutation run**. Found by the mutation pass, not by reading it.

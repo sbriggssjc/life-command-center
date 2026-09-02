@@ -650,6 +650,50 @@ never string-built `file://` or `new URL(...).pathname`.** Guard:
 control; comments stripped). **And on the operator side: a bake-off, backfill or probe that returns
 to the prompt in under a second with nothing printed is a symptom, not a success.**
 
+### ⚠️ AN AGREEMENT RATE HAS NO MEANING WITHOUT THE MODEL'S SELF-AGREEMENT FLOOR (OCR1c, 2026-09-02)
+
+The bake-off's first real run scored **77% tesseract-vs-DocAI field agreement over 10 documents**,
+and the number was **uninterpretable**. Reading the 11 non-agreements — rather than counting them —
+found **at least 6 were harness or model artifacts**: 2 were `Kohl's` vs `Kohl’s`, 2 were `""` vs
+`null` scored `candidate_only`, 2 were the MODEL doing different arithmetic on text both sides
+carried **verbatim**, and 4 date disagreements had **no attributable cause at all**. If the model
+disagrees with itself 20% of the time on identical text, 77% is a WIN; at 99% it is a loss.
+`--control self` runs the same model twice on the same baseline text and scores run 2 against run 1
+with the **same comparator and the same both-null exclusion**, so the two rates are subtractable.
+Writeup: `docs/audits/OCR1_LOCAL_OCR_BAKEOFF_2026-09-02.md` §8.
+
+- **Wherever a MODEL sits between the thing under test and the metric, measure the model against
+  itself first.** Two independent calls, **never `temperature=0`** — pinning a seed measures a
+  configuration nobody runs and reports a floor the pipeline never has. `deltaVsSelf` returns
+  **null, never 0**, when either side has no decided field (P180: 0 reads as *at parity*, the truth
+  is *not measured*).
+- **⚠️ NORMALIZE BEFORE COUNTING, AND KEEP THE SENTINEL LIST NARROW.** `""`, `null`, `N/A` and a
+  dash all mean *the source did not state this*; scoring one against another reports a disagreement
+  that does not exist. But `0` is a VALUE and `Nullarbor Holdings LLC` is a NAME — widening the test
+  into "looks empty" is how a genuine miss gets hidden as `both_null`. And **rounding is not a
+  tolerance**: `412500` vs `412600` must stay a disagreement, because that digit error is the thing
+  the measurement exists to catch.
+- **⚠️ A DETECTOR FOR A CODE SHAPE MUST BLANK STRING LITERALS, NOT ONLY COMMENTS — AND THE ORDER IS
+  COMMENTS FIRST.** This file's standing rule is *strip comments before grepping source* (A5c, N18,
+  B1). OCR1c found the next layer: the harness's own RENDERED REPORT says *"deliberately NOT
+  `temperature=0`"* in a pushed string, so the anti-seed-pinning grep matched the sentence
+  **explaining** the rule and went red over correct code. Blanking literals fixes it — but blanking
+  them BEFORE stripping comments is worse than not blanking at all, because a bare apostrophe in
+  ordinary prose (*"the engine's output"*) opens a string the scanner never closes and swallows real
+  code behind it. **That is how the positive-control mutation for that assertion survived its first
+  mutation run**; it was found by the mutation pass, not by reading the guard.
+- **⚠️ A PROBE'S "AVAILABLE" IS A TRI-STATE.** `paddleocr --version` succeeding does not mean the
+  engine works — `pip install paddleocr` installs the WRAPPER; the engine is `paddlepaddle`. So the
+  probe must distinguish *wrapper only* (unavailable, name the pip package) from *could not check*
+  (no python on PATH — **not** the same as missing) from *needs a Docker VLM server* (skip here, keep
+  it runnable on the GPU box). Reading a binary's presence as availability cost **36 identical
+  failures** whose printed reason was the same `RequestsDependencyWarning` — **show the LAST 300
+  characters of stderr, never the first**, because a tool writes its warnings first and its cause
+  last.
+- **⚠️ A COUNT OF FOUND FIELDS IS NOT READABLE — CARRY THE VALUES.** `5/6 fields found` at OCR
+  confidence 68 on a title/docs bundle is indistinguishable from 5/6 on a clean lease until somebody
+  reads what was found. They already existed in memory.
+
 ### Dead-end classes are findable on purpose — `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md`
 
 Nine live defects were found in one session on 2026-08-22, all by accident, and every one
