@@ -16,6 +16,46 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — DOC17: the cap is measured against the SELECTION. The cheap route works; DOC18 staged.
+
+✅ **Probed on a real 316-page PDF. `individualPageSelector {pages:[31..45]}` returned 200 with pages
+31–45 and 65,297 chars, and the positive control (`fromStart:15`) also passed.** ⚠️ **Both arms
+passing is what makes it an answer** — a single success proves nothing about a selector that might
+have been ignored, so **the returned page NUMBERS are the evidence, not the page count.**
+
+**THE RULE: 30 pages per call contiguously from page 1 (imageless); 15 pages anywhere else.**
+⚠️ **A 31-page selection was refused for being 31, NOT for being part of 316 — the document total
+never enters the arithmetic.**
+
+**So a 50-page window is 3 calls, our 141-page maximum is 9, and the whole 42-document backlog is
+~$3.30 — with no GCS, no IAM, no service-agent grant, no lifecycle rule, no LRO table and no
+confidentiality decision.**
+
+⚠️ **This corrects my own last entry: DOC16's refutation stands, its CONSEQUENCE does not.** Its
+pages-31–50 call **is** available, just at 15 pages rather than 30 — three calls where it assumed
+two. **The "~40% of the window unreachable" figure was the honest number for a ONE-call route and
+must not be carried into Scott's DOC14 decision.**
+
+**Four traps measured, all load-bearing for DOC18:** ⚠️ **`metadata.page_limit` reports the MAXIMUM
+ACHIEVABLE limit, not the one in force** (says 30 when 15 applies — and `pageLimitFromError` prefers
+the structured field **by design**, so a retry sized from it loops forever) · **the `At most 15
+pages` shape carries no `details[]` and BOTH parser halves are blind to it** · **the base limit is 15
+and the baseline arm said 30** — *one error's metadata is not a limits table* · `docai-ocr` resolves
+one secret with `||` so the first env var **shadows** the others.
+
+⚠️ **Honest gap, stated not glossed: the probe document is NOT one of the 42** —
+`SHAREPOINT_FETCH_URL` is a Railway var, not a Supabase secret, so their bytes are unreachable from
+where the credentials live. **Nothing moved:** 42 markers, `docai-ocr` byte-identical, spend $0.09.
+
+🟢 **DOC18 staged** — the three-call route, with all four traps written into it and the honest
+ceiling recorded (pages beyond ~50 stay unread; the `abstract` wants clauses from the back half).
+👤 **DOC14 should probably be CLOSED — Scott's call**, and the input has changed: no longer *"a GCS
+build or lose 40% of the window"* but **"a GCS build or nine cheap sync calls."**
+
+🧹 **Consolidation: the DOC backlog went 19 rows → 11.** ⚠️ **DOC8 and DOC9 each had TWO rows** (as
+DOC13 did last round). Eight resolved items are now one summary line pointing at the canonical page;
+**every open item keeps its full detail and nothing was lost.**
+
 ## 2026-09-02 — DOC16 REFUTED on an unpredicted branch; my "lossless" claim inverts; DOC17 probes the decider
 
 **The gate ran and the sync path DOES accept a page selector** — `processOptions` →

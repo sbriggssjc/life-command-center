@@ -1093,6 +1093,65 @@ captures ~60% of the consumer's window.**
 succeed). **Without it, a failure cannot be told from a selector that is silently ignored** — the
 DOC8 no-op shape. Prompt: `docs/claude-code/prompts/DOC17-page-selector-probe.md`.
 
+### ✅ DOC17 PROBE, 2026-09-02 — the cap is measured against the SELECTION. The cheap route works.
+
+**Probed on a real 316-page PDF through `docai-ocr`'s credentials. Seven arms:**
+
+| selection | imageless | result |
+|---|---|---|
+| whole document, no selector | off | ❌ `30 got 316` |
+| **`[31..45]` — 15 pp** | off | ✅ **200 · pages `[31..45]` · 65,297 chars** |
+| **`fromStart:15` — positive control** | off | ✅ **200 · pages `[1..15]`** |
+| `[31..61]` — 31 pp | off | ❌ `30 got 31` — **refused for being 31, NOT for being part of 316** |
+| `[31..60]` — 30 pp | off | ❌ `non-imageless mode exceed the limit: **15** got 30` |
+| `[31..60]` — 30 pp | **on** | ❌ **`At most 15 pages in one call please.`** |
+| `fromStart:30` | on | ✅ 200 · pages `[1..30]` · 151,776 chars |
+
+**THE RULE: 30 pages per call contiguously from page 1 (imageless); 15 pages per call anywhere else.
+The document's total page count never enters the arithmetic.**
+
+⚠️ **Both arms passing is what makes this an answer.** A single success proves nothing about a
+selector that might have been ignored — **the returned page NUMBERS are the evidence, not the page
+count.** That control was the difference between a measurement and a coincidence.
+
+**So a 50-page window is 3 calls** (`fromStart:30` + `[31..45]` + `[46..50]`), our 141-page maximum
+is **9 calls**, and the whole 42-document backlog is **~$3.30** — **with no GCS bucket, no IAM, no
+service-agent grant, no lifecycle rule, no LRO job table, and no confidentiality decision.**
+
+⚠️ **AND IT CORRECTS THE PREVIOUS ENTRY: DOC16's refutation stands, its CONSEQUENCE does not.**
+Its pages-31–50 call **is** available — at 15 pages per call rather than 30, so the design needs
+**three** calls where it assumed two. **The "~40% of the consumer's window is unreachable" figure was
+the honest number for a ONE-call route and must NOT be carried into Scott's DOC14 decision.**
+
+**Four traps measured on the way, all load-bearing for DOC18:**
+
+- ⚠️ **`metadata.page_limit` REPORTS THE MAXIMUM ACHIEVABLE LIMIT, NOT THE ONE IN FORCE.** The
+  30-page non-imageless failure returns `page_limit: "30"` while the applicable limit is **15**.
+  `pageLimitFromError` prefers the structured field over the prose **by design** (DOC8: *a detector
+  keyed only on wording is one Google copy-edit away*) — **and here the structured field is the one
+  that misleads.** A caller sizing a retry from it **retries a 30-page selection forever.**
+- ⚠️ **The `At most 15 pages in one call please.` shape carries NO `details[]`**, so
+  `pageLimitFromError` yields `{limit:null, got:null}` — **and the prose fallback misses it too.**
+  **A third error shape exists and both halves of the parser are blind to it.**
+- ⚠️ **The base limit is 15, and the baseline arm reported 30.** Reading only that arm — the obvious
+  single measurement — would have concluded the base cap had moved to 30 and produced a route that
+  fails on **every** non-page-1 call. **One error's metadata is not a limits table.**
+- ⚠️ **`docai-ocr` resolves one shared secret with `||`, so the first env var set SHADOWS the
+  others.** The probe's first call 401'd holding a valid key. Not a defect in the live path, but it
+  makes the function unreachable from `pg_net` — the only channel a sandbox has.
+
+⚠️ **HONEST GAP, STATED NOT GLOSSED: the probe document is NOT one of the 42.** All 42 are SharePoint
+refs fetched through the Power Automate flow, and **`SHAREPOINT_FETCH_URL` is a Railway env var, not
+a Supabase edge secret** — so their bytes are unreachable from where the credentials live. A real
+316-page document from LCC Opps storage was used instead, **its page count established by the
+baseline arm rather than assumed.** Nothing in the answer depends on which document it was.
+
+**Nothing moved:** `over_docai_page_cap` **42**, `CRE_OCR_PAGE_CAP` untouched, no `processOptions` on
+the normal path, `docai-ocr` byte-identical. The probe is a **separate** function that writes
+nothing. **Spend: 60 pages ≈ $0.09.**
+
+**→ DOC18 is staged: `docs/claude-code/prompts/DOC18-three-call-sync-extract.md`.**
+
 ## 1. Scott's question, answered
 
 > *"At one point there was an issue with access to deeds ingested from CoStar and I asked whether we
