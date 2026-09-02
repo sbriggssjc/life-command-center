@@ -60,6 +60,11 @@ job, `Run Tests` always reports, **seen RED** (run 33647155312), docs-only path 
 CI arc:** merge #7397 → delete `claude/tmp-red-gate-proof` + `claude/tmp-docs-only-proof` in the UI
 → require `Run Tests` on `main`. ⚠️ Ruff stays masked, correctly — **5,738 findings, not the "11"
 the first handoff said** (GitHub's ten-annotation cap; A5's `815 = 1000 − 185` again).
+**PR12 (2026-09-02, #2057) closed** — hash fixed in place (no rewrite), 1,979 live rows since incl. 8
+break-class, all hashing. **Exposure was ~1,101, not 67** — the newline in `sales_transactions`
+narrative on NON-rung columns; the ladder-scoped census could not see it. JS failure signal
+(`provenance_failed` + alert) ships on the Railway redeploy. PR12b filed (flush watermark skips an
+errored event permanently).
 **PR5 (2026-09-02, #2051) closed with PR7** — 426 verdicts + 49 orphan markers live on
 `v_field_source_priority_triage`; no deploy gap (no `api/` change). **`never_written` stays 39 BY
 DESIGN** (rungs are soft-retired in `notes`, never deleted — "unregistered" is a different
@@ -79,18 +84,16 @@ that fires `gov_classify_agency()`; do not read it as broken.
    person names, 7 are the Colliers family. **`cbre; smyth & colliers; patel` is minted as one
    company.** Start with **`BR1-confirm`** — 12 brokerage-evidenced orgs ready for a one-decision
    human confirm.
-2. **`PR12`** — `field_provenance.value_text_hash` rejects any value with a double quote (22P02)
-   and the JS path fails OPEN, so provenance is lost silently. **Size the historical loss first**
-   (count quoted values on every curated column the ladder covers), then the `convert_to(...,'UTF8')`
-   rewrite of the generated column.
-   **Prompt drafted: `docs/claude-code/prompts/PR12-field-provenance-silent-quote-loss.md`.**
-3. **`PR5c`** — 33 rungs on six LCC-internal tables have never seen a `field_provenance` row
-   despite live `lcc_merge_field` call sites on four of them. **Grade against PR12 first** (a silent
-   22P02 is one candidate cause) — which is why PR12 is #2.
-4. **`PR5d`** — `costar_cmbs_loan`: 121 rungs, the ladder's largest source, for a capture arm with
+2. **`PR5c`** — 33 rungs on six LCC-internal tables have never seen a `field_provenance` row
+   despite live `lcc_merge_field` call sites on four of them. ✅ **PR12 does NOT explain it**
+   (0.03% break-class on `entities.name`, 0 elsewhere) — every stamp sits inside
+   `catch (_e) { /* best-effort */ }`, so the next question is whether those call sites are ever
+   REACHED. Gradeable now.
+   **Prompt drafted: `docs/claude-code/prompts/PR5c-lcc-internal-provenance-never-exercised.md`.**
+3. **`PR5d`** — `costar_cmbs_loan`: 121 rungs, the ladder's largest source, for a capture arm with
    0 rows on either domain (`loans.data_source`). Is the CoStar CMBS tab ever captured, or is the
    arm unreachable? One grep of the extension + one count.
-5. **`DE3`/`DE4`** (DE4's input is settled: FY2026's 73.66% Medicare is the fallback bucket),
+4. **`DE3`/`DE4`** (DE4's input is settled: FY2026's 73.66% Medicare is the fallback bucket),
    **`B6e-clinic-metadata`**, **`D2`–`D5`**, **`PR10`** (one source, two ladders), **`SEC1`**
    (91 of 195 SECURITY DEFINER functions anon-executable — filed by PR8, needs its own pass).
 
