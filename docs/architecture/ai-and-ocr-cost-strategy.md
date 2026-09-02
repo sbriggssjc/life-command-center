@@ -14,7 +14,7 @@
 ## 0. ⚠️ THE HEADLINE — the free tier is designed, has a producer, and is NOT WIRED
 
 **`api/_shared/document-text.js` documents a three-tier OCR chain: free local → cheap cloud (DocAI)
-→ gpt-4o vision.** Tier 1 is injected as `deps.freeOcr` (`document-text.js:328-347`).
+→ gpt-4o vision.** Tier 1 is injected as `deps.freeOcr` (`document-text.js` ~`:631` — grep `deps.freeOcr`; the line number quoted here drifted once already).
 
 🔴 **`deps.freeOcr` HAS NO SERVER-SIDE PRODUCER. NOTHING PASSES IT. EVER.**
 
@@ -153,9 +153,14 @@ OCR on savings is arguing from a number that does not support it.**
 1. **DOC18 (staged) — the three-call sync route.** ~$3.30 clears all 42 over-cap documents. **Do not
    hold it for the strategic work**; it is cheap, measured and unblocks the consumer today.
 2. **🟢 THE DURABLE ITEM — `OCR1`, and it is a BAKE-OFF FIRST, not a build.** ⚠️ **Justify it on the PAGE CAP and confidentiality, NOT on cost (§4a).**
-   ✅ **THE HARNESS IS BUILT AND SELF-VERIFIED (2026-09-02): `scripts/ocr-bakeoff.mjs`, guards
-   `test/ocr-bakeoff.test.mjs` (9/9 mutations RED). 👤 THE BAKE-OFF ITSELF HAS NOT BEEN RUN and no
-   verdict exists** — the sandbox has no egress to Supabase/Railway (`http=000`, re-measured) and the
+   ✅ **FIRST REAL RUN DONE 2026-09-02 — 15 real documents, TESSERACT ONLY** (surya needs a Docker
+   VLM server → GaryBuilt; paddle lacked `paddlepaddle`). **The page-cap case is MEASURED TRUE**: 141
+   pages read in one pass, 4/4 back-half clauses legible, 2.3–3.5 s/pp CPU. **Quality parity is
+   UNPROVABLE as built** — 36/47 fields agree, but ≥6 of the 11 non-agreements are harness/model
+   artifacts (curly apostrophes, `""` vs null, model arithmetic on identical source text), and the
+   harness has no model self-agreement floor. Record: `responses/done/OCR1-run.response.md`; next:
+   **OCR1c** (harness) → re-run with paddle. *(History:)* harness built PR #2038, guards 9/9 RED; the
+   bake-off was Scott's run — the sandbox has no egress to Supabase/Railway (`http=000`, re-measured) and the
    PDFs come through the Power Automate SharePoint flow, so it runs on the workstation or the
    GaryBuilt box. Command sequence + how to read the output:
    [`docs/audits/OCR1_LOCAL_OCR_BAKEOFF_2026-09-02.md`](../audits/OCR1_LOCAL_OCR_BAKEOFF_2026-09-02.md) §6.

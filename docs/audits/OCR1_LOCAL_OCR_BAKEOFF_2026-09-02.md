@@ -1,6 +1,13 @@
 # OCR1 — local OCR vs Google Document AI: the bake-off harness, and what could and could not be measured
 
-> **Status: HARNESS DELIVERED AND SELF-VERIFIED. THE BAKE-OFF ITSELF HAS NOT BEEN RUN, and no
+> ✅ **UPDATE 2026-09-02 16:43 UTC — THE FIRST REAL RUN HAPPENED (Scott's workstation, tesseract only).**
+> Findings and the artifact analysis live in `docs/claude-code/responses/done/OCR1-run.response.md`;
+> this page is the harness design as delivered. ⚠️ Two of this page's own assumptions did not survive
+> the run: surya 0.22 needs a Docker-hosted VLM server (GPU box, not the workstation), and
+> `pip install paddleocr` does not install the engine (`paddlepaddle`). Also §6's `--self-test` needs
+> Pillow on Windows.
+>
+> **Original status: HARNESS DELIVERED AND SELF-VERIFIED. THE BAKE-OFF ITSELF HAS NOT BEEN RUN, and no
 > recommendation against OCR1 §5 is possible yet.** The sandbox cannot reach the documents
 > (re-measured, not inherited: `http=000` to Supabase and Railway, `http=200` to GitHub). The
 > harness runs on Scott's workstation or the GaryBuilt box; §6 below is the exact command sequence.
