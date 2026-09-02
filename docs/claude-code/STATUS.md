@@ -104,6 +104,24 @@ gate has only been proven green, never proven to fail); the checkout log free of
 `B6e-ci-required-check` flipped. Prompt + response filed to `done/`
 (`B6e-ci-last5-decisions-resolved.response.md` is a transcription of the mid-flight `.docx`; the
 outcome above is from the run itself).
+## 2026-09-02 — OCR2's premise REFUTED before drafting; re-scoped to deed OCR provenance; bake-off staging script
+
+- ⚠️ **"The deed lane never tiers — all 325 deeds went to gpt-4o" was in three canonical documents
+  and is false on both halves.** `document-text.js:217` passes `ocrTiered: true` by default and no
+  caller passes `false`. The 325 was a **date artifact**: 154 of 185 dated gov deed extractions ran
+  2026-07-15→07-25, before DocAI went live on 08-12. **Corrected in place** (strike-through) in
+  `ai-and-ocr-cost-strategy.md` §0 + §5, `CURRENT-STATE.md`, backlog OCR2, and the handoff.
+- **The real defect:** the handler computes `ocr_tier`/`ocr_engine`/`ocr_pages` and the PATCH at
+  `:233` persists only `raw_text` — gov 325/0 and dia 182/0 deeds with text/with provenance. That is
+  how an unverifiable claim reached three docs. **OCR2 re-scoped** to persist provenance (additive
+  jsonb, RPC merge, fill-blanks, NO backfill onto pre-08-12 rows) and close the gpt-4o opt-out.
+  Prompt: `prompts/OCR2-deed-lane-ocr-provenance.md`.
+- **OCR1 run made mechanical:** `scripts/ocr-bakeoff-stage.ps1` copies the 15 sample PDFs from the
+  synced OneDrive `PROPERTIES` folder into `bakeoff/<id>/source.pdf` (paths verified against the
+  mount; 407 is a title/docs bundle, noted). `--model real` needs `OLLAMA_URL` (+ `OLLAMA_EXTRACTION`,
+  CF Access pair) in `.env.local`, alongside `OPS_SUPABASE_URL` / `OPS_SUPABASE_SERVICE_KEY` for the
+  baselines.
+
 ## 2026-09-02 — OCR1 reconciled (harness built, bake-off NOT run); DOC18's first tick failed on a THIRD deploy surface, fixed, verified on a real lease
 
 **OCR1 (PR #2038) delivered the instrument, not the measurement.** `scripts/ocr-bakeoff.mjs` +

@@ -29,10 +29,19 @@
 **So every OCR call this system has ever made started at a paid tier.** The $0 tier exists in the
 design, in the comments, and in a script — and has never once run in production.
 
-⚠️ **AND THE DEED LANE NEVER TIERS AT ALL.** `document-text.js:502-505`: when `ocrTiered` is falsy it
-calls `ocrPdfToText` → `invokeVisionExtractionAI` → **gpt-4o directly**, gated only on
-`OPENAI_API_KEY`. **All 325 extracted deeds went to the most expensive tier**, on a path that never
-consults DocAI at all.
+~~⚠️ **AND THE DEED LANE NEVER TIERS AT ALL.** `document-text.js:502-505`: when `ocrTiered` is falsy it
+calls `ocrPdfToText` → `invokeVisionExtractionAI` → gpt-4o directly. All 325 extracted deeds went to
+the most expensive tier.~~ ⚠️ **REFUTED 2026-09-02 — read this instead.** The deed drain
+(`api/_handlers/document-text.js:217`) passes **`ocrTiered: true` by default and no caller in `api/`
+passes `false`**; the gpt-4o-direct branch (`document-text.js` ~`:860`) is reachable only by an
+opt-out nobody uses. **The "325 to gpt-4o" number was a DATE artifact:** 154 of the 185 dated gov
+deed extractions ran **2026-07-15 → 07-25, before DocAI went live on 2026-08-12** — the cheap tier did
+not exist, so gpt-4o was the only OCR there was. The 30 extracted on 08-12/13 went through the
+tiered chain. **The genuine defect is that gov `property_documents.extracted_data` carries NO OCR
+provenance** (`deed_extraction` + `extracted_at` only — the handler computes `ocr_tier` /
+`ocr_engine` / `ocr_pages` and returns them on the tick, then drops them), so the tier mix cannot be
+audited after the fact — which is precisely how an unverifiable claim got written into three
+documents. **OCR2 is re-scoped to that** (backlog row).
 
 ## 1. Microsoft is not the answer, and the repo already established why
 
@@ -166,9 +175,12 @@ OCR on savings is arguing from a number that does not support it.**
    tunnel + CF Access, and inject `deps.freeOcr` at the two server call sites. **The seam already
    exists and is tested** (`test/document-text.test.mjs` stubs it). This makes routine OCR **$0/page
    permanently** and leaves DocAI as the escalation, which is what the design always said.
-3. **🔴 Fix the deed lane's un-tiered gpt-4o call (`OCR2`).** `document-text.js:502-505` bypasses
-   DocAI entirely. **That is the 6–14× tier as the DEFAULT for deeds** — a live, current, fixable
-   waste independent of everything else.
+3. **🟡 `OCR2` — RE-SCOPED 2026-09-02: the deed lane DOES tier; what it lacks is PROVENANCE.**
+   ~~`document-text.js:502-505` bypasses DocAI entirely; the 6–14× tier is the default for deeds~~ —
+   refuted (§0). The build is: persist `method` / `ocr_tier` / `ocr_engine` / `ocr_pages` on the gov
+   and dia deed rows (the handler already computes them and drops them), so the deed tier mix is
+   auditable like the CRE sidecar's; and close the gpt-4o-direct opt-out so no future caller can
+   reach it by omission. Prompt: `OCR2-deed-lane-ocr-provenance.md`.
 4. **🔵 Verify the edge→Claude path (`OCR3`).** If it is 400ing, ~10 un-flagged call sites are on an
    unchosen fallback. **Measure before assuming either way.**
 5. **🔵 Collapse the four Ollama clients into one (`OCR4`).**
