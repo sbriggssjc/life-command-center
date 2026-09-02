@@ -976,6 +976,22 @@ Registry: `feature_flags_registry.OCR_CLOUD_DOCAI`. Crons 160/167/169 ACTIVE. Fu
 - **Caps:** ⚠️ **DocAI sync is 30 pages, not 15, since DOC8 (2026-09-01)** — `docai-ocr` v23 sets
   `imagelessMode: true` on the ProcessRequest (a **TOP-LEVEL boolean**, verified against the live v1
   discovery document — **NOT** `processOptions.ocrConfig`, where nesting it is a silent no-op).
+  - ⚠️ **"30 pages" IS ONLY TRUE CONTIGUOUSLY FROM PAGE 1, AND THE CAP IS MEASURED AGAINST THE
+    SELECTION, NOT THE DOCUMENT (DOC17, 2026-09-02, seven live arms on a 316-page PDF).**
+    `ProcessRequest.processOptions` → `individualPageSelector {pages}` / `fromStart` / `fromEnd`
+    works on the sync path: `[31..45]` returned **pages 31–45** of a 316-page document, and the
+    `fromStart:15` positive control returned pages 1–15. A 31-page selection is refused for being
+    **31**, never for being part of 316. But **off page 1 the limit is 15**: 30 pages at 31–60
+    fails, and *with* imageless it fails on a third error string, **`At most 15 pages in one call
+    please.`** — so a ~50-page document is **three** sync calls (`fromStart:30` imageless +
+    `[31..45]` + `[46..50]`), **no GCS required**. Whole 42-doc backlog ≈ **$3.30**.
+  - ⚠️ **`metadata.page_limit` IS THE MAXIMUM ACHIEVABLE LIMIT, NOT THE ONE IN FORCE** — the
+    30-pages-off-page-1 failure reports `page_limit: "30"` while its own message names **15**.
+    DOC8's `pageLimitFromError` prefers the structured field *by design*, and here that field is
+    the misleading one; sizing a retry off it re-sends the same rejected selection forever. **And
+    the `At most 15 pages` shape carries NO `details[]` at all**, so both the structured read and
+    the prose fallback return null. Inert today (the live path sends no selector); load-bearing for
+    DOC18. Full measurement: `docs/architecture/document-capture-ocr-and-deeds.md` (DOC17 ANSWER).
   `INTAKE_OCR_MAX_BYTES` 12MB default; bigger scans go off-box via the `ocr_text` resubmit seam
   (`POST /api/intake?_route=lease-backfill&id=<id>`). Optional: `AI_OCR_MODEL=gpt-4o-mini`.
 - **⚠️ `over_page_cap` → gpt-4o WAS the documented design and it was MEASURED TO FAIL.** Across every
