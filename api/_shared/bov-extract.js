@@ -368,10 +368,10 @@ export function resolveQuotedDate(v) {
   if (typeof v === 'string') {
     const s = v.trim();
     if (!s) return empty;
-    if (isRealDate(s)) return { date: s, as_stated: s, precision: 'day' };
-    if (/^\d{4}-\d{2}$/.test(s)) return { date: null, as_stated: s, precision: 'month' };
-    if (/^\d{4}$/.test(s)) return { date: null, as_stated: s, precision: 'year' };
-    return { date: null, as_stated: s, precision: null };
+    // EXT1b: ONE parser for every date string in this module (see parseStatedDate).
+    const parsed = parseStatedDate(s);
+    if (!parsed) return { date: null, as_stated: s, precision: null };
+    return { date: parsed.date, as_stated: s, precision: parsed.precision };
   }
   if (typeof v !== 'object') return empty;
   const rawPrec = typeof v.precision === 'string' ? v.precision.trim().toLowerCase() : null;
@@ -432,6 +432,236 @@ export function deriveExpirationFromTerm(commencement, term) {
 }
 
 // ---------------------------------------------------------------------------
+// EXT1b — `as_stated` is the AUTHORITY; the model's label is the fallback
+//
+// EXT1 stopped the model doing arithmetic and made it QUOTE. The floor re-run
+// (2026-09-02, `--control self --engines tesseract`) proved the quotes are
+// reliably verbatim and the LABELS beside them are not:
+//
+//   doc 431 rent  `as_stated: "$8,796.50 per month"` with `basis:"per_sf_annual"`,
+//                 `amount: 8.7965` — the quote says per month in plain English and
+//                 the amount was divided by 1,000 ⇒ `rent_basis_unresolved`, null.
+//   doc 336 rent  `as_stated: "Lease Years 1-5: $75,000.00 per year ($6,250.00 per
+//                 month) ..."` with `amount: null` — the year-1 figure is the first
+//                 `$` in the quote.
+//   doc 431 dates `as_stated: "March 15, 2021"` came back `precision:"formula"` on
+//                 the control run and `precision:"day"` on the baseline. A plain
+//                 calendar date, classified non-deterministically — that flip is the
+//                 whole self-disagreement on both date fields (80% / 80%).
+//
+// So the deterministic half moves one step further into code: when the verbatim
+// quote states the basis, the amount or the precision, the QUOTE decides and the
+// model's label is used only where the quote is silent. Every function below is
+// pure and every override records its source, so a reader can always tell which
+// half spoke.
+// ---------------------------------------------------------------------------
+
+/** Every `$`-figure in a quote, in order, with the index it starts at. */
+function dollarFigures(s) {
+  const out = [];
+  const re = /\$\s*(\d[\d,]*(?:\.\d+)?)/g;
+  let m;
+  while ((m = re.exec(String(s))) !== null) {
+    const n = Number(m[1].replace(/,/g, ''));
+    if (Number.isFinite(n)) out.push({ amount: n, start: m.index, end: re.lastIndex });
+  }
+  return out;
+}
+
+/**
+ * The FIRST `$`-figure in the quote, or null.
+ *
+ * Doc 336's `as_stated` holds the whole rent schedule and the model returned a
+ * null amount beside it; the year-1 figure is the first `$` on the line.
+ */
+export function amountFromAsStated(asStated) {
+  const figs = dollarFigures(asStated);
+  return figs.length ? figs[0].amount : null;
+}
+
+const PER_SF_RE = /(?:per|\/)\s*(?:[a-z.]+\s+)?(?:sq\.?\s*ft\.?|square\s+f(?:oo|ee)t|s\.?\s*f\.?)(?=\b|\s|\/|$)/i;
+const MONTHLY_RE = /(?:per|\/|each)\s*(?:calendar\s+)?month\b|\bmonthly\b|\/\s*mo\b|per\s+mo\b/i;
+const ANNUAL_RE = /(?:per|\/)\s*(?:calendar\s+|lease\s+)?year\b|per\s+annum\b|\bannually\b|\bannual\b|\/\s*yr\b|per\s+yr\b/i;
+
+/**
+ * Derive the rent basis from the verbatim quote — the fix for doc 431.
+ *
+ * ⚠️ THE WINDOW IS THE POINT. The basis belongs to ONE figure, and a quote often
+ * restates the same rent on a second basis ("$75,000.00 per year ($6,250.00 per
+ * month)"). So the text considered runs from the start of the quote up to the
+ * NEXT `$`-figure after the one being classified: doc 336 reads "per year" and
+ * never sees the parenthetical, and doc 431 reads "per month". Where that window
+ * carries BOTH a monthly and an annual marker the quote is genuinely ambiguous
+ * and this returns null — the model's label is the fallback, never a coin flip.
+ *
+ * @param {string|null} asStated  the verbatim rent text
+ * @param {number} amountIndex    which `$`-figure the basis is being read for
+ * @returns {'monthly'|'annual'|'per_sf_annual'|'per_sf_monthly'|null}
+ */
+export function basisFromAsStated(asStated, amountIndex = 0) {
+  const s = asStated == null ? '' : String(asStated);
+  if (!s.trim()) return null;
+  const figs = dollarFigures(s);
+  const next = figs[amountIndex + 1];
+  const window = next ? s.slice(0, next.start) : s;
+
+  const monthly = MONTHLY_RE.test(window);
+  const annual = ANNUAL_RE.test(window);
+  if (monthly && annual) return null; // two periods in one window ⇒ the quote is silent
+
+  if (PER_SF_RE.test(window)) {
+    if (annual) return 'per_sf_annual';
+    if (monthly) return 'per_sf_monthly';
+    return null; // "$12.50 per rentable square foot" states no period — do not guess one
+  }
+  if (monthly) return 'monthly';
+  if (annual) return 'annual';
+  return null;
+}
+
+const MONTH_NUM = {
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
+  may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9, oct: 10, october: 10, nov: 11, november: 11,
+  dec: 12, december: 12,
+};
+const MONTH_WORD = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+const LEAD_WORDS = /^(?:at|on|the|of|as\s+of|effective|dated|commencing|beginning|starting|from|through|until|to)\b[\s,]*/;
+
+const DATE_PATTERNS = [
+  { re: /^(\d{4})-(\d{2})-(\d{2})$/, take: (m) => ({ y: +m[1], mo: +m[2], d: +m[3] }) },
+  { re: /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/, take: (m) => ({ y: +m[3], mo: +m[1], d: +m[2] }) },
+  { re: new RegExp(`^${MONTH_WORD}\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})$`), take: (m) => ({ y: +m[3], mo: MONTH_NUM[m[1]], d: +m[2] }) },
+  { re: new RegExp(`^(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:day\\s+of\\s+)?${MONTH_WORD}\\.?,?\\s+(\\d{4})$`), take: (m) => ({ y: +m[3], mo: MONTH_NUM[m[2]], d: +m[1] }) },
+  { re: new RegExp(`^${MONTH_WORD}\\.?,?\\s+(\\d{4})$`), take: (m) => ({ y: +m[2], mo: MONTH_NUM[m[1]], d: null }) },
+  { re: /^(\d{4})-(\d{2})$/, take: (m) => ({ y: +m[1], mo: +m[2], d: null }) },
+  { re: /^(\d{4})$/, take: (m) => ({ y: +m[1], mo: null, d: null }) },
+];
+
+/**
+ * THE SINGLE DATE PARSER. Everything that reads a date string goes through here.
+ *
+ * ⚠️ IT MUST CONSUME THE WHOLE QUOTE, NOT FIND A DATE INSIDE ONE. "the earlier of
+ * March 1, 2021 or thirty days after Delivery" CONTAINS a calendar date and IS a
+ * formula; a `.search()` for a date would resolve it into a day and re-commit the
+ * exact defect EXT1 removed. Only a small, closed set of structural wrappers is
+ * stripped first (a `Label:` prefix, "on the", "midnight on", trailing
+ * punctuation); anything left over means the quote is not simply a date, and this
+ * returns null so the model's own precision stands.
+ *
+ * @returns {{date: string|null, precision: 'day'|'month'|'year'}|null}
+ */
+function parseStatedDate(raw) {
+  if (raw == null) return null;
+  let s = String(raw).trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!s) return null;
+  s = s.replace(/^[^:]{0,40}:\s*/, '');          // a "Commencement Date:" style label
+  s = s.replace(/^(?:at\s+)?midnight\s+/, '');
+  for (let i = 0; i < 4; i += 1) s = s.replace(LEAD_WORDS, '');
+  s = s.replace(/[.,;]+$/, '').trim();
+  if (!s) return null;
+
+  for (const p of DATE_PATTERNS) {
+    const m = p.re.exec(s);
+    if (!m) continue;
+    const { y, mo, d } = p.take(m);
+    if (!Number.isFinite(y)) return null;
+    if (d != null && Number.isFinite(mo)) {
+      const iso = `${String(y).padStart(4, '0')}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      return isRealDate(iso) ? { date: iso, precision: 'day' } : null;
+    }
+    if (mo != null && Number.isFinite(mo)) return mo >= 1 && mo <= 12 ? { date: null, precision: 'month' } : null;
+    return { date: null, precision: 'year' };
+  }
+  return null;
+}
+
+/**
+ * Derive precision (and the date itself) from the verbatim quote — the fix for
+ * doc 431's dates, where "March 15, 2021" came back `precision:"formula"`.
+ *
+ * Returns null when the quote is not simply a date, which is what keeps a formula
+ * a formula: "Five days after Landlord's Work is Substantially Complete" and
+ * "midnight on the last day of the 15th Lease Year" both fall through to null and
+ * the model's `formula` stands.
+ *
+ * @returns {{precision:'day'|'month'|'year', date:string|null}|null}
+ */
+export function precisionFromAsStated(asStated) {
+  const parsed = parseStatedDate(asStated);
+  return parsed ? { precision: parsed.precision, date: parsed.date } : null;
+}
+
+/**
+ * Reconcile a normalized `base_rent` against its own quote.
+ *
+ * ⚠️ THE MODEL'S NUMBER MUST APPEAR IN THE MODEL'S OWN QUOTE. That is the whole
+ * amount rule, and it is what separates doc 431 (`amount: 8.7965` against
+ * "$8,796.50 per month" — not present, so the quote wins) from a quote that
+ * legitimately carries several figures ("a security deposit of $10,000 and base
+ * rent of $8,796.50 per month" — the model picked the second one, so the model
+ * keeps it AND the basis is read around that figure, not the deposit). A tolerance
+ * would not do this job: 8.7965 and 8,796.50 are the SAME figure scaled by 1,000,
+ * and no threshold distinguishes that from a different figure on the page.
+ *
+ * Fill-blanks in spirit: the model's label is only ever replaced where the quote
+ * states the fact itself, and `basis_source` / `amount_source` say which spoke.
+ */
+export function reconcileBaseRentWithQuote(baseRent) {
+  if (!baseRent) return baseRent;
+  const asStated = baseRent.as_stated;
+  const out = { ...baseRent, basis_source: 'model', amount_source: 'model' };
+  if (!asStated) {
+    out.basis_source = baseRent.basis == null ? null : 'model';
+    out.amount_source = baseRent.amount == null ? null : 'model';
+    return out;
+  }
+
+  const figs = dollarFigures(asStated);
+  let idx = 0;
+  if (figs.length) {
+    const matched = baseRent.amount == null
+      ? -1
+      : figs.findIndex((f) => Math.abs(f.amount - baseRent.amount) < 0.01);
+    if (matched >= 0) {
+      idx = matched;
+    } else {
+      out.amount = figs[0].amount;
+      out.amount_source = 'as_stated';
+      idx = 0;
+    }
+  } else if (baseRent.amount == null) {
+    out.amount_source = null;
+  }
+
+  const quoted = basisFromAsStated(asStated, idx);
+  if (quoted) {
+    out.basis = quoted;
+    out.basis_source = 'as_stated';
+  } else if (baseRent.basis == null) {
+    out.basis_source = null;
+  }
+  return out;
+}
+
+/**
+ * Reconcile a resolved date detail against its own quote — doc 431's dates.
+ *
+ * The quote decides in BOTH directions: a calendar day quoted under a `formula`
+ * label becomes a day, and a month-only quote under a `day` label drops the day
+ * the model invented. Where the quote is not simply a date, nothing changes.
+ */
+export function reconcileQuotedDateWithQuote(detail) {
+  if (!detail || !detail.as_stated) return detail;
+  const quoted = precisionFromAsStated(detail.as_stated);
+  if (!quoted) return detail;
+  if (quoted.precision === detail.precision && (quoted.date || null) === (detail.date || null)) {
+    return { ...detail, precision_source: 'as_stated' };
+  }
+  return { ...detail, date: quoted.date, precision: quoted.precision, precision_source: 'as_stated' };
+}
+
+// ---------------------------------------------------------------------------
 // Per-lease → tenant
 // ---------------------------------------------------------------------------
 
@@ -466,14 +696,15 @@ export async function extractTenantFromLease(leaseRow, deps = {}) {
   // own arithmetic can never be preferred to ours. With no quoted basis at all
   // (a legacy record, or a model that ignored the schema) its number is the only
   // thing on offer and rides through unchanged.
-  const baseRent = normalizeBaseRent(parsed.base_rent);
+  // EXT1b — the verbatim quote is the authority over the model's own labels.
+  const baseRent = reconcileBaseRentWithQuote(normalizeBaseRent(parsed.base_rent));
   const { year1_rent: annualized, rent_basis_unresolved } = annualizeRent(baseRent, sf);
   const year1Rent = baseRent ? annualized : numOrNull(parsed.year1_rent);
 
   // EXT1 — dates. Quoted, never defaulted; an expiration is derived only from a
   // stated commencement DAY plus a stated term, and says so when it is.
-  const commencement = resolveQuotedDate(parsed.lease_commencement);
-  const expiration = resolveQuotedDate(parsed.lease_expiration);
+  const commencement = reconcileQuotedDateWithQuote(resolveQuotedDate(parsed.lease_commencement));
+  const expiration = reconcileQuotedDateWithQuote(resolveQuotedDate(parsed.lease_expiration));
   const leaseTerm = normalizeLeaseTerm(parsed.lease_term);
   if (!expiration.date) {
     const derived = deriveExpirationFromTerm(commencement, leaseTerm);
@@ -524,7 +755,7 @@ function numOrNull(v) {
  */
 function cleanRentPeriod(p, leasedSf) {
   if (!p || typeof p !== 'object') return null;
-  const baseRent = normalizeBaseRent(p.base_rent);
+  const baseRent = reconcileBaseRentWithQuote(normalizeBaseRent(p.base_rent));
   const { year1_rent: annualized, rent_basis_unresolved } = annualizeRent(baseRent, leasedSf);
   const annual = baseRent ? annualized : numOrNull(p.annual_rent);
   const start = resolveQuotedDate(p.start_date);

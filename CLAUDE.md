@@ -704,6 +704,56 @@ Writeup: `docs/audits/OCR1_LOCAL_OCR_BAKEOFF_2026-09-02.md` §8.
   confidence 68 on a title/docs bundle is indistinguishable from 5/6 on a clean lease until somebody
   reads what was found. They already existed in memory.
 
+### ⚠️ A MODEL'S QUOTE AND ITS LABEL ARE NOT THE SAME EVIDENCE — PARSE THE QUOTE (EXT1, EXT1b, 2026-09-02)
+
+EXT1 stopped the lease extractor doing arithmetic and picking date defaults, and made it QUOTE:
+`base_rent {amount, basis, as_stated}` and a date with a `precision` beside the verbatim text. The
+floor re-run measured what that bought — rent and date disagreements against DocAI **2 → 0 and
+4 → 0**, doc 255 reading **101,568** on all three runs where it had read 8,464 / 89,496 / 84,464 —
+and, more usefully, what it did NOT buy: `year1_rent` self-agreement held at **89%** and both dates
+sat at **80%**. **The quotes were reliably verbatim and the LABELS beside them were not.** Live:
+`as_stated: "$8,796.50 per month"` came back `basis: "per_sf_annual"` with `amount: 8.7965`, and a
+plain `"March 15, 2021"` came back `precision: "formula"` on one call and `"day"` on the next.
+EXT1b derives basis, amount and precision **from the quote in code**, and the model's label is the
+fallback where the quote is silent. Guard `test/ext1b-as-stated-authority.test.mjs` (23 tests,
+**16/16 mutations RED**); record `docs/claude-code/responses/EXT1b-basis-precision-quotes.response.md`.
+
+- **The durable rule: when a model reports a value AND a classification of that value, they are two
+  different reliabilities.** The verbatim span is transcription; the label is judgement, and it is
+  the half that flips between calls. Ask for both, then **decide the label in code from the span**.
+  This is the P125 lesson (*a proxy for a fact you already hold is not a measurement*) inverted: here
+  the fact you already hold is the QUOTE, and the model's own summary of it is the proxy.
+- **⚠️ A SCALING ERROR HAS NO TOLERANCE THAT DISTINGUISHES IT FROM A DIFFERENT FIGURE.** 8.7965 and
+  8,796.50 are one figure ÷ 1,000; any numeric threshold wide enough to catch that also swallows a
+  genuinely different number on the page. **The test is PRESENCE: the model's number must appear in
+  the model's own quote**, else the quote's first `$`-figure wins. Measured on *"a security deposit of
+  $10,000 and base rent of $8,796.50 per month"* — a bare first-figure rule takes the deposit.
+- **⚠️ A UNIT/BASIS BELONGS TO ONE FIGURE, SO CLASSIFY A WINDOW, NOT THE STRING.** A rent quote
+  routinely restates the same rent on a second basis (*"$75,000.00 per year ($6,250.00 per month)"*);
+  over the whole string that is ambiguous and abstains, losing the row. The window runs to the **next**
+  `$`-figure after the one being classified. And where a window genuinely carries two period markers
+  the answer is **null — silence hands the decision back to the model's label, it does not flip a
+  coin.**
+- **⚠️ A PARSER FOR "IS THIS QUOTE A DATE" MUST CONSUME THE WHOLE QUOTE, NEVER SEARCH IT.**
+  *"the earlier of March 1, 2021 or thirty days after Delivery"* CONTAINS a calendar date and IS a
+  formula; a `.search()` resolves it and re-commits the exact defect EXT1 removed. Strip a small
+  CLOSED set of structural wrappers (a `Label:` prefix, `on the`, `midnight on`, trailing punctuation)
+  and then require a full match. **And the quote decides in BOTH directions** — a month-only quote
+  under a `day` label drops the day the model invented, which is the half that is easy to omit.
+- **ONE parser.** `resolveQuotedDate`'s bare-string branch routes through the same `parseStatedDate`;
+  a second date parser beside it is the normaliser drift this file warns about a dozen times.
+- **⚠️ MY OWN PREDICTION WAS WRONG IN A NAMED WAY, AND EXT1b's IS THE SAME SHAPE.** EXT1 predicted
+  the floor would reach ~100% and it did not, **because it assumed the model's LABELS would be as
+  reliable as its QUOTES**. EXT1b predicts ~100% again, from having READ the residual rows — but a
+  field can still disagree for a reason nobody has read yet. **Read the rows before predicting the
+  aggregate, and say which reading the prediction rests on.** Second caveat, structural: fixing a
+  both-null row makes it DECIDED, so **the denominator moves** and the new rate is not directly
+  comparable to the old one without reading the counts.
+- **A genuine OCR miss must stay an honest null.** Doc 425's dates came through tesseract as
+  `"1st day of A ec | , 2000"`; the model correctly returned `formula`/null and DocAI read both.
+  **That is the signal the bake-off exists for** — an "improvement" that turns it into a date is a
+  regression.
+
 ### Dead-end classes are findable on purpose — `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md`
 
 Nine live defects were found in one session on 2026-08-22, all by accident, and every one
