@@ -53,6 +53,44 @@ and recorded in the response: a body slice closing on a default parameter, a nei
 Docs: `public-records-source-lane.md` §2 (PR2/PR11/PR12 blocks, by CC) · `CLAUDE.md` public-records
 pointer · `PLANNED-BACKLOG.md` PR2 ✅ / PR11 🟡 / PR12 🔴 · handoff + OPERATOR-ACTIONS (this turn).
 Response filed to `done/`.
+## 2026-09-02 — OCR1c: the bake-off harness has a FLOOR now. ⚠️ NO real-document verdict changed — the sample on file is still 10 arm-A documents, tesseract only, and the 77% is still uninterpretable until Scott re-runs with `--control self`.
+
+Harness-only; nothing wired; no real document run (the sandbox still cannot reach Supabase or
+SharePoint). `scripts/ocr-bakeoff.mjs` + `test/ocr-bakeoff.test.mjs`. Writeup:
+`docs/audits/OCR1_LOCAL_OCR_BAKEOFF_2026-09-02.md` **§8**; response
+`docs/claude-code/responses/OCR1c-bakeoff-harness-self-agreement-control.response.md`.
+
+**Four changes, each guarded (30 tests, 0 fail; 25/25 new mutations RED; full suite 5,038 pass / 0 fail):**
+
+1. **Comparator artifacts normalized** — curly quotes/apostrophes, en/em dashes, NBSP, whitespace;
+   `""` / `null` / `N/A` / `—` → null BEFORE the both-null decision; numbers strip a trailing `sf`.
+   **4 of the first run's 11 non-agreements were this, not OCR.** ⚠️ Rounding is **not** a
+   tolerance — `412500` vs `412600` stays a disagreement, and the sentinel list is narrow on purpose
+   (`0` is a value; `Nullarbor Holdings LLC` is a name), both mutation-verified.
+2. **`--control self`** — the model run TWICE on the same DocAI text, scored with the SAME
+   `scoreDocument` and the same both-null exclusion, printed ABOVE the engine tables with
+   `rate − self` per field. Two independent calls, deliberately **not** `temperature=0`.
+   `deltaVsSelf` returns **null, never 0**, when there is no floor. A run without it prints a red
+   *NOT RUN* banner instead of a bare rate. Cost: 10 extra model calls/run.
+3. **Failure reporting** — `stderrTail` shows the LAST 300 chars (the first 160 were the same
+   `RequestsDependencyWarning` on **all 36** first-run failures and hid BOTH real causes); the probe
+   now separates *wrapper only* (`pip install paddlepaddle`) / *cannot check* / *needs a Docker VLM
+   server → the GPU box*; `--self-test` names `pip install pillow`. **Positive-controlled live** with
+   a fake `paddleocr` on PATH — the workstation's exact state, now reported instead of run 18 times.
+4. **Arm B carries the VALUES** (`graded_values`/`fields_found` + a report table) — a `5/6 found` at
+   confidence 68 is unreadable as a count.
+
+⚠️ **Two guard defects the mutation pass found, both new to this repo's collection:** a detector for
+a CODE shape must **blank string literals as well as comments** (the rendered report says
+*"deliberately NOT `temperature=0`"* in a pushed string, so the anti-pinning grep went RED over
+correct code); and the **order is load-bearing — comments FIRST, then literals**, because a bare
+apostrophe in prose opens a string the blanker never closes and swallows real code behind it. That
+is how the positive-control mutation for that very assertion survived its first run.
+
+👤 **Scott:** `pip install paddlepaddle`, then
+`node scripts/ocr-bakeoff.mjs --run --engines tesseract,paddleocr --control self` on the staged 15.
+Read the floor table first, then `rate − self`, then the named disagreements. Surya still belongs on
+GaryBuilt.
 
 ## 2026-09-02 — B6e-ci-required-check-prep LANDED (Dialysis #7395 + #7397): the gate has been seen RED, the docs-only path is proven, and MY "11 ruff errors" was an annotation cap. PR8 reconciled: the producer half is an EMPTY-WINDOW zero.
 
@@ -299,6 +337,23 @@ gate has only been proven green, never proven to fail); the checkout log free of
 `B6e-ci-required-check` flipped. Prompt + response filed to `done/`
 (`B6e-ci-last5-decisions-resolved.response.md` is a transcription of the mid-flight `.docx`; the
 outcome above is from the run itself).
+## 2026-09-02 — OCR1c built (self-agreement floor + honest engine probes); branch pushed, NO PR opened
+
+CC delivered all four changes on `claude/ocr-bakeoff-self-agreement-qnyl9z` (`837a7ba`): quote/dash/
+NBSP normalization and sentinel→null before comparing (accounts for 4 of the 11 non-agreements),
+`--control self` (two independent model calls on the DocAI text, same scorer, `rate − self` column,
+red NOT RUN banner when absent), last-300-chars stderr + tri-state engine probe (`wrapper only` /
+`could not check` / `needs a Docker VLM server`), arm-B values in the JSON. 30 guards, **25/25
+mutations RED**; two guard defects found by the mutation pass (a code-shape grep must blank string
+literals too, and comments must be stripped BEFORE literals or a prose apostrophe swallows code).
+⚠️ **As of this reconciliation the branch is NOT in `main` and no PR exists** — CC ended with "say the
+word if you want one." Merge first, then the re-run (`OPERATOR-ACTIONS.md` OCR1). No real-document
+verdict changed. Response + prompt → `done/`.
+
+**DOC18 at 17:10 UTC:** 6 attempted, 4 windowed (169 pages billed), 1 true partial, `bov_ready` 48; the
+predicted 12 MB residual appeared on doc 128 (`over_ocr_cap`, 0 calls) → **DOC18-bytes**, sized after
+the drain. Dedupe grep clean.
+
 ## 2026-09-02 — OCR1 first REAL run reconciled: page-cap case measured TRUE; quality unprovable until the harness has a self-agreement control
 
 Scott's re-run (after the main-guard fix) completed on **15 real documents + 3 fixtures, tesseract
