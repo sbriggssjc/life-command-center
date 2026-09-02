@@ -15,7 +15,15 @@
 //     property:   { address, city_state, building_sf, close_date, name },
 //     tenants:    [{ name, guarantor, sf, lease_type, year1_rent, escalation_pct,
 //                    lease_commencement, lease_expiration, rent_schedule[],
-//                    abstract:{...LeaseAbstract...}, credit:{...}, clause_refs:{...} }],
+//                    abstract:{...LeaseAbstract...}, credit:{...}, clause_refs:{...},
+//                    base_rent:{amount,basis,as_stated}, rent_basis_unresolved,
+//                    lease_commencement_detail, lease_expiration_detail, lease_term }],
+//
+// EXT1 (2026-09-02): `year1_rent` and both dates are DERIVED IN CODE from what the
+// model QUOTES. The model reports the rent with the basis the lease states it on
+// and reports a date only when the lease states a full calendar day; annualizing
+// and any term arithmetic happen in annualizeRent / deriveExpirationFromTerm. The
+// six consumer keys are unchanged — the quoted evidence rides beside them.
 //     real_estate:       { year_built, parcel_apn, land_acres, zoning, flood_zone, ... },
 //     underwriting_hints:{ purchase_price, going_in_cap, in_place_noi, ... }
 //   }
@@ -130,10 +138,25 @@ function leasePrompt(leaseText) {
     'You are a commercial real estate lease abstractor. Read the LEASE below and',
     'return ONLY a JSON object (no prose, no code fence) with this exact shape.',
     'Use null for anything the lease does not state — NEVER guess a value.',
-    'Dates as YYYY-MM-DD. Rents and dollar amounts as plain numbers (no $ or commas).',
-    'Escalation as a decimal (0.02 = 2%). For each clause in "clause_refs", give the',
-    'section label AND a short verbatim "snippet" (<=8 words) copied from that clause',
-    'so its page can be located.',
+    'Dollar amounts as plain numbers (no $ or commas). Escalation as a decimal',
+    '(0.02 = 2%). For each clause in "clause_refs", give the section label AND a',
+    'short verbatim "snippet" (<=8 words) copied from that clause so its page can',
+    'be located.',
+    '',
+    'RENT — REPORT IT AS THE LEASE STATES IT. DO NOT ANNUALIZE AND DO NOT DO ANY',
+    'ARITHMETIC: give the figure exactly as written plus the basis it is written',
+    'on, and let the caller convert. "$8,464.00 per month" is',
+    '{ "amount": 8464, "basis": "monthly", "as_stated": "$8,464.00 per month" }.',
+    '"$12.50 per square foot per year" is { "amount": 12.5, "basis":',
+    '"per_sf_annual", ... }. If the basis is not stated, leave "basis" null.',
+    '',
+    'DATES — QUOTE, DO NOT RESOLVE. "date" is filled ONLY when the lease states a',
+    'full calendar date. A month-only statement gives "precision":"month" and a',
+    'null "date". A date defined by a formula or an event ("the first day of the',
+    'month following Delivery", "ten (10) Lease Years from the Commencement Date")',
+    'gives "precision":"formula", a null "date", and the formula copied verbatim',
+    'into "as_stated". NEVER pick a day, a month, or a year to fill a date the',
+    'lease does not state.',
     '',
     '{',
     '  "tenant_name": string|null,',
@@ -141,11 +164,12 @@ function leasePrompt(leaseText) {
     '  "suite": string|null,',
     '  "leased_sf": number|null,',
     '  "lease_type": "NNN"|"NN"|"MG"|"Gross"|null,',
-    '  "year1_rent": number|null,',
+    '  "base_rent": { "amount": number|null, "basis": "monthly"|"annual"|"per_sf_annual"|"per_sf_monthly"|null, "as_stated": string|null },',
     '  "escalation_pct": number|null,',
-    '  "lease_commencement": "YYYY-MM-DD"|null,',
-    '  "lease_expiration": "YYYY-MM-DD"|null,',
-    '  "rent_schedule": [ { "label": string, "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD", "annual_rent": number, "status": "Contracted"|"Option" } ],',
+    '  "lease_commencement": { "date": "YYYY-MM-DD"|null, "as_stated": string|null, "precision": "day"|"month"|"year"|"formula"|null },',
+    '  "lease_expiration": { "date": "YYYY-MM-DD"|null, "as_stated": string|null, "precision": "day"|"month"|"year"|"formula"|null },',
+    '  "lease_term": { "as_stated": string|null, "years": number|null, "months": number|null },',
+    '  "rent_schedule": [ { "label": string, "start_date": "YYYY-MM-DD"|null, "end_date": "YYYY-MM-DD"|null, "base_rent": { "amount": number|null, "basis": "monthly"|"annual"|"per_sf_annual"|"per_sf_monthly"|null, "as_stated": string|null }, "status": "Contracted"|"Option" } ],',
     '  "abstract": {',
     ABSTRACT_KEYS.map((k) => `    "${k}": string|null`).join(',\n'),
     '  },',
@@ -238,6 +262,176 @@ export async function gatherPropertyText(crePropertyId, deps = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// EXT1 — rent basis and quoted dates are resolved in CODE, never by the model
+//
+// The OCR1c self-agreement control ran the SAME model on the SAME DocAI text
+// twice and it disagreed with ITSELF on 29% of `lease_expiration` decisions and
+// 11% of `year1_rent`. On one lease it returned 84,464 on one call and 89,496 on
+// the next as the annual rent from a text that states `$8,464.00 per month` — a
+// figure matching neither 12x nor anything on the page. The model was doing
+// arithmetic and choosing date defaults in its head, differently per call, while
+// the prompt's own "NEVER guess" instruction sat two lines above the format rule
+// that forced the guess. The fix is to stop asking it to: the model QUOTES
+// (amount + basis, date + precision + verbatim text) and the functions below do
+// the deterministic part.
+// ---------------------------------------------------------------------------
+
+/** Rent bases the model may report. Anything else is treated as unstated. */
+const RENT_BASES = new Set(['monthly', 'annual', 'per_sf_annual', 'per_sf_monthly']);
+
+/** Round to cents so 12.5 * 3800 * 12 never renders as ...0000004. */
+function toCents(n) {
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+}
+
+/**
+ * Normalize the model's `base_rent` object into { amount, basis, as_stated }.
+ * A bare number (a model that ignored the schema, or a legacy record) is kept as
+ * an amount with a NULL basis — which annualizeRent then refuses to convert,
+ * because "assume it is annual" is exactly the guess this unit removes.
+ */
+export function normalizeBaseRent(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number' || typeof v === 'string') {
+    const amount = numOrNull(v);
+    return amount == null ? null : { amount, basis: null, as_stated: String(v) };
+  }
+  if (typeof v !== 'object') return null;
+  const amount = numOrNull(v.amount);
+  const rawBasis = typeof v.basis === 'string' ? v.basis.trim().toLowerCase() : null;
+  const basis = rawBasis && RENT_BASES.has(rawBasis) ? rawBasis : null;
+  const asStated = v.as_stated == null || v.as_stated === '' ? null : String(v.as_stated);
+  if (amount == null && !asStated) return null;
+  return { amount, basis, as_stated: asStated };
+}
+
+/**
+ * Annualize a quoted rent. THE ONLY PLACE THIS ARITHMETIC HAPPENS.
+ *
+ * @returns { year1_rent:number|null, rent_basis_unresolved:boolean }
+ *
+ * `rent_basis_unresolved` is TRUE whenever a real amount is on the page and we
+ * still cannot state an annual figure — an unstated basis, or a per-SF rent with
+ * no leased SF to multiply by. It is NOT the same fact as "the lease states no
+ * rent" (amount null), which resolves to a plain null and no flag: P180's
+ * unknown-is-not-a-value rule, applied to the reason as well as the value.
+ */
+export function annualizeRent(baseRent, leasedSf) {
+  const b = normalizeBaseRent(baseRent);
+  if (!b || b.amount == null) return { year1_rent: null, rent_basis_unresolved: false };
+  const sf = numOrNull(leasedSf);
+  switch (b.basis) {
+    case 'annual':
+      return { year1_rent: toCents(b.amount), rent_basis_unresolved: false };
+    case 'monthly':
+      return { year1_rent: toCents(b.amount * 12), rent_basis_unresolved: false };
+    case 'per_sf_annual':
+      return sf ? { year1_rent: toCents(b.amount * sf), rent_basis_unresolved: false }
+                : { year1_rent: null, rent_basis_unresolved: true };
+    case 'per_sf_monthly':
+      return sf ? { year1_rent: toCents(b.amount * sf * 12), rent_basis_unresolved: false }
+                : { year1_rent: null, rent_basis_unresolved: true };
+    default:
+      // An amount with no stated basis. Reporting it verbatim would assert an
+      // annual figure the lease never made; the caller keeps `as_stated`.
+      return { year1_rent: null, rent_basis_unresolved: true };
+  }
+}
+
+const FULL_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** True only for a real calendar day (rejects 2026-02-31, 2026-13-01). */
+function isRealDate(s) {
+  const m = FULL_DATE.exec(String(s || ''));
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (mo < 1 || mo > 12 || d < 1) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+}
+
+/**
+ * Normalize a quoted date into { date, as_stated, precision }.
+ *
+ * Accepts the EXT1 object shape and, for robustness against a model that ignores
+ * the schema (and for any record written before this unit), a bare string.
+ *
+ * ⚠️ A `date` is emitted ONLY when it is a real calendar day AND the model has
+ * not itself said the lease is vaguer than that. A `precision` of month / year /
+ * formula beside a filled `date` means the model resolved it in its head — the
+ * exact 29%-self-disagreement behaviour this unit removes — so the date is
+ * dropped and the verbatim text is kept instead.
+ */
+export function resolveQuotedDate(v) {
+  const empty = { date: null, as_stated: null, precision: null };
+  if (v == null || v === '') return empty;
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (!s) return empty;
+    if (isRealDate(s)) return { date: s, as_stated: s, precision: 'day' };
+    if (/^\d{4}-\d{2}$/.test(s)) return { date: null, as_stated: s, precision: 'month' };
+    if (/^\d{4}$/.test(s)) return { date: null, as_stated: s, precision: 'year' };
+    return { date: null, as_stated: s, precision: null };
+  }
+  if (typeof v !== 'object') return empty;
+  const rawPrec = typeof v.precision === 'string' ? v.precision.trim().toLowerCase() : null;
+  const precision = ['day', 'month', 'year', 'formula'].includes(rawPrec) ? rawPrec : null;
+  const asStated = v.as_stated == null || v.as_stated === '' ? null : String(v.as_stated);
+  const raw = v.date == null ? '' : String(v.date).trim();
+  const vague = precision === 'month' || precision === 'year' || precision === 'formula';
+  const date = !vague && isRealDate(raw) ? raw : null;
+  return { date, as_stated: asStated || (date || null), precision: precision || (date ? 'day' : null) };
+}
+
+/** Normalize the model's `lease_term` into { as_stated, years, months } | null. */
+export function normalizeLeaseTerm(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'string') return { as_stated: v, years: null, months: null };
+  if (typeof v !== 'object') return null;
+  const years = numOrNull(v.years);
+  const months = numOrNull(v.months);
+  const asStated = v.as_stated == null || v.as_stated === '' ? null : String(v.as_stated);
+  if (years == null && months == null && !asStated) return null;
+  return { as_stated: asStated, years, months };
+}
+
+/** Total whole months in a term, or null when the lease states no term length. */
+function termMonths(term) {
+  if (!term) return null;
+  const y = Number.isFinite(term.years) ? term.years : 0;
+  const m = Number.isFinite(term.months) ? term.months : 0;
+  const total = Math.round(y * 12 + m);
+  return total > 0 ? total : null;
+}
+
+/**
+ * Derive an expiration from a stated commencement DAY plus a stated term length.
+ *
+ * The convention is the standard one and it is deterministic: a term of N months
+ * commencing on D expires the day BEFORE D+N months (ten years from 2020-01-01
+ * expires 2029-12-31, not 2030-01-01), with a month-end commencement clamped to
+ * the last day of the target month rather than rolling into the next one.
+ *
+ * ⚠️ Only ever called when the model resolved NO expiration of its own, and the
+ * result is stamped `derived_from_term` so a reader can tell a derivation from a
+ * date the lease states. Anything short of a full commencement day plus a whole
+ * term returns null — a partial input is a "Not on file", never a default.
+ */
+export function deriveExpirationFromTerm(commencement, term) {
+  if (!commencement || commencement.precision !== 'day' || !isRealDate(commencement.date)) return null;
+  const months = termMonths(term);
+  if (months == null) return null;
+  const [y, mo, d] = commencement.date.split('-').map(Number);
+  const targetIdx = (y * 12 + (mo - 1)) + months;
+  const ty = Math.floor(targetIdx / 12);
+  const tm = targetIdx % 12;
+  const lastDay = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
+  const end = new Date(Date.UTC(ty, tm, Math.min(d, lastDay)));
+  end.setUTCDate(end.getUTCDate() - 1);
+  return end.toISOString().slice(0, 10);
+}
+
+// ---------------------------------------------------------------------------
 // Per-lease → tenant
 // ---------------------------------------------------------------------------
 
@@ -264,19 +458,53 @@ export async function extractTenantFromLease(leaseRow, deps = {}) {
       if (parsed.abstract[k] != null && parsed.abstract[k] !== '') abstract[k] = parsed.abstract[k];
     }
   }
+  const sf = numOrNull(parsed.leased_sf);
+
+  // EXT1 — rent. The model quotes; we annualize. A `year1_rent` NUMBER from the
+  // model is IGNORED whenever a quoted `base_rent` is present: the model returned
+  // 84,464 and 89,496 on two runs over one `$8,464.00 per month` lease, so its
+  // own arithmetic can never be preferred to ours. With no quoted basis at all
+  // (a legacy record, or a model that ignored the schema) its number is the only
+  // thing on offer and rides through unchanged.
+  const baseRent = normalizeBaseRent(parsed.base_rent);
+  const { year1_rent: annualized, rent_basis_unresolved } = annualizeRent(baseRent, sf);
+  const year1Rent = baseRent ? annualized : numOrNull(parsed.year1_rent);
+
+  // EXT1 — dates. Quoted, never defaulted; an expiration is derived only from a
+  // stated commencement DAY plus a stated term, and says so when it is.
+  const commencement = resolveQuotedDate(parsed.lease_commencement);
+  const expiration = resolveQuotedDate(parsed.lease_expiration);
+  const leaseTerm = normalizeLeaseTerm(parsed.lease_term);
+  if (!expiration.date) {
+    const derived = deriveExpirationFromTerm(commencement, leaseTerm);
+    if (derived) {
+      expiration.date = derived;
+      expiration.precision = 'day';
+      expiration.derived_from_term = true;
+    }
+  }
+
   const tenant = {
     name: parsed.tenant_name || '',
     guarantor: parsed.guarantor || '',
     suite: parsed.suite || '',
-    sf: numOrNull(parsed.leased_sf),
+    sf,
     lease_type: parsed.lease_type || 'NNN',
-    year1_rent: numOrNull(parsed.year1_rent),
+    year1_rent: year1Rent,
     escalation_pct: numOrNull(parsed.escalation_pct),
-    lease_commencement: parsed.lease_commencement || '',
-    lease_expiration: parsed.lease_expiration || '',
-    rent_schedule: Array.isArray(parsed.rent_schedule) ? parsed.rent_schedule.map(cleanRentPeriod).filter(Boolean) : null,
+    lease_commencement: commencement.date || '',
+    lease_expiration: expiration.date || '',
+    rent_schedule: Array.isArray(parsed.rent_schedule)
+      ? parsed.rent_schedule.map((p) => cleanRentPeriod(p, sf)).filter(Boolean)
+      : null,
     abstract: Object.keys(abstract).length ? abstract : null,
     clause_refs: Object.keys(clauseRefs).length ? clauseRefs : null,
+    // Derivation evidence, beside the six consumer keys — never instead of them.
+    base_rent: baseRent,
+    rent_basis_unresolved: baseRent ? rent_basis_unresolved : false,
+    lease_commencement_detail: commencement,
+    lease_expiration_detail: expiration,
+    lease_term: leaseTerm,
   };
   return { ok: true, tenant, document_id: leaseRow.document_id, model: resp.data?.model || null };
 }
@@ -287,16 +515,29 @@ function numOrNull(v) {
   return Number.isFinite(n) ? n : null;
 }
 
-function cleanRentPeriod(p) {
+/**
+ * One rent-schedule period. `annual_rent` keeps its name and its type — the BOV
+ * generator's RentPeriodInput reads it — but it is now DERIVED from the quoted
+ * `base_rent` by the same annualizer as the year-1 figure, so a schedule stated
+ * monthly stops being annualized in the model's head one row at a time. A model
+ * `annual_rent` number is used only when nothing was quoted.
+ */
+function cleanRentPeriod(p, leasedSf) {
   if (!p || typeof p !== 'object') return null;
-  const annual = numOrNull(p.annual_rent);
-  if (annual == null && !p.start_date && !p.label) return null;
+  const baseRent = normalizeBaseRent(p.base_rent);
+  const { year1_rent: annualized, rent_basis_unresolved } = annualizeRent(baseRent, leasedSf);
+  const annual = baseRent ? annualized : numOrNull(p.annual_rent);
+  const start = resolveQuotedDate(p.start_date);
+  const end = resolveQuotedDate(p.end_date);
+  if (annual == null && !baseRent && !start.date && !p.label) return null;
   return {
     label: p.label || '',
-    start_date: p.start_date || '',
-    end_date: p.end_date || '',
+    start_date: start.date || '',
+    end_date: end.date || '',
     annual_rent: annual,
     status: p.status === 'Option' ? 'Option' : 'Contracted',
+    base_rent: baseRent,
+    rent_basis_unresolved: baseRent ? rent_basis_unresolved : false,
   };
 }
 
@@ -522,4 +763,4 @@ export async function runBovExtractSweep({ limit = 5, refresh = false } = {}, de
   return { ok: true, swept: results.length, extracted: results.filter((x) => x.ok).length, results };
 }
 
-export const __private = { fetchProperty, deriveAssetType, buildPropertyBlock, numOrNull, cleanRentPeriod };
+export const __private = { fetchProperty, deriveAssetType, buildPropertyBlock, numOrNull, cleanRentPeriod, leasePrompt };

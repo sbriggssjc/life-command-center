@@ -16,6 +16,60 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — EXT1 SHIPPED (`de6daca`): the lease extractor QUOTES; the code annualizes and resolves dates. ⚠️ The floor movement is PREDICTED — the measurement is Scott's re-run.
+
+- **What changed.** `leasePrompt` no longer asks for an answer, it asks for a quote:
+  `base_rent {amount, basis: monthly|annual|per_sf_annual|per_sf_monthly, as_stated}` replaces
+  `year1_rent`; `lease_commencement` / `lease_expiration` become
+  `{date, as_stated, precision: day|month|year|formula}`; `lease_term {as_stated, years, months}` is
+  the only input a derivation may use. `annualizeRent` / `resolveQuotedDate` /
+  `deriveExpirationFromTerm` (all pure, all exported) do the deterministic part.
+- ⚠️ **THE OLD `'Dates as YYYY-MM-DD.'` LINE IS REMOVED, NOT SOFTENED.** It sat two lines below the
+  prompt's own `'Use null for anything the lease does not state — NEVER guess a value.'` and is the
+  format rule that forced the guess. Adding `precision` beside it would have left both instructions
+  live and let the model pick which to obey — which is what it had been doing.
+- **A model `year1_rent` number is IGNORED whenever a quote is present**, on the tenant and on every
+  `rent_schedule` row. Measured live, the model returned **84,464 and 89,496 on two runs over one
+  `$8,464.00 per month` lease**; its own arithmetic can never be preferred to ours (101,568).
+- ⚠️ **TWO JUDGEMENT CALLS, STATED RATHER THAN BURIED.** (1) An amount with **no stated basis**
+  resolves to `null` + `rent_basis_unresolved`, not to itself — passing 90,000 through as an annual
+  figure is the same guess as annualizing, in the other direction. **This is the one place EXT1 can
+  LOWER coverage, and it lowers it only where the previous number was unearned**; `as_stated` is kept
+  so a human can settle it. (2) *The lease states no rent* keeps that flag **false** — it is a
+  different fact from *we cannot convert the rent it states* (P180's unknown-is-not-a-value, applied
+  to the REASON as well as the value). Mutating either goes red.
+- **Consumer contract unchanged, pinned three ways.** The six graded keys keep their names and types,
+  `rent_schedule` keeps `annual_rent` (the generator's `RentPeriodInput` reads it), and a bare legacy
+  number or date string still resolves — so **no backfill and no re-extraction**; the quoted evidence
+  rides BESIDE the six (`bov-generator/main.py`'s `TenantInput` is `extra="allow"`).
+- ⚠️ **PREDICTED, NOT MEASURED — and the sandbox cannot measure it.** No OCR engine on PATH
+  (`--self-test`: surya / paddleocr / ocrmypdf / tesseract all absent) and no model, so
+  `--control self` cannot run here. Prediction: `year1_rent` 89% → **~100%** (the arithmetic left the
+  model); `lease_expiration` 71% → **rises**, bounded by how consistently the model classifies
+  `precision`. 👤 **Verify:** `node scripts/ocr-bakeoff.mjs --run --control self --engines tesseract`,
+  reading **exactly two rows** of the §1 floor table. The other four fields are the control (EXT1 does
+  not touch them).
+- ⚠️ **A RISING `lease_expiration` SELF-RATE IS NOT "MORE EXPIRATIONS FOUND."** Some disagreements
+  become a stable **both-null**, which the harness excludes from the rate by design — read
+  `self_both_null` beside the rate, or a field that got more HONEST reads as a field that got better.
+- **What WAS proven here is plumbing.** The harness's offline stub (`stubExtractionAI`) now emits the
+  quoted shape, so `--self-test` exercises the production path; had it kept the pre-EXT1 shape it
+  would have run the legacy fallback on every self-test and left the new path untested by the one
+  command that needs no model. A guard drives that stub through the real `extractTenantFromLease`.
+- **Guard:** `test/ext1-lease-rent-basis-quoted-dates.test.mjs` — 21 tests, **20/20 mutations RED**.
+  ⚠️ **Two survived their first mutation pass and BOTH were the test's fault, not the code's:** the
+  cents assertion was built on `12.51 × 3810`, which is **exact in IEEE-754**, so it passed with the
+  rounding removed; and the schedule test supplied no conflicting `annual_rent`, so "prefer the model
+  number" changed nothing. **The mutation pass found both; reading the tests did not.**
+- ⚠️ **The one source-shape guard needed comments stripped THEN literals blanked.** The module's
+  comments quote `year1_rent` and `84,464` while explaining the fix, and **the prompt itself is a wall
+  of string literals naming `base_rent`, `basis` and `precision`** — so a code-shape grep matches the
+  prompt text. It pins `cleanRentPeriod(p, sf)`: `.map(cleanRentPeriod)` bare passes the array
+  **index** into the leased-SF slot, making period 0 unconvertible and period 1 a 1-SF building,
+  silently.
+- Full suite **5,102 pass / 0 fail / 6 skipped**. Record:
+  `responses/EXT1-lease-rent-basis-quoted-dates.response.md`.
+
 ## 2026-09-02 — PR5 SHIPPED (#2051, `d8beb555`): the 39 never-written ladder sources are triaged IN THE DATABASE, 25 of them are not defects, and 7 are live on a second ledger. PR7 re-measured 1 → 19 orphan pairs. PR9 stated for Scott.
 
 **Verified live on LCC Opps after the merge:** `field_source_priority` **2,141** rungs (+1, the
