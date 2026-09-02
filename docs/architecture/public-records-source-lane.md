@@ -73,11 +73,31 @@ source variant exists under any other spelling (49 distinct sources checked).
 
 | leg | rows | properties linked | of 11,802 | producer |
 |---|---:|---:|---:|---|
-| **tax** | 25,621 | **9,107** | **77%** | live, fetched 2026-08-31 |
-| **parcel** | 1,604 | 908 | 7.7% | live, fetched 2026-08-31 |
+| **tax** | 25,621 | **9,107** | **77%** | live, fetched 2026-08-31 — ⚠️ **see the split below: 25,334 of these rows carry NO APN and no amount** |
+| **parcel** | 1,604 | 908 | 7.7% | live, fetched 2026-08-31 — ⚠️ **the 41 rows with building stats are the APN-less model leg** |
 | **deed** (dia) | 178 | — | — | live, fetched 2026-08-31 |
 | mortgage | 171 | 135 | 1.1% | **dead since 2026-05-10** |
 | entity | 153 | 124 | 1.0% | **dead since 2026-05-10** |
+
+### ⚠️ 2026-09-02 — the table above counts ROWS; split by `raw_payload->>'source'` it is two different things
+
+| table | `source` | rows | distinct APN | with a value | properties linked |
+|---|---|---:|---:|---|---:|
+| `tax_records` | **NULL (the gpt-4o leg, PR1)** | **25,334** | **1 — the APN is NULL** | tax_amount on **10**, assessed on 10 | **9,033** props / 22,131 links |
+| `tax_records` | `costar_sidebar` | 287 | 286 | assessed on 287, **tax_amount on 0** | 266 |
+| `parcel_records` | **NULL (the gpt-4o leg)** | 672 | **1 — NULL** | stats on **41**, assessed on 1 | 27 |
+| `parcel_records` | `costar_sidebar` | **932** | **931** | assessed on 286, **stats on 0** | **883** |
+
+**So "the tax fetcher reaches 77%" — this page's own §3 item 2, and backlog PR2 as filed — was
+measuring the model leg:** 9,033 properties are linked to APN-less, amount-less rows that PR1
+already identified as generated. **There is no county tax fetcher reaching 77% of anything.** The
+only real public-record rows in dia come from the **CoStar sidebar capture** — 931 real APNs on
+883 properties (7.5%), assessed values on 286, and **zero building stats** even though a CoStar
+property page carries building SF / year built / lot size. That last fact is the real PR2 question:
+*does the sidebar → `parcel_records` writer drop the stats it was handed?* (→ **PR2**, re-scoped).
+And the 22,131 APN-less tax links are residue to quarantine, reversibly, so no consumer ever reads
+them as coverage (→ **PR11**). Same lesson as PR1a's `0 % 100000 = 0`: **split by source before
+quoting a coverage number, or the generator's output reads as reach.**
 
 **The clinching detail:** `dia.properties.year_built` carries **3,586 `field_provenance` rows and
 the only source is `salesforce`** (priority 20). The county source registered at priority 5 — which
@@ -361,11 +381,12 @@ measure, then retire.
    evaluator, it is the **source**. Scott's "later code evaluates to find the most accurate
    representation per field" is right and still the goal — it just cannot be served by a lane whose
    inputs are generated. **The real first gap is `REGRID_API_KEY`.**
-2. **The parcel leg is thin where the tax leg is strong** — 908 properties vs 9,107, and **only 41
-   `parcel_records` rows carry `year_built` / `building_sf` / `lot_sf`** (670 carry `owner_name`).
-   ⚠️ **The right question is not "can we reach county assessors" — the tax fetcher demonstrably
-   reaches 77%.** It is *why does the same live producer return tax rows for 9,107 properties and
-   parcel stats for 41?* Investigate the fetcher, do not assume acquisition.
+2. ~~**The parcel leg is thin where the tax leg is strong** — 908 properties vs 9,107 … the tax
+   fetcher demonstrably reaches 77%.~~ ⚠️ **REFUTED 2026-09-02 — that 77% was the gpt-4o leg
+   (APN-less rows), see §2's split table. The real gap: the CoStar sidebar is the ONLY genuine
+   public-record source in dia (883 properties, 931 real APNs) and its `parcel_records` rows carry
+   ZERO building stats although the captured page has them.** → **PR2** (re-scoped: the sidebar
+   writer), **PR11** (quarantine the APN-less rows).
 3. **`confidence` and `verified` carry no information** — `confidence = 1.000` on all 23,728 rows
    and `verified = false` on every one. A constant is not a signal (the P139 lesson: a rank term
    that is a hard-coded constant reads like a value expression). Either populate it per record type

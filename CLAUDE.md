@@ -4500,9 +4500,15 @@ Related invariants from the same round:
   PR #7393 merged 8 s after its test job started). *Fails the job* and *blocks the merge* are two
   facts; the second is an operator toggle → backlog **B6e-ci-required-check**, filed WITH the
   `paths-ignore` docs-only fix (a skipped run reports no status — N9's lesson). **Ruff is the same
-  defect one job over**: `continue-on-error: true` on both steps, **red on `main` today** (11
-  errors: root `.tmp_*.py` scratch files + `alias_review.py`) behind a green check →
-  **B6e-ci-mask-ruff**; `pip-audit` / secrets grep / the two `src` imports are still masked too.
+  defect one job over**: `continue-on-error: true` on both steps, **red on `main` today** behind a
+  green check — ⚠️ **5,738 findings, NOT the "11" this line first said: GitHub caps step
+  annotations at ten, and I read page one as the total** (A5's `815 = 1000 − 185`). Ruff correctly
+  stays masked → **B6e-ci-mask-ruff** (one rule at a time, F821/F811 first). ✅ **#7395 (2026-09-02)
+  removed `paths-ignore`** — it matched `**/*.txt` incl. `requirements*.txt`, so a dependency bump
+  skipped every job silently; a ~6 s Scope job now decides inside the run and `Run Tests` always
+  reports. **The gate has been seen RED (run 33647155312) and the docs-only path proven (#7397).**
+  `pip-audit` (**red**: pypdf2 `PYSEC-2026-1835`) / secrets grep (**red**: 5 fixture matches) / the
+  two `src` imports are still masked → **B6e-ci-mask-security / -srcimport**.
   ⚠️ **Correction to what this line used to say:** "the code sits within 0.3% of the live
   reconciled model" did NOT reproduce — measured **−4.90%**, no segment within 1%; the test was
   12.5% high, the verdict (test-side fix, keep both rate constants) stands on the FY table. The
