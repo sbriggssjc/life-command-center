@@ -84,6 +84,46 @@
 - Full suite **5,102 pass / 0 fail / 6 skipped**. Record:
   `responses/EXT1-lease-rent-basis-quoted-dates.response.md`.
 
+## 2026-09-02 — PR5c CLOSED (#2060, `06a3ee5d`): the 33 zero-row LCC-internal rungs were one CHECK constraint — five callers sent a `target_database` outside the vocabulary and failed 23514 on 100% of calls, silently.
+
+**Verified live on LCC Opps after the merge:** all **33** rungs carry a `pr5c_verdict` —
+`no_merge_path_caller` 13 · `reached_and_broken` 10 · `ledger_is_elsewhere` 6 ·
+`producer_never_wired` 2 · `unreached_and_broken` 2; `field_provenance` rows on the six tables
+**0** (correct until a producer runs post-deploy); rows with an out-of-vocabulary
+`target_database` **0**; unranked **29**. CI 5,132 / 5,126 / 0 fail.
+
+- **`lcc_merge_field` ALWAYS inserts a row** (write/skip/conflict, no early return), so a
+  (table, field, source) at zero rows means the RPC never COMPLETED. That one observation turned
+  "did the lane run?" into "does the call succeed?", answerable in one rolled-back replay: **6 of 6
+  PR5 §2 sources fail, 5 with 23514**; the sixth (`lcc_generated`) is correct and simply unrun.
+  Single owner now: `provenanceTargetDatabase()` in `field-priority-guard.js`; guard 12/12 mutations RED.
+- **The rule was already written beside ONE call site** (`comms_owner_bridge`, the only LCC-internal
+  lane that has ever written provenance) — and it cited `availability-checker` as a correct
+  precedent, which sends the bare `'dia'`. **A comment naming a sibling as correct is not evidence.**
+- **Corrects PR12 §4 in place:** its ~0.03% break-class rate measured the stored COLUMN; three
+  sites `JSON.stringify` a jsonb parameter, so their payload rate was ~100%. The verdict survived
+  (23514 fires regardless), the reasoning did not.
+- **Corrects PR5 §1a:** `field_provenance` HAS run on one LCC-internal table (`comms_owner_bridge`, 22 rows).
+- **PR12's failure signal cannot see any of the five** — they call the RPC directly, not through
+  `shouldWriteField`: **0 open alerts over a population failing 100%** → `PR5c-signal`.
+- **Not fixed, filed:** `PR5c-entities` (13 rungs, no merge-path caller at all while a dozen paths
+  PATCH the table — the next real piece of work), `PR5c-avail-field` (rung says `status`, writer
+  writes `is_active`), **`PR5c-deploy`** (the `availability-checker` edge function is a THIRD deploy
+  surface, fixed in source, NOT deployed — Scott's call).
+
+**Verify-next (Class 8):** a `field_provenance` row on `public.lcc_cre_property_documents` after the
+next CRE folder-feed registration, **post-Railway-redeploy** — the count correctly stays 0 until then.
+
+Docs: `docs/audits/PR5c_INTERNAL_RUNG_VERDICTS_2026-09-02.md` · `CLAUDE.md` PR5c block · backlog
+PR5c ✅ + four siblings · handoff (all by CC, in the same change — the turn protocol working).
+OPERATOR-ACTIONS + CURRENT-STATE this turn. Prompt + response filed to `done/`.
+
+**Consolidation (this turn): the provenance ladder now has ONE canonical page** —
+`docs/architecture/field-provenance-ladder.md` (model · instruments · dated live state · arc index ·
+open ids · and the PR8/PR5/PR12/PR5c lessons moved out of `CLAUDE.md` **verbatim**, 251 lines).
+`CLAUDE.md` § "Field-level data provenance" keeps a ten-bullet invariant list and points there.
+Relocate, not archive (DOCUMENTATION-MAP §6z): nothing deleted, every inbound mention is a bare name.
+
 ## 2026-09-02 — PR12 SHIPPED (#2057, `68ede28c`): `field_provenance` no longer drops values with quotes/newlines — fixed WITHOUT a 1 GB table rewrite — and the exposure was 16× the row's number.
 
 **Verified live on LCC Opps after the merge:** `value_text_hash.attgenerated = ''` (plain column,

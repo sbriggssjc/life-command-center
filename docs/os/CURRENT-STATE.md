@@ -80,7 +80,11 @@ owned by a BEFORE trigger (`convert_to`), no rewrite, 1025 MB unchanged; before 
 backslash-rendering value (quotes, **newlines** — ~1,101 exposed, mostly `sales_transactions`
 narrative) aborted `lcc_merge_field` and the JS failed open silently. The failure is now counted
 (`provenance_failed`) and alerted (`provenance_write_failed`) — that half awaits the Railway redeploy.
-→ backlog PR1d (`REGRID_API_KEY`), PR5a–e, PR7a–b, PR9 (Scott), PR11, PR12a–b.
+⚠️ `target_database` is a CLOSED vocabulary (`lcc_opps`/`dia_db`/`gov_db`, CHECK-enforced) and it
+is NOT part of the rung lookup — five callers sent other strings and failed 23514 on every call
+into a bare catch (PR5c, fixed via `provenanceTargetDatabase()`; the edge-function copy awaits its
+own deploy). **`lcc_merge_field` always inserts a row, so zero rows = the call never completed.**
+→ **`docs/architecture/field-provenance-ladder.md`** (canonical); backlog PR1d (`REGRID_API_KEY`), PR5a–e, PR5c-entities/-signal/-deploy, PR7a–b, PR9 (Scott), PR11, PR12a–b.
 
 ### Comms → context
 Outlook/Teams intake → `activity_events` / `email_bodies` → deal attribution → correspondence
