@@ -76,6 +76,17 @@ shape one database over: B6c-dup's `trg_gov_pse_propagate_to_sale` records into 
 
 ### 1a. And `field_provenance` has never run on any LCC-internal table
 
+> ⚠️ **CORRECTED 2026-09-02 by PR5c — this heading is false as written, and the ANSWER is below
+> it.** `field_provenance` HAS run on an LCC-internal table: `public.activity_events` carries
+> **22 rows** from `comms_owner_bridge` (2026-08-14), plus one `audit_run_log` smoke row. The true
+> claim is narrower: *it has never run on any of the six tables carrying these 33 rungs.* The
+> exception is the whole finding — that lane is the one that passes `p_target_database='lcc_opps'`
+> and does not `JSON.stringify` its value, and **five siblings pass a string the
+> `field_provenance_target_database_check` REFUSES** (`'dia'`, `'gov'`, `'lcc'`, `'lcc_db'`), so
+> they raise **23514 on 100% of calls** into a bare `catch`. `lcc_merge_field` always inserts a row
+> — write, skip and conflict all land — so zero rows means the RPC never completed.
+> Full measurement + the 33-rung verdict table: `docs/audits/PR5c_INTERNAL_RUNG_VERDICTS_2026-09-02.md`.
+
 | target_table | rungs | provenance rows | physical table on LCC Opps |
 |---|---:|---:|---|
 | `entities` | 13 | **0** | yes |
@@ -114,6 +125,15 @@ produced nothing".
 > silently dropped"** — which is exactly the **PR12** failure mode (a value containing a double
 > quote aborts `lcc_merge_field` with 22P02 and `shouldWriteField` fails open). Sizing PR12 is
 > upstream of grading these six.
+>
+> ✅ **ANSWERED 2026-09-02 (PR5c), and it was neither.** Replaying each site's exact payload in a
+> rolled-back transaction: **5 of these 6 raise 23514** — `field_provenance_target_database_check`
+> accepts only `lcc_opps`/`dia_db`/`gov_db`, and they send `'dia'`, `'gov'`, `'lcc'`, `'lcc_db'`.
+> The sixth, `lcc_generated`, returns `decision=write` at rung 1: its call is correct and its lane
+> has not run. ⚠️ The `w8_u3` lane is additionally **unreached** — `prior_owner_link` has 2 rows
+> ever, both terminal non-applies (the 26 `applied` reviews are a `person_email_merge` sub-lane
+> that creates no edge). All five callers fixed; see
+> `docs/audits/PR5c_INTERNAL_RUNG_VERDICTS_2026-09-02.md`.
 
 ---
 

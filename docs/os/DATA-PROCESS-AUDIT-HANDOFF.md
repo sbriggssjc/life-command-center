@@ -60,6 +60,18 @@ job, `Run Tests` always reports, **seen RED** (run 33647155312), docs-only path 
 CI arc:** merge #7397 → delete `claude/tmp-red-gate-proof` + `claude/tmp-docs-only-proof` in the UI
 → require `Run Tests` on `main`. ⚠️ Ruff stays masked, correctly — **5,738 findings, not the "11"
 the first handoff said** (GitHub's ten-annotation cap; A5's `815 = 1000 − 185` again).
+**PR5c (2026-09-02) CLOSED — and it corrects PR12 §4 and PR5 §1a in place.** The cause was one
+CHECK: `field_provenance_target_database_check` accepts only `lcc_opps`/`dia_db`/`gov_db`, and
+**five call sites sent `'dia'`/`'gov'`/`'lcc'`/`'lcc_db'` → 23514 on 100% of calls** into a bare
+`catch`. **`lcc_merge_field` ALWAYS inserts a row** (write/skip/conflict), so zero rows means the
+RPC never completed — replayed rolled-back, 6 of 6 PR5 §2 sources fail, 5 with 23514; the sixth
+(`lcc_generated`) succeeds and its lane just has not run. ⚠️ **PR12 §4's "~0.03% break-class"
+measured the stored COLUMN, not the payload** — three sites `JSON.stringify` a jsonb param, so
+their rate was ~100%. All 33 rungs carry a `pr5c_verdict`; nothing retired; rung fingerprint
+unchanged. **Verify-next (Class 8):** a `field_provenance` row on
+`public.lcc_cre_property_documents` after the next CRE folder-feed registration, POST-deploy —
+the live count correctly stays 0 until then. ⚠️ **`availability-checker` is a THIRD deploy surface,
+fixed in source and NOT deployed** (PR5c-deploy).
 **PR12 (2026-09-02, #2057) closed** — hash fixed in place (no rewrite), 1,979 live rows since incl. 8
 break-class, all hashing. **Exposure was ~1,101, not 67** — the newline in `sales_transactions`
 narrative on NON-rung columns; the ladder-scoped census could not see it. JS failure signal
@@ -84,12 +96,13 @@ that fires `gov_classify_agency()`; do not read it as broken.
    person names, 7 are the Colliers family. **`cbre; smyth & colliers; patel` is minted as one
    company.** Start with **`BR1-confirm`** — 12 brokerage-evidenced orgs ready for a one-decision
    human confirm.
-2. **`PR5c`** — 33 rungs on six LCC-internal tables have never seen a `field_provenance` row
-   despite live `lcc_merge_field` call sites on four of them. ✅ **PR12 does NOT explain it**
-   (0.03% break-class on `entities.name`, 0 elsewhere) — every stamp sits inside
-   `catch (_e) { /* best-effort */ }`, so the next question is whether those call sites are ever
-   REACHED. Gradeable now.
-   **Prompt drafted: `docs/claude-code/prompts/PR5c-lcc-internal-provenance-never-exercised.md`.**
+2. **`PR5c-entities`** — the 13 `entities` rungs are the one PR5c population with no fix yet:
+   **no `lcc_merge_field` call site anywhere passes `p_target_table='entities'`**, while a dozen
+   paths PATCH the table. Cheapest real fix is routing the `email`/`phone` writers
+   (`owner-contact-propagate.js`, `contact-writeback.js`) through `shouldWriteField`, which already
+   speaks the vocabulary. Siblings: **`PR5c-signal`** (PR12's failure counter cannot see the five
+   direct callers — 0 open alerts over a 100%-failing population) and **`PR5c-avail-field`**
+   (the dia `availability_scraper` rung names `status`; the writer writes `is_active`).
 3. **`PR5d`** — `costar_cmbs_loan`: 121 rungs, the ladder's largest source, for a capture arm with
    0 rows on either domain (`loans.data_source`). Is the CoStar CMBS tab ever captured, or is the
    arm unreachable? One grep of the extension + one count.

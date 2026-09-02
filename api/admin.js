@@ -85,6 +85,7 @@ import {
   isEnqueueableHygieneProposal,
   collectAddressNumbers, matchCandidateToProperties,
 } from './_shared/naming-hygiene-planner.js';
+import { provenanceTargetDatabase } from './_shared/field-priority-guard.js';
 import * as RH from './_shared/reachability-harvest-planner.js';
 import { pickBestBody as pickBestCommsBody } from './_shared/voice-corpus-clean.js';
 import { isBrokerageContact as coaIsBrokerageContact, buildOwnerBridgeProvenanceArgs } from './_shared/comms-owner-attribution.js';
@@ -9722,9 +9723,17 @@ async function handleDecisionVerdict(req, res) {
           if (val == null) continue;
           try {
             const pv = await opsQuery('POST', 'rpc/lcc_merge_field', {
-              p_workspace_id: decision.workspace_id || null, p_target_database: dom, p_target_table: fspTable,
+              p_workspace_id: decision.workspace_id || null,
+              // PR5c: `dom` is 'dia'/'gov'; field_provenance only accepts
+              // dia_db/gov_db/lcc_opps, so the raw value 23514'd every call.
+              p_target_database: provenanceTargetDatabase(dom), p_target_table: fspTable,
               p_record_pk: String(newContactId), p_field_name: colName,
-              p_value: JSON.stringify(val), p_source: 'comms_observed',
+              // PR5c: p_value is a jsonb PARAM -- PostgREST hands the parsed JSON
+              // value straight to it. JSON.stringify() here double-encodes a
+              // string into '"\"x\""'::jsonb, which no other source can ever
+              // compare equal to. Pass the raw value (the comms_owner_bridge
+              // site at ~9888 already says so).
+              p_value: val, p_source: 'comms_observed',
               p_source_run_id: review.source_run_id || 'verdict', p_confidence: Number(review.confidence) || null,
               p_recorded_by: user.id || null,
             });
@@ -9793,9 +9802,17 @@ async function handleDecisionVerdict(req, res) {
       let provenanceId = null;
       try {
         const pv = await opsQuery('POST', 'rpc/lcc_merge_field', {
-          p_workspace_id: decision.workspace_id || null, p_target_database: dom, p_target_table: fspTable,
+          p_workspace_id: decision.workspace_id || null,
+              // PR5c: `dom` is 'dia'/'gov'; field_provenance only accepts
+              // dia_db/gov_db/lcc_opps, so the raw value 23514'd every call.
+              p_target_database: provenanceTargetDatabase(dom), p_target_table: fspTable,
           p_record_pk: String(contactId), p_field_name: col,
-          p_value: JSON.stringify(value), p_source: review.provenance_source || 'w9_2_internal_harvest',
+          // PR5c: p_value is a jsonb PARAM -- PostgREST hands the parsed JSON
+          // value straight to it. JSON.stringify() here double-encodes a
+          // string into '"\"x\""'::jsonb, which no other source can ever
+          // compare equal to. Pass the raw value (the comms_owner_bridge
+          // site at ~9888 already says so).
+          p_value: value, p_source: review.provenance_source || 'w9_2_internal_harvest',
           p_source_run_id: review.source_run_id || 'verdict', p_confidence: Number(review.confidence) || null,
           p_recorded_by: user.id || null,
         });
@@ -10604,9 +10621,17 @@ async function handleDecisionVerdict(req, res) {
       let provenanceId = null;
       try {
         const pv = await opsQuery('POST', 'rpc/lcc_merge_field', {
-          p_workspace_id: ws || null, p_target_database: 'lcc', p_target_table: 'entity_relationships',
+          p_workspace_id: ws || null,
+          // PR5c: 'lcc' is not in the field_provenance vocabulary; this lane's
+          // stamp has never once landed. entity_relationships is LCC-internal.
+          p_target_database: provenanceTargetDatabase('lcc'), p_target_table: 'entity_relationships',
           p_record_pk: String(relId), p_field_name: relType,
-          p_value: JSON.stringify(linkedName), p_source: 'w8_u3_link_propagation',
+          // PR5c: p_value is a jsonb PARAM -- PostgREST hands the parsed JSON
+          // value straight to it. JSON.stringify() here double-encodes a
+          // string into '"\"x\""'::jsonb, which no other source can ever
+          // compare equal to. Pass the raw value (the comms_owner_bridge
+          // site at ~9888 already says so).
+          p_value: linkedName, p_source: 'w8_u3_link_propagation',
           p_source_run_id: review.source_run_id || 'verdict', p_confidence: Number(review.confidence) || null,
           p_recorded_by: user.id || null,
         });

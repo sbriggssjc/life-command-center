@@ -19,7 +19,8 @@
 // Usage in upsertDomainLeases / upsertDomainProperty / etc:
 //
 //   const allowed = await shouldWriteField({
-//     targetDb:    'dia',
+//     targetDb:    'dia_db',   // <- see provenanceTargetDatabase() below; 'dia'
+//                              //    is REFUSED by the field_provenance CHECK
 //     targetTable: 'dia.leases',
 //     recordPk:    leaseId,
 //     fieldName:   'guarantor',
@@ -57,6 +58,56 @@ import { opsQuery } from './ops-db.js';
 // ⚠️ Read `provenance_failed`, never `recorded`. A re-discovery tally reads
 //    exactly like throughput while nothing moves.
 // ============================================================================
+
+// ============================================================================
+// PR5c — target_database is a CLOSED vocabulary, and five callers did not know
+// (2026-09-02)
+//
+//   field_provenance_target_database_check
+//     CHECK (target_database = ANY (ARRAY['lcc_opps','dia_db','gov_db']))
+//
+// lcc_merge_field() ALWAYS inserts a field_provenance row -- write, skip and
+// conflict all land -- so a (table, field, source) with zero rows means the RPC
+// never completed, not that it decided against writing. Five call sites passed
+// a value outside the vocabulary ('dia', 'gov', 'lcc', 'lcc_db') and therefore
+// raised 23514 on EVERY call, 100% of the time, into a bare `catch`. Measured
+// live 2026-09-02 by replaying each site's exact payload in a rolled-back
+// transaction: 6 of 6 zero-row sources failed, 5 with 23514.
+//
+// ⚠️ The rung lookup keys on (target_table, field_name, source) ONLY --
+//    target_database is not part of it -- so a wrong value here cannot be
+//    detected by anything that reasons about ladders. It fails at the INSERT.
+//
+// ⚠️ The lesson had already been written down, once, beside ONE call site
+//    (api/admin.js, comms_owner_bridge: "p_target_database='lcc_opps' matches
+//    the ops-local convention") -- and that is the only LCC-internal lane with
+//    provenance rows. A fix recorded next to one call site is not a fix for the
+//    class. This function is the class's single owner; the guard
+//    test/pr5c-provenance-target-database.test.mjs enforces it repo-wide.
+// ============================================================================
+
+/** The only values field_provenance.target_database will accept. */
+export const PROVENANCE_TARGET_DATABASES = Object.freeze(['lcc_opps', 'dia_db', 'gov_db']);
+
+const _PROVENANCE_DB_ALIASES = Object.freeze({
+  dia: 'dia_db', dialysis: 'dia_db', dia_db: 'dia_db',
+  gov: 'gov_db', government: 'gov_db', gov_db: 'gov_db',
+  lcc: 'lcc_opps', lcc_db: 'lcc_opps', lcc_opps: 'lcc_opps', ops: 'lcc_opps', cre: 'lcc_opps',
+});
+
+/**
+ * Canonicalise a domain/database key for field_provenance.target_database.
+ * Returns null for anything unrecognised -- a caller must NOT invent a value,
+ * because an out-of-vocabulary string aborts the whole lcc_merge_field() call
+ * with 23514 and takes the provenance row with it.
+ *
+ * @param {string|null|undefined} v  'dia' | 'dialysis' | 'dia_db' | 'gov' | ... | 'lcc_opps'
+ * @returns {'lcc_opps'|'dia_db'|'gov_db'|null}
+ */
+export function provenanceTargetDatabase(v) {
+  if (v == null) return null;
+  return _PROVENANCE_DB_ALIASES[String(v).trim().toLowerCase()] || null;
+}
 
 const PROVENANCE_FAILURE_ALERT_KIND = 'provenance_write_failed';
 

@@ -27,6 +27,7 @@
 // ============================================================================
 
 import { opsQuery } from './ops-db.js';
+import { provenanceTargetDatabase } from './field-priority-guard.js';
 import { enqueueEnrichmentJob } from './bridges.js';
 import { enqueueCreDocText } from './cre-property-doc-text.js';
 import {
@@ -390,7 +391,9 @@ export async function recordCreProvenance(entries, { workspaceId, actorId } = {}
       if (value === undefined || value === null) continue;
       tasks.push(opsQuery('POST', 'rpc/lcc_merge_field', {
         p_workspace_id:    workspaceId || null,
-        p_target_database: 'lcc_db',
+        // PR5c: 'lcc_db' is not in the field_provenance vocabulary
+        // (lcc_opps/dia_db/gov_db) -- every folder-feed CRE stamp 23514'd.
+        p_target_database: provenanceTargetDatabase('lcc_opps'),
         p_target_table:    e.targetTable,
         p_record_pk:       String(e.recordPk),
         p_field_name:      fieldName,
