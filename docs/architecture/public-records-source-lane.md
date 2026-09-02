@@ -257,6 +257,17 @@ while a verification querying `field_provenance where source='county_records'` *
 Keeping `county_records` off that allowlist is the correct state; adding it is a deliberate act that
 belongs with a real acquisition path, never as plumbing. Pinned by the LCC guard.
 
+✅ **`domain_trigger` DECOMPOSED 2026-09-02 — the original source name survives in
+`source_run_id`** (`v_src || ':evt' || id`), so the relabel is recoverable without touching the
+append-only table. Live: **17,371 rows = `agency_classifier` 17,277** (gov `government_type` on
+four tables, still writing today) **+ `qa22_davita_brand_canonicalize` 94** (one-shot, 2026-07-30).
+⚠️ **`agency_classifier` is not registered in `field_source_priority` at all** — a write-but-
+unregistered source PR5's reverse arm could not see, because it wears `domain_trigger`'s name. And
+`qa22_…` *is* registered and sits in PR5's "39 never written" while 94 of its rows exist under the
+wrong label. **PR5's detector must key on `coalesce(split_part(source_run_id,':evt',1), source)`,
+and the 39 is 38.** → backlog **PR8** (build: registered-for-this-field ⇒ own name; an append-only
+effective-source view; never a rewrite).
+
 ### The corrected sequence
 
 **source → verdict → consumer → cron.** The lane's real acquisition path already exists and is

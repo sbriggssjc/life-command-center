@@ -4418,16 +4418,22 @@ Related invariants from the same round:
   running / does anything watch it / does CI enforce anything".** Live producer state, the CI
   enforcement status of each repo, and the traps already paid for. ✅ **LCC verified clean
   2026-09-01** — `npm test` is a bare unmasked `run:` and a required check, all 7 workflows carry
-  `timeout-minutes`. ⚠️ **Dialysis: the suite now RUNS for the first time in the repo's history and is down to 5 red**
-  (3,110 collected / 5 errors / **0 executed** → 3,128 / 0 / **3,132**; 3,065 pass · 55 fail → **3,106
-  pass · 14 fail** → **3,119 pass · 5 fail**, `executed` going UP at every step so nothing was skipped
-  or quarantined anywhere in the arc). `timeout-minutes` now bounds all four jobs, sized from a
-  measured run. **But the pytest line is still masked** — ⚠️ **measured, not enforced: 5 real
-  failures sit on `main` and cannot fail a merge.** 👤 **Both remaining failures are OPERATOR
-  DECISIONS, not build work** — the revenue-model vintage question (the code sits within 0.3% of the
-  live reconciled model; the TEST is 12.5% high) and the `listing_broker` write path, whose cost is
-  now quantified: **1,930 sales carry a broker name with no FK, invisible to `broker_ranking.py`**.
-  The suite caught that product bug on its own. ❓ government-lease unswept.
+  `timeout-minutes`. ✅ **Dialysis: the pytest line is UNMASKED (PR #7393, 2026-09-02) and green
+  once on `main`, read from the job log: 3,147 collected / 3,139 passed / 0 failed** — the arc ran
+  `0 executed → 3,128 → 3,132 → 3,147` and `55 → 14 → 5 → 3 → 0` failed, `executed` UP at every
+  step so nothing was skipped or quarantined. ⚠️ **BUT A RED SUITE STILL DOES NOT BLOCK A MERGE
+  THERE — Dialysis has no branch protection** (`ci.yml`'s header says CI is not a required check;
+  PR #7393 merged 8 s after its test job started). *Fails the job* and *blocks the merge* are two
+  facts; the second is an operator toggle → backlog **B6e-ci-required-check**, filed WITH the
+  `paths-ignore` docs-only fix (a skipped run reports no status — N9's lesson). **Ruff is the same
+  defect one job over**: `continue-on-error: true` on both steps, **red on `main` today** (11
+  errors: root `.tmp_*.py` scratch files + `alias_review.py`) behind a green check →
+  **B6e-ci-mask-ruff**; `pip-audit` / secrets grep / the two `src` imports are still masked too.
+  ⚠️ **Correction to what this line used to say:** "the code sits within 0.3% of the live
+  reconciled model" did NOT reproduce — measured **−4.90%**, no segment within 1%; the test was
+  12.5% high, the verdict (test-side fix, keep both rate constants) stands on the FY table. The
+  `listing_broker` pair was cleared by BR2 (`listing_broker_id` 181 → 1,027). ❓ government-lease
+  unswept.
 - **⚠️ PUBLIC RECORDS ARE A SOURCE, NOT A GAP-FILLER — AND THE LANE IS BUILT AND HAS NEVER WRITTEN A
   FIELD (2026-09-01):** `docs/architecture/public-records-source-lane.md`. **START HERE before
   proposing anything about assessor / parcel / tax / deed data.** `county_records` is registered at

@@ -25,6 +25,7 @@
 | **⛔ Merging to `main`** | **`main` is protected — you cannot push to it.** Branch → PR → both checks green → merge. *"npm test"* is a **required status check** (2026-08-27), so a direct push is rejected by the rule engine and retrying never works. ✅ **The Node-version lockout is RESOLVED** — the gate pins Node 24 and has been green on `main`. ⚠️ **Expect a THIRD step:** branch protection requires branches to be up to date, so if `main` moved you must click **"Update branch"** and wait for both checks to re-run — with two audit windows active that is the common path, not the exception. | **`docs/os/GITHUB-WORKFLOW.md`** |
 | **Where documents go** | Root of the repo is code + config; **no new `.md` there.** Five files carry state: CURRENT-STATE · PLANNED-BACKLOG · STATUS · CLAUDE.md · GITHUB-WORKFLOW. | **`docs/os/DOCUMENTATION-MAP.md`** |
 | **✅ CI gate** | ~~No workflow runs `npm test`.~~ **FIXED 2026-08-27.** `test-suite.yml` runs the full suite on every PR **and it is a REQUIRED check**, so the `test/*.test.mjs` tripwires this repo documents are now genuine merge gates rather than local detectors. ⚠️ **The lesson that produced it is still live:** the workflow shipped **red on every run including `main`** (a Node-20 pin against Deno `.ts` imports) — **a new CI job is not shipped until it has been green once on `main`**, or it is a badge people learn to merge past. | `CLAUDE.md` footgun; `GITHUB-WORKFLOW.md` §4 |
+| **Dialysis CI (sibling repo)** | ✅ **pytest UNMASKED 2026-09-02 (PR #7393) and green once on `main` — 3,147 collected / 3,139 passed / 0 failed, read from the job log.** ❌ **Not a merge gate:** Dialysis has **no branch protection** (its `ci.yml` header says so; #7393 merged 8 s after the test job started). ⚠️ Ruff is `continue-on-error` and **red on `main` today** behind a green check. → backlog **B6e-ci-required-check** (👤), **B6e-ci-mask-ruff / -security / -srcimport**. | `docs/architecture/producer-health-and-ci-enforcement.md` §3 |
 | **Two Railway services** | `tranquil-delight-…` = root web app + `/mcp` + OAuth + the 9 bounded read/comps routes (what ChatGPT and Copilot Studio use). A **separate standalone MCP service** (`mcp/server.js`) is what the personal-Claude / Cowork `mcp__lcc__*` tools talk to. `pacific-love-…` = BOV Generator. **A deploy of engine changes = redeploy BOTH.** | `AI-SURFACES-OPERATIONAL-REFERENCE.md` §2 |
 | **Databases (3)** | **LCC Opps** `xengecqvemvfknjvbvrq` (the brain + auth/GoTrue + most crons) · **Dialysis_DB** `zqzrriwuavgrquhisnoa` (dia domain; **hosts `data-query` + `daily-briefing` edge fns**) · **Government** `scknotsqkcheojiaewwh` (gov domain). | `CLAUDE.md` §"Database topology" |
 | **Supabase views/migrations** | **Live immediately** — the CM export reads views per request (`no-store`), so data-layer fixes need no deploy. **DB migration first, JS second** — except a `CHECK` that enforces new writer output, which goes *after* the writer deploy. | `CLAUDE.md` §"Deploy ordering" |
@@ -351,7 +352,20 @@ Recorded here so the next chat does not re-inherit them, per the fix-the-note-in
    21**). Carried as backlog **V6**.
 7. **`CLAUDE.md` said "CI keeps the hard fail."** No workflow runs `npm test` on a PR at all — the
    4,551-test suite never executes in CI, which is how #1786 merged green with a red suite.
-   Corrected in `CLAUDE.md`; fix scoped as backlog **N9**.
+   Corrected in `CLAUDE.md`; fix scoped as backlog **N9** (✅ resolved 2026-08-27).
+
+### Added 2026-09-02 — from landing B6e-ci-last5
+
+8. **"The Dialysis code sits within 0.3% of the live reconciled model"** — in the prompt, the
+   backlog, `CLAUDE.md` and `producer-health-and-ci-enforcement.md`. CC measured **−4.90%**, no
+   segment within 1%. The decision it supported stands on the FY table; the figure was wrong on
+   four pages and is corrected on all four.
+9. **`PLANNED-BACKLOG.md` N9 still read "partially shipped and currently red"** six days after
+   `CURRENT-STATE.md` §1 recorded it resolved and required. Two stores, one fact — corrected in the
+   backlog.
+10. **"Unmask the pytest line so a red suite fails a merge"** (B6e-ci-unmask's own wording) was
+    only half true by construction: on Dialysis a red job blocks nothing without branch protection.
+    Re-filed as **B6e-ci-required-check**.
 
 ## 8. Where the history went (nothing was deleted)
 

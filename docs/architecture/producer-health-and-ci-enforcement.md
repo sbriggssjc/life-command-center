@@ -8,7 +8,7 @@
 > traps already paid for.** Where this page and an audit disagree, **this page wins** and the audit
 > gets a supersession note in the same change.
 
-**Live state 2026-09-01 · backlog `B6*` / `PR*` · invariants `I4`, `I11` · playbook Classes 21, 31.**
+**Live state 2026-09-02 · backlog `B6*` / `PR*` · invariants `I4`, `I11` · playbook Classes 21, 31.**
 
 ---
 
@@ -55,8 +55,13 @@ on a 401 → **B6d-sam**) from 4 at the start of the arc.
 | repo | does a red suite block a merge? | notes |
 |---|---|---|
 | **life-command-center** | ✅ **yes** | `npm test` is a bare unmasked `run:` and a **required check** since 2026-08-27; all 7 workflows carry `timeout-minutes`. **Verified clean 2026-09-01** — its `exit 0` / `\|\| true` are deliberate control flow inside `set -euo pipefail` |
-| **Dialysis** | ❌ **no** | the suite **now runs** (first time ever, PR #7389) but the pytest line is **still masked** |
+| **Dialysis** | ⚠️ **the JOB fails, the MERGE does not** | ✅ pytest **UNMASKED 2026-09-02 (PR #7393)** and **green once on `main`** — `3,147 collected / 3,139 passed / 0 failed`, read from the job log. ❌ **But there is NO branch protection**: `ci.yml`'s own header says CI is not a required check, and PR #7393 merged **8 s after its test job started**. → **B6e-ci-required-check** (👤 Scott; file the `paths-ignore` docs-only fix with it). Still masked: ruff (**red on `main` today**, 11 errors), `pip-audit`, the secrets grep, `import src.main` / `import app` → **B6e-ci-mask-ruff / -security / -srcimport** |
 | **government-lease** | ❓ unmeasured | not swept |
+
+⚠️ **"Fails the job" and "blocks the merge" are two different facts, and a workflow can deliver
+the first without the second.** LCC learned it on 2026-08-27 (N9); Dialysis is standing in the same
+place today. The unmask was the build work; the required-check toggle is the operator step, and
+without it the green step is a badge again.
 
 ### The Dialysis milestone, and the state it leaves
 
@@ -65,11 +70,20 @@ on a 401 → **B6d-sam**) from 4 at the start of the arc.
 | `73f1418` (pre-#7389) | 3,110 | 5 | **0** | — | — |
 | `c80f778` (#7389) | 3,128 | 0 | 3,128 | 3,065 | 55 |
 | `eac8668` (#7390) | 3,128 | 0 | 3,128 | 3,106 | 14 |
-| **`5d464dd` (#7391)** | 3,132 | 0 | **3,132** | **3,119** | **5** |
+| `5d464dd` (#7391) | 3,132 | 0 | 3,132 | 3,119 | 5 |
+| `ff712e0` (#7392, BR2) | 3,138 | 0 | 3,138 | 3,127 | 3 |
+| **`83d53f0` (#7393) — UNMASKED, on the runner** | **3,147** | **0** | **3,147** | **3,139** | **0** |
 
-**From a suite that could not execute at all to one that executes fully with five known, named,
-individually-argued failures — and `executed` went UP at every step.** Nothing was skipped or
-quarantined anywhere in the arc.
+**From a suite that could not execute at all to one that executes fully, unmasked, at zero
+failures — and `executed` went UP at every step.** Nothing was skipped or quarantined anywhere in
+the arc. ⚠️ **The `83d53f0` row is read from the `main` job log** (`3139 passed, 7 skipped, 1
+xfailed in 417.81s`), not from the job conclusion — the conclusion read success through all 55
+failures before the unmask and proves nothing on its own. **The gate has only been proven green;
+it has not yet been seen to FAIL a red PR** — that is the next verification.
+
+⚠️ **`B6e-ci-baseline39` closed by supersession:** the "39 failed" came from CC's sandbox at #7392
+time and was never `main`'s state — `ff712e0` measured **3** on the runner. What produced 39
+there is not named (stub pollution is the likely shape); it gates nothing now.
 
 **7 skipped · 1 xfailed throughout.** ✅ The **import check is unmasked and green on a real runner**,
 so it is a genuine gate, and **`timeout-minutes` now bounds all four jobs**, sized from a measured
@@ -79,10 +93,11 @@ run (Tests 7 m 58 s → 20) rather than guessed — they were inheriting the **6
 fall.** That is the number that makes the rest trustworthy, and it is the one to demand of any
 "we fixed the tests" claim.
 
-⚠️ **The state is still MEASURED, NOT ENFORCED.** 14 real failures are visible on `main` and cannot
-fail a merge, because the pytest line keeps its `|| echo`. → **B6e-ci-red14**, then
-**B6e-ci-unmask**, in that order. **Unmasking against known red ships a gate red on day one — the
-documented trap.**
+~~⚠️ **The state is still MEASURED, NOT ENFORCED.** 14 real failures are visible on `main` and cannot
+fail a merge, because the pytest line keeps its `|| echo`.~~ ✅ **SUPERSEDED 2026-09-02 — the
+`|| echo` is gone (B6e-ci-unmask, PR #7393) and the red was cleared FIRST (14 → 5 → 3 → 0), in the
+documented order.** What remains is the operator half: **a failing job does not block a merge on
+Dialysis until `Run Tests` is a required check** (B6e-ci-required-check).
 
 ### 🎯 Two techniques from #7390 worth reusing
 
@@ -103,21 +118,22 @@ module that never mentions `dateutil`** — i.e. a test harness reaching into *d
 layers were all required: sys.modules objects · attributes on the real module · symbols already bound
 into `src.*` globals by a `from X import Y` executed inside the stub window.
 
-### 👤 The last 5 are BOTH operator decisions — the build work is done
+### ✅ The last 5 — resolved on measurement and landed (2026-09-02, PR #7393)
 
-`B6e-ci-unmask` is no longer gated on effort. Two questions, both sized:
-
-1. **`test_financial_ground_truth` (3).** Measured, and it exonerates the code: **it sits within
-   0.3% of the live reconciled model while the test is 12.5% high**, so the constants
-   (`DEFAULT_PATIENTS` 79 → 72, the 2-payer/4-payer reconstruction) are safe test-side one-liners.
-   ⚠️ **The only real question: `RATES_2025` and `CMS_2023_RATES` hold IDENTICAL constants — a
-   deliberate collapse, or a lost vintage distinction?** A wrong answer propagates into every
-   downstream revenue figure.
-2. **`test_listing_broker_update` (2).** Move the broker-name normalisation into `update_field`
-   (keeping the identity alias that protects every other caller) — **or leave 1,930 sales carrying a
-   broker name with no FK, invisible to `broker_ranking.py`.** Either side changes a write path.
-
-**Until one lands, the mask stays** — unmasking against 5 known failures ships a job red on day one.
+1. **`test_financial_ground_truth` (3).** Test-side fixes landed (`DEFAULT_PATIENTS` 79 → 72, the
+   2-payer/4-payer reconstruction); **`RATES_2025` and `CMS_2023_RATES` kept as TWO named constants
+   with the WHY documented** — identical today (the blended rate drifted −0.6% over 2021–2024; what
+   moves is payer mix), and collapsing them would permanently destroy the ability to express a
+   divergence. ⚠️ **Correction, mine: this page said the code "sits within 0.3% of the live
+   reconciled model." It does not — CC measured −4.90% vs live, and no segment sits within 1%.**
+   The code is still the closer of the two (the test was 12.5% high) and the verdict rested on the
+   FY table, so nothing downstream changes — but the figure was wrong on a canonical page and is
+   corrected here. **FY2026's 73.66% Medicare is the fallback bucket's signature** (74.6–76.3% in
+   every year; zero HCRIS rows in FY2026) — verified live, feeds DE4.
+2. **`test_listing_broker_update` (2).** **Already cleared by BR2** (`listing_broker_id` 181 →
+   1,027, `id_set_name_null` held at 0) before this prompt ran — the backlog was 3, not 5.
+3. **Found by the sweep, not asked for:** a latent `UnboundLocalError` in `_dynamic_payer_model`,
+   reachable and one populated column away from firing. Fixed.
 
 ### ✅ The slice-window sweep: the silent failure mode was real
 
@@ -165,7 +181,16 @@ finishing the unmask.**
 
 ⚠️ **Do not unmask before the red is cleared** — gating a never-enforced suite is the documented
 *"never green once on `main`"* trap. **The import check is the model: unmask one line, prove it green
-on `main`, then it counts.**
+on `main`, then it counts.** ✅ Applied to the pytest line 2026-09-02; **still to apply, one at a
+time, in this order: ruff (red on `main` today — clear the red first) → `pip-audit` → secrets grep →
+the two `src` imports (which need import-time side effects removed from `src/` before they can ever
+pass).**
+
+⚠️ **Lint is the same defect one job over.** Both ruff steps carry `continue-on-error: true`, and on
+2026-09-02 the *Lint & Type Check* job shows a green check with **11 ruff errors** behind it — root
+scratch files `.tmp_source_gap_classify.py` / `.tmp_prop_diag.py` and `alias_review.py`. **Grep the
+SHAPE** (`continue-on-error` is on the list below); a green lint badge over a red linter is exactly
+the `|| echo` finding wearing YAML.
 
 ### The masking idioms — grep the SHAPE, never one spelling
 

@@ -16,6 +16,94 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — B6e-ci-last5 LANDED: the Dialysis pytest line is UNMASKED and green on `main` — and it is still NOT a merge gate (Dialysis PR #7393, `83d53f0`)
+
+**Read from the `main` job log (run 33642110673, job 100287516338), never the badge:**
+`collected 3147 items` → **`3139 passed, 7 skipped, 1 xfailed, 0 failed in 417.81s`.** The step's
+own header now reads *"B6e-ci-unmask (2026-09-02): UNMASKED. A red suite now fails the job."*
+`executed` **3,132 → 3,147**, up again — nothing skipped or quarantined at any step of the arc
+(`0 → 3,128 → 3,132 → 3,147`; `55 → 14 → 5 → 3 → 0` failed).
+
+| unit | outcome |
+|---|---|
+| `financial_ground_truth` (3) | test-side fixes landed; `RATES_2025` and `CMS_2023_RATES` kept as **two named constants with the WHY documented**; 9/9 mutations RED on the model+vintage guards |
+| `listing_broker_update` (2) | **already cleared by BR2** before this prompt ran — the backlog was **3, not 5** |
+| latent `UnboundLocalError` in `_dynamic_payer_model` | found by the sweep, reachable, one populated column from firing — **fixed** |
+| pytest `\|\| echo` | **removed**, 5/5 mutations RED on the unmask guard, **green once on `main`** |
+| `B6e-worktree-gitlinks` | the PR touches `.claude/worktrees/`; the CC task list marks the 3 gitlinks removed. ⚠️ **Not verified from a checkout log this turn** — confirm the `exit code 128` line is gone on the next run |
+
+### ✅ `B6e-ci-baseline39` is SETTLED by supersession, and the 39 was never `main`'s state
+
+The apples-to-apples run landed: **`main` at `ff712e0` (post-#7392) measured 3,138 collected /
+3,127 passed / 3 failed** — recorded in the workflow comment — and `83d53f0` reads **0** on a real
+runner. The 39 came from CC's own sandbox run at #7392 time and **was never reproduced in the
+authoritative environment**. ⚠️ **What produced 39 there is still not named** (the documented
+cross-module stub pollution is the likely shape, not a proven one), but it no longer gates anything:
+the gate now runs on the runner, and the runner reads 0. Recorded as closed-with-residue, not
+explained.
+
+### 🚨 Two corrections to previously-stated figures — one of them mine, on a canonical page
+
+- **"The code sits within 0.3% of the reconciled model" does NOT reproduce.** CC measured
+  **−4.90% vs live, and no segment sits within even 1%.** That figure was in the prompt, in
+  `producer-health-and-ci-enforcement.md` §3, in the backlog row, and in `CLAUDE.md`. **All four
+  corrected in place this turn.** The verdict it supported (test-side fix, keep both constants) is
+  unchanged — the code is the closer of the two to live, and the constants question was settled on
+  the FY table, not on that number.
+- **FY2026's 73.66% Medicare is the fallback bucket's signature, verified live this turn:**
+  `partial_plus_default` reads **74.6–76.3% Medicare in EVERY year 2021–2026**, and FY2026 has
+  **zero `hcris_form_265_11` rows** (65 `national_default` + 659 `partial_plus_default`). Not a
+  market shift. Feeds **DE4**.
+
+### 🔴 What the workflow file says that the response did not — read `ci.yml`, not the PR
+
+1. **Dialysis has NO branch protection.** The workflow header states it in so many words (*"CI is
+   NOT a required status check — this repo merges via a local `git merge` + `git push`"*), and
+   **PR #7393 merging 8 seconds after its test job started is the proof.** So the unmask makes a
+   red suite **fail the job** — it does **not block a merge**. The gate is one operator step short:
+   → **B6e-ci-required-check** (👤 Scott). ⚠️ **`paths-ignore` skips CI on docs-only changes, and a
+   skipped run reports no status** — so making `Run Tests` required will block docs-only PRs until
+   the LCC docs-only-branch pattern (`test-suite.yml`) is copied across. File both halves together.
+2. **Ruff is masked and red on `main` right now.** Both ruff steps carry
+   `continue-on-error: true`; the current run shows a green *Lint & Type Check* with **11 errors
+   behind it** — root scratch files `.tmp_source_gap_classify.py` / `.tmp_prop_diag.py` (E501) and
+   `alias_review.py` (E402 ×2, F401 ×2). Pre-existing on `main` (the PR touched none of them). Same
+   class as `|| echo`, one job over. → **B6e-ci-mask-ruff**, and the `.tmp_*.py` files are the
+   Dialysis version of the root-clutter this repo already cleaned.
+3. **Named in the workflow, absent from the backlog until now:** `import src.main` / `import app`
+   in the build job are still masked and **red for a real reason** — both run a live Supabase
+   health check at module import. → **B6e-ci-mask-srcimport**. `pip-audit` and the secrets grep
+   remain `continue-on-error` → **B6e-ci-mask-security**.
+
+### CC's own tooling caught two silences worth keeping
+
+- A `curl` poller against the GitHub API returned *"GitHub access is not enabled"* and would have
+  sat silent forever — **indistinguishable from "CI still running."** Only the MCP path reaches
+  GitHub from CC. Committed while verifying a fix for exactly this shape.
+- A branch-filtered runs query returned a stale page whose newest row was 2026-06-27, and CC
+  reported *"no push-to-main CI for two months"* before cross-checking. Wrong; retracted in-line.
+  **A filtered query returning a comfortable answer is the same shape as every detector trap in
+  this arc.**
+
+### Also this turn — PR8 decomposed by measurement, PR5's count moves
+
+`lcc_flush_provenance_events` stamps `source_run_id := v_src || ':evt' || id`, so the relabelled
+source name **survives on every row**. `domain_trigger` 17,371 = **`agency_classifier` 17,277**
+(gov `government_type` on `sales_transactions` / `properties` / `leases` / `property_agencies`,
+writing 2026-07-30 → today) **+ `qa22_davita_brand_canonicalize` 94** (one-shot 2026-07-30).
+`agency_classifier` is **unregistered** — PR5's reverse arm reported 21 write-but-unregistered
+sources, "all benign `cleanup_run_*`", and could not see this 22nd because it wears the catch-all's
+name. `qa22_…` is registered and counted among the "39 never written" while 94 of its rows exist
+under the wrong label — **39 is 38**. PR8 is now a build prompt, not an audit
+(`PR8-provenance-relabel-decompose.md`). Re-measured the top-three sizes at session start too:
+BR1 131/73/28/7, PR2 1,604/41/908-vs-9,107, PR5 67/39/21 — all reproduce; `recorded_deed` positive
+control 2,681 → **2,731**, still writing.
+
+**Verify next on:** the first *red* PR on Dialysis actually showing a failed `Run Tests` job (the
+gate has only been proven green, never proven to fail); the checkout log free of `exit code 128`;
+`B6e-ci-required-check` flipped. Prompt + response filed to `done/`
+(`B6e-ci-last5-decisions-resolved.response.md` is a transcription of the mid-flight `.docx`; the
+outcome above is from the run itself).
 ## 2026-09-02 — DOC18 LIVE (migration applied, deploy confirmed, dry run correct); OCR1 prompt corrected before send
 
 - **Deploy confirmed** by `/version` = `f8d42593` (the `main` tip after #2034), not by a handler
