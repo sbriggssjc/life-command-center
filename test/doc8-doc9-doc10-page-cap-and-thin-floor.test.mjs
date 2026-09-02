@@ -66,7 +66,15 @@ describe('DOC8 — the docai-ocr request asks for imageless mode', () => {
     // ProcessOptions carries ocrConfig/layoutConfig/... and NO imageless field, so
     // nesting it there is silently ignored and the cap stays at 15.
     assert.ok(/imagelessMode:\s*true/.test(src), 'expected imagelessMode: true in the request body');
-    assert.ok(!/processOptions[\s\S]{0,200}imagelessMode/.test(src),
+    // ⚠️ RE-ANCHORED 2026-09-02 (DOC18). This was a 200-CHARACTER PROXIMITY WINDOW
+    // and DOC18 made it fire on completely correct code: `callDocai` now takes a
+    // `processOptions` PARAMETER, whose name sits within 200 chars of the body's
+    // `imagelessMode`. The invariant is about NESTING, not proximity — so it now
+    // asks the actual question: does any `processOptions: { … }` object literal
+    // contain `imagelessMode`? (`{ processOptions }` shorthand and the parameter's
+    // type annotation are correctly not object literals.) The fixed-window footgun
+    // this repo documents, caught in its undershoot-equivalent direction.
+    assert.ok(!/processOptions\s*:\s*\{[\s\S]*?imagelessMode/.test(src),
       'imagelessMode is NOT a ProcessOptions/OcrConfig field — nesting it is a silent no-op');
     // It must sit beside rawDocument/skipHumanReview, i.e. in the same object literal.
     assert.ok(/rawDocument:[\s\S]{0,200}imagelessMode/.test(src),
@@ -75,7 +83,11 @@ describe('DOC8 — the docai-ocr request asks for imageless mode', () => {
 
   it('degrades instead of breaking OCR when the processor rejects the field', () => {
     assert.ok(/rejectsImagelessMode/.test(src), 'expected a narrow unknown-field detector');
-    assert.ok(/callDocai\([^)]*false\)/.test(src), 'expected a single retry with imageless off');
+    // ⚠️ RE-ANCHORED 2026-09-02 (DOC18): `callDocai` gained a trailing
+    // `processOptions` argument, so `false)` is no longer the end of the call. The
+    // invariant is "a retry with imageless OFF", not "false is the last argument".
+    assert.ok(/callDocai\([^)]*,\s*false\s*(?:,[^)]*)?\)/.test(src),
+      'expected a single retry with imageless off');
   });
 
   it('surfaces which mode served the document, so a silent fallback is observable', () => {
@@ -235,7 +247,10 @@ describe('DOC8 — above the cap, no OCR is attempted and the marker is NAMED', 
   });
 
   it('the over-cap marker is a CEILING reason with a longer expiry, not a transient', () => {
-    assert.deepEqual([...CRE_CEILING_REASONS], ['over_docai_page_cap']);
+    // ⚠️ DOC18 added `window_failed` — "the multi-call window RAN and produced
+    // nothing", a different fact from "never attempted". The set is still PINNED
+    // (an accidental widening must be deliberate), just to the current membership.
+    assert.deepEqual([...CRE_CEILING_REASONS], ['over_docai_page_cap', 'window_failed']);
     assert.ok(!CRE_RETRY_REASONS.includes('over_docai_page_cap'),
       'a 24 h retry on a known-unservable document parks the batch on it forever');
   });
