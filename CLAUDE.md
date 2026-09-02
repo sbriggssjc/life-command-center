@@ -637,6 +637,19 @@ pipeline's status is its **last** command unless `set -o pipefail` is set.
   green once on `main`"* trap. **Sequence: measure on `main` → fix or quarantine what is red →
   unmask ONE LINE AT A TIME, starting with the cheapest check (the import).**
 
+### ⚠️ A NODE SCRIPT THAT PRINTS NOTHING AND EXITS 0 HAS NOT RUN — check the main guard (OCR1, 2026-09-02)
+
+`scripts/ocr-bakeoff.mjs` guarded `main()` with `import.meta.url === \`file://${process.argv[1]}\``.
+On Windows `argv[1]` is `C:\…\x.mjs` and the URL is `file:///C:/…`, so the compare **never matches,
+`main()` never runs, and every command exits 0 with no output** — `--self-test`, `--fetch-baselines`
+and `--run` all "succeeded" on Scott's first real run having done nothing. The sandbox (Linux) could
+not reproduce it. Same shape as `| tee` without `pipefail`: a green exit over zero work.
+**Use `import.meta.url === pathToFileURL(process.argv[1]).href` and `fileURLToPath(import.meta.url)`,
+never string-built `file://` or `new URL(...).pathname`.** Guard:
+`test/scripts-main-guard-windows.test.mjs` (class-wide over `scripts/`, `mcp/`, `api/`; positive
+control; comments stripped). **And on the operator side: a bake-off, backfill or probe that returns
+to the prompt in under a second with nothing printed is a symptom, not a success.**
+
 ### Dead-end classes are findable on purpose — `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md`
 
 Nine live defects were found in one session on 2026-08-22, all by accident, and every one

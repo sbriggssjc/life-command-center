@@ -36,6 +36,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   PROVENANCE_COLUMN_CANDIDATES,
   planProvenanceDiff,
@@ -145,7 +146,7 @@ async function bucketsFor(db, tableName, col) {
 
 async function main() {
   const ledger = JSON.parse(fs.readFileSync(
-    path.resolve(path.dirname(new URL(import.meta.url).pathname), 'd1-provenance-acknowledgements.json'), 'utf8'));
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'd1-provenance-acknowledgements.json'), 'utf8'));
 
   const [govCat, diaCat] = await Promise.all([q('gov', CATALOGUE_SQL), q('dia', CATALOGUE_SQL)]);
   const [govCols, diaCols] = await Promise.all([resolveColumns('gov', govCat), resolveColumns('dia', diaCat)]);

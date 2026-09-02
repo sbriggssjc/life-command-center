@@ -174,6 +174,20 @@ gate has only been proven green, never proven to fail); the checkout log free of
 `B6e-ci-required-check` flipped. Prompt + response filed to `done/`
 (`B6e-ci-last5-decisions-resolved.response.md` is a transcription of the mid-flight `.docx`; the
 outcome above is from the run itself).
+## 2026-09-02 — The bake-off's first real run did NOTHING: a Windows main-guard bug, silent exit 0
+
+Scott ran the sequence; engines installed, `ocr-bakeoff-stage.ps1` staged **15 of 15**, and then
+`--self-test`, `--fetch-baselines` and `--run` each **printed nothing and exited 0**. Cause:
+`scripts/ocr-bakeoff.mjs:975` guarded `main()` with `import.meta.url === \`file://${process.argv[1]}\``,
+which never matches on Windows (`C:\…` vs `file:///C:/…`) — so `main()` never ran. Line 960's
+`new URL(import.meta.url).pathname` had the mirror bug. The sandbox is Linux and could not have
+caught it; the silence was the only signal, and it is the `| tee`-without-`pipefail` shape again.
+**Fixed** (`pathToFileURL` / `fileURLToPath`; the same `.pathname` idiom fixed in
+`d1-cross-db-provenance-diff.mjs`; 10 other scripts already had it right). **Class guard added:**
+`test/scripts-main-guard-windows.test.mjs`, mutation-verified RED on the original line. Self-test
+now prints its 15 assertions. Footgun recorded in `CLAUDE.md`. **Scott re-runs from step 3 after
+merging.**
+
 ## 2026-09-02 — OCR2's premise REFUTED before drafting; re-scoped to deed OCR provenance; bake-off staging script
 
 - ⚠️ **"The deed lane never tiers — all 325 deeds went to gpt-4o" was in three canonical documents

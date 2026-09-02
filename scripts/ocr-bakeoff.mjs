@@ -53,6 +53,7 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadEnvForScripts } from './_env-file.mjs';
 
 // ---------------------------------------------------------------------------
@@ -957,7 +958,7 @@ async function main() {
   const a = parseArgs(process.argv.slice(2));
   const dir = resolve(process.cwd(), a.dir);
   if (!a.mode) {
-    console.log(readFileSync(new URL(import.meta.url).pathname, 'utf8').split('\n')
+    console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n')
       .filter((l) => l.startsWith('//')).slice(0, 40).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
     process.exit(0);
   }
@@ -972,6 +973,10 @@ async function main() {
   });
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// ⚠️ Windows: process.argv[1] is `C:\\...\\ocr-bakeoff.mjs` while import.meta.url is
+// `file:///C:/...`, so a string compare NEVER matches and main() silently never
+// runs — every command exits 0 having done nothing (bit us 2026-09-02 on the
+// first real run). Compare URL to URL.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((e) => { console.error(e); process.exit(1); });
 }
