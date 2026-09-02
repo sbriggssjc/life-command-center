@@ -337,6 +337,19 @@ gate has only been proven green, never proven to fail); the checkout log free of
 `B6e-ci-required-check` flipped. Prompt + response filed to `done/`
 (`B6e-ci-last5-decisions-resolved.response.md` is a transcription of the mid-flight `.docx`; the
 outcome above is from the run itself).
+## 2026-09-02 — Scott's app walk-through catalogued: 48 comments → UX0–UX49, tiered T0–T4 (P16)
+
+Source: `LCC App Function Notes.docx` (41 screenshots; kept outside the repo). Canonical page
+`docs/architecture/app-ux-review-2026-09-02.md`; backlog §P16; doctrine block added to `CLAUDE.md`
+pending a canon entry (UX0). **Queues behind OCR1 re-run / OCR2 by instruction.** Points worth the
+next reader's time: several "is this an error?" questions are ANSWERED on the page rather than
+queued (CMS "since Sept 2025" = a reporting-period series + the still-open B6d-cms-restart; the
+"high" clinic revenue is almost certainly OPERATING revenue not rent — the A5 misread); the Sellers
+"0 / $0" is the `diaQuery` `[]`-on-error shape, so it is a response to read, not an empty table; the
+Ownership "500" is the paged-query-as-count footgun; Brokers and the CM charts map to open rows
+(BR1–BR5, K13–K18) rather than new ones. The single largest shared primitive across the feature asks
+is the **draft → send → log loop** (Pipeline drawer, Marketing tab, buyer-rep) — build it once.
+
 ## 2026-09-02 — OCR1c built (self-agreement floor + honest engine probes); branch pushed, NO PR opened
 
 CC delivered all four changes on `claude/ocr-bakeoff-self-agreement-qnyl9z` (`837a7ba`): quote/dash/
@@ -389,6 +402,34 @@ caught it; the silence was the only signal, and it is the `| tee`-without-`pipef
 `test/scripts-main-guard-windows.test.mjs`, mutation-verified RED on the original line. Self-test
 now prints its 15 assertions. Footgun recorded in `CLAUDE.md`. **Scott re-runs from step 3 after
 merging.**
+
+## 2026-09-02 — OCR2 SHIPPED: deed OCR provenance persisted; the column had a second writer that REPLACED it
+
+**Built:** `<dom>_merge_document_extracted_data` on gov + dia (applied live) = the **single owner** of
+writes to `property_documents.extracted_data`; `api/_shared/document-text-provenance.js` (shape +
+merge, one owner for both); `processOneDoc` writes provenance on both exits **after** the deed parse;
+`deed-parser.js` routes its own write through the merge RPC with a legacy-replace fallback; the
+`ocrTiered:false` opt-out is closed. Surfaces `v_gov_deed_ocr_provenance` /
+`v_dia_deed_ocr_provenance`. Suite **5,074 / 5,068 pass / 0 fail**.
+
+- ⚠️ **The prompt's premise was incomplete in a way that would have shipped a silent no-op.** It
+  anticipated my write clobbering the deed parser's; the reverse was the live hazard —
+  `deed-parser.js` PATCHed `extracted_data: {...}`, a **wholesale replace**, so provenance written
+  beside `deed_extraction` was destroyed on every deed and on every re-parse. Proven by a key census,
+  not a code read: gov's 185 rows carry exactly two keys, dia carries 10 with a third.
+- ⚠️ **`revoke ... from public` left `anon`/`authenticated` holding EXPLICIT grants** (Supabase
+  default privileges) — the complementary half of the documented B6d trap, caught only because the
+  check was `has_function_privilege` rather than re-reading the REVOKE. Both roles now false.
+- ⚠️ **Two guards passed their own mutation via the import line** and were replaced with behavioural
+  tests. 16/16 mutations RED.
+- **No backfill**: 507 rows' tier is unknowable (154 gov extractions predate DocAI, 140 undated).
+  `unrecorded` holding at gov 325 / dia 182 IS the verification.
+- ⚠️ **The two halves verify on different clocks.** PROVENANCE is pending a new deed (extraction backlog 0 on both domains, and the re-parse path deliberately writes none). The **MERGE fix runs on the next tick with no new deed** — the re-parse queue holds **gov 166 + dia 119 = 285** rows, each of which was a wholesale replace before. An earlier draft said only "pending a new deed" and that overstated the wait.
+- Filed: **OCR2a** (re-parse writes none, deliberately — no extraction, no tier), **OCR2b** (the
+  `needs_ocr` refusal reason is still discarded, unlike the CRE sidecar).
+- Writeup `docs/audits/OCR2_DEED_OCR_PROVENANCE_2026-09-02.md`; canon
+  `ai-and-ocr-cost-strategy.md` §0, `CLAUDE.md` (new jsonb-merge-owner doctrine + the privilege
+  half), backlog OCR2 → ✅.
 
 ## 2026-09-02 — OCR2's premise REFUTED before drafting; re-scoped to deed OCR provenance; bake-off staging script
 
