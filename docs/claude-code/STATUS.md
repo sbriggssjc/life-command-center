@@ -16,6 +16,67 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — EXT1b shipped + deployed; three named rows re-score exactly; floor re-run owed
+
+`#2068`, deployed `a013aea6`. 431 rent → **105,558** (`basis_source: as_stated`), 336 → **75,000**,
+431 dates → `2021-03-15` day-precision on BOTH runs, 255 untouched. 23 guards, 16/16 mutations RED.
+Three decisions worth carrying (each measured against the obvious alternative): the basis window
+stops at the next `$`; amount is presence-in-the-quote, never a tolerance; a formula is never turned
+into a date even when it contains one. Prediction on file: rent + both dates → ~100% self-rate, with
+the date denominators rising — read counts, not rates. 👤 Re-run command on `OPERATOR-ACTIONS.md`
+(OCR1 row). EXT1b + UX-T0 files → `done/`. Next: **OWN-T0** to CC.
+
+## 2026-09-02 — EXT1b SHIPPED: `as_stated` is the authority, the model's labels are the fallback. ⚠️ The floor movement is PREDICTED — the measurement is Scott's re-run.
+
+- **What shipped:** `basisFromAsStated` / `amountFromAsStated` / `precisionFromAsStated` + two
+  reconcilers in `api/_shared/bov-extract.js`, wired before `annualizeRent` and both date resolvers
+  and into `cleanRentPeriod`. **One JS file. No migration, no prompt change, no OCR change, no
+  backfill.** Guard `test/ext1b-as-stated-authority.test.mjs` — 23 tests, **16/16 mutations RED**;
+  full suite **5,178 / 0 fail**; the 21 EXT1 tests unchanged. Record:
+  `responses/EXT1b-basis-precision-quotes.response.md`.
+- **The three named rows, re-scored:** 431 rent `null → **105,558**` (quote said *per month*, label
+  said `per_sf_annual`, amount was ÷1,000); 336 `null → **75,000**` (the year-1 figure is the first
+  `$` in the schedule quote); 431 dates `formula/null → **2021-03-15, precision day**` on BOTH runs.
+  **255 held at 101,568** — EXT1b must not move the row EXT1 already fixed, and it does not.
+- **⚠️ THE AMOUNT RULE IS PRESENCE-IN-THE-QUOTE, NOT A TOLERANCE.** 8.7965 and 8,796.50 are the same
+  figure scaled by 1,000; **no threshold separates that from a different figure on the page.** The
+  model keeps its amount only when that amount appears as a `$`-figure in its OWN quote — measured on
+  *"a security deposit of $10,000 and base rent of $8,796.50 per month"*, where a bare first-figure
+  rule takes the deposit.
+- **⚠️ THE BASIS WINDOW STOPS AT THE NEXT `$`.** Doc 336 states a period *and* a parenthetical
+  monthly restatement of the same rent; over the whole string that is ambiguous and abstains, losing
+  the row. Where a window genuinely carries both markers the answer is **null and the model's label
+  stands** — silence hands the decision back rather than flipping a coin.
+- **⚠️ A FORMULA IS NEVER TURNED INTO A DATE, INCLUDING ONE THAT CONTAINS A DATE.** The parser must
+  CONSUME the whole quote; *"the earlier of March 1, 2021 or thirty days after Delivery"* contains a
+  calendar date and IS a formula, and a `.search()` would resolve it and re-commit the exact defect
+  EXT1 removed. And the quote decides in BOTH directions — a month-only quote under a `day` label
+  drops the day the model invented.
+- **PREDICTED floor:** `year1_rent` 89 → ~100, both dates 80 → ~100, other three fields unchanged.
+  ⚠️ **Two caveats, stated because EXT1's prediction was wrong in exactly this way:** it assumes the
+  residue is only the rows already read (last time I assumed the model's LABELS were as reliable as
+  its QUOTES), and **`decided fields` should RISE on the dates** as 431 stops being both-null, so the
+  denominator moves and the rate is not directly comparable to run 3's. Doc 425's dates must stay
+  honest nulls — that is a real OCR miss.
+- **Next:** Scott's `--run --model real --control self --engines tesseract`, then read the same two
+  floor rows.
+## 2026-09-02 — UX23 went wholesale: 9.4% of properties carry >1 CURRENT owner and the conflict detector reads 0 → OWN-T0; two operator decisions recorded
+
+Scott on UX23: *almost every property* shows owner gaps/lapses and the ownership tab conflicts with
+itself — asked for a wholesale approach rather than a named record. **Measured before writing the
+prompt:** `lcc_entity_portfolio_facts` has **756 of 8,068 properties with >1 `is_current` owner**
+(33 with 3+); `lcc_property_owner` disagrees with the current fact on **667 of 8,223**;
+`v_lcc_portfolio_ownership_conflict` = **0** (built for P175a's ghost-vs-ended pair; structurally
+blind to two live current owners). And `chain_2plus` is 178, so a developer→owner gap is the DEFAULT
+state the panel never labels. **OWN-T0 staged**: disagreement matrix over every store the tab reads
++ ten named rows → fix the supersession writer that leaves the prior current fact un-ended
+(reversible, predicted delta) → `v_lcc_property_ownership_reconciled` as the ONE view the panel
+reads with `gap` / `conflict` / `operator_not_owner` as words → detector sees 756 before, 0 after.
+⚠️ **A detector reading 0 over a 9% defect is the P182 class, again.**
+
+Decisions: **UX39/UX41** keep both, move off the headline tabs to a back-end screen (UX39b/UX41b,
+with UX-T2). **UX13a** deferred to user onboarding. EXT1b sent to CC.
+
 ## 2026-09-02 — UX-T0 reconciled (deploy + migrations verified); EXT1 floor MEASURED — two noise classes gone, labels are the next layer → EXT1b
 
 - **UX-T0 (#2061) verified live:** JS in deployed `a3172f44`; `v_manager_overview.is_team_member`
@@ -107,6 +168,37 @@
   silently.
 - Full suite **5,102 pass / 0 fail / 6 skipped**. Record:
   `responses/EXT1-lease-rent-basis-quoted-dates.response.md`.
+
+## 2026-09-02 — PR5c-entities SHIPPED (#2066, `e9c74357`): the two `entities` contact writers consult the ladder — and it buys RECORDING, not protection, because every rung is `record_only`.
+
+**Verified live:** `field_provenance where target_table='entities'` **0** (correct — neither writer
+has a cron, `SF_CONTACT_WRITEBACK` is `off`); all ten `email`/`phone` rungs `enforce_mode='record_only'`
+(`manual_edit`/`manual_resolution`@1 → `salesforce`@20 → `domain_owner_contact`@55 → `costar_sidebar`@60);
+unranked **29**; 0 provenance-failure alerts. CI green on the merged SHA — CC checked the run on
+`b71fde0f`, not the one it validated (`3093f846`), because the merge UI added a second commit; merged
+**7 s after** the required suite went green.
+
+- **Wiring a ladder onto a table with an empty ledger cannot protect a curated value it has never
+  seen** — `lcc_merge_field` compares against `field_provenance`, not the live column, so the first
+  call on every field returns `no_prior_provenance ⇒ write`. And under `record_only`,
+  `shouldWriteField` records a `skip` and the write proceeds anyway. **Read the enforce mode before
+  predicting any behaviour change**; this is the prerequisite for grading a gate, not the gate.
+- **A grep does not find the writers of a column** — grep 24 sites / 13 files, AST walk **41 / 16**;
+  per-file column unions mis-labelled `bridge-handlers-salesforce.js` as an `email`/`phone` PATCHer
+  when only its CREATE path carries them. Count with a parser, read the payload per SITE.
+- **Where the writer has its own ledger (`metadata.field_sources`), a field the ladder drops must
+  lose its stamp there too** — that stamp is what the writer reads next run (the PR10 two-ladders shape).
+- **Two premature `check_suite.completed` webhooks** (one 46 s before the test job started) — read
+  as "CI passed" either would have been wrong. Verified against the runs each time.
+- **Filed:** `PR5c-enforce` (all ten rungs `record_only`; ungradeable until the ledger has history)
+  and **`PR5c-entities-b`** (`bridge-handlers-salesforce.js`, ~336 SF contacts/30d, unwired — the
+  nearer win because it runs daily). JS ships on the Railway redeploy (`e9c74357`).
+
+**Verify-next:** post-deploy, an operator tick of `owner-contact-propagate` → `entities` rows `0 → N`
+split by source/decision. Guard `test/pr5c-entities-ladder-wiring.test.mjs` (14 tests, 17/17
+mutations RED). Docs: `docs/audits/PR5c_entities_LADDER_WIRED_2026-09-02.md` · ladder page §3/§4 ·
+`CLAUDE.md` invariant list · backlog (all by CC). Handoff §3 rewritten this turn into a verify-next
+ledger (the closed-PR narrative now lives on the ladder page only). Prompt + response filed to `done/`.
 
 ## 2026-09-02 — PR5c CLOSED (#2060, `06a3ee5d`): the 33 zero-row LCC-internal rungs were one CHECK constraint — five callers sent a `target_database` outside the vocabulary and failed 23514 on 100% of calls, silently.
 

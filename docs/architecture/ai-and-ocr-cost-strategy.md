@@ -181,6 +181,12 @@ OCR on savings is arguing from a number that does not support it.**
      question.
    - Arm B's population is **42 documents / 2,200 pages / 31–141pp / 24 of them over 50pp**, not the
      four the OCR1 prompt names.
+   - ✅ **EXT1 + EXT1b (2026-09-02) — the extraction MODEL was the larger error source and is now
+     quote-first:** rent returns `{amount, basis, as_stated}` and is annualized in code; dates return
+     `{date, as_stated, precision}`; and `as_stated` parsed in code overrides the model's labels
+     (measured: quotes verbatim-reliable, labels not). Floor after EXT1: rent/date disagreements vs
+     tesseract 2→0 / 4→0; self-rate 89/80/80 pending EXT1b's re-run (predicted ~100). Records:
+     `responses/done/EXT1-floor-measurement.response.md`, `EXT1b-basis-precision-quotes.response.md`.
    Stand an OCR endpoint on the GaryBuilt box
    (Surya / PaddleOCR / ocrmypdf-Tesseract, all already named in the design) behind the **existing**
    tunnel + CF Access, and inject `deps.freeOcr` at the two server call sites. **The seam already
