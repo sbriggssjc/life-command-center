@@ -337,6 +337,19 @@ gate has only been proven green, never proven to fail); the checkout log free of
 `B6e-ci-required-check` flipped. Prompt + response filed to `done/`
 (`B6e-ci-last5-decisions-resolved.response.md` is a transcription of the mid-flight `.docx`; the
 outcome above is from the run itself).
+## 2026-09-02 — Scott's app walk-through catalogued: 48 comments → UX0–UX49, tiered T0–T4 (P16)
+
+Source: `LCC App Function Notes.docx` (41 screenshots; kept outside the repo). Canonical page
+`docs/architecture/app-ux-review-2026-09-02.md`; backlog §P16; doctrine block added to `CLAUDE.md`
+pending a canon entry (UX0). **Queues behind OCR1 re-run / OCR2 by instruction.** Points worth the
+next reader's time: several "is this an error?" questions are ANSWERED on the page rather than
+queued (CMS "since Sept 2025" = a reporting-period series + the still-open B6d-cms-restart; the
+"high" clinic revenue is almost certainly OPERATING revenue not rent — the A5 misread); the Sellers
+"0 / $0" is the `diaQuery` `[]`-on-error shape, so it is a response to read, not an empty table; the
+Ownership "500" is the paged-query-as-count footgun; Brokers and the CM charts map to open rows
+(BR1–BR5, K13–K18) rather than new ones. The single largest shared primitive across the feature asks
+is the **draft → send → log loop** (Pipeline drawer, Marketing tab, buyer-rep) — build it once.
+
 ## 2026-09-02 — OCR1c built (self-agreement floor + honest engine probes); branch pushed, NO PR opened
 
 CC delivered all four changes on `claude/ocr-bakeoff-self-agreement-qnyl9z` (`837a7ba`): quote/dash/
