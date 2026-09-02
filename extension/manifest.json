@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LCC Assistant",
-  "version": "1.0.45",
+  "version": "1.0.46",
   "description": "Life Command Center context panel \u2014 Team Briggs CRE intelligence",
   "permissions": [
     "storage",
@@ -51,6 +51,7 @@
         "https://*.costar.com/*"
       ],
       "js": [
+        "shared/property-identity.js",
         "content/_sale-merge.js",
         "content/_portfolio-parse.js",
         "content/_broker-owner-reconcile.js",
