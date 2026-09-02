@@ -409,11 +409,18 @@ function approvedSameParcelAddressConflict(target, context, frozenAddressToken, 
   const capturedParcel = normalizeParcelNumber(context.parcel_number);
   if (!capturedParcel) return null;
   return aliases.find((alias) => {
+    const reasonCode = clean(alias?.reason_code);
+    const sourceRecordPinned = reasonCode === 'service_location_mailing_address_same_parcel_source_record';
     if (alias?.status !== 'approved'
-      || alias?.reason_code !== 'service_location_mailing_address_same_parcel'
+      || (reasonCode !== 'service_location_mailing_address_same_parcel' && !sourceRecordPinned)
       || alias?.frozen_address_token !== frozenAddressToken
       || alias?.captured_address_token !== capturedAddressToken
       || normalizeParcelNumber(alias?.parcel_number) !== capturedParcel
+      || (sourceRecordPinned && (
+        clean(context.source).toLowerCase() !== 'costar'
+        || !clean(alias?.costar_property_id)
+        || clean(alias?.costar_property_id) !== clean(context.costar_property_id)
+      ))
       || !clean(alias?.authorized_by)
       || !/^\d{4}-\d{2}-\d{2}T/.test(clean(alias?.authorized_at))) return false;
     const citations = Array.isArray(alias.evidence_citations) ? alias.evidence_citations : [];
@@ -528,8 +535,10 @@ export function buildAscStructuredCapture(target, context = {}) {
         normalizeAscBuildingAddressToken(cmsIdentity),
         normalizeAscBuildingAddressToken(context),
       );
+    const sameParcelAddressConflictSourceRecordPinned = sameParcelAddressConflict?.reason_code
+      === 'service_location_mailing_address_same_parcel_source_record';
     const sameParcelAddressConflictMatch = sameParcelAddressConflict
-      && exactTenantCorroboration;
+      && (exactTenantCorroboration || sameParcelAddressConflictSourceRecordPinned);
     const rangeContainment = capturedRangeContainsFrozenNumber(frozenComparisonToken, addressToken);
     const rangeContainmentMatch = rangeContainment && corroboration;
     const controlledFacilityAlias = controlledAscFacilityAlias(target, context);
@@ -565,8 +574,11 @@ export function buildAscStructuredCapture(target, context = {}) {
       captured_property_address_preserved: clean(context.address),
       frozen_address_token: frozenComparisonToken,
       captured_address_token: addressToken,
-      corroboration_basis: exactTenantCorroboration.basis,
-      corroborated_name: exactTenantCorroboration.matched_name,
+      corroboration_basis: exactTenantCorroboration?.basis || 'costar_source_record_and_parcel_pin',
+      corroborated_name: exactTenantCorroboration?.matched_name || null,
+      costar_property_id: sameParcelAddressConflictSourceRecordPinned
+        ? clean(context.costar_property_id)
+        : null,
       second_review_required: true,
     } : operatingIdentityAliasMatch ? {
       mode: 'approved_operating_identity_parent_building',
