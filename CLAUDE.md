@@ -292,9 +292,11 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
     5,290–6,794 — **outside the window, red, over completely correct code.** That is the
     UNDERSHOOT case. The **OVERSHOOT** case is worse and silent: a window that runs past the
     function's end asserts against the NEXT function, so **a green guard may be passing on code it
-    never named.** **27 more of these are still live in that one file** (`B6e-ci-slice-window`).
-    **Anchor on the AST span, never a character count** — a byte offset is a literal that moves,
-    and a growing function is the normal case.
+    never named.** ✅ **All 27 in that file were re-anchored 2026-09-01 and the split MEASURED:
+    21 undershoot / 6 overshoot / 0 exact — SIX guards were asserting against code outside the
+    function they name, i.e. passing on code they never tested.** The overshoot case was filed as a
+    hypothesis and turned out to be 6 of 27. **Anchor on the AST span, never a character count** —
+    a byte offset is a literal that moves, and a growing function is the normal case.
 - **⚠️ "REACHABLE" AND "IN THE RIGHT MODULE" ARE DIFFERENT PROPERTIES.** Unit 4 moved 7 of
   12 `_entityTab*` bodies and left five behind; every guard stayed green because the
   tab-registry guard only asks whether a tab reaches a renderer that EXISTS — and it did.
@@ -4322,12 +4324,16 @@ Related invariants from the same round:
   running / does anything watch it / does CI enforce anything".** Live producer state, the CI
   enforcement status of each repo, and the traps already paid for. ✅ **LCC verified clean
   2026-09-01** — `npm test` is a bare unmasked `run:` and a required check, all 7 workflows carry
-  `timeout-minutes`. ⚠️ **Dialysis: the suite now RUNS for the first time in the repo's history and is down to 14 red**
-  (3,110 collected / 5 errors / **0 executed** → 3,128 / 0 / **3,128**; 3,065 pass · 55 fail → **3,106
-  pass · 14 fail**, `executed` held at 3,128 throughout so nothing was hidden). `timeout-minutes` now
-  bounds all four jobs, sized from a measured run. **But the pytest line is still masked** — ⚠️
-  **measured, not enforced: 14 real failures sit on `main` and cannot fail a merge**, and the suite
-  has already caught one real product bug (`B6e-ci-listing-broker`). ❓ government-lease unswept.
+  `timeout-minutes`. ⚠️ **Dialysis: the suite now RUNS for the first time in the repo's history and is down to 5 red**
+  (3,110 collected / 5 errors / **0 executed** → 3,128 / 0 / **3,132**; 3,065 pass · 55 fail → **3,106
+  pass · 14 fail** → **3,119 pass · 5 fail**, `executed` going UP at every step so nothing was skipped
+  or quarantined anywhere in the arc). `timeout-minutes` now bounds all four jobs, sized from a
+  measured run. **But the pytest line is still masked** — ⚠️ **measured, not enforced: 5 real
+  failures sit on `main` and cannot fail a merge.** 👤 **Both remaining failures are OPERATOR
+  DECISIONS, not build work** — the revenue-model vintage question (the code sits within 0.3% of the
+  live reconciled model; the TEST is 12.5% high) and the `listing_broker` write path, whose cost is
+  now quantified: **1,930 sales carry a broker name with no FK, invisible to `broker_ranking.py`**.
+  The suite caught that product bug on its own. ❓ government-lease unswept.
 - **⚠️ PUBLIC RECORDS ARE A SOURCE, NOT A GAP-FILLER — AND THE LANE IS BUILT AND HAS NEVER WRITTEN A
   FIELD (2026-09-01):** `docs/architecture/public-records-source-lane.md`. **START HERE before
   proposing anything about assessor / parcel / tax / deed data.** `county_records` is registered at

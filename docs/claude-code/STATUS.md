@@ -207,6 +207,64 @@ design** (15 candidates read, 10 genuine / 5 SPE-named-after-tenant; the confirm
 `entity_type` defect; **C18** (`ownership_start_date`) is unchanged and still the highest-value item
 — though §7.2 corrects WHY: the 50.7% blindness belongs to `investor_owner` pacing, not to
 repeat-buyer pacing, which is 98.8% dated.
+## 2026-09-01 — ✅ 14 → 5, the 6 false-green guards were real, and both remaining blockers are now SIZED decisions (PR #7391, `5d464dd`)
+
+| | executed | pass | fail |
+|---|---:|---:|---:|
+| `73f1418` (pre-#7389) | **0** | — | — |
+| `c80f778` (#7389) | 3,128 | 3,065 | 55 |
+| `eac8668` (#7390) | 3,128 | 3,106 | 14 |
+| **`5d464dd` (#7391)** | **3,132** | **3,119** | **5** |
+
+**`executed` went UP, 3,128 → 3,132.** Nothing skipped or quarantined at any step in the arc. From
+a suite that could not execute at all to one that executes fully with **five known, named,
+individually-argued failures.**
+
+### 🎯 The slice-window sweep confirmed the silent failure mode
+
+**All 27 fixed-character windows re-anchored on their AST spans: 21 undershoot / 6 overshoot / 0
+exact.** ⚠️ **Six guards were asserting against code outside the function they name** — the silent
+false-green I flagged as theoretical when filing it. It was not theoretical. **B6e-ci-slice-window
+closed.**
+
+### The `financial_ground_truth` three: measured, and the test is the stale side
+
+**The code sits within 0.3% of the live reconciled model; the test is 12.5% high.** So
+`DEFAULT_PATIENTS` 79 → 72 and the 2-payer/4-payer reconstruction are **safe test-side one-liners on
+the evidence.** ⚠️ **The genuine open question is much narrower than I filed it**: whether
+`RATES_2025` and `CMS_2023_RATES` holding **identical constants** is a deliberate collapse or a lost
+vintage distinction. 👤 **That is Scott's, and it is the only part of this group that is.**
+
+### `listing_broker_update` (2): the cost of not deciding is now quantified
+
+Move the broker-name normalisation into `update_field` (keeps the identity alias protecting every
+other caller) — **or leave 1,930 sales carrying a broker name with no FK, invisible to
+`broker_ranking.py`.** 👤 Scott's call; both blockers gate `B6e-ci-unmask`, and **the mask is
+correctly still in place** — unmasking against 5 known failures ships a job red on day one.
+
+### ✅ This also closes a mystery I filed two days ago
+
+**`B6e-fred-git128` is explained.** Three `.claude/worktrees/*` gitlinks are committed with **no
+`.gitmodules`**, which is what puts `The process '/usr/bin/git' failed with exit code 128` in *every*
+CI job log. Pre-existing (from `325aca3`), not introduced by any recent PR. → **B6e-worktree-gitlinks**.
+
+### ⚠️ One new finding verified, and its scope corrected
+
+`properties.clinic_metadata` **does not exist anywhere in the dia schema** — confirmed, no column of
+that name on any table — so `propagate_cms_to_properties` writes it and `update_row` **silently
+drops it, no error.** ⚠️ **But the report called this "CMS certification-date propagation is a dead
+write", and that is broader than the data supports.** Measured: `properties.certification_date` is
+set on **2,417** rows and `cms_last_propagated_at` on **1,814**, stamped as recently as **2026-08-31
+20:33** — **the certification-date propagation is LIVE.** What is dead is only the `clinic_metadata`
+payload riding alongside it. ⚠️ **Also surfaced by that check and unexplained: 2,417 have a
+certification date while only 1,814 carry a propagation stamp — 603 came from somewhere else.**
+
+Also filed, not fixed: a **schema-refresh N+1** in `FinancialEstimateTracker.save_estimate()` (a
+retry-with-backoff schema fetch *inside* the row loop, ~4.5 s/row).
+
+⚠️ **Run 2279 carried 5 failures and reported success** — concrete, current evidence for why the
+mask matters, from this very PR.
+
 ## 2026-09-01 — B6e-ci-red14 drafted: the last 14, and the `financial_ground_truth` group is measurable after all
 
 Prompt queued: `B6e-ci-red14-adjudicate-the-last-14.md`. **The governing rule is the one this arc

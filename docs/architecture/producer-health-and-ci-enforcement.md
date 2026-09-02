@@ -64,7 +64,12 @@ on a 401 → **B6d-sam**) from 4 at the start of the arc.
 |---|---:|---:|---:|---:|---:|
 | `73f1418` (pre-#7389) | 3,110 | 5 | **0** | — | — |
 | `c80f778` (#7389) | 3,128 | 0 | 3,128 | 3,065 | 55 |
-| **`eac8668` (#7390)** | 3,128 | 0 | **3,128** | **3,106** | **14** |
+| `eac8668` (#7390) | 3,128 | 0 | 3,128 | 3,106 | 14 |
+| **`5d464dd` (#7391)** | 3,132 | 0 | **3,132** | **3,119** | **5** |
+
+**From a suite that could not execute at all to one that executes fully with five known, named,
+individually-argued failures — and `executed` went UP at every step.** Nothing was skipped or
+quarantined anywhere in the arc.
 
 **7 skipped · 1 xfailed throughout.** ✅ The **import check is unmasked and green on a real runner**,
 so it is a genuine gate, and **`timeout-minutes` now bounds all four jobs**, sized from a measured
@@ -98,7 +103,31 @@ module that never mentions `dateutil`** — i.e. a test harness reaching into *d
 layers were all required: sys.modules objects · attributes on the real module · symbols already bound
 into `src.*` globals by a `from X import Y` executed inside the stub window.
 
-### The remaining 14 — and the one group that needs a decision, not a fix
+### 👤 The last 5 are BOTH operator decisions — the build work is done
+
+`B6e-ci-unmask` is no longer gated on effort. Two questions, both sized:
+
+1. **`test_financial_ground_truth` (3).** Measured, and it exonerates the code: **it sits within
+   0.3% of the live reconciled model while the test is 12.5% high**, so the constants
+   (`DEFAULT_PATIENTS` 79 → 72, the 2-payer/4-payer reconstruction) are safe test-side one-liners.
+   ⚠️ **The only real question: `RATES_2025` and `CMS_2023_RATES` hold IDENTICAL constants — a
+   deliberate collapse, or a lost vintage distinction?** A wrong answer propagates into every
+   downstream revenue figure.
+2. **`test_listing_broker_update` (2).** Move the broker-name normalisation into `update_field`
+   (keeping the identity alias that protects every other caller) — **or leave 1,930 sales carrying a
+   broker name with no FK, invisible to `broker_ranking.py`.** Either side changes a write path.
+
+**Until one lands, the mask stays** — unmasking against 5 known failures ships a job red on day one.
+
+### ✅ The slice-window sweep: the silent failure mode was real
+
+All 27 fixed-character windows in `test_processing_audit.py` re-anchored on their AST spans:
+**21 undershoot / 6 overshoot / 0 exact.** ⚠️ **Six guards were asserting against code outside the
+function they name.** The undershoot case (a stale red over correct code) had already bitten twice;
+the overshoot case was filed as a hypothesis and turned out to be **6 of 27 passing on code they
+never tested.**
+
+### Historical — the 14 that #7391 reduced to 5
 
 All 14 fail **in isolation**, so they are genuine test-vs-code disagreements rather than harness
 pollution. ⚠️ **`git log` cannot adjudicate them — every file traces to one squashed import merge
