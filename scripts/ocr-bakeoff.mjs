@@ -1191,10 +1191,16 @@ print("ok")
   const degradedDir = join(dir, 'FIXTURE-degraded');
   const noisyDir = join(dir, 'FIXTURE-noisy');
   for (const d of [cleanDir, degradedDir, noisyDir]) mkdirSync(d, { recursive: true });
-  const r = run('python3', ['-c', py,
-    join(cleanDir, 'source.pdf'), join(degradedDir, 'source.pdf'), join(noisyDir, 'source.pdf')]);
+  // Windows spells it `python` (the 2026-09-02 GaryBuilt run skipped the whole self-test on
+  // `python3` alone, while `python` + Pillow were installed and one line away).
+  let r = null;
+  for (const exe of ['python3', 'python', 'py']) {
+    r = run(exe, ['-c', py,
+      join(cleanDir, 'source.pdf'), join(degradedDir, 'source.pdf'), join(noisyDir, 'source.pdf')]);
+    if (!(r.error?.code === 'ENOENT')) break;
+  }
   if (r.error?.code === 'ENOENT') {
-    return { ok: false, reason: 'python3 is not on PATH', fix: 'install Python 3 and put python3 on PATH' };
+    return { ok: false, reason: 'python3/python/py not on PATH', fix: 'install Python 3 (Windows: `python`; Linux: `python3`) and Pillow' };
   }
   if (r.status !== 0) {
     const err = stderrTail(r.stderr);
