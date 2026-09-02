@@ -41,7 +41,13 @@ tiered chain. **The genuine defect is that gov `property_documents.extracted_dat
 provenance** (`deed_extraction` + `extracted_at` only — the handler computes `ocr_tier` /
 `ocr_engine` / `ocr_pages` and returns them on the tick, then drops them), so the tier mix cannot be
 audited after the fact — which is precisely how an unverifiable claim got written into three
-documents. **OCR2 is re-scoped to that** (backlog row).
+documents. **OCR2 is re-scoped to that** (backlog row). ✅ **SHIPPED 2026-09-02** — the four fields now persist into `extracted_data.document_text` on both domains through `<dom>_merge_document_extracted_data`, the single owner of writes to that column, and the tier mix is readable on `v_gov_deed_ocr_provenance` / `v_dia_deed_ocr_provenance`.
+
+- ⚠️ **The build found a second writer the re-scope had not named: `deed-parser.js` REPLACED the whole `extracted_data` column**, so a provenance key written beside `deed_extraction` was destroyed on every deed, and on every re-parse. Evidence it was real: gov's 185 rows carry **exactly** the two keys that write puts there, while dia carries 10 with a third (`r59_backfilled_at`) from the one call site that already merged. **Before adding a key to a shared jsonb column, enumerate its writers and check whether any of them REPLACES rather than merges.**
+- ⚠️ **The gpt-4o-direct branch is GONE, and the hazard was the DEFAULT, not any live caller.** `extractDocumentText`'s signature read `ocrTiered = false`; both production callers passed `true`, so nothing reached gpt-4o directly — the risk was that a NEW caller inherits the 6–14× tier by writing nothing at all. The default is `true`, an explicit `false` is refused by name, and `ocrPdfToText` now has **exactly one call site**: tier 3 inside `ocrPdfToTextTiered`.
+- ⚠️ **NOTHING WAS BACKFILLED, and that is the verification.** 507 rows' tier is unknowable (the 154 pre-DocAI extractions plus 140 gov rows carrying no date at all). They read `unrecorded`; **`unrecorded` FALLING would mean somebody guessed a tier.**
+- **Read `provenance_written` on the tick, never the `ocr_tier`/`ocr_engine` beside it** — those report what was COMPUTED, and the gap between computed and persisted was the entire defect.
+  Writeup: `docs/audits/OCR2_DEED_OCR_PROVENANCE_2026-09-02.md`.
 
 ## 1. Microsoft is not the answer, and the repo already established why
 

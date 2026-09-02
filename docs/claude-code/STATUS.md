@@ -390,6 +390,34 @@ caught it; the silence was the only signal, and it is the `| tee`-without-`pipef
 now prints its 15 assertions. Footgun recorded in `CLAUDE.md`. **Scott re-runs from step 3 after
 merging.**
 
+## 2026-09-02 — OCR2 SHIPPED: deed OCR provenance persisted; the column had a second writer that REPLACED it
+
+**Built:** `<dom>_merge_document_extracted_data` on gov + dia (applied live) = the **single owner** of
+writes to `property_documents.extracted_data`; `api/_shared/document-text-provenance.js` (shape +
+merge, one owner for both); `processOneDoc` writes provenance on both exits **after** the deed parse;
+`deed-parser.js` routes its own write through the merge RPC with a legacy-replace fallback; the
+`ocrTiered:false` opt-out is closed. Surfaces `v_gov_deed_ocr_provenance` /
+`v_dia_deed_ocr_provenance`. Suite **5,074 / 5,068 pass / 0 fail**.
+
+- ⚠️ **The prompt's premise was incomplete in a way that would have shipped a silent no-op.** It
+  anticipated my write clobbering the deed parser's; the reverse was the live hazard —
+  `deed-parser.js` PATCHed `extracted_data: {...}`, a **wholesale replace**, so provenance written
+  beside `deed_extraction` was destroyed on every deed and on every re-parse. Proven by a key census,
+  not a code read: gov's 185 rows carry exactly two keys, dia carries 10 with a third.
+- ⚠️ **`revoke ... from public` left `anon`/`authenticated` holding EXPLICIT grants** (Supabase
+  default privileges) — the complementary half of the documented B6d trap, caught only because the
+  check was `has_function_privilege` rather than re-reading the REVOKE. Both roles now false.
+- ⚠️ **Two guards passed their own mutation via the import line** and were replaced with behavioural
+  tests. 16/16 mutations RED.
+- **No backfill**: 507 rows' tier is unknowable (154 gov extractions predate DocAI, 140 undated).
+  `unrecorded` holding at gov 325 / dia 182 IS the verification.
+- ⚠️ **The two halves verify on different clocks.** PROVENANCE is pending a new deed (extraction backlog 0 on both domains, and the re-parse path deliberately writes none). The **MERGE fix runs on the next tick with no new deed** — the re-parse queue holds **gov 166 + dia 119 = 285** rows, each of which was a wholesale replace before. An earlier draft said only "pending a new deed" and that overstated the wait.
+- Filed: **OCR2a** (re-parse writes none, deliberately — no extraction, no tier), **OCR2b** (the
+  `needs_ocr` refusal reason is still discarded, unlike the CRE sidecar).
+- Writeup `docs/audits/OCR2_DEED_OCR_PROVENANCE_2026-09-02.md`; canon
+  `ai-and-ocr-cost-strategy.md` §0, `CLAUDE.md` (new jsonb-merge-owner doctrine + the privilege
+  half), backlog OCR2 → ✅.
+
 ## 2026-09-02 — OCR2's premise REFUTED before drafting; re-scoped to deed OCR provenance; bake-off staging script
 
 - ⚠️ **"The deed lane never tiers — all 325 deeds went to gpt-4o" was in three canonical documents
