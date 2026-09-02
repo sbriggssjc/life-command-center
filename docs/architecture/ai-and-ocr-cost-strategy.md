@@ -29,10 +29,19 @@
 **So every OCR call this system has ever made started at a paid tier.** The $0 tier exists in the
 design, in the comments, and in a script — and has never once run in production.
 
-⚠️ **AND THE DEED LANE NEVER TIERS AT ALL.** `document-text.js:502-505`: when `ocrTiered` is falsy it
-calls `ocrPdfToText` → `invokeVisionExtractionAI` → **gpt-4o directly**, gated only on
-`OPENAI_API_KEY`. **All 325 extracted deeds went to the most expensive tier**, on a path that never
-consults DocAI at all.
+~~⚠️ **AND THE DEED LANE NEVER TIERS AT ALL.** `document-text.js:502-505`: when `ocrTiered` is falsy it
+calls `ocrPdfToText` → `invokeVisionExtractionAI` → gpt-4o directly. All 325 extracted deeds went to
+the most expensive tier.~~ ⚠️ **REFUTED 2026-09-02 — read this instead.** The deed drain
+(`api/_handlers/document-text.js:217`) passes **`ocrTiered: true` by default and no caller in `api/`
+passes `false`**; the gpt-4o-direct branch (`document-text.js` ~`:860`) is reachable only by an
+opt-out nobody uses. **The "325 to gpt-4o" number was a DATE artifact:** 154 of the 185 dated gov
+deed extractions ran **2026-07-15 → 07-25, before DocAI went live on 2026-08-12** — the cheap tier did
+not exist, so gpt-4o was the only OCR there was. The 30 extracted on 08-12/13 went through the
+tiered chain. **The genuine defect is that gov `property_documents.extracted_data` carries NO OCR
+provenance** (`deed_extraction` + `extracted_at` only — the handler computes `ocr_tier` /
+`ocr_engine` / `ocr_pages` and returns them on the tick, then drops them), so the tier mix cannot be
+audited after the fact — which is precisely how an unverifiable claim got written into three
+documents. **OCR2 is re-scoped to that** (backlog row).
 
 ## 1. Microsoft is not the answer, and the repo already established why
 
@@ -143,24 +152,57 @@ OCR on savings is arguing from a number that does not support it.**
 
 1. **DOC18 (staged) — the three-call sync route.** ~$3.30 clears all 42 over-cap documents. **Do not
    hold it for the strategic work**; it is cheap, measured and unblocks the consumer today.
-2. **🟢 THE DURABLE ITEM — `OCR1`, and it is a BAKE-OFF FIRST, not a build.** ⚠️ **Justify it on the PAGE CAP and confidentiality, NOT on cost (§4a).** Stand an OCR endpoint on the GaryBuilt box
+2. **🟢 THE DURABLE ITEM — `OCR1`, and it is a BAKE-OFF FIRST, not a build.** ⚠️ **Justify it on the PAGE CAP and confidentiality, NOT on cost (§4a).**
+   ✅ **THE HARNESS IS BUILT AND SELF-VERIFIED (2026-09-02): `scripts/ocr-bakeoff.mjs`, guards
+   `test/ocr-bakeoff.test.mjs` (9/9 mutations RED). 👤 THE BAKE-OFF ITSELF HAS NOT BEEN RUN and no
+   verdict exists** — the sandbox has no egress to Supabase/Railway (`http=000`, re-measured) and the
+   PDFs come through the Power Automate SharePoint flow, so it runs on the workstation or the
+   GaryBuilt box. Command sequence + how to read the output:
+   [`docs/audits/OCR1_LOCAL_OCR_BAKEOFF_2026-09-02.md`](../audits/OCR1_LOCAL_OCR_BAKEOFF_2026-09-02.md) §6.
+   - ⚠️ **AND ONE SCOPE CORRECTION THAT HOLDS WHICHEVER WAY IT LANDS: removing the OCR page cap does
+     NOT give the consumer the whole lease.** `LEASE_TEXT_SLICE_CHARS = 90,000` still caps what
+     reaches the model — ~52 pages at the corpus MEDIAN density (1,738 chars/page, measured per
+     document over 87 OCR'd docs) and **~33 at p90**. An uncapped local engine removes the
+     ACQUISITION ceiling (we would hold all 141 pages, free and re-readable); the CONSUMPTION ceiling
+     moves to the extractor. **OCR1b must say which ceiling it is moving** — "dissolves the page-cap
+     class of problem" is true of acquisition only. ⚠️ Note DOC18's "~1,800 chars/page ⇒ ~50 pages"
+     **is correct at the median**; a sum-weighted aggregate reads 2,195 and answers a different
+     question.
+   - Arm B's population is **42 documents / 2,200 pages / 31–141pp / 24 of them over 50pp**, not the
+     four the OCR1 prompt names.
+   Stand an OCR endpoint on the GaryBuilt box
    (Surya / PaddleOCR / ocrmypdf-Tesseract, all already named in the design) behind the **existing**
    tunnel + CF Access, and inject `deps.freeOcr` at the two server call sites. **The seam already
    exists and is tested** (`test/document-text.test.mjs` stubs it). This makes routine OCR **$0/page
    permanently** and leaves DocAI as the escalation, which is what the design always said.
-3. **🔴 Fix the deed lane's un-tiered gpt-4o call (`OCR2`).** `document-text.js:502-505` bypasses
-   DocAI entirely. **That is the 6–14× tier as the DEFAULT for deeds** — a live, current, fixable
-   waste independent of everything else.
+3. **🟡 `OCR2` — RE-SCOPED 2026-09-02: the deed lane DOES tier; what it lacks is PROVENANCE.**
+   ~~`document-text.js:502-505` bypasses DocAI entirely; the 6–14× tier is the default for deeds~~ —
+   refuted (§0). The build is: persist `method` / `ocr_tier` / `ocr_engine` / `ocr_pages` on the gov
+   and dia deed rows (the handler already computes them and drops them), so the deed tier mix is
+   auditable like the CRE sidecar's; and close the gpt-4o-direct opt-out so no future caller can
+   reach it by omission. Prompt: `OCR2-deed-lane-ocr-provenance.md`.
 4. **🔵 Verify the edge→Claude path (`OCR3`).** If it is 400ing, ~10 un-flagged call sites are on an
    unchosen fallback. **Measure before assuming either way.**
 5. **🔵 Collapse the four Ollama clients into one (`OCR4`).**
 
 ### ⚠️ The honest risk in the local route — name it, do not assume past it
 
-**Local OCR quality on executed leases is UNMEASURED.** The only tier comparison we have is
-**DocAI 14,687 avg chars vs gpt-4o 1,579** — that says gpt-4o is bad, **not** that Surya matches
-DocAI. **A bake-off on real leases is part of OCR1, not an afterthought**: run both engines over the
-same 10 documents and compare `char_len` and readability at the midpoint. **If local loses badly,
+**Local OCR quality on executed leases is STILL UNMEASURED — the harness exists, the measurement
+does not.** The only tier comparison we have is **DocAI 14,687 avg chars vs gpt-4o 1,579** — that
+says gpt-4o is bad, **not** that Surya matches DocAI.
+
+⚠️ **AND `char_len` IS THE WRONG YARDSTICK — this line used to propose it and that was wrong.**
+Demonstrated on the harness's own fixture: a deliberately degraded scan produced **575 characters
+against the clean read's 518 — MORE text, and 4-of-6 field agreement against 6-of-6.** A garbled OCR
+is not short. **Grade on whether `extractTenantFromLease` gets the same ANSWER** (tenant, dates,
+rent, SF, lease type); `ocr_confidence` and a wordlike-token ratio track quality, `char_len` did not.
+
+⚠️ **The metric's own trap: a document that defeats BOTH engines returns null on every field, and
+naive equality then reports 100% agreement over a total failure.** The harness excludes both-null
+from the denominator by construction — and that rule immediately caught a real defect in the harness
+itself (two graded fields were being read under the model's JSON key rather than the consumer's, so
+they scored `both_null` forever; counting both-null as agreement would have rendered it as a perfect
+6/6). Read `both_null` on every row before believing any rate. **If local loses badly,
 Tier 1 becomes a pre-filter for born-digital PDFs only and DocAI stays the workhorse** — still a
 large saving, and an honest one.
 

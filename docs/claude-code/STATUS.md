@@ -174,6 +174,55 @@ gate has only been proven green, never proven to fail); the checkout log free of
 `B6e-ci-required-check` flipped. Prompt + response filed to `done/`
 (`B6e-ci-last5-decisions-resolved.response.md` is a transcription of the mid-flight `.docx`; the
 outcome above is from the run itself).
+## 2026-09-02 — OCR2's premise REFUTED before drafting; re-scoped to deed OCR provenance; bake-off staging script
+
+- ⚠️ **"The deed lane never tiers — all 325 deeds went to gpt-4o" was in three canonical documents
+  and is false on both halves.** `document-text.js:217` passes `ocrTiered: true` by default and no
+  caller passes `false`. The 325 was a **date artifact**: 154 of 185 dated gov deed extractions ran
+  2026-07-15→07-25, before DocAI went live on 08-12. **Corrected in place** (strike-through) in
+  `ai-and-ocr-cost-strategy.md` §0 + §5, `CURRENT-STATE.md`, backlog OCR2, and the handoff.
+- **The real defect:** the handler computes `ocr_tier`/`ocr_engine`/`ocr_pages` and the PATCH at
+  `:233` persists only `raw_text` — gov 325/0 and dia 182/0 deeds with text/with provenance. That is
+  how an unverifiable claim reached three docs. **OCR2 re-scoped** to persist provenance (additive
+  jsonb, RPC merge, fill-blanks, NO backfill onto pre-08-12 rows) and close the gpt-4o opt-out.
+  Prompt: `prompts/OCR2-deed-lane-ocr-provenance.md`.
+- **OCR1 run made mechanical:** `scripts/ocr-bakeoff-stage.ps1` copies the 15 sample PDFs from the
+  synced OneDrive `PROPERTIES` folder into `bakeoff/<id>/source.pdf` (paths verified against the
+  mount; 407 is a title/docs bundle, noted). `--model real` needs `OLLAMA_URL` (+ `OLLAMA_EXTRACTION`,
+  CF Access pair) in `.env.local`, alongside `OPS_SUPABASE_URL` / `OPS_SUPABASE_SERVICE_KEY` for the
+  baselines.
+
+## 2026-09-02 — OCR1 reconciled (harness built, bake-off NOT run); DOC18's first tick failed on a THIRD deploy surface, fixed, verified on a real lease
+
+**OCR1 (PR #2038) delivered the instrument, not the measurement.** `scripts/ocr-bakeoff.mjs` +
+11 guards (9/9 mutations RED); sample size **3 synthetic fixtures, 0 real documents**; no §5 row
+selected. The run is Scott's (workstation/GaryBuilt) — now on `OPERATOR-ACTIONS.md`. CC's canonical
+edits to `ai-and-ocr-cost-strategy.md` were checked and stand. Two findings worth carrying: (1) the
+harness caught its own C10-class defect — graded fields read under the model's JSON key scored
+`both_null` forever, and counting both-null as agreement would have rendered 6/6 for fields never
+read; (2) **removing the OCR cap does not give the consumer the whole lease** —
+`LEASE_TEXT_SLICE_CHARS` (90k) caps consumption at ~52pp median / ~33pp p90, so OCR1b must say which
+ceiling it moves. Arm B is 42 docs / 2,200 pages, not the four names my prompt listed.
+
+**DOC18's first live tick (15:07) FAILED — `window_failed / cloud_ocr_non_ok`, `window_calls: 0`.**
+Cause: the `docai-ocr` edge function was still **v24 (2026-09-01)**. DOC18 changed three surfaces —
+`api/` (Railway), a migration, and `supabase/functions/docai-ocr` — and its deploy note named only
+the first two. With the old function the `page_range` selector was ignored silently, the whole
+39-page PDF went to DocAI, and it was refused over the cap; the route reported it honestly. Deployed
+**v25** from the repo at 15:29 (health probe `page_range_supported: true`), re-fired one tick:
+**doc 80 (31pp) → 2 calls, 31 pages, `[[1,31]]`, 0 gaps, 0 duplicates, 76,346 chars, full
+coverage.** Backlog 42 → 41 + 1 attempted (doc 61 retries when its marker rotates to the head).
+⚠️ **Rule added to `CLAUDE.md`: a change touching `api/`, `supabase/migrations/` and
+`supabase/functions/` has THREE deploys; check `list_edge_functions` `updated_at` against the merge
+time the way `/version` is checked for Railway.** ✅ Positive control on the diagnosis: the DOC17
+probe function (`docai-page-probe`) had been deployed the same day by CC, which is why DOC17's
+measurements were real while DOC18's route was not.
+
+**Consolidation:** OCR1 prompt + response → `done/`; eight already-reconciled responses (C13, DOC1,
+DOC8, DOC14, DOC16, DOC17) → `responses/done/`; ten already-shipped prompts (C6, C8, C10, C11, C13,
+DOC1, DOC14, DOC16, DOC17, B6e-ci-required-check-prep) → `done/`. **`prompts/` now holds only the
+open PR8 and the handoff.** Dedupe grep clean.
+
 ## 2026-09-02 — DOC18 LIVE (migration applied, deploy confirmed, dry run correct); OCR1 prompt corrected before send
 
 - **Deploy confirmed** by `/version` = `f8d42593` (the `main` tip after #2034), not by a handler

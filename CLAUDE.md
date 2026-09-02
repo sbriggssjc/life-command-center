@@ -1043,9 +1043,18 @@ Registry: `feature_flags_registry.OCR_CLOUD_DOCAI`. Crons 160/167/169 ACTIVE. Fu
   - ✅ **DOC18 BUILT THE ROUTE (2026-09-02) — `?mode=longdoc`, ONE document per tick, no GCS.**
     `planPageWindow` + `ocrCloudCheapWindow` (`api/_shared/document-text.js`) extract the consumer's
     ~50-page window as three cheap sync calls; `docai-ocr` now takes a `page_range` →
-    `ProcessOptions`. **⚠️ MERGED IS NOT RUNNING — the migration `20260902120000` must be applied
-    BEFORE the Railway redeploy, and the 42 markers are unmoved until both land.** Four things worth
-    carrying:
+    `ProcessOptions`. ✅ **LIVE 2026-09-02 — and the first tick FAILED on a THIRD deploy surface the
+    sentence that used to sit here never named.** It said *"the migration must be applied BEFORE the
+    Railway redeploy"* — true, and incomplete: the route also changed the `docai-ocr` **Supabase edge
+    function**, which deploys with neither the migration nor Railway. With v24 still live the window
+    sent the whole 39-page PDF, the `page_range` selector was **ignored silently**, DocAI refused it
+    over the 30-page cap, and the route honestly recorded `window_failed / cloud_ocr_non_ok` with
+    `window_calls: 0`. Deployed v25 from the repo (health probe reads `page_range_supported: true`);
+    the next document (80, 31pp) came back **2 calls, 31 pages, `[[1,31]]`, 0 gaps, 0 duplicates,
+    76,346 chars.** ⚠️ **A change that touches `api/`, `supabase/migrations/` AND `supabase/functions/`
+    has THREE deploys, and "merged is not running" applies to each independently** — check
+    `list_edge_functions` `updated_at` against the merge time, the same way `/version` is checked for
+    Railway. Four things worth carrying:
     - **⚠️ THE SEAM IS ASSEMBLED BY PAGE NUMBER, NOT BY BLOB** — DocAI returns the document's REAL
       page numbers for a selected range, so a map keyed on page number makes duplication
       structurally impossible and DETECTS a gap. **A plausible total length is not evidence of a
