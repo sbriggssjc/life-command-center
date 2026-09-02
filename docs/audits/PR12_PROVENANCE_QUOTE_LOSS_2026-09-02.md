@@ -151,6 +151,25 @@ the six have a live `lcc_merge_field` call site inside `catch (_e) {}` — so th
 relationship **types**, not columns. **If a dropped stamp were the cause, the rate would have to be
 ~100%. It is ~0.** The zero is real: those lanes do not write provenance. **PR5c is gradeable now.**
 
+> 🚨 **CORRECTED 2026-09-02 by PR5c — the verdict holds and the reasoning above measured the wrong
+> population.** The rate IS ~100%, because **the payload is not the column**. Three of the five
+> zero-row call sites wrap `p_value` in `JSON.stringify()`, and `p_value` is a **jsonb parameter**:
+> PostgREST hands it the parsed JSON value, so `JSON.stringify('Boyd Watterson')` arrives as jsonb
+> `"\"Boyd Watterson\""`, whose `::text` carries a backslash at position 2. Verified against the
+> pre-fix expression:
+> `encode(sha224(coalesce(to_jsonb('"Boyd Watterson"'::text)::text,'')::bytea),'hex')` → **22P02**.
+> Every string those sites sent was break-class, unconditionally.
+>
+> **This is this audit's own rule, missed one section later** (§"a census scoped to ladder-governed
+> columns misses most of it"): *the predicate has to match what the caller actually hands the
+> function, not what the column happens to hold.* The census asked what the column holds.
+>
+> PR12 is still not the binding cause — **23514 on an out-of-vocabulary `target_database` fires
+> anyway**, on all five sites — so "PR5c is gradeable now" was right for the wrong reason. The
+> double-encoding is removed in the same change, because shipping the `target_database` fix alone
+> would have armed a malformed payload no other source could compare equal to.
+> See `docs/audits/PR5c_INTERNAL_RUNG_VERDICTS_2026-09-02.md`.
+
 ---
 
 ## 5. The async path is the same defect, with one difference that matters

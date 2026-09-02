@@ -1161,6 +1161,74 @@ Full measurement: `docs/audits/PR12_PROVENANCE_QUOTE_LOSS_2026-09-02.md`.
   is exempted **by path**, with a companion test asserting the exemption still matches something so
   the allowlist cannot rot into a lie.
 
+### ⚠️ `target_database` IS A CLOSED VOCABULARY, AND FIVE CALLERS DID NOT KNOW (PR5c, 2026-09-02)
+
+```
+field_provenance_target_database_check
+  CHECK (target_database = ANY (ARRAY['lcc_opps','dia_db','gov_db']))
+```
+
+**`lcc_merge_field()` ALWAYS inserts a `field_provenance` row — `write`, `skip` AND `conflict` all
+land, there is no early return. So a (table, field, source) at zero rows means the RPC never
+COMPLETED, never that it decided against writing.** That one observation turns "did the lane run?"
+into "does the call succeed at all?", and it is answerable in one rolled-back transaction. Five call
+sites passed a value outside the vocabulary — `'lcc'` (`api/admin.js` w8_u3), `'lcc_db'`
+(`cre-registry.js`), `'dia'`/`'gov'` (`admin.js` reachability harvest ×2, and the
+`availability-checker` edge function) — and therefore raised **23514 on 100% of calls** into a bare
+`catch (_e) { /* best-effort */ }`. Replayed live: **6 of 6 PR5 §2 `writer_live_zero_rows` sources
+fail, 5 with 23514**; the sixth (`lcc_generated`) succeeds and its lane has simply not run.
+Single owner now: **`provenanceTargetDatabase()`** in `api/_shared/field-priority-guard.js`. Guard
+`test/pr5c-provenance-target-database.test.mjs` (12/12 mutations RED). Writeup:
+`docs/audits/PR5c_INTERNAL_RUNG_VERDICTS_2026-09-02.md`.
+
+- **⚠️ THE RUNG LOOKUP KEYS ON `(target_table, field_name, source)` ONLY — `target_database` is not
+  part of it.** So a wrong value here is structurally invisible to every detector that reasons about
+  ladders (PR5's triage, `v_field_provenance_unranked`, the effective-source census). It fails at
+  the INSERT, *after* every ladder question has been answered correctly. **Before concluding that a
+  registered source has no producer, check whether its producer's call can physically land a row.**
+- **⚠️ THE FIX WAS ALREADY WRITTEN DOWN — BESIDE ONE CALL SITE — AND THE CLASS WAS NEVER SWEPT.**
+  `api/admin.js`'s `comms_owner_bridge` stamp carries a comment stating BOTH halves correctly
+  (*"do NOT JSON.stringify it, which would double-encode"* and *"`p_target_database='lcc_opps'`
+  matches the ops-local convention"*), and that lane is **the only LCC-internal lane that has ever
+  written provenance** (22 rows). It even cites `availability-checker` as a precedent — and
+  `availability-checker` sends the bare `"dia"`. **A comment naming a sibling as correct is not
+  evidence that it is.** Same shape as the FRED `| tee` lesson: grep for the SHAPE over the whole
+  population, never one spelling, and put the rule in a function rather than a comment.
+- **🚨 PR12 §4 MEASURED THE RIGHT THING ABOUT THE WRONG POPULATION, AND SAID SO ITSELF ONE SECTION
+  LATER.** It sized the quote-loss mechanism over the **stored curated column values**
+  (`entities.name` 23 of 69,462 = 0.03%, zero elsewhere) and concluded a dropped stamp could not be
+  the cause because the rate would need to be ~100%. **It is ~100%**: `p_value` is a **jsonb
+  parameter** — PostgREST hands it the parsed JSON value — so the three sites that wrapped it in
+  `JSON.stringify()` sent jsonb `"\"x\""`, whose `::text` carries a backslash at position 2 and
+  22P02'd the pre-fix hash on **every string**. PR12's own rule: *the predicate has to match what the
+  caller actually hands the function, not what the column happens to hold.* **The verdict survived
+  (23514 fires anyway) and the reasoning did not — which would have stopped the next reader one
+  layer early.**
+- **⚠️ A `status` COLUMN ON A TABLE SERVING TWO SUB-LANES IS NOT A READING OF EITHER.**
+  `w8_u3_link_review` reads **26 `applied`** — and every one is `proposal_type='person_email_merge'`,
+  a sub-lane that creates no edge (`applied_log_id` NULL on all 26; **zero** `entity_relationships`
+  rows carry a `review_id`). Split by `proposal_type`, `prior_owner_link` — the arm that reaches the
+  provenance stamp — has **2 rows ever, both terminal non-applies.** Same family as B6d-pri's
+  *"split by `source` before quoting a failure count"*.
+- **⚠️ `entity_relationships.developed`/`.owns` ARE NOT PR7 ORPHAN COLUMNS** — they are relationship
+  **TYPES**, and the caller passes `relType` as `p_field_name` deliberately; the rungs were
+  registered to that convention. Retiring them would have been wrong. **Read the caller before
+  reading a rung as an orphan.**
+- **⚠️ PR12's FAILURE SIGNAL CANNOT SEE ANY OF THESE FIVE.** `provenance_failed` and the
+  `provenance_write_failed` alert live in `shouldWriteField`/`recordFieldWrites`; all five broken
+  sites call the RPC directly. Measured: **0 open alerts over a population failing 100% of the
+  time.** *An instrument's population is part of the instrument* (B6a). Backlog **PR5c-signal**.
+- **The 33 rungs are verdicted on `v_field_source_priority_triage.pr5c_verdict`, none deleted**:
+  `reached_and_broken` 10 (folder-feed CRE — the lane IS live, 13 docs in 30 days, a real
+  recoverable loss) · `unreached_and_broken` 2 · `no_merge_path_caller` **13** (`entities`: no
+  `lcc_merge_field` site anywhere passes that table, while a dozen paths PATCH it) ·
+  `ledger_is_elsewhere` 6 · `producer_never_wired` 2. **Nothing is retired** — PR5 measured that
+  "unregistered" is a different BRANCH of `lcc_merge_field`, so a registry edit moves outcomes both
+  ways. Zero-delta proven structurally *and* by an unchanged rung fingerprint.
+- **⚠️ Verify on the PRODUCER (Class 8), and mind the THIRD deploy surface.** The live count stays 0
+  until the Railway redeploy; the edge function ships with neither the migration nor Railway
+  (DOC18) and is **fixed in source but NOT deployed**.
+
 - **`v_field_provenance_actionable`** / `v_field_provenance_current` / `v_field_provenance_conflicts` — drive
   the Decision Center provenance lanes.
 
