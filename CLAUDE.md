@@ -4410,6 +4410,94 @@ Overview on-market **461 → 207**, Metrics roster **42 → 4**, building SF **2
   the surface states how many rows it is not showing. The producer that mints those memberships
   from correspondence is **UX48a, not fixed**.
 
+## OWN-T0 — the panel showed four ownership stores and reconciled none of them (2026-09-02)
+
+> 📍 **The property panel's ownership read is now ONE view:
+> `v_lcc_property_ownership_reconciled`.** Canonical page:
+> [`docs/architecture/ownership-history-lane.md`](docs/architecture/ownership-history-lane.md)
+> § OWN-T0. Audit: `docs/audits/OWN_T0_PROPERTY_OWNERSHIP_RECONCILED_2026-09-02.md`.
+
+Scott, UX23: *"almost every property I open seems to have similar errors … even conflicting on the
+property's own ownership history tab, like no reconciliation is occurring."* He is right at
+population scale and **the standing detector read zero**. `_udTabOwnership` assembled its answer
+from four stores nothing reconciled — `lcc_property_owner` (the Current Owner card), the domain
+`v_ownership_current` (the ladder), `lcc_entity_portfolio_facts` (the portfolio line) and the domain
+`v_ownership_chain` (the timeline) — and printed one name in the headline with a different one two
+lines below, with no relationship stated between them. Measured: **1,260 of 7,678 (16.4%)** resolved
+owner vs domain true_owner · **667 of 5,964 (11.2%)** resolved owner absent from the current facts ·
+**756 of 8,068 (9.4%)** properties with more than one CURRENT owner · and, inside gov itself,
+**1,509 of 3,474 (43.4%)** latest-transition grantee vs `properties.true_owner_id`.
+
+- **⚠️ FILL-BLANKS ON A PROPERTY FACT IS A QUESTION ABOUT THE PROPERTY, NOT ABOUT ONE OWNER.**
+  Every writer of `lcc_entity_portfolio_facts` keys "already recorded?" on
+  `(entity_id, source_domain, source_property_id)` — the OWNER-property pair — so none of them asks
+  whether the PROPERTY already has a current owner. P117's candidate CTE is the clearest instance
+  (`where pf.entity_id is null`, under a comment reading *"FILL-BLANKS: never touch an existing
+  row"*) and it accounts for **632 of the 756 (83.6%)**; p117-beside-p117 is 0, so it is a
+  CROSS-writer defect, not a within-writer one. The function has **no cron**, and its own drift view
+  invites re-running it: a re-run under the old predicate inserts 2,595 rows of which **480 would
+  mint a NEW second current owner ($400.3M)**. Fixed at the property grain; the skip is named
+  `skip_property_has_current_owner`. Same family as C1's *lane-predicate column vs writer column*,
+  one grain up.
+- **⚠️ A MULTI-CURRENT PROPERTY IS USUALLY NOT A DATA ERROR — IT IS ONE ASSET HELD AT TWO LEVELS,
+  AND THE PRESCRIBED REPAIR WOULD HAVE DESTROYED A TRUE FACT.** The brief said end-date the earlier
+  owner, date-ordered. Read on the **top 60 by rent** rather than counted, the class is dominated by
+  **sponsor ↔ SPE**: `USAA Real Estate || Usgbf Tsa LLC` ($26.7M), `Trammell Crow Co || USBGF
+  SENTINEL SQUARE III` ($24.1M), `Boyd Watterson || Boyd Ashburn LLC`, `NGP Capital || NGP VI FALLS
+  CHURCH VA LLC`, `Easterly || EGP 2300 Des Plaines LLC` — Boyd/FGF ×8, NGP ×5, EGP/USGP ×9. The
+  sponsor is who we prospect; the SPE is on the deed and the GSA lease; **both rows are true.** It
+  was also unexecutable as written: **523 of 756 are only partly dated, 121 not at all** (P117 writes
+  a NULL start by design), and `is_current` is `GENERATED ALWAYS AS (ownership_end_date IS NULL)`, so
+  un-currenting a row means **writing a date we do not have.** So OWN-T0 end-dates, deletes and
+  repoints **nothing**; it fixes the producer, states the conflict in the view, and makes it
+  countable. **A ten-row read is what turned a plausible remedy into a refuted one.**
+- **⚠️ THE SAME READ FOUND THREE MORE SHAPES INSIDE THE ONE BUCKET, EACH NEEDING A DIFFERENT
+  ANSWER** — `George Washington University` vs `George Washington University (The)` is ONE party in
+  two entities (a merge, P195/A2a); `Easterly Gov Properties (REIT)` vs `EastGroup Properties, Inc.`
+  is **two different REITs** sharing the `egp` token, the exact collision A3 measured and refused to
+  key on; `Cira Square Master Tenant LLC` is a master TENANT in the owner slot. **One blanket rule
+  could not have been right for any two of them.**
+- **⚠️ A P113 OPERATOR IN THE OWNER SLOT IS NOT A CONFLICT.** The view's first cut counted every
+  current claim and **884 properties read `conflict`** purely because a known non-owner sits beside
+  the real owner — the badge-that-is-noise failure. `property_state` counts OWNER CANDIDATES;
+  operator / brokerage / placeholder links stay on the row FLAGGED. That is what surfaces
+  `only_non_owner_claims` = **7,678 properties with no owner on file at all**, which the old count
+  hid inside "single owner".
+- **⚠️ NO LEXICAL SPONSOR GUESS MAY DECIDE AN OWNERSHIP FACT.** A3 measured
+  `lcc_tier0_sponsor_brand_token` at **3 of 74** on GSA SPEs (a government SPE is named for its city
+  and agency, not "Propco") and ~25% precision generally; P198 measured co-proposal at 7%. Only the
+  human-confirmed `lcc_ownership_sponsor_family` clears a pair — **64 properties today against
+  ~1,550 unconfirmed**. An unconfirmed sponsor/SPE pair stays `unclassified_rival`, an honest
+  non-answer, and **one confirm clears a whole family** (A3 measured `boyd` at 20 of 24) — that lane
+  is the highest-leverage follow-up (**OWN-T0e**).
+- **⚠️ `not materialized` IS LOAD-BEARING ON A VIEW A PANEL POINT-QUERIES.** Without it the 3-row
+  query is **1,013.9 ms / 216,947 buffers**; with it **20.1 ms / 674** — a multiply-referenced CTE is
+  ALWAYS materialized so the predicate cannot push down (C13b §7.7), and `fact` was aggregating all
+  14,119 portfolio rows on every panel open. **The detector hit the sibling footgun and TIMED OUT at
+  60 s** on correlated scalar subqueries before being hoisted to one join. Aggregates byte-identical
+  before and after.
+- **⚠️ READ THE LABEL DISTRIBUTION, NOT THE CODE.** `evidence_level='other'` held **3,364** links and
+  every one was something the map should have named: 1,965 whose source is the STRING
+  `'unattributed'` (so the `is null` arm never saw them) and 1,399 A2 rows sourced
+  `gov_ownership_chain:<uuid>`. Corrected, `other` reads 0. A label that says "Other" for *we do not
+  know where this came from* is P180 one layer up.
+- **The detector that read 0 was CORRECT and NARROW, and is left alone.**
+  `v_lcc_portfolio_ownership_conflict` requires a tombstone that is CURRENT beside a survivor that has
+  **ENDED** (the P175a shape) — structurally unable to see two LIVE entities both current, which is
+  745 of the 756. `v_lcc_property_multi_current` is the complement and carries both defect classes
+  separately. Positive control: **756 / $903,291,687**, reproducing the independent baseline exactly.
+- **⚠️ VERIFY ON `skip_property_has_current_owner` AND THE DETECTOR'S SPLIT — NEVER ON 756 GOING
+  DOWN.** Nothing here end-dates a fact, so 756 is expected to HOLD; the number that moves is the
+  growth that does not happen. Guard: `test/own-t0-ownership-reconciled.test.mjs` (20 tests,
+  **25/25 mutations RED**; comment-stripping is load-bearing, and a literal-blanker on top of it,
+  because the function's own `comment on function … 'Reverse: delete from
+  lcc_entity_portfolio_facts …'` puts a banned shape inside a string literal — comments first, THEN
+  literals, per OCR1c).
+- ⚠️ **One guard survived its own mutation and the mutation pass found it, not reading it**: a bare
+  search for `is_owner_candidate` stayed green when the alias was renamed, because the token
+  legitimately appears in three other places. It asserts the SUBSTANCE now — that `n_current_owners`
+  counts candidates and that candidacy excludes operator/brokerage/placeholder.
+
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
 Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration
@@ -4901,6 +4989,7 @@ Related invariants from the same round:
   are active; *check what a population IS before routing work to it*. The concrete residue is
   narrow and named: **82 properties with a sale price and no building size cannot produce a $/SF
   comp.**
+- **What the PROPERTY PANEL reads for ownership (ONE view):** `docs/architecture/ownership-history-lane.md` § OWN-T0 + `docs/audits/OWN_T0_PROPERTY_OWNERSHIP_RECONCILED_2026-09-02.md`.
 - **Ownership Resolution Engine:** government-lease `docs/OWNERSHIP_RESOLUTION_ENGINE.md`.
 - **Property-owner subsystem + SF-as-a-source doctrine:** `docs/architecture/property-owner-subsystem.md`
   + `docs/architecture/property-owner-source-authority-and-doctrine.md`. **Point person ≠ property owner:**

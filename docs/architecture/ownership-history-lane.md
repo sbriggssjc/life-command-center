@@ -5,7 +5,11 @@
 > The dated audits under `docs/audits/` are the **evidence trail** — go there for *why*, come here
 > for *what is true now*.
 >
-> **Last measured: 2026-08-28 (post-B1a).** Re-measure before quoting any number.
+> **Last measured: 2026-09-02 (post-OWN-T0).** Re-measure before quoting any number.
+>
+> 🧭 **What the PROPERTY PANEL reads is § OWN-T0 at the foot of this page** — the reconciled view
+> `v_lcc_property_ownership_reconciled` is the single ownership read for the panel, and the
+> 756-property multi-current defect it made countable.
 >
 > 📇 **Topic index for the whole ownership→contact chain (~20 files, and two that are named
 > misleadingly): [`connectivity-and-open-threads.md`](connectivity-and-open-threads.md) §0.**
@@ -345,3 +349,84 @@ variant A4b now catches). **There is no further recoverable population here.**
 | `docs/audits/V8_SPONSOR_FAMILY_REVIEW_2026-08-27.md` | Scott's 12 answers + the evidence check that changed 4 |
 | `docs/audits/B1_CHAIN_VALUE_FLOOR_SPLIT_2026-08-28.md` | the value floor split by CONSUMER: the measured cost of the automated path, why dia and `trace_` are held, and the two gates that treat unknown value in opposite directions |
 | `docs/audits/B1a_AMBIGUOUS_ENTITY_MERGE_2026-08-28.md` | the duplicate-entity merge that refuted its own premise: depth is source-limited, the round trip proven on the P196 duplicate-edge shape, and the two corroboration signals a unique key makes unobservable |
+| `docs/audits/OWN_T0_PROPERTY_OWNERSHIP_RECONCILED_2026-09-02.md` | the property panel's single reconciled chain: the disagreement matrix across four stores, the wrong-grain fill-blanks predicate, and why blanket supersession was measured on named rows and refuted |
+
+
+---
+
+## OWN-T0 — one reconciled chain for the property panel (2026-09-02)
+
+**Audit:** [`docs/audits/OWN_T0_PROPERTY_OWNERSHIP_RECONCILED_2026-09-02.md`](../audits/OWN_T0_PROPERTY_OWNERSHIP_RECONCILED_2026-09-02.md)
+**Migration:** `supabase/migrations/20260902160000_lcc_own_t0_property_ownership_reconciled.sql` (applied live)
+**Guard:** `test/own-t0-ownership-reconciled.test.mjs` (20 tests, 25/25 mutations RED)
+
+Scott, UX23: *"conflicting on the property's own ownership history tab, like no reconciliation is
+occurring."* Measured, he is right at population scale and the standing detector read **zero**.
+
+### What ships
+
+| object | what it is |
+|---|---|
+| `v_lcc_property_ownership_reconciled` | **the ONE view the property panel reads.** One row per (asset, owner link) across every LCC-resident store, survivor-collapsed, carrying `evidence_level`, `is_primary` + `primary_reason`, `property_state`, `conflict_class`, `gap_before`, `start_date_unknown`. |
+| `v_lcc_property_ownership_current` | its one-row-per-property head (properties with a CURRENT claim only). |
+| `v_lcc_property_multi_current` | the detector that read zero. **756 properties / $903.3M**, split `multi_current_distinct_parties` 745 / `tombstone_duplicate_current` 11. |
+| `lcc_ownership_evidence_level` / `_sponsor_family_token` / `_conflict_class` | the three single-owner helpers behind it. |
+| `GET /api/entities?action=ownership_chain&domain=&property_id=` | the panel's read. |
+| `lcc_sync_property_owner_to_portfolio` | producer fix — fill-blanks moves to the PROPERTY grain. |
+
+### The invariants this adds
+
+* **Fill-blanks on a property fact is a question about the PROPERTY, not about one owner.** Every
+  writer of `lcc_entity_portfolio_facts` keys on `(entity_id, domain, property)`, so "already
+  recorded?" was asked of the owner. That minted a second CURRENT owner on **632 of 756** properties.
+  A re-run of P117 under the old predicate would have added **480 more** ($400.3M); it now names them
+  `skip_property_has_current_owner`.
+* **⚠️ A multi-current property is USUALLY NOT A DATA ERROR — it is one asset held at two levels.**
+  Read on the top 60 by rent, the class is dominated by **sponsor ↔ SPE** (Boyd/FGF, NGP V–VII,
+  EGP/USGP, USGBF, GI, USBGF, URG, Jemal, SkyTower, KPG). The sponsor is who we prospect; the SPE is
+  who is on the deed and the GSA lease. **End-dating either destroys a true fact**, which is why
+  OWN-T0 writes no `ownership_end_date` at all and the guard goes red if a future cleanup does.
+  It also could not have been executed as prescribed: 523 of 756 are only partly dated, 121 not at
+  all, and `is_current` is `GENERATED ALWAYS`, so un-currenting a row means inventing a date.
+* **The panel's job is to STATE the disagreement, not resolve it.** `is_primary` + `primary_reason`
+  name a headline owner from an authority ladder over recorded facts; every other current claim stays
+  on the row and `property_state='conflict'` says so in words.
+* **A P113 operator is flagged and excluded from the owner COUNT, never dropped.** Counting every
+  claim made **884** properties read `conflict` over a known non-owner. `only_non_owner_claims`
+  (**7,678 properties**) is the honest "no owner on file" state that produces.
+* **No lexical sponsor guess decides an ownership fact.** A3 measured
+  `lcc_tier0_sponsor_brand_token` at 3 of 74 on GSA SPEs; P198 measured co-proposal at 7%. Only the
+  **human-confirmed** `lcc_ownership_sponsor_family` clears a pair (64 properties today). An
+  unconfirmed sponsor/SPE pair stays `unclassified_rival` — and one confirm clears a whole family.
+* **⚠️ `not materialized` on the four base CTEs is load-bearing.** Without it the panel's point query
+  is **1,013.9 ms / 216,947 buffers**; with it **20.1 ms / 674** (C13b §7.7 — a multiply-referenced
+  CTE is always materialized, so the predicate cannot push down). The detector hit the sibling
+  footgun and **timed out at 60 s** on correlated subqueries before being hoisted.
+* **⚠️ Read the LABEL DISTRIBUTION, not just the code.** `evidence_level='other'` held 3,364 links
+  and every one was something the map should have named — 1,965 whose source is the STRING
+  `'unattributed'` (not null, so the `is null` arm never saw them) and 1,399 A2 rows sourced
+  `gov_ownership_chain:<uuid>`. Corrected, `other` reads 0.
+
+### Live state (2026-09-02)
+
+| property_state | conflict_class | properties |
+|---|---|---:|
+| `single_current_owner` | — | 10,084 |
+| `only_non_owner_claims` | — | 7,678 |
+| `conflict` | `unclassified_rival` | 1,614 |
+| `conflict` | `duplicate_entity` | 417 |
+| `conflict` | `sponsor_family_confirmed` | 64 |
+| `no_current_owner` | — | 185 |
+
+**Verify on `skip_property_has_current_owner` and the detector's `defect_class` split — never on 756
+going down.** Nothing here end-dates a fact, so 756 is expected to hold; the number that moves is the
+growth that does not happen.
+
+### Open (OWN-T0a…g) — see the audit §8
+
+`OWN-T0a` gov's own transition-vs-`true_owner` disagreement (**1,509 of 3,474, 43.4%**) ·
+`OWN-T0b` no LCC mirror of `v_ownership_transitions_portfolio` · `OWN-T0c` 417 duplicate-entity
+merges (and `lcc_entity_canonical_key` keeps a trailing `(The)`) · `OWN-T0d` 11 tombstone duplicates ·
+**`OWN-T0e` ~1,550 unconfirmed sponsor/SPE pairs — one confirm clears a family; the highest-leverage
+follow-up** · `OWN-T0f` per-row UUIDs in `ownership_source` · `OWN-T0g`
+`lcc_finalize_entity_portfolios` supersedes only within its own payload (gov) and not at all (dia).
