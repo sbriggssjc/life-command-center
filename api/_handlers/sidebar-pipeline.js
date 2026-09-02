@@ -924,24 +924,135 @@ export function deriveListingAskHistory(metadata = {}) {
   };
 }
 
-/** Parse acres string: "0.54 AC" → 0.54 */
-function parseAcres(val) {
-  if (val == null) return null;
-  if (typeof val === 'number') return val;
-  const cleaned = String(val).replace(/,/g, '').replace(/\s*AC\s*/gi, '').trim();
-  const num = parseFloat(cleaned);
-  return isNaN(num) ? null : num;
+/**
+ * Parse a captured lot size into SQUARE FEET, reporting the unit it was
+ * expressed in.
+ *
+ * ⚠️ I12 (docs/architecture/public-records-source-lane.md §4): `lot_sf` is
+ * square feet and `land_area` is acres — 3,702 paired dia rows, 0 equal, ratio
+ * 43,560 on 91.1%. A lot size that is not UNIT-parsed is a unit error waiting
+ * to be stored as a measurement, so this returns the basis alongside the
+ * number and refuses rather than guessing.
+ *
+ * Measured over the 2,477 live CoStar captures carrying a lot_size (LCC Opps
+ * entities.metadata, 2026-09-02) there are exactly three real shapes plus two
+ * ambiguous strays:
+ *
+ *   "1.00 (43,560 sf)"  1,679 (68%)  acres, with the SF already computed
+ *   "0.86 AC"             528 (21%)  acres
+ *   "12,400 SF"           268 (11%)  square feet
+ *   "19,998"                2        bare — refused, see below
+ *
+ * ⚠️ THE DOMINANT SHAPE IS THE ONE THE PREVIOUS PARSER GOT WRONG. The old
+ * body looked for /([\d.]+)\s*AC/i, which "1.00 (43,560 sf)" does not contain,
+ * then fell through to parseSF — which strips the "sf" token and parseFloats
+ * the LEADING number, returning **1** square foot for a one-acre lot. It is
+ * the parenthetical that carries square feet; the leading number is acres.
+ * (Measured 2026-09-02: dia.properties has 0 rows below 100 sq ft, so this had
+ * not contaminated the curated column — it was latent, and it is exactly the
+ * defect that would have shipped into parcel_records.lot_sf.)
+ *
+ * A BARE number is refused for `lot_size` and accepted for a key that names
+ * its own unit (`land_sf` / `lot_sf` → square feet, `acreage` → acres): the
+ * unit rides the key when the value does not carry it, and where neither does,
+ * 19,998 acres and 19,998 sq ft are both sayable. Refusing costs 2 rows;
+ * guessing risks a 43,560× error.
+ *
+ * @param {string|number|null} raw
+ * @param {'unknown'|'sf'|'acres'} keyUnit unit implied by the key it came from
+ * @returns {{ sf: number|null, acres: number|null, basis: string }}
+ */
+export function parseLotSize(raw, keyUnit = 'unknown') {
+  const NONE = { sf: null, acres: null, basis: 'absent' };
+  if (raw == null || raw === '') return NONE;
+
+  // ⚠️ CoStar renders "no lot size on file" as **"0.00 (1 sf)"** / "0.00 (2 sf)"
+  // — a zero acreage with a rounding artefact in the parenthetical. Storing
+  // that is the PR1a defect exactly: a no-data sentinel written into a numeric
+  // column reads as a measurement ("this parcel is one square foot"), where a
+  // NULL would have been honest. Measured 2026-09-02: 10 captures fleet-wide
+  // render that shape, and EVERY parenthetical below 100 sq ft is one of them,
+  // so the floor refuses the sentinels and nothing real (the smallest genuine
+  // lot in the population is 3,528 sq ft).
+  const MIN_PLAUSIBLE_LOT_SF = 100;
+  const fromAcres = (ac) => (Number.isFinite(ac) && ac > 0
+    ? { sf: Math.round(ac * 43560), acres: Math.round(ac * 100) / 100, basis: 'acres' }
+    : NONE);
+  const fromSf = (sf, basis) => {
+    if (!Number.isFinite(sf) || sf <= 0) return NONE;
+    if (sf < MIN_PLAUSIBLE_LOT_SF) return { sf: null, acres: null, basis: 'implausible_lot_size' };
+    return { sf: Math.round(sf), acres: Math.round((sf / 43560) * 100) / 100, basis };
+  };
+
+  if (typeof raw === 'number') {
+    if (keyUnit === 'acres') return fromAcres(raw);
+    if (keyUnit === 'sf') return fromSf(raw, 'sf_from_key');
+    return { sf: null, acres: null, basis: 'ambiguous_bare_number' };
+  }
+  if (typeof raw !== 'string') return NONE;
+  const s = raw.trim();
+  if (!s) return NONE;
+
+  // A) "1.00 (43,560 sf)" — the parenthetical is the assessor's own square
+  //    footage and needs no conversion of ours.
+  const paren = s.match(/\(\s*([\d,]+(?:\.\d+)?)\s*(?:sf|sq\.?\s*ft)\s*\)/i);
+  if (paren) return fromSf(parseFloat(paren[1].replace(/,/g, '')), 'parenthetical_sf');
+
+  // B) "0.86 AC" / "2.49 Acres"
+  const ac = s.match(/^\s*([\d,]+(?:\.\d+)?)\s*(?:ac\b|acres?\b)/i);
+  if (ac) return fromAcres(parseFloat(ac[1].replace(/,/g, '')));
+
+  // C) "12,400 SF"
+  const sf = s.match(/^\s*([\d,]+(?:\.\d+)?)\s*(?:sf\b|sq\.?\s*ft)/i);
+  if (sf) return fromSf(parseFloat(sf[1].replace(/,/g, '')), 'sf');
+
+  // D) bare — the key decides, or nobody does.
+  const bare = s.match(/^\s*([\d,]+(?:\.\d+)?)\s*$/);
+  if (bare) {
+    const n = parseFloat(bare[1].replace(/,/g, ''));
+    if (keyUnit === 'acres') return fromAcres(n);
+    if (keyUnit === 'sf') return fromSf(n, 'sf_from_key');
+    return { sf: null, acres: null, basis: 'ambiguous_bare_number' };
+  }
+  return { sf: null, acres: null, basis: 'unparseable' };
 }
 
-/** Parse lot SF: handles "2.49 AC" → acres-to-SF conversion, or standard SF parse */
-function parseLotSF(rawLotSize) {
-  if (!rawLotSize) return null;
-  // If value contains AC/Acres, convert to SF
-  const acMatch = String(rawLotSize).match(/([\d.]+)\s*AC/i);
-  if (acMatch) return Math.round(parseFloat(acMatch[1]) * 43560);
-  // Otherwise try standard SF parse
-  return parseSF(rawLotSize);
+/**
+ * Resolve a capture's lot size in square feet from every key that can carry
+ * it, preferring the keys that name their own unit. Single owner — the parcel
+ * writer, the property writer and the PR2 backfill all read this one function
+ * so they cannot drift on units.
+ */
+export function lotSizeFromMetadata(metadata = {}) {
+  // ⚠️ `metadata.lot_sf` IS EXCLUDED, AND THAT IS A MEASUREMENT, NOT AN
+  // OVERSIGHT. The key names square feet and holds BOTH units: live values
+  // include 78300 / 43560 / 100000 / 41817.6 (square feet) alongside 1.71 /
+  // 0.94 / 1.24 / 0.7 (acres). Reading it as its name promises turned a
+  // 1.71-acre lot into "2 square feet" in this backfill's own dry run — caught
+  // by auditing the parsed outliers, not by reading the code. A key whose
+  // contents are mixed does not carry a unit, so it is not a unit source.
+  // 41 rows fleet-wide; `lot_size` covers the same captures with the unit in
+  // the value. (I12, one level up: the KEY can lie about the unit too.)
+  const attempts = [
+    [metadata.land_sf, 'sf'],       // measured: 850 rows, every one "N SF"
+    [metadata.lot_size, 'unknown'], // unit rides the value
+    [metadata.acreage, 'acres'],    // measured: 41 rows, all plain acre decimals
+  ];
+  let refused = null;
+  for (const [raw, unit] of attempts) {
+    const parsed = parseLotSize(raw, unit);
+    if (parsed.sf != null) return parsed;
+    if (parsed.basis !== 'absent' && !refused) refused = parsed;
+  }
+  return refused || { sf: null, acres: null, basis: 'absent' };
 }
+
+// NOTE: `parseAcres` and `parseLotSF` were REMOVED here, not left as thin
+// wrappers. Both encoded the acres/square-feet rule a second time, and this
+// repo has paid repeatedly for two implementations of one normalisation
+// (lcc_normalize_entity_name, ownerCore, strictOwnerCore). `parseLotSize` /
+// `lotSizeFromMetadata` above are the single owner; every lot-size read in
+// this file goes through them.
 
 /** Parse parking ratio: "2.28/1,000 SF" → 2.28, "32 Spaces (5.82 Spaces per 1,000 SF)" → 5.82 */
 function parseParkingRatio(raw) {
@@ -4562,6 +4673,10 @@ export async function upsertDomainProperty(domain, entity, metadata) {
     console.log(`[upsertDomainProperty] historical-sale-comp capture detected (comp_id=${metadata._comp_id}); suppressing tenant/rent/lease writes onto property row`);
   }
 
+  // I12 single owner: square feet and acres both come from one unit-aware
+  // parse of whichever key the capture used (land_sf / lot_sf / acreage /
+  // lot_size). An ambiguous bare lot_size is refused, not guessed.
+  const capturedLot = lotSizeFromMetadata(metadata);
   const propertyData = stripNulls({
     // Store the NORMALIZED address (e.g. "599 ct st") so the address=ilike.<normAddr>
     // lookup at the top of this function can find this row on the next promote.
@@ -4582,7 +4697,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
     zoning: metadata.zoning || null,
     occupancy_percent: parsePercent(metadata.occupancy),
     parking_ratio: parseParkingRatio(metadata.parking),
-    lot_sf: parseLotSF(metadata.land_sf) || parseLotSF(metadata.lot_size),
+    lot_sf: capturedLot.sf,
     assessed_value: parseCurrency(metadata.assessed_value),
     is_single_tenant: metadata.tenancy_type === 'Single' ? true : metadata.tenancy_type === 'Multi' ? false : null,
     property_ownership_type: metadata.ownership_type || null,
@@ -4594,7 +4709,11 @@ export async function upsertDomainProperty(domain, entity, metadata) {
     // when the FK is still null (a not-yet-resolved owner). recorded_owner_id (FK)
     // is the single source of truth; do NOT rely on this column being independent.
     recorded_owner_name: ownerContact?.name || null,
-    land_area: metadata.lot_size && /AC/i.test(metadata.lot_size) ? parseAcres(metadata.lot_size) : null,
+    // I12: ONE parse decides both columns. Previously `lot_sf` ran through a
+    // parser that read CoStar's dominant "1.00 (43,560 sf)" as 1 sq ft while
+    // `land_area` tested for a literal "AC" and so wrote nothing for that same
+    // shape — two writers on one fact, disagreeing about its unit.
+    land_area: capturedLot.acres,
     // Coordinates from CoStar Public Record tab (shared across both domains)
     latitude:  parseCoord(metadata.public_record?.latitude) || parseCoord(metadata.location?.latitude) || parseCoord(metadata.property?.latitude) || parseCoord(metadata.latitude),
     longitude: parseCoord(metadata.public_record?.longitude) || parseCoord(metadata.location?.longitude) || parseCoord(metadata.property?.longitude) || parseCoord(metadata.longitude),
@@ -4610,11 +4729,14 @@ export async function upsertDomainProperty(domain, entity, metadata) {
   });
 
   if (domain === 'government') {
-    // Government properties schema uses different column names
-    const lotSF = parseSF(metadata.land_sf) || parseSF(metadata.lot_size);
-    const lotAcres = lotSF ? Math.round(lotSF / 43560 * 100) / 100 : null;
-    const landAcresRaw = metadata.lot_size && /AC/i.test(metadata.lot_size)
-      ? parseAcres(metadata.lot_size) : null;
+    // Government properties schema uses different column names.
+    // I12: read the SAME unit-aware parse the dia branch uses. The previous
+    // `parseSF(metadata.lot_size)` had the identical acres-as-square-feet
+    // defect — it strips the "sf" token and parseFloats the leading number, so
+    // CoStar's dominant "1.00 (43,560 sf)" returned 1.
+    const lotSF = capturedLot.sf;
+    const lotAcres = capturedLot.acres;
+    const landAcresRaw = capturedLot.basis === 'acres' ? capturedLot.acres : null;
 
     // Mirror most-recent sale fields onto properties so v_sales_comps /
     // portfolio dashboards don't have to JOIN sales_transactions for
@@ -5142,6 +5264,79 @@ async function linkPublicRecord(domain, propertyId, recordType, recordId) {
   }
 }
 
+/**
+ * The `parcel_records` physical stats a capture carries, parsed and bounded.
+ *
+ * SINGLE OWNER. `upsertPublicRecords` (forward captures) and
+ * scripts/pr2-backfill-sidebar-parcel-stats.mjs (the 932 rows written before
+ * the writer carried them) both call this, so the shipped parse and the
+ * backfilled parse cannot disagree — the normaliser-drift hazard this repo has
+ * paid for repeatedly.
+ *
+ * `land_use` is deliberately NOT mapped from `metadata.property_type`. On a
+ * county-assessor capture that key holds a use code, but on a CoStar capture it
+ * holds the CRE property type ("Medical Office"); one key, two meanings, and
+ * writing the wrong one into a land-use column is a fact nobody stated.
+ */
+export function parcelStatsFromMetadata(metadata = {}) {
+  const lot = lotSizeFromMetadata(metadata);
+  const buildingSf = parseSF(metadata.square_footage);
+  return {
+    // A building of 0 sq ft is the no-data sentinel PR1a spent a round
+    // removing, not a measurement — refuse it rather than assert it.
+    building_sf:    Number.isFinite(buildingSf) && buildingSf > 0 ? Math.round(buildingSf) : null,
+    lot_sf:         lot.sf,
+    year_built:     parseYearSafe(metadata.year_built),
+    year_renovated: parseYearSafe(metadata.year_renovated),
+    zoning:         metadata.zoning ? String(metadata.zoning).trim().slice(0, 64) || null : null,
+    land_use:       metadata.land_use ? String(metadata.land_use).trim().slice(0, 128) || null : null,
+    owner_name:     assessorOwnerName(metadata),
+  };
+}
+
+/**
+ * Keep only the offered fields the existing row leaves blank.
+ *
+ * Fill-blanks is the discipline for every sidebar write (CLAUDE.md,
+ * Data-write discipline) and it cannot be delegated to the priority registry
+ * here: these rungs ship `record_only`, under which `lcc_merge_field` records
+ * a `skip` and the writer proceeds anyway. So the blank test is explicit.
+ */
+function blankFieldsOnly(existingRow, offered) {
+  const out = {};
+  if (!offered) return out;
+  for (const [k, v] of Object.entries(offered)) {
+    if (v == null) continue;
+    const current = existingRow ? existingRow[k] : null;
+    if (current == null || current === '') out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * The owner name an ASSESSOR page states for this parcel, or null.
+ *
+ * ⚠️ `parcel_records.owner_name` means "the party the county names on this
+ * parcel". It must NEVER be filled from the CoStar owner panel or from the
+ * ownerContact this pipeline already resolved: that restates a value we hold as
+ * if a county had said it, which is precisely the gov ORE Phase A1 finding —
+ * gov's 9,749 parcel `owner_name` values are the recorded owner we fed the
+ * prompt, echoed back, and they read as independent corroboration ever since.
+ *
+ * The only key that carries a genuine assessor owner is the county-assessor
+ * scanner's own `owner_name` (extension/content/public-records.js
+ * scanAssessor). Measured 2026-09-02: that key has never appeared on any of
+ * 55,901 entity captures, so this returns null today — wired, with a ceiling of
+ * zero stated rather than a gap left silent.
+ */
+function assessorOwnerName(metadata = {}) {
+  const raw = metadata.public_record?.owner_name ?? metadata.owner_name;
+  if (raw == null) return null;
+  const name = String(raw).trim();
+  if (!name) return null;
+  return name.slice(0, 200);
+}
+
 async function upsertPublicRecords(domain, propertyId, entity, metadata, provCollect) {
   // ── Diagnostic: log what the extension actually sent ──────────────────
   const pubRecFields = {
@@ -5156,6 +5351,11 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
     legal_description: metadata.legal_description || null,
     latitude: metadata.latitude || null,
     longitude: metadata.longitude || null,
+    // PR2: these arrive on the capture and were being dropped on the floor.
+    square_footage: metadata.square_footage || null,
+    year_built: metadata.year_built || null,
+    lot_size: metadata.lot_size || metadata.land_sf || null,
+    zoning: metadata.zoning || null,
   };
   console.log(`[PublicRecords] domain=${domain} property=${propertyId} input:`, JSON.stringify(pubRecFields));
 
@@ -5174,11 +5374,37 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
                     || (landVal && impVal ? landVal + impVal : null);
   const taxYear   = new Date().getFullYear();
 
+  // ── PR2: the physical stats the capture has always carried ───────────────
+  // `parcel_records` has held building_sf / lot_sf / year_built / land_use /
+  // zoning / owner_name since it was created, and the CoStar Public Record tab
+  // sends them (extension/content/public-records.js findValue('Building Size'),
+  // 'Year Built', 'Lot Size', 'Zoning'). Nothing wrote them: the INSERT below
+  // carried apn/county/state/assessed_value/raw_payload only, so the ONE
+  // genuine public-record source in dia produced 932 rows with 931 real APNs
+  // and ZERO building stats (measured 2026-09-02), while the gpt-4o leg's
+  // APN-less rows were the only ones carrying any.
+  //
+  // Ceiling, measured on the captures behind those rows (LCC Opps entity
+  // metadata for the 888 dia properties, 815 still resolvable): square_footage
+  // 765 · year_built 712 · lot_size 733 · zoning 228 · land_use 0 ·
+  // owner_name 0 · tax_amount 0. The last three are absent from EVERY capture
+  // — see `capturedTaxAmount` below — so they are wired and will stay empty
+  // until the extension sends them. That is a stated ceiling, not a silent gap.
+  const capturedLot = lotSizeFromMetadata(metadata);
+  const parcelStats = parcelStatsFromMetadata(metadata);
+  const capturedTaxAmount = parseCurrency(metadata.tax_amount);
+  const statsSeen = Object.entries(parcelStats).filter(([, v]) => v != null).map(([k]) => k);
+  console.log(`[PublicRecords] parcel stats parsed: [${statsSeen.join(', ')}]` +
+    ` lot_basis=${capturedLot.basis} tax_amount=${capturedTaxAmount == null ? 'absent' : capturedTaxAmount}`);
+
   // ── parcel_records ──────────────────────────────────────────────────────
   if (domain === 'dialysis') {
     const parcelHash = Buffer.from(`parcel|${apn}|${entity.state || ''}`).toString('base64');
     const parcelLookup = await domainQuery('dialysis', 'GET',
-      `parcel_records?apn=eq.${encodeURIComponent(apn)}&select=id&limit=1`
+      // PR2: select the stat columns too — the PATCH branch below is
+      // fill-blanks and needs to know which of them the row already holds.
+      `parcel_records?apn=eq.${encodeURIComponent(apn)}` +
+      `&select=id,building_sf,lot_sf,year_built,year_renovated,zoning,land_use,owner_name&limit=1`
     );
     if (!parcelLookup.ok || !parcelLookup.data?.length) {
       const parcelData = stripNulls({
@@ -5186,6 +5412,8 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
         county,
         state:          entity.state || null,
         assessed_value: assessed,
+        ...parcelStats,          // PR2 — building_sf / lot_sf / year_built /
+                                 // year_renovated / zoning / land_use / owner_name
         raw_payload:    {
           source: 'costar_sidebar', property_id: propertyId,
           census_tract: metadata.census_tract || null,
@@ -5194,6 +5422,11 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
           far: metadata.far || null,
           assessment_years: metadata.assessment_years || null,
           tax_amount: metadata.tax_amount || null,
+          // I12: say which unit the stored lot_sf was derived FROM, so a future
+          // reader can tell a parenthetical square footage from our own
+          // acres->sf conversion without re-parsing the capture.
+          lot_size_raw: metadata.lot_size || metadata.land_sf || null,
+          lot_size_basis: capturedLot.basis,
         },
         fetched_at:     metadata.extracted_at || new Date().toISOString(),
         data_hash:      parcelHash,
@@ -5219,16 +5452,25 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
       // CoStar's parcel data is aggregator-quality; county-records and OM
       // promoter both outrank it for these fields when they're present.
       const existingParcelId = parcelLookup.data[0]?.id;
+      // FILL-BLANKS: a stat is offered only where the row does not already
+      // hold one. `costar_sidebar` is an aggregator read of the assessor's
+      // page; it must never displace a value a higher-authority source put
+      // there, and the registry's enforce_mode on these rungs is
+      // `record_only`, so the registry alone would not stop it.
+      const blankOnly = blankFieldsOnly(parcelLookup.data[0], parcelStats);
       const filteredParcelPatch = await filterByFieldPriority({
         targetDb:    'dia_db',
         targetTable: 'dia.parcel_records',
         recordPk:    existingParcelId || apn,
         source:      'costar_sidebar',
         confidence:  0.6,
-        fields:      { assessed_value: assessed, county },
+        // stripNulls FIRST: filterByFieldPriority passes a null value straight
+        // through to the PATCH, which would NULL a column the capture simply
+        // did not carry. Fill-blanks means we only ever send what we have.
+        fields:      stripNulls({ assessed_value: assessed, county, ...blankOnly }),
       }).catch(err => {
         console.warn('[upsertPublicRecords:dia:parcel] field-priority filter failed (proceeding with full patch):', err?.message);
-        return { assessed_value: assessed, county };
+        return stripNulls({ assessed_value: assessed, county, ...blankOnly });
       });
       let _parcelPatchRes = { ok: true }; // default: nothing to patch → no failure
       if (filteredParcelPatch && Object.keys(filteredParcelPatch).length > 0) {
@@ -5251,8 +5493,21 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
   }
 
   if (domain === 'government') {
+    // gov.parcel_records names the same facts differently, and it carries BOTH
+    // land_area_sf AND land_area_acres — I12 says derive one from the other
+    // rather than writing whichever unit the source happened to express.
+    const govParcelStats = {
+      building_sf:     parcelStats.building_sf,
+      land_area_sf:    parcelStats.lot_sf,
+      land_area_acres: capturedLot.acres,
+      year_built:      parcelStats.year_built,
+      zoning:          parcelStats.zoning,
+      property_class:  parcelStats.land_use,
+      owner_name:      parcelStats.owner_name,
+    };
     const parcelLookup = await domainQuery('government', 'GET',
-      `parcel_records?apn=eq.${encodeURIComponent(apn)}&select=parcel_id&limit=1`
+      `parcel_records?apn=eq.${encodeURIComponent(apn)}` +
+      `&select=parcel_id,building_sf,land_area_sf,land_area_acres,year_built,zoning,property_class,owner_name&limit=1`
     );
     if (!parcelLookup.ok || !parcelLookup.data?.length) {
       const parcelHash = Buffer.from(`parcel|${apn}|${entity.state || ''}`).toString('base64');
@@ -5265,6 +5520,7 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
         total_assessed_value: assessed,
         assessment_year:      taxYear,
         situs_address:        entity.address || null,
+        ...govParcelStats,    // PR2
         raw_payload:          {
           source: 'costar_sidebar', property_id: propertyId,
           census_tract: metadata.census_tract || null,
@@ -5274,6 +5530,8 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
           far: metadata.far || null,
           assessment_years: metadata.assessment_years || null,
           tax_amount: metadata.tax_amount || null,
+          lot_size_raw: metadata.lot_size || metadata.land_sf || null,
+          lot_size_basis: capturedLot.basis,
         },
         fetched_at:           metadata.extracted_at || new Date().toISOString(),
         data_hash:            parcelHash,
@@ -5302,6 +5560,7 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
         improvement_value:    impVal,
         total_assessed_value: assessed,
         assessment_year:      taxYear,
+        ...blankFieldsOnly(parcelLookup.data[0], govParcelStats),   // PR2, fill-blanks
       });
       const filteredGovParcelPatch = await filterByFieldPriority({
         targetDb:    'gov_db',
@@ -5344,7 +5603,10 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
     }
     console.log(`[PublicRecords] Multi-year assessment data: ${taxYears.length} years from extension`);
   }
-  if (taxYears.length === 0 && assessed) {
+  // PR2: a capture carrying only a tax bill (no assessment) still deserves a
+  // current-year tax row — otherwise the one figure the tax table is named for
+  // has nowhere to land.
+  if (taxYears.length === 0 && (assessed || capturedTaxAmount)) {
     taxYears.push({ year: taxYear, assessed, land: landVal, imp: impVal });
   }
 
@@ -5352,7 +5614,7 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
     for (const ty of taxYears) {
       const taxHash = Buffer.from(`tax|${apn}|${ty.year}`).toString('base64');
       const taxLookup = await domainQuery('dialysis', 'GET',
-        `tax_records?apn=eq.${encodeURIComponent(apn)}&tax_year=eq.${ty.year}&select=id&limit=1`
+        `tax_records?apn=eq.${encodeURIComponent(apn)}&tax_year=eq.${ty.year}&select=id,tax_amount&limit=1`
       );
       if (!taxLookup.ok || !taxLookup.data?.length) {
         const taxData = stripNulls({
@@ -5361,6 +5623,12 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
           state:          entity.state || null,
           tax_year:       ty.year,
           assessed_value: ty.assessed,
+          // PR2: the captured tax figure belongs in the COLUMN, not stashed in
+          // the parcel's raw_payload where nothing reads it. Only ever on the
+          // current year — a multi-year assessment row carries assessed values
+          // per year, never a per-year tax bill, so stamping one figure onto
+          // every year would manufacture history.
+          tax_amount:     ty.year === taxYear ? capturedTaxAmount : null,
           raw_payload:    { source: 'costar_sidebar', land_value: ty.land, improvement_value: ty.imp },
           fetched_at:     metadata.extracted_at || new Date().toISOString(),
           data_hash:      taxHash,
@@ -5388,7 +5656,11 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
           recordPk:    existingTaxId || `${apn}|${ty.year}`,
           source:      'costar_sidebar',
           confidence:  0.6,
-          fields:      { assessed_value: ty.assessed },
+          fields:      stripNulls({
+            assessed_value: ty.assessed,
+            ...blankFieldsOnly(taxLookup.data[0],
+              { tax_amount: ty.year === taxYear ? capturedTaxAmount : null }),
+          }),
         }).catch(err => {
           console.warn('[upsertPublicRecords:dia:tax] field-priority filter failed (proceeding with full patch):', err?.message);
           return { assessed_value: ty.assessed };
@@ -5422,7 +5694,7 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
     for (const ty of taxYears) {
       const taxLookup = parcelId
         ? await domainQuery('government', 'GET',
-            `tax_records?parcel_id=eq.${parcelId}&tax_year=eq.${ty.year}&select=tax_record_id&limit=1`)
+            `tax_records?parcel_id=eq.${parcelId}&tax_year=eq.${ty.year}&select=tax_record_id,tax_amount&limit=1`)
         : { ok: false, data: [] };
 
       if (!taxLookup.ok || !taxLookup.data?.length) {
@@ -5433,6 +5705,7 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
           state_code:     entity.state || 'XX',
           tax_year:       ty.year,
           assessed_value: ty.assessed,
+          tax_amount:     ty.year === taxYear ? capturedTaxAmount : null,   // PR2
           raw_payload:    { source: 'costar_sidebar', land_value: ty.land, improvement_value: ty.imp },
           fetched_at:     metadata.extracted_at || new Date().toISOString(),
           data_hash:      taxHash,
@@ -5458,7 +5731,11 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
           recordPk:    existingTaxRecordId || `${parcelId}|${ty.year}`,
           source:      'costar_sidebar',
           confidence:  0.6,
-          fields:      { assessed_value: ty.assessed },
+          fields:      stripNulls({
+            assessed_value: ty.assessed,
+            ...blankFieldsOnly(taxLookup.data[0],
+              { tax_amount: ty.year === taxYear ? capturedTaxAmount : null }),
+          }),
         }).catch(err => {
           console.warn('[upsertPublicRecords:gov:tax] field-priority filter failed (proceeding with full patch):', err?.message);
           return { assessed_value: ty.assessed };
