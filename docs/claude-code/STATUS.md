@@ -104,6 +104,56 @@ gate has only been proven green, never proven to fail); the checkout log free of
 `B6e-ci-required-check` flipped. Prompt + response filed to `done/`
 (`B6e-ci-last5-decisions-resolved.response.md` is a transcription of the mid-flight `.docx`; the
 outcome above is from the run itself).
+## 2026-09-02 — DOC18 LIVE (migration applied, deploy confirmed, dry run correct); OCR1 prompt corrected before send
+
+- **Deploy confirmed** by `/version` = `f8d42593` (the `main` tip after #2034), not by a handler
+  probe. **Migration `20260902120000` applied from Cowork** and censused: 3 columns, cron
+  `lcc-cre-doc-text-longdoc` active, `v_lcc_cre_longdoc_backlog` = 42 / pages 31–141 / 0 unknown.
+  ⚠️ Order was writer-first (Railway auto-deploys on merge); safe only because the non-windowed
+  payload carries no new keys. **Ungated dry run** (`mode=longdoc&limit=3` via `pg_net` + the vault
+  key): plans correct on docs 61/80/91 — first segment 30, every later segment ≤15.
+- ⚠️ **`'vercel'` is a dead LABEL, not a dead host** — `lcc_cron_post` routes anything not `'edge'`
+  to the Railway URL. The two existing cre-doc-text crons still say `'vercel'` and are fine.
+- **OCR1 prompt corrected in place before sending — three defects:** (1) **the sample it asked
+  for cannot exist** — the longest DocAI baseline is exactly 30 pages *because* of the cap, so
+  "≥3 leases over 30pp with a baseline" is structurally empty; split into arm A (head-to-head,
+  ten named ids) and arm B (over-cap leases 319/320/200/61, graded on consumer-field coherence,
+  no baseline); (2) **the sandbox cannot reach the PDFs or the baselines** (DOC17/18 measured
+  `http=000`), so CC builds the harness and proves it on a synthetic fixture, Scott runs it on
+  the box; (3) `extractTenantFromLease` calls a model — same model both arms, recorded. Two
+  drifted line refs fixed (the `deps.freeOcr` seam is ~:631, not :328; `rawDocument` is in the
+  edge fn, not `document-text.js`).
+- `bakeoff/` added to `.gitignore` (it will hold client lease text). The arm-A baselines are NOT
+  pre-exported — a 538k-char SQL result does not belong in a chat transcript; the harness fetches
+  them itself on the workstation (`--fetch-baselines`, §6b).
+
+## 2026-09-02 — DOC18 reconciled: merged (#2032), NOT running; §7b re-measured; six backlog ID defects fixed
+
+**DOC18 came back and is merged** (`e5c8f34e`, PR #2032). Claude Code had already written the
+canonical DOC18 section; this turn reconciled the rest. Re-measured on LCC Opps at ~16:00 UTC:
+
+- **Migration `20260902120000` is NOT applied** — 0 of the 3 partial-extract columns, no
+  `lcc-cre-doc-text-longdoc` cron, no `v_lcc_cre_longdoc_backlog`. **42 `over_docai_page_cap`
+  markers unmoved.** Redeploy unconfirmed (Railway unreachable from the sandbox). *Merged is not
+  running.* Operator sequence is in backlog **DOC18**: migration → redeploy both services → the
+  ungated `mode=longdoc` dry run → let the cron run one document per tick.
+- **§7b**: undrained **401** (was 426), consumer-visible sidecars **289**, `bov_ready` **43** (was
+  37), `bov_extraction` **25**, gov deeds **325/325**.
+- ⚠️ **Corrected my own claim in place:** "ZERO gpt-4o since redeploy" is false by two rows — both
+  in the first two ticks after the 09-01 15:00 redeploy (15:00 and 16:00), both `thin_ocr_result`
+  fragments (116 / 211 chars), and **zero since 16:01**. 88 DocAI events in the same window. The
+  escalation is closed; the wording was over-stated for the window it was read in.
+- **Consolidation:** the canonical page's CURRENT STATE block carried a merge artifact — two copies
+  of the "live gap" / "retry markers" rows and two "Open" lists (one pre-DOC17, one post). Collapsed
+  to one. **Backlog duplicate grep found six:** `B6d-pri-metrics` and `B6d-sam` were genuine
+  duplicate rows (merged); **`J2`–`J4` and `PR6` were ID COLLISIONS** — two unrelated items sharing
+  an ID (P1c's JV items vs P14d's Power-Automate items; the I12 `land_area` defect vs the
+  `manual_verify` priority question). Renamed P14d `J1–J6 → PA1–PA6` (one cross-ref in
+  `OPERATOR-ACTIONS.md` updated) and the `manual_verify` row → `PR9`. ⚠️ **The dedupe grep reports
+  collisions and duplicates identically — read the rows before merging.**
+- Response + prompt moved to `done/`.
+
+**Next:** run **OCR1** (`docs/claude-code/prompts/OCR1-local-ocr-bakeoff.md`), leading with its §0.
 
 ## 2026-09-02 — Thread wrapped: handoff written, STATUS archived, topic set consolidated
 

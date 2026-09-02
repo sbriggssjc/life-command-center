@@ -28,26 +28,27 @@
 
 ## CURRENT STATE — read these ten lines first, then §0 for how we got here
 
-**Measured live 2026-09-02 11:39 UTC.** ⚠️ §0 below is a dated worklog; **this block is the truth.**
+**Measured live 2026-09-02 ~16:00 UTC** (§7b queries, both projects). ⚠️ §0 below is a dated worklog;
+**this block is the truth.** *(A merge on 2026-09-02 left this block with two copies of the "live
+gap" / "retry markers" rows and two "Open" lists; collapsed to one.)*
 
 | | |
 |---|---|
 | **domain store (deeds)** | ✅ **325/325 text — 100%, complete.** Cron 160, `doctype=deed`. ⛔ **Do NOT widen it** (DOC7). |
-| **CRE registry drain** | undrained **771 → 426**, sidecar **345**, `scan_lowest_id` **2** — reaches the oldest document. |
-| **consumer** | **`bov_ready` 5 → 37.** BOV extract is receiving real leases, DDs and OMs. |
-| **OCR tier** | ✅ **22+ events since redeploy, 100% DocAI, ZERO gpt-4o.** The 9.3×-worse escalation is closed. |
-| **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (18 at 31–50pp, 24 at >50pp, max 141; re-verified unmoved 2026-09-02 after DOC17) — ✅ **DOC17 measured the cheap route OPEN; DOC18 BUILT it (see the DOC18 section). ⚠️ MERGED IS NOT RUNNING: the route ships on the next Railway redeploy + the additive migration, and until both land the 42 are unmoved.** |
+| **CRE registry drain** | undrained **771 → 401**, consumer-visible sidecars **289**, `scan_lowest_id` **2** — reaches the oldest document. |
+| **consumer** | **`bov_ready` 5 → 43**, `lcc_cre_bov_extraction` **25**. BOV extract is receiving real leases, DDs and OMs. |
+| **OCR tier** | ✅ **88 DocAI events since the 2026-09-01 15:00 redeploy; gpt-4o = 2, both in the first two ticks (15:00 and 16:00 on 09-01, `thin_ocr_result` fragments of 116 / 211 chars — the exact waste shape DOC8 closed) and ZERO since 16:01.** ⚠️ The earlier "ZERO gpt-4o since redeploy" wording was true of the window it was read in and is corrected here. |
+| **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (18 at 31–50pp, 24 at >50pp, max 141) — **unmoved.** ✅ DOC17 measured the cheap route OPEN; ✅ **DOC18 LIVE 2026-09-02 14:40 UTC** — PR #2032 merged, `/version` = `f8d42593`, migration `20260902120000` applied and censused (3 columns · cron `lcc-cre-doc-text-longdoc` active · `v_lcc_cre_longdoc_backlog` = 42 / pages 31–141 / 0 unknown), ungated dry run returned correct plans (39pp → `[1..30]+[31..39]`). **The cron now takes one document per tick at :07/:37 — read `v_lcc_cre_longdoc_backlog` and the partial count, never the tick's tally.** |
 | **retry markers** | 17 (`thin_ocr_result` 14, `fetch_failed` 3). `retry_admitted` is **0 and that is correct** — see DOC13 below. |
 
-**Open, in priority order: DOC18 BUILT, AWAITING DEPLOY** (the three-call sync route — no GCS; migration `20260902120000` must be applied BEFORE the JS redeploy) · **DOC14** (the alternative; still blocked on Scott — GCS persistence + confidentiality, and 👤 whether it is still worth doing at all now that sync reaches the whole window) · ✅ **DOC17 ANSWERED** · ⛔ **DOC16 REFUTED (consequence superseded)** ·
-| **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (re-measured 2026-09-02; **18 at 31–50pp, 24 at >50pp**, max 141) — DOC14, blocked on an operator prerequisite. ⚠️ DOC16 was the proposed way round it and is **refuted** — see the DOC16 GATE section. |
-| **retry markers** | 17 (`thin_ocr_result` 14, `fetch_failed` 3). `retry_admitted` is **0 and that is correct** — see DOC13 below. |
-
-**Open, in priority order: DOC14** (blocked on Scott — GCS + a confidentiality decision; it is the
-route again now that DOC16 is refuted) · ~~DOC16~~ (**closed, refuted at its gate — do not re-propose
-the two-call design without re-reading the DOC16 GATE section**) ·
-**DOC13-watch** (retry starvation, benign today) · **DOC2** (cross-repo stale docs) · **DOC3**
-(gov firm-term chain not wired) · **DOC4/5/6**.
+**Open, in priority order: DOC18 — LIVE, verify on the first ticks** (see the DOC18 section for the
+verification queries; still owed: boundary text at pages 30/31 and 45/46 on three real leases,
+measured cost, and the `over_ocr_cap` byte-size residual) · **OCR1** (the local-OCR
+bake-off — if it wins, DOC18's partial ceiling and DOC14 both become unnecessary) · **DOC14** (👤
+Scott — probably close now that sync reaches the whole window) · ✅ **DOC17 ANSWERED** · ⛔ **DOC16
+REFUTED (consequence superseded; do not re-propose the two-call design without re-reading the DOC16
+GATE section)** · **DOC13-watch** (retry starvation, benign today) · **DOC2** (cross-repo stale
+docs) · **DOC3** (gov firm-term chain not wired) · **DOC4/5/6**.
 
 ---
 
