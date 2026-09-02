@@ -229,6 +229,21 @@ async function getPageContext() {
   });
 }
 
+async function getActiveTabUrl() {
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tabs?.[0]?.url || null;
+  } catch {
+    return null;
+  }
+}
+
+async function validateCostarContext(ctx) {
+  if (!ctx || ctx.domain !== 'costar') return { ok: true, reasons: [] };
+  const activeUrl = await getActiveTabUrl();
+  return window.LccPropertyIdentity.contextIntegrity(ctx, activeUrl);
+}
+
 // ── Restricted ASC frozen-50 research target ───────────────────────────────
 // This is a separate evidence-only path. It never calls Save Property, the
 // dia/gov propagator, Salesforce writeback, opportunity creation, or outreach.
@@ -326,6 +341,14 @@ async function wireAscResearchAction(ctx, actions) {
     // context replace the complete page context that produced this card.
     const sessionCtx = await getPageContext();
     const liveCtx = sessionCtx?.address && sessionCtx?.state ? sessionCtx : ctx;
+    const integrity = await validateCostarContext(liveCtx);
+    if (!integrity.ok) {
+      button.disabled = true;
+      button.textContent = 'Capture blocked — record changed';
+      button.className = 'btn btn-sm btn-danger';
+      detail.textContent = `CoStar record integrity failed: ${integrity.reasons.join(', ')}. Reload the current property before attaching.`;
+      return;
+    }
     const domain = liveCtx.domain || liveCtx.source || '';
     const context = {
       ...buildMetadata(liveCtx, domain),
@@ -918,15 +941,30 @@ async function loadPropertyTab(opts) {
   const address = source.address || source.name || '';
   const city = source.city || '';
   const state = source.state || '';
+  const sourceCostarId = source.domain === 'costar'
+    ? (source.costar_property_id || window.LccPropertyIdentity.costarPropertyId(source.page_url))
+    : null;
 
   header.innerHTML = `
     <div class="property-title">${escapeHtml(address)}</div>
     ${city || state ? `<div class="property-subtitle">${escapeHtml([city, state].filter(Boolean).join(', '))}</div>` : ''}
-    <div class="property-source">${domainBadge(domain)} ${escapeHtml(domainLabel)}${siteType ? ` (${escapeHtml(siteType)})` : ''}${source._version ? ` v${source._version}` : ''}</div>
+    <div class="property-source">${domainBadge(domain)} ${escapeHtml(domainLabel)}${siteType ? ` (${escapeHtml(siteType)})` : ''}${source._version ? ` v${source._version}` : ''}${sourceCostarId ? ` · CoStar ID ${escapeHtml(sourceCostarId)}` : ''}${source._source_field_provenance ? ' · provenance locked' : ''}</div>
   `;
 
   body.innerHTML = '<div class="loading"><div class="spinner"></div><br>Looking up property...</div>';
   actions.innerHTML = '';
+
+  const sourceIntegrity = await validateCostarContext(source);
+  if (!sourceIntegrity.ok) {
+    body.innerHTML = `<div class="domain-mismatch-banner" style="background:#FEF2F2;border:1px solid #DC2626;border-radius:6px;padding:10px;margin:8px;font-size:12px;color:#991B1B;">
+      <div style="font-weight:700;margin-bottom:5px;">Capture blocked — CoStar record changed</div>
+      <div>The stored snapshot does not belong entirely to the active CoStar record. No Save, Update, or ASC Attach action is available.</div>
+      <div style="margin-top:6px;font-size:10px;">Snapshot ID: ${escapeHtml(sourceIntegrity.costarPropertyId || 'unknown')} · Active ID: ${escapeHtml(sourceIntegrity.activeCostarPropertyId || 'unknown')} · ${escapeHtml(sourceIntegrity.reasons.join(', '))}</div>
+      <div style="margin-top:6px;">Reload the current CoStar property and wait for a fresh, provenance-locked scan.</div>
+    </div>`;
+    actions.innerHTML = '<button class="btn btn-sm btn-danger" disabled>Capture blocked — record integrity</button>';
+    return;
+  }
 
   // Query LCC to see if this property already exists.
   // Round 76ek: lookup_asset now accepts entity_id, source_url, and
@@ -2311,6 +2349,12 @@ function wirePropertyActions(ctx, lccEntity) {
       // Re-read live pageContext so OM-enriched data is included
       // (the closure ctx may be stale if OM ingestion happened after render)
       const liveCtx = (await getPageContext()) || ctx;
+      const integrity = await validateCostarContext(liveCtx);
+      if (!integrity.ok) {
+        updateBtn.textContent = 'Update blocked — record changed';
+        updateBtn.className = 'btn btn-sm btn-danger';
+        return;
+      }
 
       // PATCH the existing entity — merge new CRE data into metadata
       const fields = extractSourceFields(liveCtx);
@@ -2359,6 +2403,12 @@ function wirePropertyActions(ctx, lccEntity) {
 
       // Re-read live pageContext so OM-enriched data is included
       const liveCtx = (await getPageContext()) || ctx;
+      const integrity = await validateCostarContext(liveCtx);
+      if (!integrity.ok) {
+        saveBtn.textContent = 'Save blocked — record changed';
+        saveBtn.className = 'btn btn-sm btn-danger';
+        return;
+      }
 
       const fields = extractSourceFields(liveCtx);
       const metadata = buildMetadata(liveCtx, domain);

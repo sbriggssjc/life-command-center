@@ -662,16 +662,28 @@ export function stubExtractionAI({ prompt }) {
   const text = String(prompt || '');
   const pick = (re) => { const m = text.match(re); return m ? m[1].trim() : null; };
   const num = (v) => { if (v == null) return null; const n = Number(String(v).replace(/[$,\s]/g, '')); return Number.isFinite(n) ? n : null; };
+  const quotedDate = (d) => (d ? { date: d, as_stated: d, precision: 'day' } : { date: null, as_stated: null, precision: null });
   const out = {
     tenant_name: pick(/TENANT:\s*([^\n]+)/i),
     guarantor: null,
     suite: null,
     leased_sf: num(pick(/RENTABLE (?:AREA|SF):\s*([\d,]+)/i)),
     lease_type: pick(/LEASE TYPE:\s*([A-Za-z]+)/i),
-    year1_rent: num(pick(/(?:YEAR 1 |ANNUAL )?BASE RENT:\s*\$?([\d,]+)/i)),
+    // EXT1: the consumer takes a QUOTED rent (amount + the basis the lease
+    // states it on) and QUOTED dates (a date only at day precision), and does
+    // the annualization and any term arithmetic itself. The stub emits that
+    // shape so --self-test exercises the path production runs, not a legacy one.
+    base_rent: (() => {
+      const stated = pick(/((?:YEAR 1 |ANNUAL )?BASE RENT:\s*\$?[\d,]+(?:\s*PER (?:MONTH|YEAR|SF))?)/i);
+      const amount = num(pick(/(?:YEAR 1 |ANNUAL )?BASE RENT:\s*\$?([\d,]+)/i));
+      if (amount == null) return null;
+      const perMonth = /BASE RENT:[^\n]*PER MONTH/i.test(text);
+      return { amount, basis: perMonth ? 'monthly' : 'annual', as_stated: stated };
+    })(),
     escalation_pct: null,
-    lease_commencement: pick(/COMMENCEMENT(?: DATE)?:\s*(\d{4}-\d{2}-\d{2})/i),
-    lease_expiration: pick(/EXPIRATION(?: DATE)?:\s*(\d{4}-\d{2}-\d{2})/i),
+    lease_commencement: quotedDate(pick(/COMMENCEMENT(?: DATE)?:\s*(\d{4}-\d{2}-\d{2})/i)),
+    lease_expiration: quotedDate(pick(/EXPIRATION(?: DATE)?:\s*(\d{4}-\d{2}-\d{2})/i)),
+    lease_term: null,
     rent_schedule: null,
     abstract: Object.fromEntries(BACK_HALF_CLAUSES.map((c) => {
       const found = (CLAUSE_VOCAB[c] || []).some((p) => p.test(text));
