@@ -35,6 +35,139 @@
 
 import { opsQuery } from './ops-db.js';
 
+// ============================================================================
+// PR12 — a dropped provenance write must never be silent (2026-09-02)
+//
+// field_provenance.value_text_hash was GENERATED over `value::text::bytea`.
+// The bytea escape parser rejects jsonb's backslash escapes (\" \n \t \r \b
+// \f \uXXXX) with 22P02, aborting the whole lcc_merge_field() call — so any
+// value carrying a double quote, newline, tab or control character wrote its
+// curated value and lost its provenance row. The DB half is fixed by
+// supabase/migrations/20261010120000_lcc_pr12_provenance_hash_bytea_safe.sql.
+//
+// This is the other half. shouldWriteField STILL FAILS OPEN — a provenance
+// failure must never cost a curated value, which is the one thing worse than
+// losing the provenance. What changes is that the failure now leaves a trace:
+//   * the DB's OWN SQLSTATE + message, never just `rpc_<status>` (the same
+//     rule this repo learned from "a PostgREST 409 is not necessarily a
+//     conflict" — a status code cannot name a cause);
+//   * a process-local counter, so a caller/tick can report `provenance_failed`;
+//   * a deduped lcc_health_alerts row, so it reaches a surface.
+//
+// ⚠️ Read `provenance_failed`, never `recorded`. A re-discovery tally reads
+//    exactly like throughput while nothing moves.
+// ============================================================================
+
+const PROVENANCE_FAILURE_ALERT_KIND = 'provenance_write_failed';
+
+// key -> { count, code, message, targets:Set, firstAt, lastAt }
+const _provenanceFailures = new Map();
+// Alerts are opened at most once per distinct SQLSTATE per process. The hot
+// path is per-FIELD, so a GET+POST per failure would be its own outage.
+const _provenanceAlerted = new Set();
+
+/**
+ * PostgREST returns the DB error body as { code, message, details, hint } on a
+ * non-2xx. Pull the real cause out of it; fall back to the transport error.
+ */
+export function describeProvenanceFailure(res, err) {
+  const body = res && res.data && typeof res.data === 'object' ? res.data : null;
+  const code = (body && body.code) || (err && err.code) || null;
+  const message = (body && body.message) || (err && err.message) || null;
+  return {
+    code: code || `http_${res && res.status != null ? res.status : 'exception'}`,
+    message: message || 'no DB message returned',
+    details: (body && body.details) || null,
+  };
+}
+
+function _recordProvenanceFailure(targetTable, fieldName, cause) {
+  const key = cause.code;
+  let e = _provenanceFailures.get(key);
+  if (!e) {
+    e = { count: 0, code: cause.code, message: cause.message,
+          targets: new Set(), firstAt: new Date().toISOString(), lastAt: null };
+    _provenanceFailures.set(key, e);
+  }
+  e.count += 1;
+  e.lastAt = new Date().toISOString();
+  if (e.targets.size < 25) e.targets.add(`${targetTable}.${fieldName}`);
+  return e;
+}
+
+/**
+ * Provenance-write failures seen by this process, keyed by the DB's own
+ * SQLSTATE. `{ total, byCode: [{ code, message, count, targets }] }`.
+ * Callers that report a tick should surface `total` as `provenance_failed`.
+ */
+export function getProvenanceFailureStats() {
+  const byCode = [];
+  let total = 0;
+  for (const e of _provenanceFailures.values()) {
+    total += e.count;
+    byCode.push({ code: e.code, message: e.message, count: e.count,
+                  targets: Array.from(e.targets), firstAt: e.firstAt, lastAt: e.lastAt });
+  }
+  byCode.sort((a, b) => b.count - a.count);
+  return { total, byCode };
+}
+
+/** Test seam only — resets the process-local counters and alert dedup. */
+export function resetProvenanceFailureStats() {
+  _provenanceFailures.clear();
+  _provenanceAlerted.clear();
+}
+
+/**
+ * Fire-and-forget deduped health alert. Never throws: a failure to report a
+ * failure must not become a third failure on the caller's write path.
+ */
+async function _openProvenanceFailureAlert(entry) {
+  if (_provenanceAlerted.has(entry.code)) return;
+  _provenanceAlerted.add(entry.code);
+  const source = `lcc_merge_field:${entry.code}`;
+  try {
+    const existing = await opsQuery(
+      'GET',
+      'lcc_health_alerts?select=alert_id&alert_kind=eq.' + encodeURIComponent(PROVENANCE_FAILURE_ALERT_KIND)
+        + '&source=eq.' + encodeURIComponent(source) + '&resolved_at=is.null&limit=1',
+      undefined, { countMode: 'none' });
+    if (existing.ok && Array.isArray(existing.data) && existing.data[0]) return;
+    await opsQuery('POST', 'lcc_health_alerts', {
+      detected_at: new Date().toISOString(),
+      alert_kind: PROVENANCE_FAILURE_ALERT_KIND,
+      source,
+      severity: 'warn',   // the column default and 482 of 485 live rows; 'warning' is drift
+      summary: `lcc_merge_field failed with ${entry.code}: provenance not recorded (the curated write still proceeded)`,
+      details: { sqlstate: entry.code, db_message: entry.message,
+                 targets: Array.from(entry.targets), first_seen: entry.firstAt },
+    });
+  } catch (_e) {
+    // Swallowed on purpose — see the doc comment above.
+  }
+}
+
+/**
+ * Single owner of "a provenance write was dropped": count it, name the DB's
+ * cause, and surface it. Returns the fail-open decision so the two call sites
+ * cannot drift on what a failure means.
+ */
+function noteProvenanceFailure({ targetTable, fieldName, res, err }) {
+  const cause = describeProvenanceFailure(res, err);
+  const entry = _recordProvenanceFailure(targetTable, fieldName, cause);
+  console.warn(`[field-priority-guard] provenance NOT recorded for ${targetTable}.${fieldName}`
+    + ` — ${cause.code}: ${cause.message} (write still allowed)`);
+  void _openProvenanceFailureAlert(entry);
+  return {
+    write: true,
+    decision: 'no_rule',
+    enforceMode: 'no_rule',
+    provenanceRecorded: false,
+    failureCode: cause.code,
+    reason: `provenance write failed (${cause.code}) — failing open`,
+  };
+}
+
 /**
  * Consult the field_source_priority registry for whether this write should
  * proceed. Calls lcc_merge_field() to get the decision and the rule's
@@ -108,15 +241,12 @@ export async function shouldWriteField({
       p_recorded_by:     null,
     });
   } catch (err) {
-    // Fail open — never block a write because of a registry RPC error.
-    console.warn(`[field-priority-guard] lcc_merge_field RPC failed for ${targetTable}.${fieldName}: ${err?.message}`);
-    return { write: true, decision: 'no_rule', enforceMode: 'no_rule',
-             reason: 'RPC error — failing open' };
+    // PR12: still fail open — never block a curated write because of a registry
+    // RPC error — but record WHY, so a dropped provenance row is not silent.
+    return noteProvenanceFailure({ targetTable, fieldName, res: null, err });
   }
   if (!res.ok) {
-    console.warn(`[field-priority-guard] lcc_merge_field returned ${res.status} for ${targetTable}.${fieldName}`);
-    return { write: true, decision: 'no_rule', enforceMode: 'no_rule',
-             reason: 'RPC non-ok — failing open' };
+    return noteProvenanceFailure({ targetTable, fieldName, res, err: null });
   }
 
   // lcc_merge_field returns SETOF record (TABLE), so PostgREST sends an
@@ -132,6 +262,7 @@ export async function shouldWriteField({
   if ((decision === 'skip' || decision === 'conflict') && enforceMode === 'strict') {
     return {
       write: false,
+      provenanceRecorded: true,
       decision,
       enforceMode,
       currentSource: currentSrc,
@@ -148,6 +279,7 @@ export async function shouldWriteField({
     write: true,
     decision,
     enforceMode,
+    provenanceRecorded: true,
     currentSource: currentSrc,
   };
 }
@@ -202,8 +334,16 @@ export async function recordFieldWrites({
         p_confidence:      conf,
         p_recorded_by:     null,
       })
-        .then(res => { res?.ok ? recorded++ : failed++; })
-        .catch(() => { failed++; })
+        .then(res => {
+          if (res?.ok) { recorded++; return; }
+          // PR12: same counter, same DB-cause capture as the gate path.
+          failed++;
+          noteProvenanceFailure({ targetTable, fieldName, res, err: null });
+        })
+        .catch(err => {
+          failed++;
+          noteProvenanceFailure({ targetTable, fieldName, res: null, err });
+        })
     );
   }
   await Promise.allSettled(promises);

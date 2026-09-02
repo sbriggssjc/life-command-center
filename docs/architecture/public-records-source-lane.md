@@ -171,15 +171,33 @@ Backfill: batch `pr2_sidebar_parcel_stats_20260902`, 817 rows, reversal ledger
   source verbatim; the `domain_trigger` relabel PR8 replaced lives in the ASYNC
   `lcc_flush_provenance_events` drain. The consequence of writing unregistered
   is drift-detector growth, not a relabel.
-- 🔴 **FOUND, FILED, NOT FIXED — `field_provenance` CANNOT STORE A VALUE
-  CONTAINING A DOUBLE QUOTE.** `value_text_hash` is `GENERATED AS
-  encode(sha224((value)::text::bytea),'hex')`; a jsonb string renders its inner
-  quotes with backslashes and `::bytea` rejects them with **22P02**, aborting
-  the whole `lcc_merge_field` call. One live value hits it (apn `145416`, zoning
-  `"C" - Commercial`) and it is the reason provenance is 2,532 and not 2,533.
-  The live writer degrades quietly rather than failing — `shouldWriteField`
-  catches and fails open — so this has been silently dropping provenance for any
-  quoted value for as long as the column has existed. Backlog **PR12**.
+- ✅ **FOUND HERE, FIXED 2026-09-02 (PR12) — `field_provenance` COULD NOT STORE A
+  VALUE CONTAINING A DOUBLE QUOTE, A NEWLINE, A TAB OR ANY CONTROL CHARACTER.**
+  `value_text_hash` was `GENERATED AS encode(sha224((value)::text::bytea),'hex')`;
+  jsonb renders those as BACKSLASH escapes and bytea's escape parser accepts only
+  `\\` and `\ooo`, so the cast raised **22P02** and aborted the whole
+  `lcc_merge_field` call. One value in this backfill hit it (apn `145416`, zoning
+  `"C" - Commercial`) and it is the reason provenance is 2,532 and not 2,533 — **the
+  single DEMONSTRATED loss anywhere in the system**, because a writer is known to
+  have tried. `shouldWriteField` caught the non-ok RPC and failed open, so the
+  curated value landed and the provenance row vanished with no signal.
+  - ⚠️ **THE SCOPE WAS BROADER THAN THE DOUBLE QUOTE THIS BULLET ORIGINALLY
+    NAMED** — and broader in a way that matters, because it reaches jsonb objects
+    and arrays whose string MEMBERS carry a quote. It does NOT break on a jsonb
+    object's own delimiter quotes (`{"a": "b"}` has no backslash) or on non-ASCII.
+    Rule, validated 14/14 against the live cast: after collapsing `\\` pairs, any
+    remaining backslash errors.
+  - **Fixed with no table rewrite.** `ALTER COLUMN ... DROP EXPRESSION` is
+    metadata-only (probed live: `pg_relation_filenode` unchanged, values
+    byte-identical), so the generated column became a plain column owned by a
+    BEFORE trigger using `convert_to(...,'UTF8')`. **0 of 1,270,785 stored values
+    contain a backslash**, so no backfill was needed and every hash is unchanged —
+    verified at 0 mismatches over the whole population.
+  - **Exposure 79 ladder-governed values; 12 proven safe (their writer passes a
+    jsonb ARRAY); 67 residual.** The cumulative historical loss is **unmeasurable**
+    — a break-class value later overwritten with a clean one leaves nothing behind.
+    Writeup `docs/audits/PR12_PROVENANCE_QUOTE_LOSS_2026-09-02.md`; backlog
+    **PR12a** for the residual.
 - **Fill-blanks proven, not asserted:** all 817 snapshotted pre-states are
   **fully blank across every touched column**, so the backfill overwrote
   nothing. Re-run plans 0.
@@ -566,7 +584,10 @@ rungs, so this adds a RUNG, 2,140 → 2,141) · 39 never written · 21 write-but
   comparison the row was filed under.
 - **⚠️ Six `writer_live_zero_rows` sources have a correct `lcc_merge_field` call site wrapped in
   `catch (_e) { /* best-effort */ }`**, so their zero **cannot distinguish "never ran" from "ran and
-  the stamp was dropped"** — the **PR12** mechanism. Size PR12 before grading them.
+  the stamp was dropped"** — the **PR12** mechanism. ✅ **SIZED 2026-09-02 AND IT IS NOT THE
+  CAUSE.** Break-class values on the LCC-internal columns are `entities.name` **23 of 69,462
+  (0.03%)** and **ZERO** everywhere else; a dropped stamp would have to be ~100% to explain a zero.
+  **Grade them on the ordinary reading — the lanes do not write provenance.**
 - **`costar_cmbs_loan` holds 121 rungs — the largest single source in the ladder — for a capture arm
   that has never produced a row** (`loans.data_source` carries none on either domain). → **PR5d**.
 
