@@ -945,7 +945,7 @@ merges as `domain_trigger`. Full writeup + measurements: `docs/architecture/publ
   is fixed** (Class 8).
 ### ⚠️ A RUNG WITH NO WRITES IS SEVEN DIFFERENT FACTS, AND "UNREGISTERED" IS NOT A LOW RUNG (PR5, 2026-09-02)
 
-**39 of 69 registered ladder sources have never written a `field_provenance` row — and only 14 of
+**39 of 68 registered ladder sources have never written a `field_provenance` row — and only 14 of
 them are rungs nothing will ever exercise.** Verdict + evidence for all 39 are stamped into
 `field_source_priority.notes` and surfaced on **`v_field_source_priority_triage`**
 (`pr5_verdict`, `is_orphan_column`, `is_retired`). Writeup:

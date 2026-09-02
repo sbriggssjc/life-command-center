@@ -508,7 +508,8 @@ rewritten.** Guards: `test/provenance-relabel-registration.test.mjs` (7 tests) +
 
 Every verdict + its evidence is stamped into `field_source_priority.notes` and surfaced on
 **`v_field_source_priority_triage`** (426 rungs verdicted, 49 marked `PR7:orphan_column`,
-51 retired). Counts after: **69 registered · 39 never written · 21 write-but-unregistered ·
+51 retired). Counts after: **68 registered SOURCES (unchanged — `costar_sidebar` already had 73
+rungs, so this adds a RUNG, 2,140 → 2,141) · 39 never written · 21 write-but-unregistered ·
 `v_field_provenance_unranked` 30 → 29.**
 
 - 🚨 **SEVEN OF THE 39 ARE LIVE ON A SECOND LADDER.** `manual`, `rel_purchase`, `rel_owns`,

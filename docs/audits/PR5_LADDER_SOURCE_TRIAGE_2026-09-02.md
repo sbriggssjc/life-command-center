@@ -13,12 +13,18 @@ Keyed on `v_field_provenance_effective_source` (i.e. after PR8 recovered relabel
 
 | | before | after |
 |---|---:|---:|
-| registered sources | 68 | **69** |
+| registered **sources** (distinct) | 68 | **68** |
+| registered **rungs** | 2,140 | **2,141** |
 | never written | 39 | **39** |
 | write-but-unregistered (source grain) | 21 | **21** |
 | `v_field_provenance_unranked` (field grain, 30d) | 30 | **29** |
 | rungs carrying a PR5 verdict | 0 | **426** |
 | rungs marked `PR7:orphan_column` | 0 | **49** |
+
+⚠️ **The registered-source count does NOT move, and getting that wrong is this audit's own
+mistake, caught on review.** `costar_sidebar` was already a registered source with 73 rungs, so
+adding a 74th changes the RUNG count and not the SOURCE count — the exact source-grain-vs-field-grain
+confusion §3 is about, committed by the person writing §3. **State which grain a count is on.**
 
 `never_written` staying at 39 is the **expected** result, not a failure: no rung was deleted,
 and the count only moves when a producer actually runs. `write_but_unregistered` staying at 21 is
@@ -289,6 +295,10 @@ the `manual_edit`@1 comparison the row was filed under.
    historical residue from a writer fixed five weeks earlier.
 6. **A logical prefix is not a schema.** `lcc.` reads like one and is not; the check that assumed so
    flagged six healthy tables and missed five real namespaces.
-7. **Anchor a parse on a token, never an offset.** The triage view's first cut used
+7. **State which GRAIN a count is on — and this audit got its own headline wrong once.** It first
+   reported "68 → 69 registered sources"; registering a rung on an already-registered source moves
+   the rung count (2,140 → 2,141) and leaves the source count at 68. Same confusion as §3, one line
+   later.
+8. **Anchor a parse on a token, never an offset.** The triage view's first cut used
    `split_part(notes, 'PR5:', 2)` and silently returned NULL for 26 rungs the PR7 marker stamped in
    front — 400 verdicted before the regex, 426 after.
