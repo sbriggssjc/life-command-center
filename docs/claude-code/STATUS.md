@@ -16,6 +16,44 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — DOC14 blocked on a CONFIDENTIALITY decision; DOC13 answered; the sizing moved ~2×
+
+**DOC14 stopped at the operator prerequisite and built nothing — the intended outcome.** The async
+contract was verified from the **live v1 discovery document** (rev 20260820): `batchProcess` → LRO,
+poll `operations.get`, output at `outputGcsDestination`.
+
+⚠️ **TWO WAYS MY PREREQUISITE LIST WAS WRONG, and the missing half is the expensive one.**
+**`BatchDocumentsInputConfig` accepts ONLY `gcsPrefix`/`gcsDocuments` — batch takes NO inline
+bytes**, so an **INPUT bucket is mandatory too and every SharePoint byte-stream must be uploaded to
+GCS first** — materially more than "add a bucket." And **`imagelessMode` does not exist on
+`BatchProcessRequest`**: DOC8's flag does not carry over.
+
+🔴 **THE GATE IS CONFIDENTIALITY, NOT COST.** ~$3 for the whole projected backlog. **But batch writes
+the FULL TEXT of confidential executed client leases to GCS as JSON** — Scott's decision, not
+plumbing. ⚠️ The **~500 pp ceiling remains UNVERIFIED** (`docs.cloud.google.com` egress-blocked).
+
+⚠️ **THE SIZING MOVED ~2× OVERNIGHT — my own "small sample" caveat cashed in, and it corrected three
+documented claims:** lease **17.0%** (was 8.1%, then 10.1%) · ⚠️ **"100% leases" REFUTED — DD is 4 at
+4.4%** · **max pages 57 → 141**, which **makes the unverified ~500 pp ceiling load-bearing after
+all**, reversing yesterday's "our largest is 59 pages" reasoning. **~87 projected; 40 already marked
+with 426 undrained.** ⚠️ **Third time in this arc a rate moved materially as the sample grew** (the
+86% escalation, `repeat_buyer` 8×, now this) — **quote a rate with its denominator AND its sample.**
+
+✅ **DOC13 ANSWERED — `retry_admitted: 0` is CORRECT.** 11 of 14 markers are past 24 h with no
+re-extraction, which reads like a stall and is not: `scan_lowest_id: 2 · scan_capped: false ·
+eligible: 15` — **the scan reaches the oldest document, is not budget-capped, and fills its limit
+from the 426 FRESH documents first.** Retries are correctly lowest priority while real work exists.
+
+🔵 **DOC15 filed as a watch:** if documents arrive faster than the drain, **the retry lane never
+runs** — Class 12 one level up, a lower-priority lane that can starve. **Verify `retry_admitted`
+goes non-zero as `undrained` approaches 0.**
+
+🧹 **Consolidation, and one real defect found:** **`PLANNED-BACKLOG.md` carried TWO DOC13 rows** —
+collapsed to one. And **the canonical page now opens with a CURRENT STATE block**; §0 had become an
+eight-entry dated worklog a new reader would have to read backwards. Live: deeds **325/325** · drain
+**771 → 426** · **`bov_ready` 5 → 37** · **22+ OCR events, 100% DocAI, zero gpt-4o** · 🔴 **40
+documents getting no text at all.**
+
 ## 2026-09-01 — C13c SHIPPED: `one_off_owner` carries its confidence, and the fourth column answered
 
 **Live on LCC Opps.** `one_off_owner` **142 = 13 `_sf_corroborated` + 129 `_unverified`** — the

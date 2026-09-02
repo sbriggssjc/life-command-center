@@ -20,6 +20,25 @@
 
 ---
 
+## CURRENT STATE — read these ten lines first, then §0 for how we got here
+
+**Measured live 2026-09-02 11:39 UTC.** ⚠️ §0 below is a dated worklog; **this block is the truth.**
+
+| | |
+|---|---|
+| **domain store (deeds)** | ✅ **325/325 text — 100%, complete.** Cron 160, `doctype=deed`. ⛔ **Do NOT widen it** (DOC7). |
+| **CRE registry drain** | undrained **771 → 426**, sidecar **345**, `scan_lowest_id` **2** — reaches the oldest document. |
+| **consumer** | **`bov_ready` 5 → 37.** BOV extract is receiving real leases, DDs and OMs. |
+| **OCR tier** | ✅ **22+ events since redeploy, 100% DocAI, ZERO gpt-4o.** The 9.3×-worse escalation is closed. |
+| **🔴 the live gap** | **40 documents carry `over_docai_page_cap` and get NO text at all** — DOC14, blocked on an operator prerequisite. |
+| **retry markers** | 17 (`thin_ocr_result` 14, `fetch_failed` 3). `retry_admitted` is **0 and that is correct** — see DOC13 below. |
+
+**Open, in priority order: DOC14** (blocked on Scott — GCS + a confidentiality decision) ·
+**DOC13-watch** (retry starvation, benign today) · **DOC2** (cross-repo stale docs) · **DOC3**
+(gov firm-term chain not wired) · **DOC4/5/6**.
+
+---
+
 ## 0. ⚠️ THE HEADLINE — a green cron returned `eligible: 0` over 695 waiting documents (FIXED, DOC1)
 
 **There are TWO document stores, in two databases, with two workers. Conflating them is why this
@@ -719,6 +738,92 @@ group by 1 order by over_cap desc;
 --   2. is the DocAI service agent granted on it?          <- the one people forget
 --   3. what env var carries its name?                     <- none exists today
 ```
+
+### 🔴 DOC14 — BLOCKED ON AN OPERATOR PREREQUISITE, and RE-SIZED ~2× (2026-09-02)
+
+**Nothing was built. The contract was verified from the live v1 discovery document** (revision
+20260820): `batchProcess` → `GoogleLongrunningOperation`, poll
+`projects.locations.operations.get`, output at
+`BatchProcessMetadata.individualProcessStatuses[].outputGcsDestination`. **The prompt's §2 was right
+that this is an LRO writing to GCS, cannot fit the 22 s tick, and belongs in `mode=jobs`.**
+
+⚠️ **TWO WAYS THE PROMPT'S PREREQUISITE LIST WAS WRONG, and the missing half is the expensive one:**
+
+1. **`BatchDocumentsInputConfig` accepts ONLY `gcsPrefix` / `gcsDocuments` — batch takes NO inline
+   bytes**, unlike `ProcessRequest` (`rawDocument`/`gcsDocument`/`inlineDocument`). §2 named an
+   **output** bucket; an **INPUT bucket is mandatory too**, and **every SharePoint byte-stream would
+   have to be uploaded to GCS first.** That is a materially larger build than "add a bucket."
+2. **`imagelessMode` does not exist on `BatchProcessRequest`** — it is a `ProcessRequest` field only.
+   **DOC8's flag does not carry over.**
+
+**Prerequisites are ABSENT on four independent checks:** a repo grep for `GCS|gs://|bucket` across
+`api/`, `supabase/`, `scripts/` returns **one hit and it is the prose line saying it would be
+needed** · `diag?kind=env` has **no GCS field at all** · LCC Opps `vault.secrets` holds 7 names,
+**none GCP** · `docai-ocr` reads 4 GCP envs, **none a bucket**, and makes **no Cloud Storage call**.
+⚠️ **One check could not run** (whether an unreferenced bucket exists in the GCP project — the SA key
+is a Supabase edge secret and `*.supabase.co` is sandbox-blocked); **it does not change the verdict**,
+because the Document AI **service agent** grant is certainly absent — every call this system has ever
+made passed `rawDocument` inline.
+
+⚠️ **The page ceiling could NOT be verified** — `docs.cloud.google.com` is egress-blocked.
+**The ~500 pp figure this repo has carried since 2026-08-12 stays labelled UNVERIFIED.**
+
+**👤 THE REAL GATE IS NOT COST — IT IS CONFIDENTIALITY.** ~$0.59 today and **~$3 for the whole
+projected backlog** (at the repo's carried ~$1.50/1k rate, itself unverified). **Batch writes the
+FULL TEXT of confidential executed client leases to GCS as JSON.** That is Scott's decision, not a
+plumbing step. Unblocking also needs two `us` GCS prefixes, `storage.objectAdmin` for the DocAI SA,
+**separate grants for the Document AI service agent** (`service-<PROJNUM>@gcp-sa-prod-dai-core…` —
+the principal people forget), and a lifecycle rule.
+
+**One build note recorded for whoever picks this up:** the sidecar has **nowhere to keep the LRO
+operation name.** `reason` is consumed as **set membership** by `CRE_RETRY_REASONS`, so parking an
+opaque id there **breaks re-admission**. A column or a small job table is **part of the build, not an
+afterthought** — and it is the same requirement as the in-flight idempotency the prompt asked for.
+
+### ⚠️ AND THE SIZING MOVED ~2× — the "small sample" caveat cashed in exactly as written
+
+| doctype | drained | **over cap** | rate | undrained | max pages |
+|---|---:|---:|---:|---:|---:|
+| **lease** | 212 | **36** | **17.0%** | 234 | **141** |
+| **dd** | 90 | **4** | **4.4%** | 166 | 59 |
+| om | 43 | 0 | 0% | 26 | — |
+
+**Three claims this page carried are now corrected:**
+
+1. **The lease rate is 17.0%, not 8.1%** — it more than doubled as the sample grew 86 → 212.
+2. ⚠️ **"100% leases" is REFUTED — DD is 4 over cap (4.4%).** The exclusivity was an artifact of the
+   smaller sample.
+3. **Max pages is 141, not 57.** ⚠️ **That makes the unverified ~500 pp async ceiling load-bearing
+   after all** — the earlier "not load-bearing, our largest is 59 pages" reasoning no longer holds.
+
+**Projection: ~87 documents total**, roughly double the ~45 recorded yesterday. **`over_docai_page_cap`
+is already 40 with 426 still undrained.**
+
+⚠️ **This is the third time in this arc a rate moved materially when the sample grew** (the gpt-4o
+escalation 86%, `repeat_buyer` 8×, now this). **Quote a rate with its denominator and its sample
+size, and re-measure before acting on it.** The semantic reading is now direct rather than inferred —
+`LFB Plasma Lease` (59), `McBen Amended and Restated Cultivation lease` (57), `KEDPlasma – Myrtle
+Beach Lease Agreement` (46), `Harbor Bay – FAA Lease` (39) — **unmistakably full executed leases.**
+
+### ✅ DOC13 ANSWERED 2026-09-02 — `retry_admitted: 0` is CORRECT, and here is the watch item
+
+**11 of the 14 `thin_ocr_result` markers are now past the 24 h window** (oldest 46 days) and
+**none has re-extracted.** That reads like a failure and is not. Every tick since 10:00 UTC:
+
+```
+retry_admitted:0 · scan_lowest_id:2 · scan_capped:false · scan_pages:2 · eligible:15
+```
+
+**The scan reaches document id 2 and is NOT budget-capped — it simply fills `limit=15` from the 426
+FRESH undrained documents before it needs a retry candidate.** Retries are correctly the lowest
+priority while genuine new work exists. **The 3 `fetch_failed` markers are all under 24 h and are
+correctly not due.**
+
+⚠️ **THE WATCH ITEM — a priority inversion, benign today:** if new documents arrive faster than the
+drain, the retry lane **never runs**. That is Class 12's shape one level up — not a fixed window, but
+**a lower-priority lane that can starve indefinitely.** Today it is fine (426 drains in ~2 days).
+**Verify `retry_admitted` goes non-zero as `undrained` approaches 0** — and if the folder feed keeps
+it permanently non-empty, the retry lane needs a reserved slot rather than the remainder.
 
 ## 1. Scott's question, answered
 
