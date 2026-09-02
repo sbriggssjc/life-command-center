@@ -398,6 +398,33 @@ function approvedOperatingIdentityAlias(target, context, capturedAddressToken) {
   return null;
 }
 
+function normalizeParcelNumber(value) {
+  return clean(value).toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+function approvedSameParcelAddressConflict(target, context, frozenAddressToken, capturedAddressToken) {
+  const aliases = Array.isArray(target.cms_evidence?.approved_same_parcel_address_conflicts)
+    ? target.cms_evidence.approved_same_parcel_address_conflicts
+    : [];
+  const capturedParcel = normalizeParcelNumber(context.parcel_number);
+  if (!capturedParcel) return null;
+  return aliases.find((alias) => {
+    if (alias?.status !== 'approved'
+      || alias?.reason_code !== 'service_location_mailing_address_same_parcel'
+      || alias?.frozen_address_token !== frozenAddressToken
+      || alias?.captured_address_token !== capturedAddressToken
+      || normalizeParcelNumber(alias?.parcel_number) !== capturedParcel
+      || !clean(alias?.authorized_by)
+      || !/^\d{4}-\d{2}-\d{2}T/.test(clean(alias?.authorized_at))) return false;
+    const citations = Array.isArray(alias.evidence_citations) ? alias.evidence_citations : [];
+    const sources = new Set(citations
+      .filter((citation) => /^https:\/\//i.test(clean(citation?.url)))
+      .map((citation) => clean(citation?.source).toLowerCase()));
+    return sources.has('official_facility_registry')
+      && sources.has('licensed_property_public_record');
+  }) || null;
+}
+
 export function assertAscResearchImport({ release_id, selection_fingerprint, candidate_pool_fingerprint, candidates } = {}) {
   for (const [name, value] of Object.entries({ release_id, selection_fingerprint, candidate_pool_fingerprint })) {
     if (!SHA256_RE.test(clean(value).toLowerCase())) throw new Error(`${name} must be a lowercase SHA-256 fingerprint`);
@@ -482,6 +509,12 @@ export function buildAscStructuredCapture(target, context = {}) {
       context,
       addressToken,
     );
+    const sameParcelAddressConflict = approvedSameParcelAddressConflict(
+      target,
+      context,
+      frozenComparisonToken,
+      addressToken,
+    );
     const parentBuildingMatch = hasAscSublocation(cmsIdentity.address)
       && buildingAddressTokensAgree(
         normalizeAscBuildingAddressToken(cmsIdentity),
@@ -495,6 +528,8 @@ export function buildAscStructuredCapture(target, context = {}) {
         normalizeAscBuildingAddressToken(cmsIdentity),
         normalizeAscBuildingAddressToken(context),
       );
+    const sameParcelAddressConflictMatch = sameParcelAddressConflict
+      && exactTenantCorroboration;
     const rangeContainment = capturedRangeContainsFrozenNumber(frozenComparisonToken, addressToken);
     const rangeContainmentMatch = rangeContainment && corroboration;
     const controlledFacilityAlias = controlledAscFacilityAlias(target, context);
@@ -516,12 +551,24 @@ export function buildAscStructuredCapture(target, context = {}) {
     const facilityCorroboration = exactFacilityCorroboration(target, context);
     const compoundStreetSplitMatch = compoundStreetSplit && facilityCorroboration;
     if (!parentBuildingMatch && !aliasMatch && !operatingIdentityAliasMatch
+      && !sameParcelAddressConflictMatch
       && !rangeContainmentMatch && !multiSignalRangeMatch
       && !municipalityAliasMatch && !directionalStreetTypeMatch
       && !compoundStreetSplitMatch) {
       throw new Error('Captured page does not match the active frozen ASC candidate');
     }
-    identityMatch = operatingIdentityAliasMatch ? {
+    identityMatch = sameParcelAddressConflictMatch ? {
+      mode: 'approved_same_parcel_address_conflict',
+      alias_reason_code: sameParcelAddressConflict.reason_code,
+      parcel_number: clean(context.parcel_number),
+      cms_service_address_preserved: clean(cmsIdentity.address),
+      captured_property_address_preserved: clean(context.address),
+      frozen_address_token: frozenComparisonToken,
+      captured_address_token: addressToken,
+      corroboration_basis: exactTenantCorroboration.basis,
+      corroborated_name: exactTenantCorroboration.matched_name,
+      second_review_required: true,
+    } : operatingIdentityAliasMatch ? {
       mode: 'approved_operating_identity_parent_building',
       alias_reason_code: operatingIdentityAlias.reason_code,
       cms_facility_name_preserved: clean(cmsIdentity.facility_name),
