@@ -285,7 +285,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab, opts) {
   if (!mainFilter) {
     // No property_id or lease_number — render a fallback detail panel
     // using the fields already present on the search card record
-    _setUdCache({ db, ids, property: null, leases: [], ownership: null, chain: [], rankings: null, fallback, _fallbackOnly: true });
+    _setUdCache({ db, ids, property: null, leases: [], ownership: null, chain: [], rankings: null, fallback, ownReconciled: null, _fallbackOnly: true });
     _udRenderFallbackHeader(db, fallback);
     if (bodyEl) bodyEl.innerHTML = _udRenderTab(activeTab);
     return;
@@ -516,6 +516,24 @@ async function openUnifiedDetail(db, ids, fallback, initialTab, opts) {
       console.warn('entity metadata lookup failed', e);
     }
 
+    // ── OWN-T0 ──────────────────────────────────────────────────────────
+    // The ONE reconciled ownership chain for this asset. Best-effort: a miss
+    // leaves ownReconciled null and the tab SAYS the reconciler was
+    // unreachable rather than rendering an empty chain, because "no owner" and
+    // "could not ask" are different facts (C10 — the polite `|| ''` default is
+    // exactly what let a wiring bug read as missing data).
+    let ownReconciled = null;
+    try {
+      const _ownPid = (synthProperty && synthProperty.property_id) || (ids && ids.property_id) || null;
+      if (_ownPid && (db === 'dia' || db === 'gov')) {
+        const _ownParams = new URLSearchParams({
+          action: 'ownership_chain', domain: db, property_id: String(_ownPid),
+        });
+        const _ownRes = await _entityApiFetch('/api/entities?' + _ownParams.toString());
+        if (_ownRes && Array.isArray(_ownRes.links)) ownReconciled = _ownRes;
+      }
+    } catch (_eOwn) { console.warn('reconciled ownership chain unavailable', _eOwn); }
+
     // Merge the direct-from-properties anchor / escalation columns onto the
     // view-sourced property record so _udPickCurrentRent can read them
     // without another fetch. The view may not expose these columns.
@@ -541,7 +559,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab, opts) {
         })
       : synthProperty;
 
-    _setUdCache({ db, ids, property: mergedProperty, leases, ownership, chain, rankings, fallback, entityMeta, lccEntityId: resolvedLccEntityId, completeness: completenessRow, nextAction: nextActionRow, _fallbackOnly: allEmpty });
+    _setUdCache({ db, ids, property: mergedProperty, leases, ownership, chain, rankings, fallback, entityMeta, lccEntityId: resolvedLccEntityId, completeness: completenessRow, nextAction: nextActionRow, ownReconciled, _fallbackOnly: allEmpty });
     // Render the data completeness rail at the top of the detail panel.
     // Best-effort: never throws upward (Item #6 Phase A, 2026-05-17).
     try { _udRenderCompletenessRail(); } catch (e) { console.warn('completeness rail render failed', e); }
@@ -7395,6 +7413,110 @@ function _udCurrentOwnerCard(own, db) {
   return h;
 }
 
+/**
+ * OWN-T0 — the reconciled ownership chain, from the ONE view.
+ *
+ * `rec` is the /api/entities?action=ownership_chain payload
+ * (v_lcc_property_ownership_reconciled). Every store that can name an owner of
+ * this asset is already folded in there, labelled by the KIND of record that
+ * made the claim, so this renderer never consults a second source.
+ *
+ * The point is not to pick a winner quietly. Where two parties are both on
+ * record as current, the banner SAYS SO and names them, because that is the
+ * true state of the file — and on gov it is usually a sponsor and its SPE,
+ * both correct at different levels of the stack. Measured 2026-09-02: 756
+ * properties carry more than one current owner and the standing detector read
+ * zero. See docs/architecture/ownership-history-lane.md § OWN-T0.
+ */
+function _udRenderReconciledOwnership(rec, db) {
+  let h = '<div class="detail-section">';
+  h += '<div class="detail-section-title">Ownership</div>';
+
+  if (!rec) {
+    // Never render a silent blank: an unreachable reconciler and an owner-less
+    // property are different facts (P180 / C10 — a polite default is what let a
+    // wiring bug read as missing data for months).
+    h += '<div class="detail-empty" style="font-size:13px">Reconciled ownership is unavailable right now — the source records below are still shown.</div>';
+    return h + '</div>';
+  }
+
+  const links = Array.isArray(rec.links) ? rec.links : [];
+  const state = rec.property_state || 'no_owner_on_file';
+
+  if (state === 'no_owner_on_file') {
+    h += '<div class="detail-empty" style="font-size:13px">No owner on record for this property in any store.</div>';
+    return h + '</div>';
+  }
+
+  if (state === 'conflict') {
+    const names = links.filter(l => l.is_owner_candidate).map(l => l.owner_name).filter(Boolean);
+    const CLASS_NOTE = {
+      duplicate_entity: 'the same party is recorded twice — this is a merge, not a change of ownership',
+      sponsor_family_confirmed: 'a confirmed sponsor and its single-asset entity — both are correct, at different levels',
+      placeholder_in_pair: 'one of these is a placeholder name, not a party',
+      operator_in_pair: 'one of these is the operator/tenant, not the owner',
+      brokerage_in_pair: 'one of these is a brokerage — the agent, never the principal',
+      unclassified_rival: 'not yet classified. On a GSA asset this is usually a sponsor and its SPE (both true); it can also be two genuinely different owners',
+    };
+    const note = CLASS_NOTE[rec.conflict_class] || '';
+    h += '<div style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);border-radius:8px;padding:10px 14px;margin-bottom:12px">';
+    h += `<div style="font-size:12px;font-weight:600;color:var(--yellow)">${names.length} owners on record as current</div>`;
+    h += `<div style="font-size:11px;color:var(--text2);margin-top:3px">${esc(names.join('  ·  '))}</div>`;
+    if (note) h += `<div style="font-size:11px;color:var(--text3);margin-top:5px">${esc(note)}.</div>`;
+    h += '<div style="font-size:11px;color:var(--text3);margin-top:4px">Neither has been superseded — nothing here was chosen for you.</div>';
+    h += '</div>';
+  } else if (state === 'only_non_owner_claims') {
+    h += '<div style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);border-radius:8px;padding:10px 14px;margin-bottom:12px">';
+    h += '<div style="font-size:12px;font-weight:600;color:var(--yellow)">No owner on file</div>';
+    h += '<div style="font-size:11px;color:var(--text2);margin-top:3px">Every party recorded against this asset is an operator, a brokerage or a placeholder — none of them owns it.</div>';
+    h += '</div>';
+  } else if (state === 'no_current_owner') {
+    h += '<div style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);border-radius:8px;padding:10px 14px;margin-bottom:12px">';
+    h += '<div style="font-size:12px;font-weight:600;color:var(--yellow)">Ownership history only</div>';
+    h += '<div style="font-size:11px;color:var(--text2);margin-top:3px">Every recorded owner has an end date and nobody has been recorded since.</div>';
+    h += '</div>';
+  }
+
+  const LEVEL = {
+    reconciled: 'Reconciled', domain_record: 'Domain record', title_record: 'Deed / county',
+    transaction_record: 'Sale record', lease_record: 'GSA lease', chain_apply: 'Ownership chain',
+    unattributed: 'Source not recorded', other: 'Other',
+  };
+
+  h += '<div class="detail-timeline">';
+  links.forEach((l) => {
+    const cur = l.is_current === true;
+    const cls = (cur && l.is_primary) ? 'green' : '';
+    const start = l.ownership_start_date ? _fmtDate(l.ownership_start_date) : null;
+    const end   = l.ownership_end_date ? _fmtDate(l.ownership_end_date) : (cur ? 'Present' : 'Unknown');
+    h += `<div class="detail-timeline-item ${cls}">`;
+    // Dates: "Start not on file" is stated, never guessed at (A2 — the start of
+    // a chain stays NULL rather than being bridged).
+    h += `<div class="detail-card-date">${esc(start ? (start + ' → ' + end) : ('Start not on file → ' + end))}</div>`;
+    h += `<div class="detail-card-title">${l.owner_entity_id ? entityLink(l.owner_name, 'entity', l.owner_entity_id, db) : esc(l.owner_name || '—')}`;
+    if (l.is_primary) h += ' <span class="detail-badge" style="background:rgba(34,197,94,0.12);color:var(--green);border:1px solid rgba(34,197,94,0.35);font-size:9px;padding:2px 7px;border-radius:10px;margin-left:6px">Owner</span>';
+    if (l.is_operator) h += ' <span class="detail-badge" style="background:rgba(251,191,36,0.10);color:var(--yellow);border:1px solid rgba(251,191,36,0.35);font-size:9px;padding:2px 7px;border-radius:10px;margin-left:6px" title="Operator / tenant recorded in the owner slot — not the owner">Operator</span>';
+    if (l.is_brokerage) h += ' <span class="detail-badge" style="background:rgba(251,191,36,0.10);color:var(--yellow);border:1px solid rgba(251,191,36,0.35);font-size:9px;padding:2px 7px;border-radius:10px;margin-left:6px" title="A brokerage is the agent, never the principal">Brokerage</span>';
+    if (l.is_placeholder) h += ' <span class="detail-badge" style="background:rgba(148,163,184,0.12);color:var(--text3);font-size:9px;padding:2px 7px;border-radius:10px;margin-left:6px">Placeholder</span>';
+    h += '</div>';
+    h += '<div class="detail-card-body">';
+    const bits = [];
+    bits.push(esc(LEVEL[l.evidence_level] || l.evidence_level || 'Unknown source'));
+    if (l.is_primary && l.primary_reason) bits.push(esc(l.primary_reason));
+    if (l.resolver_confidence != null) bits.push(Math.round(Number(l.resolver_confidence) * 100) + '% confidence');
+    h += `<span class="t-meta3-sm">${bits.join(' · ')}</span>`;
+    if (l.gap_before) {
+      h += '<div style="font-size:11px;color:var(--yellow);margin-top:4px">Gap in the recorded chain before this owner — the intervening owner is not on file.</div>';
+    }
+    h += '</div></div>';
+  });
+  h += '</div>';
+  h += '<div style="font-size:11px;color:var(--text3);margin-top:8px">One chain, assembled from every store that names an owner of this asset. Nothing is end-dated to produce it.</div>';
+  h += '</div>';
+  return h;
+}
+window._udRenderReconciledOwnership = _udRenderReconciledOwnership;
+
 function _udTabOwnership() {
   const own = _udCache.ownership;
   const chain = _udCache.chain || [];
@@ -7403,6 +7525,8 @@ function _udTabOwnership() {
   let html = '';
   // P3.3 — lead with the reconciled current owner (clickable to the owner sidebar).
   html += _udCurrentOwnerCard(own, db);
+  // OWN-T0: the reconciled chain is THE ownership answer on this tab.
+  html += _udRenderReconciledOwnership(_udCache.ownReconciled, db);
 
   // If no ownership data but fallback has ownership fields, show them
   if (!own && chain.length === 0) {
@@ -7560,7 +7684,13 @@ function _udTabOwnership() {
   // recorded_owner_id / true_owner_id. This prevents "Mds Dv Victorville"
   // from appearing as both the current owner AND a 2015–2016 historical
   // owner. Earliest transfer_date and latest ownership_end win.
+  // OWN-T0: the DOMAIN stores are evidence now, not the answer. They stay --
+  // they carry sale price, cap rate, the NM badge and prospecting state that the
+  // reconciled chain does not -- but behind a disclosure, because rendering them
+  // beside the reconciled chain as an equal claim is what made the tab
+  // "conflicting" in the first place.
   const dedupedChain = _udDedupChain(chain, own);
+  html += '<details style="margin-bottom:16px"><summary style="cursor:pointer;font-size:12px;color:var(--text2);padding:6px 0">Source records \u2014 domain ownership history (' + dedupedChain.length + ')</summary>';
   html += '<div class="detail-section">';
   html += `<div class="detail-section-title">Ownership History <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">${dedupedChain.length} records</span></div>`;
 
@@ -7685,7 +7815,7 @@ function _udTabOwnership() {
     });
     html += '</div>';
   }
-  html += '</div>';
+  html += '</div></details>';
 
   // ══════════════════════════════════════════════════════════════════════
   // MOVED TO THE OWNER PANEL — redesign 2026-08-15 §2.5 / §3.3
