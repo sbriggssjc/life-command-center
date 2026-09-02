@@ -337,6 +337,25 @@ gate has only been proven green, never proven to fail); the checkout log free of
 `B6e-ci-required-check` flipped. Prompt + response filed to `done/`
 (`B6e-ci-last5-decisions-resolved.response.md` is a transcription of the mid-flight `.docx`; the
 outcome above is from the run itself).
+## 2026-09-02 — OCR1 run 2 (with the floor) → tesseract = §5 row 2; OCR2 verified live; EXT1 filed
+
+- **OCR1 run 2:** model self-agreement floor **93%** (`lease_expiration` only 71%); tesseract **80%**
+  (−13 pp) on 10 real docs. Read on named rows: 2 model-arithmetic, 4 date-default noise, **3 real
+  tesseract misses** (one promoted a person's name over the company — a layout/reading-order effect),
+  2 fixture. **Verdict for tesseract: §5 row 2** — free pre-filter/fallback that removes the page cap,
+  not a DocAI replacement. Paddle failed on all 18 with a paddlepaddle 3.x oneDNN/PIR runtime error
+  (Windows CPU); surya reported its Docker requirement once. **Deciding run → GaryBuilt** (👤).
+  Record: `responses/done/OCR1-run2-with-self-control.response.md`.
+- **EXT1 filed:** the extraction model, not OCR, is the larger error source on `year1_rent`
+  (annualized in the model's head, differently per call) and `lease_expiration` (29% self-disagree).
+  Return rent with its basis, annualize in code, dates as quoted.
+- **OCR2 verified live:** `gov_/dia_merge_document_extracted_data` present on both domains, `anon`
+  EXECUTE **false** by `has_function_privilege`, 0 provenance rows (correct — no new deed), Railway at
+  `35528de9`. ⚠️ **A `/version` probe can return a CACHED body** — the first fetch showed the morning's
+  SHA with the morning's `ts`; a cache-busting query param returned the truth. Add one always.
+- Files: OCR1c + OCR2 responses and the OCR2 prompt → `done/`. `prompts/` holds the handoff and
+  PR2 (other window).
+
 ## 2026-09-02 — Scott's app walk-through catalogued: 48 comments → UX0–UX49, tiered T0–T4 (P16)
 
 Source: `LCC App Function Notes.docx` (41 screenshots; kept outside the repo). Canonical page
