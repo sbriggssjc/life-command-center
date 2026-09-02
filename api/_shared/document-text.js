@@ -702,7 +702,16 @@ export async function ocrPdfToTextTiered({ buffer, mediaType } = {}, deps = {}) 
  */
 export async function extractDocumentText(
   {
-    sourceUrl, storageRef, storagePath, mediaType, allowOcr = true, ocrTiered = false,
+    sourceUrl, storageRef, storagePath, mediaType, allowOcr = true,
+    // ⚠️ OCR2 — DEFAULT `true`, AND `false` IS REFUSED BY NAME. This used to default
+    // to `false`, which meant a caller that simply omitted the flag reached gpt-4o
+    // vision DIRECTLY — the 6–14x tier — with nothing in the call site to show for
+    // it. Both production callers happened to pass `true`, so the hazard was that a
+    // NEW caller inherits the expensive path by writing nothing at all. The tiered
+    // chain (free local -> cheap DocAI -> gpt-4o LAST RESORT) is now the only PDF
+    // route out of this function; `ocrPdfToText` survives solely as tier 3 INSIDE
+    // `ocrPdfToTextTiered`, where it is gated on an explicit opt-in.
+    ocrTiered = true,
     minChars = DOC_TEXT_MIN_CHARS,
     // DOC8 — refuse OCR above this many PDF pages instead of falling through to
     // gpt-4o. null (the default) is OFF, so every existing caller — the deed lane
@@ -853,12 +862,20 @@ export async function extractDocumentText(
       }
     }
 
-    let ocr;
-    if (ocrTiered) {
-      ocr = await (deps.ocrPdfToTextTiered || ocrPdfToTextTiered)({ buffer, mediaType: ct || 'application/pdf' }, deps);
-    } else {
-      ocr = await (deps.ocrPdfToText || ocrPdfToText)({ buffer, mediaType: ct || 'application/pdf', ocrImpl: deps.ocrImpl });
+    // ⚠️ OCR2 — a caller that explicitly asks to skip the tiering is REFUSED by name
+    // rather than quietly served the expensive engine. Silently honouring it would
+    // restore exactly the reachability this closed, and a silent bypass of a cost
+    // control is indistinguishable from the control not existing.
+    if (ocrTiered === false) {
+      return {
+        ok: false, reason: 'ocr_tiering_cannot_be_disabled',
+        status: 0,
+        detail: 'extractDocumentText no longer has a gpt-4o-direct path; gpt-4o remains reachable only as the last tier inside ocrPdfToTextTiered.',
+      };
     }
+    const ocr = await (deps.ocrPdfToTextTiered || ocrPdfToTextTiered)(
+      { buffer, mediaType: ct || 'application/pdf' }, deps,
+    );
     if (ocr.ok && ocr.text) {
       return {
         ok: true, text: ocr.text, method: 'ocr', text_len: ocr.text.length,

@@ -480,6 +480,16 @@ Full writeup: `docs/audits/B6d_FEED_EXPECTATION_GRADING_2026-08-29.md`.
   bot caught it. ⚠️ **Do not generalise to "revoke PUBLIC from every definer function"**:
   `compute_feed_freshness` keeps an explicit `anon` grant BY DESIGN (the LCC cross-DB pull reads
   `v_feed_freshness` as anon), and revoking it would silently blind the freshness monitor.
+- **⚠️ AND THE COMPLEMENTARY HALF BIT OCR2 LIVE (2026-09-02): `REVOKE ... FROM public` DOES NOT
+  REMOVE THE **EXPLICIT** `anon`/`authenticated` GRANTS EITHER.** Supabase ships
+  `ALTER DEFAULT PRIVILEGES` granting EXECUTE on new functions to both roles, so at CREATE time they
+  hold *explicit* grants, not PUBLIC ones. Measured immediately after applying
+  `<dom>_merge_document_extracted_data`: `proacl = {postgres=X/postgres,anon=X/postgres,
+  authenticated=X/postgres,service_role=X/postgres}` and
+  `has_function_privilege('anon', oid, 'EXECUTE') = TRUE` — i.e. revoking PUBLIC alone was a **no-op
+  for the two roles that matter**, the exact mirror of the trap above. **Revoke BOTH
+  (`from public, anon, authenticated`), then ASSERT with `has_function_privilege()`.** The one rule
+  that covers both halves: *never read a privilege off the GRANT or REVOKE you just wrote.*
 
 ### ⚠️ RE-MEASURE A DATED BLOCKER BEFORE QUOTING IT (2026-08-20)
 
@@ -888,6 +898,56 @@ possible reality-driven advance.
 When a change spans DB + JS: **apply the additive/DB migration first, then ship the JS on the Railway
 redeploy.** A DB `CHECK` constraint that enforces new writer output must be applied **AFTER** the writer deploy
 (else the still-deployed old writer 500s every write). "Constraint after writer deploy; additive schema before."
+
+### ⚠️ A SHARED jsonb COLUMN NEEDS ONE MERGE OWNER — A `PATCH {col: {...}}` IS A REPLACE (OCR2, 2026-09-02)
+
+The deed drain computed `{method, ocr_tier, ocr_engine, ocr_pages}` on every extraction, returned
+them on the tick, and persisted **only** `raw_text` + `ingestion_status` — so gov's 325 deeds with
+text and dia's 182 carried **0 OCR provenance** and the tier mix was unauditable. That is the
+ordinary half. The half worth carrying:
+
+- **`property_documents.extracted_data` had TWO writers and one REPLACED the whole column.**
+  `deed-parser.js` wrote `extracted_data: { deed_extraction, extracted_at }` — a PostgREST PATCH of
+  a jsonb column is a **wholesale replace, not a merge** — so a provenance key written beside it was
+  destroyed on every deed, and a later `processOneReparse` would destroy one written on an earlier
+  tick. **Shipping the provenance write alone would have been a feature that silently no-ops.**
+- **The evidence is a KEY CENSUS, not a code read.** gov's 185 rows carry **exactly** the two keys
+  that write puts there and nothing else; dia carries **10 rows with a third** (`r59_backfilled_at`,
+  from the one call site that already merged). *A sibling key CAN survive; on the replacing path it
+  did not.* **`jsonb_object_keys` grouped over the population settles this in one query** — do it
+  before adding a key to any shared jsonb column.
+- **The fix is ONE merge owner, and it must be an RPC.** PostgREST cannot merge jsonb in a PATCH,
+  and a read-then-write from the handler RACES the other writer inside the same tick — so
+  `<dom>_merge_document_extracted_data` takes `FOR UPDATE` and both call sites go through it. Per-KEY
+  fill-blanks, never whole-object: a patch carrying one new key and one existing key must write the
+  new one. A third writer added later inherits the guarantee for free.
+- **Keep the legacy write as the RPC-failure FALLBACK.** A half-applied deploy then degrades to
+  today's behaviour instead of losing a deed extraction — which would strand the doc in the re-parse
+  queue forever.
+- **⚠️ THE HAZARD IN AN OPT-OUT IS THE DEFAULT, NOT THE CALLERS.** `extractDocumentText`'s signature
+  read `ocrTiered = false`, so *omitting* the flag reached gpt-4o vision directly — the 6–14× tier.
+  Both production callers happened to pass `true`, so the census read clean and the risk was entirely
+  that a NEW caller inherits the expensive path by writing nothing. Default flipped to `true`, the
+  branch REMOVED, and an explicit `false` **refused by name**: a silent bypass of a cost control is
+  indistinguishable from the control not existing. `ocrPdfToText` now has exactly ONE call site —
+  tier 3 inside `ocrPdfToTextTiered`.
+- **⚠️ DO NOT BACKFILL A PROVENANCE YOU CANNOT KNOW, AND MAKE THAT THE VERIFICATION.** 507 deeds
+  already carry text; 154 of gov's dated extractions predate DocAI (gpt-4o was the only OCR that
+  existed) and 140 carry no date at all. They read `unrecorded`, and **`unrecorded` FALLING is the
+  regression signal** — the inverse of the usual "did the number move" check (P180: unknown is not a
+  value).
+- **Read `provenance_written`, never the `ocr_tier`/`ocr_engine` beside it** — those report what the
+  tick COMPUTED, and the gap between computed and persisted was the entire defect. A
+  `provenance_reason` of `rpc_non_ok:404` is a **deploy** fact (migration not applied on that
+  domain), not a data fact.
+- **⚠️ TWO GUARDS PASSED THEIR OWN MUTATION VIA THE IMPORT LINE.** Asserting that the source
+  *mentions* `writeTextProvenance` / `mergeExtractedData` survived the mutation that deleted the
+  actual call, because the import still carried the identifier — the documented "a guard that matches
+  a shape is defeated by a local variable", defeated by an import instead. Both were replaced with
+  behavioural tests that INVOKE `processOneDoc` / `processDeedDocument` with stubs, and the ordering
+  (`['deed','provenance']`) is asserted directly. Guard
+  `test/ocr2-deed-provenance.test.mjs` (18 tests, **16/16 mutations RED**). Writeup:
+  `docs/audits/OCR2_DEED_OCR_PROVENANCE_2026-09-02.md`.
 
 ### Single-advance-owner (cadence)
 
