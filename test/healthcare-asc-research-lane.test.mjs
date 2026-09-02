@@ -598,6 +598,76 @@ test('approved operating identity aliases bind a CMS sublocation to its parent b
   );
 });
 
+test('approved same-parcel conflicts preserve service and mailing addresses with exact tenant corroboration', () => {
+  const conflict = {
+    status: 'approved',
+    reason_code: 'service_location_mailing_address_same_parcel',
+    frozen_address_token: '5058 S FLORIDA AVE|TESTVILLE|FL|33813',
+    captured_address_token: '5050 S FLORIDA AVE|TESTVILLE|FL|33813',
+    parcel_number: '23-29-12-000000-021160',
+    authorized_by: 'research_owner',
+    authorized_at: '2026-09-02T12:00:00Z',
+    evidence_citations: [
+      { source: 'official_facility_registry', url: 'https://registry.example/asc-location' },
+      { source: 'licensed_property_public_record', url: 'https://property.example/public-record' },
+    ],
+  };
+  const target = {
+    candidate_fingerprint: sha('e'),
+    address_token: conflict.frozen_address_token,
+    cms_identity: {
+      facility_name: 'Synthetic Ospine Surgical Center',
+      address: '5058 S Florida Ave', city: 'Testville', state: 'FL', zip: '33813',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Ospine LLC'],
+      approved_same_parcel_address_conflicts: [conflict],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/ospine',
+    address: '5050 S Florida Ave', city: 'Testville', state: 'FL', zip: '33813',
+    parcel_number: '23-29-12-000000-021160',
+    tenant_name: 'Synthetic Ospine Surgical Center',
+    square_footage: '3,500',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'approved_same_parcel_address_conflict');
+  assert.equal(built.identity_match.parcel_number, context.parcel_number);
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const mismatch of [
+    { parcel_number: '23-29-12-000000-021161' },
+    { parcel_number: '' },
+    { tenant_name: 'Unrelated Surgical Center' },
+    { address: '5052 S Florida Ave' },
+    { city: 'Other City' },
+    { zip: '33814' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: {
+        ...target.cms_evidence,
+        approved_same_parcel_address_conflicts: [{
+          ...conflict,
+          evidence_citations: [conflict.evidence_citations[0]],
+        }],
+      },
+    }, context),
+    /does not match/,
+  );
+});
+
 test('building ranges contain a frozen street number only with exact location and tenant corroboration', () => {
   const target = {
     candidate_fingerprint: sha('9'),
