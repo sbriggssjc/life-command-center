@@ -21,6 +21,7 @@
 
 import { domainQuery } from '../_shared/domain-db.js';
 import { validateDeedIngest, buildDeedDataHash } from '../_shared/ingest-contract.js';
+import { mergeExtractedData } from '../_shared/document-text-provenance.js';
 
 // ── Transfer tax rates by jurisdiction ─────────────────────────────────────
 // California standard: $1.10 per $1,000 of consideration
@@ -549,18 +550,48 @@ export async function processDeedDocument(domain, propertyId, documentId, rawTex
   // Step 2: Store extracted data on property_documents row. The column is
   // `extracted_data` (jsonb) and the PK is `document_id` on BOTH domains — the
   // original `metadata`/`id` write was a silent no-op against the real schema.
+  // ⚠️ OCR2 — THIS WRITE USED TO REPLACE THE WHOLE `extracted_data` COLUMN.
+  // A PATCH of `extracted_data: {...}` is a wholesale replace, not a merge, so it
+  // destroyed every sibling key: OCR2's `document_text` provenance written by the
+  // same tick, and the R59 `r59_backfilled_at` marker on a re-parse (which made
+  // the doc eligible for the propagate backfill again). Evidence it was real, not
+  // theoretical: gov's 185 extracted_data rows carry EXACTLY the two keys this
+  // block writes and nothing else, while dia carries 10 rows with a third key —
+  // from the one call site that already merged.
+  //
+  // It now routes through the domain's merge RPC, the single owner of writes to
+  // this column. `fillBlanks:false` is deliberate — a re-parse is EXPECTED to
+  // rewrite its own extraction (that is what the re-parse queue exists for); it
+  // simply may no longer take anyone else's keys with it.
+  //
+  // FALLBACK: on any RPC failure (most plausibly the migration not yet applied on
+  // this domain) we fall back to the legacy replace-PATCH. That is today's exact
+  // behaviour, so the worst case of a half-applied deploy is what already ships —
+  // never a lost deed extraction, which would strand the doc in the re-parse queue
+  // forever.
   if (documentId != null) {
-    await q(domain, 'PATCH',
-      `property_documents?document_id=eq.${documentId}`,
-      {
-        ingestion_status: 'deed_parsed',
-        extracted_data: {
-          deed_extraction: parsed,
-          extracted_at: new Date().toISOString(),
+    const merged = await (deps.mergeExtractedData || mergeExtractedData)(
+      domain,
+      documentId,
+      { deed_extraction: parsed, extracted_at: new Date().toISOString() },
+      { ingestionStatus: 'deed_parsed', fillBlanks: false },
+      { ...deps, domainQuery: q },
+    ).catch((e) => ({ ok: false, reason: `merge_threw:${e?.message || e}` }));
+
+    if (!merged.ok) {
+      result.extractedDataMergeFallback = merged.reason || 'unknown';
+      await q(domain, 'PATCH',
+        `property_documents?document_id=eq.${documentId}`,
+        {
+          ingestion_status: 'deed_parsed',
+          extracted_data: {
+            deed_extraction: parsed,
+            extracted_at: new Date().toISOString(),
+          },
         },
-      },
-      { 'Prefer': 'return=minimal' }
-    ).catch(() => {});
+        { 'Prefer': 'return=minimal' }
+      ).catch(() => {});
+    }
   }
 
   // Step 3: Upsert deed_record if we have a document number.
