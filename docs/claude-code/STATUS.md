@@ -16,6 +16,41 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — EXT1b SHIPPED: `as_stated` is the authority, the model's labels are the fallback. ⚠️ The floor movement is PREDICTED — the measurement is Scott's re-run.
+
+- **What shipped:** `basisFromAsStated` / `amountFromAsStated` / `precisionFromAsStated` + two
+  reconcilers in `api/_shared/bov-extract.js`, wired before `annualizeRent` and both date resolvers
+  and into `cleanRentPeriod`. **One JS file. No migration, no prompt change, no OCR change, no
+  backfill.** Guard `test/ext1b-as-stated-authority.test.mjs` — 23 tests, **16/16 mutations RED**;
+  full suite **5,178 / 0 fail**; the 21 EXT1 tests unchanged. Record:
+  `responses/EXT1b-basis-precision-quotes.response.md`.
+- **The three named rows, re-scored:** 431 rent `null → **105,558**` (quote said *per month*, label
+  said `per_sf_annual`, amount was ÷1,000); 336 `null → **75,000**` (the year-1 figure is the first
+  `$` in the schedule quote); 431 dates `formula/null → **2021-03-15, precision day**` on BOTH runs.
+  **255 held at 101,568** — EXT1b must not move the row EXT1 already fixed, and it does not.
+- **⚠️ THE AMOUNT RULE IS PRESENCE-IN-THE-QUOTE, NOT A TOLERANCE.** 8.7965 and 8,796.50 are the same
+  figure scaled by 1,000; **no threshold separates that from a different figure on the page.** The
+  model keeps its amount only when that amount appears as a `$`-figure in its OWN quote — measured on
+  *"a security deposit of $10,000 and base rent of $8,796.50 per month"*, where a bare first-figure
+  rule takes the deposit.
+- **⚠️ THE BASIS WINDOW STOPS AT THE NEXT `$`.** Doc 336 states a period *and* a parenthetical
+  monthly restatement of the same rent; over the whole string that is ambiguous and abstains, losing
+  the row. Where a window genuinely carries both markers the answer is **null and the model's label
+  stands** — silence hands the decision back rather than flipping a coin.
+- **⚠️ A FORMULA IS NEVER TURNED INTO A DATE, INCLUDING ONE THAT CONTAINS A DATE.** The parser must
+  CONSUME the whole quote; *"the earlier of March 1, 2021 or thirty days after Delivery"* contains a
+  calendar date and IS a formula, and a `.search()` would resolve it and re-commit the exact defect
+  EXT1 removed. And the quote decides in BOTH directions — a month-only quote under a `day` label
+  drops the day the model invented.
+- **PREDICTED floor:** `year1_rent` 89 → ~100, both dates 80 → ~100, other three fields unchanged.
+  ⚠️ **Two caveats, stated because EXT1's prediction was wrong in exactly this way:** it assumes the
+  residue is only the rows already read (last time I assumed the model's LABELS were as reliable as
+  its QUOTES), and **`decided fields` should RISE on the dates** as 431 stops being both-null, so the
+  denominator moves and the rate is not directly comparable to run 3's. Doc 425's dates must stay
+  honest nulls — that is a real OCR miss.
+- **Next:** Scott's `--run --model real --control self --engines tesseract`, then read the same two
+  floor rows.
+
 ## 2026-09-02 — UX-T0 reconciled (deploy + migrations verified); EXT1 floor MEASURED — two noise classes gone, labels are the next layer → EXT1b
 
 - **UX-T0 (#2061) verified live:** JS in deployed `a3172f44`; `v_manager_overview.is_team_member`
