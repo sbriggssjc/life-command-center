@@ -21,7 +21,27 @@
 | `sales_transactions` | 4,783 | `listing_broker` name **2,111** · `listing_broker_id` **181** |
 
 **The FK targets are real:** `sales_transactions.listing_broker_id` and `procuring_broker_id` both
-FK to `brokers.broker_id`. **The model is right. It is unpopulated.**
+FK to `brokers.broker_id`.
+
+⚠️ **CORRECTION 2026-09-02 — this page originally said "the model is right, it is unpopulated." That
+was wrong and complacent. It is right in SHAPE and MIS-POPULATED in content: the composite defect was
+written into the firm registry too.** Measured on `broker_companies` (131 rows):
+
+| | count | share |
+|---|---:|---:|
+| `company_name` containing a `;` | **73** | **56%** |
+| single-token rows (`ay`, `cb`, `acre`, `cook`) | 28 | 21% |
+| rows that read as a person's name | 9 | 7% |
+| `colliers%` family rows | **7** | — |
+
+Live examples: **`cbre; smyth & colliers; patel`** minted as one company; **`colliers`,
+`colliers international`, `colliers; mason`, `colliers; olaiz`, `colliers; patel`, `colliers; spisak`,
+`colliers; yeggy`** as seven separate firms; `callander commercial` beside
+`callander commercial; callander`; and `colin cornell` as a company.
+
+**So the real distinct-firm count is far below 131.** Any resolution that matches against
+`broker_companies` as it stands will attach agents to composite pseudo-firms. **Repair the registry
+before, or as part of, using it as a match target** (`BR1`).
 
 ## 2. ✅ NOT A DEFECT — keeping the name beside the id is the DESIGN
 
@@ -66,6 +86,21 @@ is to PARSE into the model that already exists, and keep the raw string as the e
 3. **143 duplicate-name groups** in `brokers` (2,280 distinct names across 2,425 rows).
 4. **`4802 D Dialysis, LLC` appears as a broker name** — a property/entity name misparsed into the
    broker slot. There will be others.
+
+## 4a. ✅ SHIPPED 2026-09-02 (BR2) — 846 resolved, and the producer was fixed with it
+
+| | before | after |
+|---|---:|---:|
+| `listing_broker_id` set | 181 | **1,027** |
+| name set / id NULL | 1,930 | **1,084** |
+| **id set / name NULL** | **0** | **0** ✅ |
+
+**The `update_field` producer fix landed in the same change as the backfill** — the prerequisite
+held, so this is not a one-shot repair of a live producer (Class 8). **`id_set_name_null` stayed at
+0**, which is the invariant that proves no name was destroyed.
+
+**1,084 remain**, and they are the Tier 2/3 population: composites, abbreviations, bare surnames and
+misparses. **They stay unresolved on purpose.**
 
 ## 5. How to resolve it — deterministic first, review lane for the rest
 

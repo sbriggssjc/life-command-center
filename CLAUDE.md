@@ -4344,9 +4344,16 @@ Related invariants from the same round:
   CMS reporting series rather than a nightly feed, and a future-dated `snapshot_date` is CMS
   fiscal-period convention. 🚨 **The thing to know: FY2026 holds ZERO `hcris_form_265_11` rows — 100%
   default fallback — so its "73.66% Medicare / $297.87 blended" is the fallback signature, not a
-  market shift.** A year chart including it reads as a 20% rate collapse. **Latent, not live**
-  (`cm_dialysis_clinic_econ_trend_y` tops out at 2024), and its only guard is `HAVING count(*) >=
-  1000` — a magnitude proxy; **FY2026 is at 724.** → `DE1`.
+  market shift.** ✅ **FIXED 2026-09-02 (DE1): both CM econ exhibits now gate on `payer_mix_source`.**
+  ⚠️ **AND THE "LATENT, NOT LIVE" CALL I MADE WAS WRONG — BOTH VIEWS MOVED.** I reasoned about FY2026
+  alone (excluded by `HAVING count(*) >= 1000` at 724 rows) and missed that **modeled rows exist in
+  EVERY year** — 523 across FY2021–24. Trend view FY2024: clinics 6,754 → 6,536, avg revenue
+  $3,476,458 → **$3,584,713 (+3.1%)**. And `cm_dialysis_operator_unit_economics` was **LIVE-WRONG**
+  — it filters `is_current_year`, spanning FY2011–2026, so it served the fallback husks directly and
+  **understated Satellite's revenue/clinic by 41%**. **A year-based guard and a quality-based guard
+  are NOT substitutes** — the row-count threshold protected against thin years, not modeled data, and
+  the two populations only partly overlap. ⚠️ The confound was tested and rejected: **modeled ≠ merely
+  stale** (measured-but-stale clinics look normal at 8,742 tx/yr; modeled ones are husks at 27).
   - ⚠️ **`definition ILIKE '%confidence_tier%'` REPORTS THE OPPOSITE OF THE TRUTH** — it matches the
     SELECT projection, and three views were nearly recorded as "careful" on that basis. **Test for
     the predicate (`WHERE … confidence_tier`), and treat a comfortable result as a bug signal**
@@ -4361,7 +4368,14 @@ Related invariants from the same round:
   the strings" is the wrong instinct and destroys information** — a co-listing is a real fact; parse
   into the model that already exists and keep the raw string as evidence. **80% (422 of 528) resolves
   on an exact case-insensitive match; the residue is abbreviations, surnames and co-listings and must
-  NOT be fuzzy-matched.** → `BR1`–`BR5`.
+  NOT be fuzzy-matched.** ✅ **BR2 SHIPPED 2026-09-02 with its producer fix in the SAME change**:
+  `listing_broker_id` 181 → **1,027**, name-with-no-id 1,930 → **1,084**, `id_set_name_null` held at
+  **0**. 🚨 **CORRECTION — the firm registry is MIS-populated, not merely unpopulated**: of
+  `broker_companies`' 131 rows, **73 (56%) contain a `;`**, 28 are single-token abbreviations, 9 read
+  as person names, and 7 are the `colliers%` family — **`cbre; smyth & colliers; patel` is minted as
+  ONE company.** The composite defect was written into the firm table too, so **the real distinct-firm
+  count is far below 131 and any matcher pointed at it will attach agents to composite pseudo-firms.**
+  → `BR1`–`BR5`.
 - **📍 PRODUCER HEALTH & CI ENFORCEMENT — one door into the whole B6 arc (fourteen audits):**
   `docs/architecture/producer-health-and-ci-enforcement.md`. **START HERE for "is our ingestion
   running / does anything watch it / does CI enforce anything".** Live producer state, the CI
