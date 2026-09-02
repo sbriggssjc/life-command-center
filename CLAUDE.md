@@ -1028,7 +1028,7 @@ Every cross-table field write to curated tables is observed:
   2026-09-02 it read **30**, then **29** after PR5 registered one of them; the same day's earlier
   measurement was 22 (a dated figure), and the 35 quoted further below is older still.
 
-### The provenance ladder — invariants (2026-09-02 arc PR1→PR12; full text + measurements in `docs/architecture/field-provenance-ladder.md`)
+### The provenance ladder — invariants (2026-09-02 arc PR1→PR12 + PR5c-entities; full text + measurements in `docs/architecture/field-provenance-ladder.md`)
 
 - **The registry IS the allowlist (PR8).** `lcc_flush_provenance_events()` merges an event under
   its own source name only if a `field_source_priority` row exists for THAT (table, field, source);
@@ -1044,6 +1044,21 @@ Every cross-table field write to curated tables is observed:
 - **`lcc_merge_field` ALWAYS inserts a row** (write/skip/conflict), so a (table, field, source) at
   zero rows means **the call never completed**, never that it decided against writing. Test it in
   one rolled-back replay with the caller's exact payload (PR5c).
+- **⚠️ WIRING A LADDER ONTO A TABLE WITH AN EMPTY LEDGER BUYS RECORDING, NOT PROTECTION
+  (PR5c-entities).** `lcc_merge_field` compares against `field_provenance`, **not the live column**,
+  so the first call on every field returns `no_prior_provenance` ⇒ **write**, whatever that column
+  already holds — a ladder cannot protect a curated value it has never seen. And `enforce_mode` is
+  part of the wiring: `shouldWriteField` blocks only on `strict`, so under **`record_only`** (all ten
+  `entities` `email`/`phone` rungs) a `skip` is recorded and the write proceeds anyway. **Read the
+  enforce mode before predicting any behaviour change, and never describe such a change as switching
+  on fill-blanks protection.** Corollary: where the writer already has its OWN ledger (here
+  `metadata.field_sources`), a field the ladder drops must lose its stamp there too — that stamp is
+  what the writer reads next run, so a lie in it is self-perpetuating (the PR10 two-ladders shape).
+- **⚠️ A GREP DOES NOT FIND THE WRITERS OF A COLUMN, AND PER-FILE COLUMN UNIONS CONFLATE THEM.**
+  Censusing `entities` writes by grep gave **24 sites / 13 files**; an AST walk gave **41 / 16**.
+  Unioning columns per FILE then reported `bridge-handlers-salesforce.js` as an `email`/`phone`
+  PATCHer when only its CREATE path carries them and both PATCHes are `metadata`-only. **Count with
+  a parser and read the payload per SITE** (the N15c lesson, at column grain).
 - **`target_database` is a CLOSED vocabulary** (`lcc_opps`/`dia_db`/`gov_db`, CHECK-enforced) and
   is NOT part of the rung lookup, so a wrong value passes every ladder check and fails 23514 at the
   INSERT. Single owner: `provenanceTargetDatabase()` in `api/_shared/field-priority-guard.js`.

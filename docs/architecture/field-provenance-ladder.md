@@ -26,6 +26,12 @@
   (`unregistered_source_filling_blank`), never overrides (`unregistered_source_with_existing_value`),
   and is overridable by anyone (`replacing_unregistered_source`). Registering or de-registering a rung
   therefore moves outcomes in BOTH directions — never delete one; soft-retire in `notes`.
+- **⚠️ The ladder compares against `field_provenance`, NOT the live column, and `enforce_mode`
+  decides whether it gates at all.** `lcc_merge_field` reads the current value from its own ledger, so
+  the first call on a field whose table has an empty ledger is `no_prior_provenance` ⇒ **write**,
+  whatever the column holds. And `shouldWriteField` blocks only on `strict`: under `record_only` a
+  `skip` is recorded and the write proceeds. Wiring a ladder onto a fresh table therefore buys the
+  LEDGER, not protection — the prerequisite for grading a gate, not the gate. (PR5c-entities.)
 - **The rung lookup keys on `(target_table, field_name, source)` only.** `target_database` is a
   separate CHECK (`lcc_opps`/`dia_db`/`gov_db`) evaluated at the INSERT, after every ladder question.
 - **`lcc.`, `dia.`, `gov.` in `target_table` are logical prefixes, not schemas** (`to_regclass` is NULL
@@ -57,11 +63,16 @@
 `unreached_and_broken` 2) · never-written sources **39 by design** · write-but-unregistered 21 (benign
 `cleanup_run_*`) · unranked **29** · `value_text_hash` plain + trigger, 0 null hashes, 8 break-class rows
 hashing correctly since PR12 · `field_provenance` on LCC-internal tables **0** (correct until the
-fixed callers run post-redeploy) · `agency_classifier` own-name rows **0** (no-population zero — no gov
+fixed callers run post-redeploy; for `entities` see PR5c-entities — both writers are wired but
+neither is scheduled, so `0 → N` needs an operator run) · `agency_classifier` own-name rows **0** (no-population zero — no gov
 write has fired since PR8).
 
-**Deploy state:** migrations for PR8/PR5/PR12/PR5c all applied live. Railway redeploy for
-`98248e18`+`68ede28c`+`06a3ee5d` unconfirmed; `availability-checker` edge function **fixed in source,
+**Deploy state:** migrations for PR8/PR5/PR12/PR5c all applied live. ✅ **Railway redeploy for
+`98248e18`+`68ede28c`+`06a3ee5d` CONFIRMED 2026-09-02** — live `/version` = `557e1462a5f2`
+(= `origin/main` HEAD), and `git merge-base --is-ancestor 06a3ee5d 557e146` is true. ⚠️ The sandbox
+has no Railway egress (proxy 403); `/version` was read with `net.http_get` **from the DB**, which
+does — a cheaper probe than any handler behavioural check, and immune to the auth-401 misread.
+`availability-checker` edge function is still `availability-checker` edge function **fixed in source,
 undeployed** (PR5c-deploy). → `docs/os/OPERATOR-ACTIONS.md`.
 
 ## 4. The arc — one line each, audit for the rest
@@ -75,10 +86,13 @@ undeployed** (PR5c-deploy). → `docs/os/OPERATOR-ACTIONS.md`.
 | PR5 / PR7 | 09-02 | 39 never-written sources triaged (25 not defects; 7 live elsewhere); 19 orphan-column pairs | `PR5_LADDER_SOURCE_TRIAGE_2026-09-02.md` |
 | PR12 | 09-02 | `::bytea` hash aborted `lcc_merge_field` on quotes/newlines; JS failed open; fixed in place | `PR12_PROVENANCE_QUOTE_LOSS_2026-09-02.md` |
 | PR5c | 09-02 | 33 zero-row internal rungs = five callers sending an invalid `target_database` (23514, 100%) | `PR5c_INTERNAL_RUNG_VERDICTS_2026-09-02.md` |
+| PR5c-entities | 09-02 | the 13 `entities` rungs had no caller; the two contact writers now consult the ladder — **recording only, because every rung is `record_only`** | `PR5c_entities_LADDER_WIRED_2026-09-02.md` |
 
 **Open (backlog ids):** PR1d (`REGRID_API_KEY`, Scott) · PR5a (29 field-grain gaps — should a ladder
 govern bookkeeping columns at all?) · PR5b (`om_extraction` unregistered where it competes) ·
-PR5c-entities (13 `entities` rungs with no merge-path caller) · PR5c-signal · PR5c-avail-field ·
+~~PR5c-entities~~ ✅ (wired 09-02) · PR5c-enforce (all 10 `entities` contact rungs are
+`record_only`, so nothing is protected yet) · PR5c-entities-b (`bridge-handlers-salesforce.js`, the
+highest-traffic `entities` email/phone writer, create-path only) · PR5c-signal · PR5c-avail-field ·
 PR5c-deploy (Scott) · PR5d (`costar_cmbs_loan`: 121 rungs, 0 rows ever) · PR5e (`gov_ownership_chain`
 dead constant) · PR7a (the live orphan column) · PR7b (prune 15 inert rungs — NOT neutral) · PR9
 (`manual_verify`@20 — Scott) · PR10 (one source, two ladders) · PR11 (model-leg quarantine) · PR12a

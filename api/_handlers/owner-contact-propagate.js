@@ -71,6 +71,10 @@ import {
   contactFanoutKey,
   BROKER_CONTACT_TYPES,
 } from '../_shared/owner-contact-propagate-planner.js';
+import {
+  filterByFieldPriority,
+  provenanceTargetDatabase,
+} from '../_shared/field-priority-guard.js';
 
 const WALL_CLOCK_MS = 20000;
 const DEFAULT_LIMIT = 200;
@@ -78,6 +82,33 @@ const MAX_LIMIT = 1000;
 // PostgREST caps every response at 1000 rows regardless of `limit` (CLAUDE.md),
 // so every batched IN() read strides at 1000 and pages until short.
 const PAGE = 1000;
+
+// ---------------------------------------------------------------------------
+// PR5c-entities (2026-09-02) — consult the ladder that was registered FOR this
+// writer.
+//
+// The header above has claimed "provenance-tagged (field_source_priority
+// 'domain_owner_contact' registered in migration 20260903120000)" since this
+// worker shipped. It was registered and NEVER CONSULTED: `entities` carries 13
+// rungs and `field_provenance` held ZERO rows for that table (positive control:
+// dia.properties, 49,571). PR5's verdict on this very rung reads "Referenced
+// only in a comment (owner-contact-propagate.js:37)". A rung nobody calls is
+// not provenance; it is a note.
+//
+// ⚠️ WHAT THIS DOES AND DOES NOT CHANGE. All ten entities email/phone rungs are
+//    enforce_mode='record_only' and min_confidence=0.000, so lcc_merge_field's
+//    'skip' NEVER blocks a write here (see the behaviour matrix in
+//    field-priority-guard.js). This change RECORDS provenance; it does not
+//    switch on fill-blanks protection. The protection that is live today is the
+//    immediate re-read in applyFill below, which stays exactly as it was.
+//    Flipping enforce_mode is a separate, graded decision (backlog PR5c-enforce).
+//
+// The spelling must match the registry byte-for-byte: target_table is the bare
+// 'entities' (not 'lcc.entities'), and the source is 'domain_owner_contact'.
+// ---------------------------------------------------------------------------
+const PROVENANCE_TARGET_DB = provenanceTargetDatabase('lcc_opps');
+const PROVENANCE_TARGET_TABLE = 'entities';
+const PROVENANCE_SOURCE = 'domain_owner_contact';
 // Keep IN() lists well under typical URL limits.
 const IN_CHUNK = 150;
 
@@ -344,17 +375,40 @@ async function applyFill(owner, plan, batchTag) {
   if (fields.phone && !String(row.phone || '').trim()) patch.phone = fields.phone;
   if (!Object.keys(patch).length) return { ok: false, reason: 'no_longer_blank' };
 
-  const upd = await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(owner.owner_entity_id), patch);
+  // Ladder gate. Both columns are registry-governed, so the whole patch goes
+  // through. Fails OPEN, house style (sidebar-pipeline.js): a registry RPC
+  // outage must never cost a fill this worker has already judged safe — the
+  // provenance row is what we lose, and field-priority-guard.js counts and
+  // alerts on that loss (PR12).
+  const c = plan.contact;
+  const gated = await filterByFieldPriority({
+    targetDb:    PROVENANCE_TARGET_DB,
+    targetTable: PROVENANCE_TARGET_TABLE,
+    recordPk:    owner.owner_entity_id,
+    source:      PROVENANCE_SOURCE,
+    sourceRunId: batchTag,
+    // The planner's own name-match score, not a constant — it is the real
+    // confidence in "this contact is the same party as this owner".
+    confidence:  plan.decision.match?.score ?? null,
+    fields:      patch,
+  }).catch((err) => {
+    console.warn('[owner-contact-propagate] field-priority filter failed (proceeding with full patch):', err?.message);
+    return patch;
+  });
+  if (!gated || !Object.keys(gated).length) return { ok: false, reason: 'blocked_by_field_priority' };
+
+  const upd = await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(owner.owner_entity_id), gated);
   if (!upd.ok) return { ok: false, reason: 'patch_failed', detail: upd.data };
 
-  const c = plan.contact;
-  const ledger = Object.keys(patch).map((f) => ({
+  // The ledger records what was WRITTEN, so it is built from the gated patch —
+  // never from the planned one, or a blocked field would read as filled.
+  const ledger = Object.keys(gated).map((f) => ({
     batch_tag: batchTag,
     owner_entity_id: owner.owner_entity_id,
     owner_name: owner.owner_name || row.name || null,
     field_name: f,
     old_value: null,                 // fill-blanks only, by construction
-    new_value: patch[f],
+    new_value: gated[f],
     source_domain: c.domain,
     source_table: 'contacts',
     source_contact_id: c.id || null,
@@ -368,7 +422,7 @@ async function applyFill(owner, plan, batchTag) {
   await opsQuery('POST', 'lcc_owner_contact_propagate_log?on_conflict=owner_entity_id,field_name,batch_tag',
     ledger, { headers: { Prefer: 'resolution=ignore-duplicates' } });
 
-  return { ok: true, filled: Object.keys(patch), patch };
+  return { ok: true, filled: Object.keys(gated), patch: gated };
 }
 
 async function insertReviews(owner, reviews, batchTag) {
