@@ -16,6 +16,16 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — EXT1b shipped + deployed; three named rows re-score exactly; floor re-run owed
+
+`#2068`, deployed `a013aea6`. 431 rent → **105,558** (`basis_source: as_stated`), 336 → **75,000**,
+431 dates → `2021-03-15` day-precision on BOTH runs, 255 untouched. 23 guards, 16/16 mutations RED.
+Three decisions worth carrying (each measured against the obvious alternative): the basis window
+stops at the next `$`; amount is presence-in-the-quote, never a tolerance; a formula is never turned
+into a date even when it contains one. Prediction on file: rent + both dates → ~100% self-rate, with
+the date denominators rising — read counts, not rates. 👤 Re-run command on `OPERATOR-ACTIONS.md`
+(OCR1 row). EXT1b + UX-T0 files → `done/`. Next: **OWN-T0** to CC.
+
 ## 2026-09-02 — EXT1b SHIPPED: `as_stated` is the authority, the model's labels are the fallback. ⚠️ The floor movement is PREDICTED — the measurement is Scott's re-run.
 
 - **What shipped:** `basisFromAsStated` / `amountFromAsStated` / `precisionFromAsStated` + two
