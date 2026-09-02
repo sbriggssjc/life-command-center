@@ -1105,16 +1105,47 @@ export async function ensureEntityLink({
     // `in.(...)` with double-quoted values — a canonical key contains spaces, and
     // an unquoted PostgREST list would split on a comma inside one.
     const inList = keys.map(k => '"' + String(k).replace(/(["\\])/g, '\\$1') + '"').join(',');
+    // PR5c-entities-b-dupes: `domain` is a PROVENANCE TAG, not part of identity.
+    // It was a hard filter here, so a party already held under `gov` (or with a
+    // NULL domain) was INVISIBLE when the same party arrived tagged `lcc`, and
+    // this tier minted a duplicate on the very key N15c exists to make unique.
+    // Measured live: 5 of the 7 same-email duplicate mints in the 30 days to
+    // 2026-09-02 had new.domain <> old.domain (lcc vs gov/dia/NULL) — the filter
+    // excluded the exact row it was looking for. `entities.domain` legitimately
+    // carries `lcc` and `cre` beside `dia`/`gov`, and one person is reachable
+    // from more than one book of business, so the key cannot be domain-scoped.
+    //
+    // Domain becomes a RANKING PREFERENCE. A CROSS-domain hit (including
+    // NULL-vs-set) additionally requires the email to agree, because a shared
+    // canonical_name alone is NOT identity for a common person name: measured
+    // over live shared-email person groups, 44 of 75 carry DIFFERENT names
+    // (`colt.neal@nmrk.com` holds two different real brokers), and two distinct
+    // "Frank Johnson"s exist here under different domains. Same-domain
+    // behaviour is byte-identical to before this change.
     let path = `entities?workspace_id=eq.${workspaceId}`
       + `&canonical_name=in.(${encodeURIComponent(inList)})&select=*&limit=10`;
-    if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
     const match = await opsQuery('GET', path);
     if (match.ok && match.data?.length) {
-      // Prefer an exact hit on the CURRENT key over a legacy-key hit, and within
-      // each, one whose entity_type agrees. A legacy hit is still a real match —
-      // it is the same party under the outgoing normalization.
-      const rank = (e) => (e.canonical_name === canonicalName ? 0 : 2) + (e.entity_type === entityType ? 0 : 1);
-      resolvedEntity = match.data.slice().sort((a, b) => rank(a) - rank(b))[0];
+      const seedEmail = normalizeEmail(seedFields.email);
+      const sameDomain = (e) => (e.domain || null) === (domain || null);
+      // Corroboration for a cross-domain attach: a real, non-generic email that
+      // matches exactly. Never a name-similarity test — fuzzy name matching is
+      // banned for identity everywhere in this codebase.
+      const emailAgrees = (e) =>
+        !!seedEmail && !isGenericInboxEmail(seedEmail) && normalizeEmail(e.email) === seedEmail;
+      const eligible = domain
+        ? match.data.filter((e) => sameDomain(e) || emailAgrees(e))
+        : match.data;
+      if (eligible.length) {
+        // Prefer an exact hit on the CURRENT key over a legacy-key hit, and within
+        // each, one whose entity_type agrees. A legacy hit is still a real match —
+        // it is the same party under the outgoing normalization. Same-domain
+        // outranks a cross-domain hit so today's winner is unchanged when both exist.
+        const rank = (e) => (sameDomain(e) ? 0 : 4)
+          + (e.canonical_name === canonicalName ? 0 : 2)
+          + (e.entity_type === entityType ? 0 : 1);
+        resolvedEntity = eligible.slice().sort((a, b) => rank(a) - rank(b))[0];
+      }
     }
   }
 
