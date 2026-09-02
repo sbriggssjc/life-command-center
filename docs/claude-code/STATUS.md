@@ -16,6 +16,34 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — DOC18 reconciled: merged (#2032), NOT running; §7b re-measured; six backlog ID defects fixed
+
+**DOC18 came back and is merged** (`e5c8f34e`, PR #2032). Claude Code had already written the
+canonical DOC18 section; this turn reconciled the rest. Re-measured on LCC Opps at ~16:00 UTC:
+
+- **Migration `20260902120000` is NOT applied** — 0 of the 3 partial-extract columns, no
+  `lcc-cre-doc-text-longdoc` cron, no `v_lcc_cre_longdoc_backlog`. **42 `over_docai_page_cap`
+  markers unmoved.** Redeploy unconfirmed (Railway unreachable from the sandbox). *Merged is not
+  running.* Operator sequence is in backlog **DOC18**: migration → redeploy both services → the
+  ungated `mode=longdoc` dry run → let the cron run one document per tick.
+- **§7b**: undrained **401** (was 426), consumer-visible sidecars **289**, `bov_ready` **43** (was
+  37), `bov_extraction` **25**, gov deeds **325/325**.
+- ⚠️ **Corrected my own claim in place:** "ZERO gpt-4o since redeploy" is false by two rows — both
+  in the first two ticks after the 09-01 15:00 redeploy (15:00 and 16:00), both `thin_ocr_result`
+  fragments (116 / 211 chars), and **zero since 16:01**. 88 DocAI events in the same window. The
+  escalation is closed; the wording was over-stated for the window it was read in.
+- **Consolidation:** the canonical page's CURRENT STATE block carried a merge artifact — two copies
+  of the "live gap" / "retry markers" rows and two "Open" lists (one pre-DOC17, one post). Collapsed
+  to one. **Backlog duplicate grep found six:** `B6d-pri-metrics` and `B6d-sam` were genuine
+  duplicate rows (merged); **`J2`–`J4` and `PR6` were ID COLLISIONS** — two unrelated items sharing
+  an ID (P1c's JV items vs P14d's Power-Automate items; the I12 `land_area` defect vs the
+  `manual_verify` priority question). Renamed P14d `J1–J6 → PA1–PA6` (one cross-ref in
+  `OPERATOR-ACTIONS.md` updated) and the `manual_verify` row → `PR9`. ⚠️ **The dedupe grep reports
+  collisions and duplicates identically — read the rows before merging.**
+- Response + prompt moved to `done/`.
+
+**Next:** run **OCR1** (`docs/claude-code/prompts/OCR1-local-ocr-bakeoff.md`), leading with its §0.
+
 ## 2026-09-02 — Thread wrapped: handoff written, STATUS archived, topic set consolidated
 
 **This window is being continued in a fresh context.** `docs/os/DATA-PROCESS-AUDIT-HANDOFF.md` is
