@@ -4376,6 +4376,10 @@ Related invariants from the same round:
   ONE company.** The composite defect was written into the firm table too, so **the real distinct-firm
   count is far below 131 and any matcher pointed at it will attach agents to composite pseudo-firms.**
   → `BR1`–`BR5`.
+- **📍 CONTINUING THE DATA-PROCESS & AUTOMATION AUDIT WINDOW — START HERE:**
+  `docs/os/DATA-PROCESS-AUDIT-HANDOFF.md`. Which window you are, what closed, what is in flight,
+  the next steps in order, the turn protocol, the git sequence, the consolidation rules, and the
+  traps already paid for. **It replaces reading the whole of `STATUS.md`.**
 - **📍 PRODUCER HEALTH & CI ENFORCEMENT — one door into the whole B6 arc (fourteen audits):**
   `docs/architecture/producer-health-and-ci-enforcement.md`. **START HERE for "is our ingestion
   running / does anything watch it / does CI enforce anything".** Live producer state, the CI
