@@ -122,6 +122,33 @@ Types: **DEFECT** (wrong today, measurable) · **DESIGN** (right data, wrong sur
 
 Answered in §3.
 
+## 1h. ✅ T0 SWEPT — 2026-09-02 (`docs/audits/UXT0_APP_DEFECT_SWEEP_2026-09-02.md`)
+
+**9 fixed · 4 owned elsewhere · 4 hypotheses in §1 REFUTED · 2 removals refused · 2 not measured.**
+Read the audit before re-opening any T0 row. Corrections to what §1 says above:
+
+- **UX26 — the "500 is the round-number tell" reading is WRONG.** `sum(canonical_total_properties)`
+  over the 16 distinct canonicals is **exactly 500**; the `limit: 500` in the loader is a
+  coincidence. The genuine finding is OWN1 (the lane is 38 hand-written regexes over 72 of 7,262
+  owners and does not say so).
+- **UX11 — the feed never read `asking_price_at_check`.** It selects `method`/`check_result`/`notes`
+  and the "no update" text is the cron's own note. **1,400 of 1,400 rows in 7 days are cron timer
+  advances and the evidence lane last wrote 2026-08-06** — the feed was honest about a dead producer.
+- **UX13 — not the P116 id-space collision.** Kelly's `activity_events` land. `email_bodies` is
+  **0 for Kelly, Nate AND Sarah**: one mailbox is synced for a four-person team.
+- **UX12 — the Team Briggs flag IS set** on sale 14832 (`is_northmarq = true`, one of 382). What is
+  missing is `sf_deal_id`, non-null on **0 of 4,785** sales.
+- **UX31 — not a unit error.** `building_size` is genuinely square feet and the median is genuinely
+  right (8,646 sf). The tile showed the **mean** (24,044 sf), dragged 2.78× by 357 whole-building
+  RBA rows.
+- **UX39 / UX41 removals REFUSED on measurement — Scott's call, not mine.** National ST is the only
+  route to 18 live `cm_natl_st*` views (480 rows) and the RCA upload card that feeds the ST quarterly
+  book. `all_other` is **6,245 opportunities, the largest domain bucket**, and Prospects is a search
+  box with no list mode to fold it into.
+
+⚠️ **UX1 was not root-caused.** The view is healthy (2,119 ms / 313 rows); the sandbox cannot reach
+the live host, so the tile was made to NAME its failure instead of guessing. One live load answers it.
+
 ## 2. Priority tiers (the order the backlog P16 section uses)
 
 Ordered so nothing diverts the OCR thread, and so cheap correctness comes before redesign:

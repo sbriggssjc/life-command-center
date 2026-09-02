@@ -4402,6 +4402,89 @@ multi-role count (954) and **P0.4 (555)** unmoved. Migration
   invariants over code nobody runs (P197). All 11 C13b invariants pass over the shipped definition.
   **Whoever rebuilds this view next repoints that constant in the same change.**
 
+## UX-T0 — the app defect sweep: four hypotheses refuted, two removals refused (2026-09-02)
+
+Twenty T0 rows from Scott's app walk-through. **9 fixed · 4 owned elsewhere · 4 mechanism
+hypotheses REFUTED · 2 removals refused on measurement · 2 not measured.** Writeup
+`docs/audits/UXT0_APP_DEFECT_SWEEP_2026-09-02.md`; guard `test/uxt0-defect-sweep.test.mjs`
+(22 tests, **15/15 mutations RED**). Headline deltas: sellers **0/$0 → 2,142/$13.48B**,
+Overview on-market **461 → 207**, Metrics roster **42 → 4**, building SF **24,044 → 8,646**.
+
+- **⚠️ A CONSUMER CAN ASK FOR A COLUMN ITS SOURCE HAS NEVER HAD — AND THE SIBLING ARM IS THE
+  POSITIVE CONTROL.** dia `sales_transactions` carries `buyer_name`, `buyer_type` and
+  `seller_name` but **no `seller_type`**. The Players tab's two arms are identical except for
+  that column, so buyers worked and **sellers rendered "0 in dataset / $0" over 2,142 sellers and
+  $13.48B**: PostgREST 42703 → `diaQuery` returns `[]` → `diaQueryAll` breaks out on the short
+  page → the `catch` never fires → `[]` is truthy so the renderer draws zeros. **When one of two
+  near-identical surfaces works, diff their column lists before reading either renderer** — it is
+  one query against `information_schema`. This is **C10 at the QUERY layer** rather than the
+  render layer, and it is the third instance of that class in this arc.
+  - **`diaQuery`'s `throwOnError` was added 2026-08-29 for exactly this and left ~70 callers on
+    the default.** Sellers was one of them. **Any surface whose empty state asserts something
+    about the DATA must opt in** — "0 in dataset" is such an assertion.
+- **⚠️ A MIGRATION IN THE REPO IS NOT A MIGRATION IN THE DATABASE, AND A POLITE FALLBACK HIDES
+  THAT FOREVER.** `20260429900000_*_v_listing_verification_summary_breakout_inferred.sql` exists
+  for BOTH domains, is correct, and had **never been applied to either** — for four months —
+  while `dialysis.js` read `s.evidence_verifications_7d` behind a comment saying *"falls back to
+  the monolithic count when running against a database that hasn't applied the migration yet."*
+  The fallback made *permanently unapplied* indistinguishable from *temporarily unapplied*, and
+  the card kept reporting **"1400 checks/7d"** where the honest breakout is **0 evidence / 1400
+  cron-only**. *Merged is not running*, in its quietest form: nothing errored.
+  - **⚠️ AND BEFORE APPLYING AN OLD MIGRATION, DIFF THE LIVE VIEW AGAINST THE FILE.** gov's body
+    is NOT dia's (`listing_status` + `exclude_from_listing_metrics` vs `is_active`); applying
+    dia's to gov would have silently rewritten gov's semantics. Reading the live gov definition
+    first — and finding it matched the file's first nine columns exactly — is what made the apply
+    safe.
+- **⚠️ "TOO LARGE" IS A DISTRIBUTION QUESTION BEFORE IT IS A UNIT QUESTION.** The Inventory
+  building-size tile was filed under the I12 acres/sq-ft class. It is not: `building_size` is
+  genuinely square feet and the **median is 8,646 sf**, right for a dialysis clinic. The tile
+  showed the **arithmetic MEAN, 24,044 sf** — dragged **2.78×** by 357 rows carrying the whole
+  medical-office building's RBA. **Compare the median to the mean before reaching for a
+  conversion**; the ratio names the shape immediately.
+- **⚠️ A TILE'S SCOPE BELONGS IN ITS TITLE, NOT ITS SUBTITLE.** "Total Buyers (all dataset)" sat
+  beside "Total Deals" that was **top-50 only**, with the scope honestly stated in the small
+  print. Two tiles side by side, one counting the dataset and one counting the page, read as one
+  population regardless.
+- **⚠️ A LATE ASYNC RENDER INTO A SHARED CONTAINER IS A LAST-WRITER-WINS RACE.** Deals' group
+  default is `prospects` (Pipeline), whose loader is the slowest in the app; clicking another
+  sub-tab mid-load switched the tab correctly and then the in-flight
+  `loadMarketing().then(() => renderDomainProspects(...))` wrote Pipeline back into
+  `#bizPageInner`. **Seven** such deferred renders existed, none checking its own tab at RESOLVE
+  time. Not a navigation bug.
+- **⚠️ TWO MEASURED REMOVALS WERE REFUSED, AND BOTH LOOKED SAFE.** *National ST* is one nav button
+  and one `else if` — and the **only** route to 18 live `cm_natl_st*` views (480 rows) and the RCA
+  upload card that feeds the Single-Tenant quarterly book. *All Other* is not duplicative of
+  Prospects: `renderProspects()` is a **search box that renders nothing until you type**, and
+  `all_other` holds **6,245 opportunities — the largest domain bucket** (gov 3,176, dia 2,410).
+  **"Check nothing is lost" has to be an inventory, not a grep for the route name.**
+- **⚠️ FOUR OF THE FIVE MECHANISM HYPOTHESES I WAS HANDED WERE WRONG, AND EACH WAS PLAUSIBLE.**
+  The Ownership lane's `limit: 500` and its "covering 500 properties" are **a coincidence** —
+  `sum(canonical_total_properties)` over its 16 canonicals is exactly 500 (so the round-number
+  footgun *pattern-matched* and the arithmetic refuted it). The verification feed never selected
+  the NULL price columns. Kelly's writes land — `email_bodies` is 0 for **three** of the four
+  team members, i.e. one mailbox is synced, not a rejected write. `is_northmarq` **is** set on
+  Woodland Hills; `sf_deal_id` is non-null on **0 of 4,785** sales. **A named mechanism in a
+  brief is a hypothesis to test first, and the cheapest test is usually the arithmetic.**
+- **⚠️ MY OWN GUARD PASSED ITS OWN MUTATION TWICE.** A bare `/is_team_member/` search stayed green
+  when the `.filter()` was deleted (the token also appears in the `_flagged` probe one line up);
+  `/_hidden/` stayed green when the disclosure branch was mutated to `if (false)` (the `const`
+  still declared it). Both are the documented *a guard that matches a shape is defeated by a name
+  that legitimately appears elsewhere*, and **the mutation pass found them, not reading them.**
+  Comment-stripping is also load-bearing here rather than hygiene: every fix explains itself by
+  naming the token it removed (`seller_type`, `diaAvailListings`, `'all'`), so a raw-source grep
+  finds them all present and passes over a complete revert.
+- **⚠️ THE METRICS ROSTER'S DISCRIMINATOR IS `lcc_users`, AND `auth.users` CANNOT DO IT.** The
+  roster showed **42** "team members" — ~21 email local-parts title-cased (`Aaminov`, `Ccouch`,
+  `Tscrivner`…), 3 system mailboxes (`Noreply`, `Support`, `Powerautomatenoreply`), one literal
+  `" <>"`, and **four** Scott Briggs rows (three operators at zero beside the one owner holding
+  all 58 active / 49 overdue). The recorded fact already existed: `lcc_users` = **4 active
+  people**, bridged to `public.users` by email (the same bridge `v_lcc_entity_point_person`
+  uses). **The obvious test — "only show people who can sign in" — returns an EMPTY roster:
+  0 of 42 memberships carry an `auth.users` identity, including the real owner.** Shipped as an
+  appended `is_team_member` FLAG, never a filter: nothing is deleted, no access is revoked, and
+  the surface states how many rows it is not showing. The producer that mints those memberships
+  from correspondence is **UX48a, not fixed**.
+
 ## Inert-feature registry (audit §4.4.3) — make "off" visible
 
 Every env-gated capability is catalogued in **`feature_flags_registry`** (LCC Opps; migration
