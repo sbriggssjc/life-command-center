@@ -261,6 +261,28 @@ gate has only been proven green, never proven to fail); the checkout log free of
 `B6e-ci-required-check` flipped. Prompt + response filed to `done/`
 (`B6e-ci-last5-decisions-resolved.response.md` is a transcription of the mid-flight `.docx`; the
 outcome above is from the run itself).
+## 2026-09-02 — OCR1 first REAL run reconciled: page-cap case measured TRUE; quality unprovable until the harness has a self-agreement control
+
+Scott's re-run (after the main-guard fix) completed on **15 real documents + 3 fixtures, tesseract
+only**: surya 0.22 runs its VLM in a Docker container (daemon off; belongs on GaryBuilt), paddleocr
+lacked `paddlepaddle` (the wrapper installs without the engine). Record with the artifact analysis:
+`responses/done/OCR1-run.response.md` (values-free; `bakeoff/agreement.md` stays local).
+
+- ✅ **Arm B — the page cap is gone for a local engine:** 141 pages read in one pass, 4/4
+  back-half clauses legible on 3 of 4 leases (the 1/4 is a title bundle at conf 68); 2.3–3.5 s/pp CPU.
+- ❓ **Arm A — 36/47 fields agree (77%), and the number has NO interpretation yet.** The 11
+  non-agreements were READ: 2 curly-apostrophe comparator artifacts, 2 `""`-vs-null artifacts,
+  2 model-arithmetic disagreements on IDENTICAL source text (both texts carry the same monthly rent
+  verbatim), 4 date disagreements of unknown cause, 1 real OCR error — on the synthetic fixture.
+  **Without grading the model against a second run of itself on the DocAI text, "how much
+  disagreement is the model" is unmeasured and no engine rate can be read.** → **OCR1c** (prompt
+  staged: normalization, `--control self`, last-300-chars stderr, honest engine probes) → re-run
+  with paddle.
+- **DOC18 drained unattended meanwhile:** 4 windowed (80/91/109 full, **doc 96 the first true
+  partial: 57pp → 50**), `bov_ready` 43 → 47, backlog 42 → 38 + 1 `window_failed`.
+- Stale claims corrected in place: the OCR1 audit's own header (surya/paddle install assumptions);
+  a drifted `:328-347` line ref on the cost page.
+
 ## 2026-09-02 — The bake-off's first real run did NOTHING: a Windows main-guard bug, silent exit 0
 
 Scott ran the sequence; engines installed, `ocr-bakeoff-stage.ps1` staged **15 of 15**, and then
