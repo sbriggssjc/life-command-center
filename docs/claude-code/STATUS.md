@@ -90,6 +90,33 @@ eight-entry dated worklog a new reader would have to read backwards. Live: deeds
 **771 → 426** · **`bov_ready` 5 → 37** · **22+ OCR events, 100% DocAI, zero gpt-4o** · 🔴 **40
 documents getting no text at all.**
 
+## 2026-09-01 — DE1 + BR1 + BR2 drafted as one prompt, and Unit 3 carries a hard prerequisite
+
+`DE1-BR1-BR2-confidence-gate-and-broker-identity.md`. Three units, ordered smallest-and-independent
+first, each shippable alone.
+
+**Unit 1 (DE1)** gates the two CM econ exhibits on **`payer_mix_source = 'hcris_form_265_11'`** — the
+FACT — rather than on `confidence_tier`, its proxy. ⚠️ **The expected result is NO CHANGE today**, and
+that is the point: it proves the gate is additive. **A view whose output moves today would mean it
+was already admitting modeled rows, which is a bigger finding.** The `HAVING count(*) >= 1000` stays,
+because it guards a different thing.
+
+**Unit 2 (BR1)** types the person/firm split. ⚠️ **Recorded facts before regexes** — `company`,
+`broker_company_id` and `contact_id` (1,916 populated) all carry evidence, and the
+two-capitalised-tokens name heuristic has already cost this codebase real companies. **Undecidable
+rows stay undecided.**
+
+🚨 **Unit 3 (BR2) has a hard prerequisite I nearly missed while sequencing this.**
+`B6e-ci-last5-decisions-resolved.md` is **still queued, not run** — and it carries the `update_field`
+producer fix. **Backfilling the broker FK while that producer is still broken is a one-shot repair of
+a live producer, the Class 8 failure this repo documents over and over.** So the prompt requires
+**either landing the producer fix in the same change, or stopping at the plan and saying so.** It may
+not ship the backfill alone.
+
+**Deliberately out of scope: BR4 (the 143 duplicate-name groups).** Deduping before the firm link is
+populated would merge two real people at the same firm — resolving the firm is what makes a duplicate
+visible or explains it away.
+
 ## 2026-09-01 — Broker + Medicare storage audited and CANONICALISED, so neither gets re-flagged as a bug
 
 Scott: *"clean the broker and firm name storage so it's cleanly shown everywhere… be sure to update
