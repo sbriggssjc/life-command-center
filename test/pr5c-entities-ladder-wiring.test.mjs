@@ -334,3 +334,136 @@ test('an all-dropped, metadata-only patch sends nothing rather than an empty-eff
   });
   assert.deepEqual(out, {});
 });
+
+// ==========================================================================
+// PR5c-entities-b — the Salesforce bridge CREATE path (2026-09-02)
+//
+// The two writers above are correct and QUIET: owner-contact-propagate's ledger
+// has not moved since 2026-08-15, so `field_provenance` for `entities` was
+// still 0 on a fully-deployed build (live /version = f5bc8cc0f868, and
+// e9c74357 IS an ancestor of it). ⚠️ That zero is therefore NOT a deploy
+// signal, and reading it as one would have been the documented mistake of
+// asserting on the wrong output.
+//
+// bridge-handlers-salesforce.js is the lane that actually runs: 10,086 lifetime
+// salesforce/Contact identities, 336 in 30 days over 22 distinct days (largest
+// single day 77, so a distribution and not one backfill spike), of which 329
+// MINTED the entity. 297 of those creates carry an email and 69 a phone —
+// ~366 field-values / 30 days ≈ 12/day.
+//
+// WHAT THESE ASSERTIONS ARE SHAPED AGAINST:
+//
+//  A. CALL, NOT MENTION. OCR2 shipped two guards defeated by the IMPORT line
+//     still carrying the identifier. So this walks insertEntity's AST span and
+//     requires a real CallExpression inside it.
+//  B. THE INSERT MUST NOT BE GATED. A create has no prior value, so
+//     lcc_merge_field always returns write/no_prior_provenance (proven live,
+//     rolled back: rung=20, mode=record_only, decision=write for both fields).
+//     Conditioning the INSERT on that would be theatre AND would make a
+//     registry outage cost a Salesforce contact. Asserted structurally: the
+//     POST precedes the record call, and no branch tests it.
+//  C. BYTE-FOR-BYTE SPELLING. 'salesforce'/'entities' resolve the registered
+//     rung; anything else silently takes lcc_merge_field's UNREGISTERED branch,
+//     which still writes a row — so nothing errors and the ladder is simply not
+//     consulted. The live proof showed new_priority=20, i.e. the rung matched.
+//  D. target_database MUST GO THROUGH provenanceTargetDatabase(). The closed
+//     vocabulary is CHECK-enforced: the logical prefix 'lcc' aborts the whole
+//     call with 23514 (positive control run live, 2026-09-02).
+//  E. SCOPE. Only email/phone carry an `entities` rung. Routing title/org_type
+//     through would mint unregistered triples onto v_field_provenance_unranked.
+// ==========================================================================
+
+const SFB = join(ROOT, 'api/_shared/bridge-handlers-salesforce.js');
+const REGISTRY_SOURCE_SFB = 'salesforce';
+
+/** The CallExpression to `name` inside a span, or null. */
+function callIn(span, name) {
+  return [...nodes(span)].find(n => n.type === 'CallExpression' && calleeName(n) === name) || null;
+}
+
+test('population control: the SF bridge parses and insertEntity is found with both callers', () => {
+  const { ast } = parse(SFB);
+  const span = fnSpan(ast, 'insertEntity');
+  assert.ok(span, 'insertEntity not found — the walker stopped finding code');
+  assert.ok(span.end - span.start > 400, 'insertEntity span implausibly small');
+
+  const callers = [...nodes(ast)].filter(n => n.type === 'CallExpression'
+    && calleeName(n) === 'insertEntity');
+  assert.equal(callers.length, 2,
+    'insertEntity must keep exactly its two callers (Account + Contact upsert) — a third '
+    + 'would inherit the salesforce source without anyone deciding that');
+});
+
+test('insertEntity CALLS recordFieldWrites (an import is not a call)', () => {
+  const { ast } = parse(SFB);
+  const span = fnSpan(ast, 'insertEntity');
+  assert.ok(callIn(span, 'recordFieldWrites'),
+    'the CREATE path must record provenance — 0 calls means entities.email/phone is '
+    + 'established daily by the highest-traffic writer with no ledger entry');
+});
+
+test('the recorded source and table match the registry byte-for-byte', () => {
+  const { ast } = parse(SFB);
+  const call = callIn(fnSpan(ast, 'insertEntity'), 'recordFieldWrites');
+  const arg = call.arguments[0];
+
+  for (const [key, expected] of [['source', REGISTRY_SOURCE_SFB],
+                                 ['targetTable', REGISTRY_TARGET_TABLE]]) {
+    const v = literalProp(arg, key);
+    const name = v && typeof v === 'object' ? v.__ident : null;
+    const resolved = name ? constInit(ast, name) : null;
+    const actual = name ? (resolved?.kind === 'literal' ? resolved.value : null) : v;
+    assert.equal(actual, expected,
+      `${key} must be exactly ${JSON.stringify(expected)} — a mismatch takes `
+      + "lcc_merge_field's unregistered branch, which still writes a row, so nothing errors");
+  }
+});
+
+test('target_database goes through provenanceTargetDatabase, never a bare literal', () => {
+  const { ast } = parse(SFB);
+  const call = callIn(fnSpan(ast, 'insertEntity'), 'recordFieldWrites');
+  const v = literalProp(call.arguments[0], 'targetDb');
+  assert.ok(v && typeof v === 'object' && v.__ident,
+    'targetDb must be the module constant, not an inline string');
+  const init = constInit(ast, v.__ident);
+  assert.equal(init?.kind, 'call', 'targetDb must be computed, not a literal');
+  assert.equal(init.fn, 'provenanceTargetDatabase',
+    'the closed vocabulary has one owner; a hand-written value is how 23514 ships');
+  assert.equal(init.arg, 'lcc_opps');
+});
+
+test('the ENTITY INSERT is never gated on the provenance result', () => {
+  const { ast, src } = parse(SFB);
+  const span = fnSpan(ast, 'insertEntity');
+
+  const post = [...nodes(span)].find(n => n.type === 'CallExpression'
+    && calleeName(n) === 'opsQuery'
+    && n.arguments[0]?.value === 'POST' && n.arguments[1]?.value === 'entities');
+  assert.ok(post, 'the entities POST must still be in insertEntity');
+
+  const rec = callIn(span, 'recordFieldWrites');
+  assert.ok(post.start < rec.start,
+    'provenance must be recorded AFTER the row exists — recordFieldWrites needs the entity id');
+
+  for (const n of nodes(span)) {
+    if (n.type !== 'IfStatement' && n.type !== 'ConditionalExpression') continue;
+    const gated = [...nodes(n.test)].some(x => x.type === 'CallExpression'
+      && calleeName(x) === 'recordFieldWrites');
+    assert.equal(gated, false,
+      'a create has no prior value, so the decision is always write/no_prior_provenance and '
+      + 'every salesforce rung is record_only — branching on it would only let a registry '
+      + 'outage cost a Salesforce contact');
+  }
+  assert.ok(src.length > 1000, 'source did not load — the scan would pass vacuously');
+});
+
+test('only registry-governed columns are routed through the ladder', () => {
+  const { ast } = parse(SFB);
+  const decl = [...nodes(ast)].find(n => n.type === 'VariableDeclarator'
+    && n.id?.name === 'PROVENANCE_FIELDS');
+  assert.ok(decl?.init?.type === 'ArrayExpression', 'PROVENANCE_FIELDS must be a literal array');
+  const fields = decl.init.elements.map(e => e.value);
+  assert.deepEqual(fields.slice().sort(), REGISTRY_GOVERNED_FIELDS.slice().sort(),
+    'title/org_type/first_name carry NO entities rung — recording them would mint '
+    + 'unregistered triples straight onto v_field_provenance_unranked');
+});

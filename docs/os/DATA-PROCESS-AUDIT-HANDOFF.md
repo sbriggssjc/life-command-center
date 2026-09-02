@@ -109,10 +109,11 @@ that fires `gov_classify_agency()`; do not read it as broken.
 
 | verify-next | the honest reading today | what proves it |
 |---|---|---|
-| Railway redeploy of `98248e18` / `68ede28c` / `06a3ee5d` / `e9c74357` | unconfirmed from the sandbox | `/version` + `git merge-base --is-ancestor` |
-| PR2 producer | 0 `costar_sidebar` parcel rows since the merge | a NEW dia sidebar parcel row carrying `building_sf` |
+| ~~Railway redeploy~~ | ✅ **CONFIRMED 22:08 UTC — live `/version` = `886cdf86` = `main` HEAD.** Read via `net.http_get('https://tranquil-delight-production-633f.up.railway.app/version')` from LCC Opps, then `net._http_response` ~15 s later (the sandbox has no Railway egress; the bare host without `-633f` 404s). | done |
+| PR5c-entities-b (SF bridge CREATE path) | `source='salesforce'` on `entities` = 0, deployed minutes ago | ~12 rows/day; read tomorrow |
+| PR2 producer | 0 `costar_sidebar` parcel rows since 2026-08-31 — nobody has captured a dia page since; the code is live | 👤 one sidebar capture on a dia property page → a NEW parcel row carrying `building_sf` |
 | PR5c callers | `field_provenance` on the six internal tables = 0, correctly | a row on `public.lcc_cre_property_documents` after the next CRE folder-feed registration, post-deploy |
-| PR5c-entities | `target_table='entities'` = 0, correctly — neither writer has a cron; `SF_CONTACT_WRITEBACK` is `off` | an operator tick of `owner-contact-propagate`, post-deploy → `0 → N` split by source/decision |
+| PR5c-entities | `target_table='entities'` = 0 for `domain_owner_contact` — neither writer has a cron; `SF_CONTACT_WRITEBACK` is `off` | 👤 one `owner-contact-propagate` tick → `0 → N` split by source/decision |
 | PR8 | `source='agency_classifier'` = 0 — no-population zero | the next gov write that fires `gov_classify_agency()` |
 | PR5c-deploy | `availability-checker` edge fn fixed in source, undeployed | `list_edge_functions.updated_at` after the merge → 👤 Scott |
 | Dialysis CI gate | prep DONE (#7395 + #7397: `paths-ignore` gone, Scope job, seen RED, docs-only proven) | 👤 three operator steps: merge #7397 → delete the two `claude/tmp-*` branches → require `Run Tests`. ⚠️ Ruff stays masked, correctly — **5,738** findings, not "11" (annotation cap). |
@@ -124,11 +125,13 @@ that fires `gov_classify_agency()`; do not read it as broken.
    person names, 7 are the Colliers family. **`cbre; smyth & colliers; patel` is minted as one
    company.** Start with **`BR1-confirm`** — 12 brokerage-evidenced orgs ready for a one-decision
    human confirm.
-2. **`PR5c-entities-b`** — `_shared/bridge-handlers-salesforce.js` is the highest-traffic `entities`
-   `email`/`phone` writer (~336 SF contacts/30d, create-path only) and is unwired; it runs DAILY,
-   which is why it outranks `PR5c-enforce` (all ten rungs `record_only` — ungradeable until the
-   ledger has history, which needs a tick nobody schedules). Siblings still filed: `PR5c-signal`,
-   `PR5c-avail-field`. **Prompt drafted: `docs/claude-code/prompts/PR5c-entities-b-salesforce-create-path.md`.**
+2. **`PR5c-entities-b-dupes`** — the Salesforce bridge minted a DUPLICATE entity on **14 of 329
+   creates (4.3%)** in 30 days, ~9× N15c's 0.48% bulk-sync rate; 8 of 14 share the older row's
+   EMAIL, which `findEntityForUpsert`'s `email=ilike` lookup should have caught. Mechanism NOT
+   established (same workspace; only 2 within 5 min, so a race covers ≤2). Outranks
+   `PR5c-enforce`: a 4.3% duplicate rate on the lane minting ~330 entities/month is already costing
+   something. ⚠️ 6 of the 14 read as one person who CHANGED FIRMS — a name-only sweep is destructive.
+   **Prompt drafted: `docs/claude-code/prompts/PR5c-entities-b-dupes-sf-bridge-duplicate-mint.md`.**
 3. **`PR5d`** — `costar_cmbs_loan`: 121 rungs, the ladder's largest source, for a capture arm with
    0 rows on either domain (`loans.data_source`). Is the CoStar CMBS tab ever captured, or is the
    arm unreachable? One grep of the extension + one count.

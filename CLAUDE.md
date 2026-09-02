@@ -1080,7 +1080,11 @@ Every cross-table field write to curated tables is observed:
   not a guard. **State which grain a count is on** (source vs field vs rung).
 - **Three deploy surfaces:** migration (instant) · Railway (`/version` + `merge-base`) · Supabase
   edge function (`list_edge_functions.updated_at`). `availability-checker` is fixed in source and
-  undeployed (PR5c-deploy).
+  undeployed (PR5c-deploy). ⚠️ **The sandbox cannot reach Railway, but the DB can:**
+  `select net.http_get('https://tranquil-delight-production-633f.up.railway.app/version')` on LCC Opps,
+  then read `net._http_response` ~15 s later. The host WITHOUT `-633f` answers 404
+  `Application not found` and reads exactly like a dead deploy. Every "`/version` unreachable from the
+  sandbox" note elsewhere in this file predates this (2026-09-02).
 
 - **`v_field_provenance_actionable`** / `v_field_provenance_current` / `v_field_provenance_conflicts` — drive
   the Decision Center provenance lanes.

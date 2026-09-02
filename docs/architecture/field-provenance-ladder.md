@@ -71,25 +71,27 @@ yet" and "the fix did not work" are the same 0 and opposite facts. `entity_relat
 regardless (`unreached_and_broken`) · `agency_classifier` own-name rows **0** (no-population zero — no gov
 write has fired since PR8).
 
-**Deploy state:** migrations for PR8/PR5/PR12/PR5c all applied live. ✅ **Railway CONFIRMED
-2026-09-02 20:38 UTC — `/version` = `06a3ee5de325`**, and `git merge-base --is-ancestor` puts
-`68ede28c` (PR12 JS) and `6f55491` (PR5c JS) inside it; `98248e18` likewise. ⚠️ Probe note: two
-`net.http_get` calls read as *no row* for several minutes before pg_net persisted them — **an
-unanswered probe is not a negative result**, re-read the row rather than concluding "not deployed".
-`availability-checker` edge function **fixed in source, undeployed** (PR5c-deploy).
-→ `docs/os/OPERATOR-ACTIONS.md`.
-hashing correctly since PR12 · `field_provenance` on LCC-internal tables **0** (correct until the
-fixed callers run post-redeploy; for `entities` see PR5c-entities — both writers are wired but
-neither is scheduled, so `0 → N` needs an operator run) · `agency_classifier` own-name rows **0** (no-population zero — no gov
-write has fired since PR8).
+**⚠️ `field_provenance` on `entities` is STILL 0 on a fully-deployed build, and that is not a deploy
+signal (PR5c-entities-b, 2026-09-02).** Both PR5c-entities writers are wired and live, and neither
+has written: `lcc_owner_contact_propagate_log`'s newest row is **2026-08-15**, 18 days back. The
+table itself is busy — **8,775 `field_provenance` rows in the last 24 h, newest 21:30 UTC** — so the
+zero is scoped to `entities` and means *those two workers have not run*, not *the wiring is absent*.
+**Assert on the population that passed through the window, never on the count alone.** The lane that
+does run daily is the Salesforce bridge, wired by PR5c-entities-b. **Measured 22:08 UTC, minutes after its deploy:** `source='salesforce'` on `entities` = 0 with 3 SF
+contacts minted in the prior 24 h — read it again tomorrow (~12 rows/day predicted), never today.
 
-**Deploy state:** migrations for PR8/PR5/PR12/PR5c all applied live. ✅ **Railway redeploy for
-`98248e18`+`68ede28c`+`06a3ee5d` CONFIRMED 2026-09-02** — live `/version` = `557e1462a5f2`
-(= `origin/main` HEAD), and `git merge-base --is-ancestor 06a3ee5d 557e146` is true. ⚠️ The sandbox
-has no Railway egress (proxy 403); `/version` was read with `net.http_get` **from the DB**, which
-does — a cheaper probe than any handler behavioural check, and immune to the auth-401 misread.
-`availability-checker` edge function is still `availability-checker` edge function **fixed in source,
-undeployed** (PR5c-deploy). → `docs/os/OPERATOR-ACTIONS.md`.
+**Deploy state:** migrations for PR8/PR5/PR12/PR5c all applied live. ✅ **Railway CONFIRMED
+2026-09-02 22:08 UTC — live `/version` = `886cdf8622f4`** (= `main` HEAD incl. #2072), so every JS
+half of this arc — PR2, PR12's failure signal, PR5c's five callers, PR5c-entities, PR5c-entities-b —
+**is running**. (Earlier read 21:41 UTC: `f5bc8cc0f868`.) The host is
+`https://tranquil-delight-production-633f.up.railway.app` — the `-633f` suffix matters; the bare
+`tranquil-delight-production` host answers 404 `Application not found`, which reads like a dead deploy.
+⚠️ The sandbox has no Railway egress (proxy 403, `connect_rejected`); `/version` was read with
+`net.http_get` **from the DB**, which does — cheaper than any handler behavioural probe and immune
+to the auth-401 misread that made an empty grep look like a stale deploy (B5). ⚠️ An unanswered
+probe is not a negative result: pg_net may take minutes to persist the row, so re-read
+`net._http_response` rather than concluding "not deployed". `availability-checker` edge function
+**fixed in source, undeployed** (PR5c-deploy). → `docs/os/OPERATOR-ACTIONS.md`.
 
 ## 4. The arc — one line each, audit for the rest
 
@@ -103,12 +105,15 @@ undeployed** (PR5c-deploy). → `docs/os/OPERATOR-ACTIONS.md`.
 | PR12 | 09-02 | `::bytea` hash aborted `lcc_merge_field` on quotes/newlines; JS failed open; fixed in place | `PR12_PROVENANCE_QUOTE_LOSS_2026-09-02.md` |
 | PR5c | 09-02 | 33 zero-row internal rungs = five callers sending an invalid `target_database` (23514, 100%) | `PR5c_INTERNAL_RUNG_VERDICTS_2026-09-02.md` |
 | PR5c-entities | 09-02 | the 13 `entities` rungs had no caller; the two contact writers now consult the ladder — **recording only, because every rung is `record_only`** | `PR5c_entities_LADDER_WIRED_2026-09-02.md` |
+| PR5c-entities-b | 09-02 | the Salesforce bridge CREATE path — the lane that actually runs (329 entity creates / 30 d) — records `email`/`phone` provenance; **records, never gates** | this page §3 + `PR5c_entities_LADDER_WIRED_2026-09-02.md` §5 |
 
 **Open (backlog ids):** PR1d (`REGRID_API_KEY`, Scott) · PR5a (29 field-grain gaps — should a ladder
 govern bookkeeping columns at all?) · PR5b (`om_extraction` unregistered where it competes) ·
 ~~PR5c-entities~~ ✅ (wired 09-02) · PR5c-enforce (all 10 `entities` contact rungs are
-`record_only`, so nothing is protected yet) · PR5c-entities-b (`bridge-handlers-salesforce.js`, the
-highest-traffic `entities` email/phone writer, create-path only) · PR5c-signal · PR5c-avail-field ·
+`record_only`, so nothing is protected yet) · ~~PR5c-entities-b~~ ✅ (wired 09-02) ·
+**PR5c-entities-b-dupes** (NEW: 14 of 329 SF creates landed on a `canonical_name` an older LIVE
+entity already held; 8 share the older row's EMAIL, which the bridge's own email dedup should have
+caught — mechanism not established, a within-batch race explains at most 2) · PR5c-signal · PR5c-avail-field ·
 PR5c-deploy (Scott) · PR5d (`costar_cmbs_loan`: 121 rungs, 0 rows ever) · PR5e (`gov_ownership_chain`
 dead constant) · PR7a (the live orphan column) · PR7b (prune 15 inert rungs — NOT neutral) · PR9
 (`manual_verify`@20 — Scott) · PR10 (one source, two ladders) · PR11 (model-leg quarantine) · PR12a

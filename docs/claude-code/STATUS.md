@@ -169,6 +169,35 @@ with UX-T2). **UX13a** deferred to user onboarding. EXT1b sent to CC.
 - Full suite **5,102 pass / 0 fail / 6 skipped**. Record:
   `responses/EXT1-lease-rent-basis-quoted-dates.response.md`.
 
+## 2026-09-02 — PR5c-entities-b SHIPPED (#2072, `886cdf86`) and ✅ THE RAILWAY REDEPLOY IS CONFIRMED: live `/version` = `886cdf86` = `main` HEAD. Every JS half of the provenance arc is running. New finding outranks the arc: the SF bridge mints a duplicate on 4.3% of creates.
+
+**Verified live 22:08 UTC:** `/version` read from the DB —
+`net.http_get('https://tranquil-delight-production-633f.up.railway.app/version')` → `net._http_response`
+15 s later → `{"version":"886cdf8622f4","git_pinned":true}`. ⚠️ The bare host without `-633f`
+answers **404 `Application not found`**, which reads exactly like a dead deploy; I hit it first.
+`source='salesforce'` on `entities` **0** (deployed minutes ago; 3 SF contacts in the prior 24 h;
+~12 rows/day predicted — read tomorrow); unranked 29; drift 0; 0 failure alerts.
+
+- **The write site is `insertEntity` (`bridge-handlers-salesforce.js:232`)**, the single owner of
+  the `entities` POST — recording placed there so a future third caller inherits it. **Records,
+  never gates**: a create has no prior value, and gating would let a registry outage cost a
+  Salesforce contact. Rolled-back proof: 2 rows, `write`/`no_prior_provenance`, rung 20 (the
+  registered rung resolved, not the unregistered branch); positive control `'lcc'` → 23514.
+- 🚨 **`PR5c-entities-b-dupes` (new):** of 329 creates in 30 days, **14 (4.3%) landed on a
+  `canonical_name` an older LIVE entity already held** — 9× N15c's bulk-sync rate. 8 of 14 share the
+  older row's email (the bridge's own `email=ilike` dedup should have caught them); not a race (2 of 8
+  within 5 min). 6 of 14 read as a person who changed firms — the documented "track where they went"
+  case; a name-only sweep would be destructive. **Measured, not diagnosed; outranks PR5c-enforce.**
+- CC also collapsed a merge artifact on the ladder page (two "Deploy state" blocks, one two
+  redeploys stale) — the parallel-window shape again.
+- Guard +6 tests, 8/8 mutations RED; CI 5,192 / 0.
+
+**What is now purely operator-side** (`OPERATOR-ACTIONS.md`): one `owner-contact-propagate` tick;
+one dia sidebar capture (PR2 producer proof — no capture since 08-31); the gov backfill; the
+`availability-checker` edge deploy; PR9. Docs: ladder page §3 (deploy state corrected to `886cdf86`
++ the host suffix trap), handoff verify-next table, OPERATOR-ACTIONS (a duplicated `PR2-gov` row
+from the parallel merge collapsed to one). Prompt + response filed to `done/`.
+
 ## 2026-09-02 — PR5c-entities SHIPPED (#2066, `e9c74357`): the two `entities` contact writers consult the ladder — and it buys RECORDING, not protection, because every rung is `record_only`.
 
 **Verified live:** `field_provenance where target_table='entities'` **0** (correct — neither writer
