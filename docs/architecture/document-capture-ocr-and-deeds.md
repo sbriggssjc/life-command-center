@@ -36,10 +36,10 @@
 | **CRE registry drain** | undrained **771 → 426**, sidecar **345**, `scan_lowest_id` **2** — reaches the oldest document. |
 | **consumer** | **`bov_ready` 5 → 37.** BOV extract is receiving real leases, DDs and OMs. |
 | **OCR tier** | ✅ **22+ events since redeploy, 100% DocAI, ZERO gpt-4o.** The 9.3×-worse escalation is closed. |
-| **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (18 at 31–50pp, 24 at >50pp, max 141; re-verified unmoved 2026-09-02 after DOC17) — ✅ **DOC17 measured the cheap route OPEN. DOC18 (three sync calls per document, no GCS) is the build; DOC14 is now the alternative, not the fallback.** |
+| **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (18 at 31–50pp, 24 at >50pp, max 141; re-verified unmoved 2026-09-02 after DOC17) — ✅ **DOC17 measured the cheap route OPEN; DOC18 BUILT it (see the DOC18 section). ⚠️ MERGED IS NOT RUNNING: the route ships on the next Railway redeploy + the additive migration, and until both land the 42 are unmoved.** |
 | **retry markers** | 17 (`thin_ocr_result` 14, `fetch_failed` 3). `retry_admitted` is **0 and that is correct** — see DOC13 below. |
 
-**Open, in priority order: DOC18** (the three-call sync route DOC17 unlocked — no GCS) · **DOC14** (the alternative; still blocked on Scott — GCS persistence + confidentiality, and 👤 whether it is still worth doing at all now that sync reaches the whole window) · ✅ **DOC17 ANSWERED** · ⛔ **DOC16 REFUTED (consequence superseded)** ·
+**Open, in priority order: DOC18 BUILT, AWAITING DEPLOY** (the three-call sync route — no GCS; migration `20260902120000` must be applied BEFORE the JS redeploy) · **DOC14** (the alternative; still blocked on Scott — GCS persistence + confidentiality, and 👤 whether it is still worth doing at all now that sync reaches the whole window) · ✅ **DOC17 ANSWERED** · ⛔ **DOC16 REFUTED (consequence superseded)** ·
 | **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (re-measured 2026-09-02; **18 at 31–50pp, 24 at >50pp**, max 141) — DOC14, blocked on an operator prerequisite. ⚠️ DOC16 was the proposed way round it and is **refuted** — see the DOC16 GATE section. |
 | **retry markers** | 17 (`thin_ocr_result` 14, `fetch_failed` 3). `retry_admitted` is **0 and that is correct** — see DOC13 below. |
 
@@ -48,6 +48,153 @@ route again now that DOC16 is refuted) · ~~DOC16~~ (**closed, refuted at its ga
 the two-call design without re-reading the DOC16 GATE section**) ·
 **DOC13-watch** (retry starvation, benign today) · **DOC2** (cross-repo stale docs) · **DOC3**
 (gov firm-term chain not wired) · **DOC4/5/6**.
+
+---
+
+## DOC18 — the three-call sync window: BUILT 2026-09-02, awaiting deploy
+
+**Replaces the `over_docai_page_cap` dead end for the 42 documents with a MULTI-CALL SYNC extract**
+of the consumer's page window, concatenated in page order into one `raw_text`. **No GCS bucket, no
+IAM grant, no LRO job table, no confidentiality decision** — that is DOC14, and this route exists to
+make it unnecessary.
+
+| what | where |
+|---|---|
+| the planner + the window | `api/_shared/document-text.js` — `planPageWindow`, `ocrCloudCheapWindow`, `extractDocumentText({ ocrPageWindow })` |
+| the page selector | `supabase/functions/docai-ocr/index.ts` — `page_range` → `ProcessOptions` |
+| the lane | `api/_handlers/cre-doc-text.js` `?mode=longdoc` + `fetchOverCapCreDocs` |
+| schema + honest counts | `supabase/migrations/20260902120000_lcc_doc18_partial_page_window.sql` |
+| cron | `lcc-cre-doc-text-longdoc`, `7,37 * * * *`, ONE document per tick |
+| guard | `test/doc18-three-call-sync-extract.test.mjs` (33 tests, **28/28 mutations RED**) |
+
+**THE CONTRACT (DOC17, measured — do not re-verify):** 30 pages per call contiguously from page 1
+(imageless); **15 pages per call anywhere else.** The document's total page count never enters the
+arithmetic. A 141-page lease at a 50-page target is `fromStart:30` + `[31..45]` + `[46..50]`.
+
+### The page target is DERIVED, not chosen
+
+`bov-extract.js` slices lease text at **`LEASE_TEXT_SLICE_CHARS` (90,000)** and this corpus runs
+~1,800 chars/page, so **~50 pages IS the whole useful window** and every page past it is money the
+consumer discards. `OCR_WINDOW_TARGET_PAGES` is that division, and the guard **binds the two**: move
+the consumer's slice without moving the window and the test goes RED with the reason attached.
+
+### ⚠️ The THIRD state — complete for the consumer, incomplete for the document
+
+`needs_ocr` is a boolean and **both values are wrong** for a windowed extract: `true` hides text we
+paid for from both consumers; `false` reads as FULL coverage on `v_lcc_cre_bov_ready`, which is a
+lie about a 141-page lease read to page 50. So a partial is `needs_ocr = false` (consumable) plus
+`partial_extract` / `pages_covered` / `page_ranges` / `reason = 'partial_page_window'`, and
+`v_lcc_cre_bov_ready` gained **`partial_docs` / `fully_covered_docs` / `lease_partial`** (appended —
+`CREATE OR REPLACE VIEW` is append-only). **Membership is deliberately unchanged**: excluding
+partials would keep 42 real leases out of BOV extract to avoid over-claiming, which is strictly
+worse and is not what honesty requires. `covered_docs` keeps its meaning (**consumable**) and is now
+qualified rather than silently redefined — the DOC9 `ocr_by_engine` lesson.
+It is **NOT a ceiling marker and does NOT re-admit**: the scan only re-admits `needs_ocr` rows.
+`gatherPropertyText` flags it as **citation risk**, because the abstract asks for renewal options,
+early termination, default cure and holdover — clauses that routinely sit in the **back half**.
+
+### ⚠️ The seam is assembled by PAGE NUMBER, not by blob
+
+Document AI returns the document's REAL page numbers for a selected range (DOC17 read `[31..45]`
+back), so the concatenation is a map keyed on page number. **Duplication is structurally
+impossible** (a page number is seen once), **a gap is DETECTED** (`page_gaps`) rather than inferred
+from a plausible total length, and `pages_covered` / `page_ranges` describe what came **BACK**,
+never what was asked for.
+
+⚠️ **AND THE SELECTOR IS VERIFIED, because an unknown body field is IGNORED SILENTLY** — a silently
+ignored selector returns pages 1..N and reads as a clean success, which would make every segment a
+duplicate of the first. A segment whose page numbers fall outside the range requested is rejected
+`page_range_ignored` and the walk stops. The wrapper also echoes `page_range_applied` on **both**
+the success and the failure response, and the GET health probe reports `page_range_supported`.
+
+### ⚠️ All four DOC17 traps fired, and here is what each cost
+
+1. **`page_limit` is the MAXIMUM ACHIEVABLE limit, not the one in force.** Nothing in the window
+   sizes a call from it — the plan comes from the two measured constants, and a guard asserts
+   `page_limit` never appears inside `ocrCloudCheapWindow` at all. The ONE re-plan the route
+   performs keys on **`imageless`**, a fact about what was SENT: a 30-page first segment is only
+   servable when imageless applied, so `imageless:false` on an over-cap refusal re-plans the whole
+   window at 15, once. ⚠️ **The discriminating test is the one where they DISAGREE** — a refusal
+   reporting `page_limit: 30` *with imageless held* must NOT re-plan, and the first cut of the guard
+   passed its own mutation because the stub set both.
+2. **`At most 15 pages in one call please.` carries NO `details[]`** and matches neither prose
+   fallback, so `pageLimitFromError` returned `{null,null}` — **and the cap DETECTOR was blind to it
+   too**, which mattered more: it would have been reported as a generic `docai_400` and the window
+   could not have told a cap refusal from a real error. `isPageCapError` now covers all three
+   shapes; the parse returns `limit: 15, got: null` (**unknown is not zero**).
+3. **The base limit is 15 and the baseline arm said 30.** The constants come from DOC17's
+   seven-arm table, not from one error's metadata, and the guard asserts every non-first segment is
+   ≤15 across four document lengths.
+4. **`docai-ocr` resolved one shared secret with `||`, so the first env var set SHADOWED the
+   others.** Fixed to a SET — a strict superset of what authenticated before, so the live drain
+   cannot regress. It is what makes the function reachable from `pg_net`, the only channel a sandbox
+   has.
+
+### The tick-budget decision (§2), and what a document looks like between ticks
+
+DOC17 measured a single call at **10.2 s and 19.3 s**, so three calls cannot fit the 22 s tick.
+**CHOSEN: its own budget (`CRE_OCR_WINDOW_BUDGET_MS`, 110 s), ONE document per tick, no cross-tick
+partial state.** Spanning ticks would need per-segment text persisted mid-document — a half-written
+sidecar both consumers could read. Instead a document either completes its window inside one tick
+or **persists the pages it DID get** (`window_incomplete: true`) and stops. **Pages already paid for
+are never discarded — that is what stops the next attempt double-charging.** A document is therefore
+never mid-flight between ticks: it is either a partial with text, or a dated marker.
+⚠️ `lcc_cron_post` stops listening at 60 s while the handler runs on (P123) — **read the sidecar
+delta, never the caller's patience.**
+
+### The cursor, and the two ceiling reasons
+
+`fetchOverCapCreDocs` orders by **`extracted_at` ASC — and that IS the cursor.** A failed window
+attempt rewrites the marker with a fresh timestamp, so the head **rotates** instead of re-selecting
+the same unservable document every tick (P135/P136: *what makes a target stop being selected?* — the
+answer here is "it was attempted", recorded as a date, not "it produced output"). A success leaves
+the queue permanently, because the sidecar flips to `needs_ocr = false`.
+
+| reason | meaning |
+|---|---|
+| `over_docai_page_cap` | the window has NEVER been tried (route off, or the lane has not reached it). **Still the right terminal state — not removed.** |
+| `window_failed` | the window RAN and produced nothing. A different fact, counted apart. |
+
+Read **`v_lcc_cre_longdoc_backlog`**, never a raw marker count. On the tick read
+**`partial_window` / `ocr` / `window_pages_covered` / `window_failed`**, never `scanned`.
+
+### ⚠️ The honest ceiling (§5) — record it, do not let it read as complete
+
+**Pages beyond ~50 are still not captured.** For a 141-page document, pages 51–141 remain unread,
+and the `abstract` block asks for exactly the clauses that live back there. **That is a real and
+permanent limitation of this route**, acceptable only because the consumer truncates at 90,000 chars
+anyway. **If a future consumer reads more than that, this ceiling becomes a defect** — which is why
+the row says so (`partial_page_window` + citation risk) and why `v_lcc_cre_bov_ready` reports
+`partial_docs` separately from `fully_covered_docs`.
+
+### What is NOT changed
+
+⛔ **gpt-4o is unreachable from this path by construction** — the window calls `ocrCloudCheap`
+directly, never `ocrPdfToTextTiered`, and a failed window returns the marker rather than falling
+through (measured at 9.3× less text on exactly this class, DOC8/DOC9). **The ordinary under-cap
+drain is byte-identical**: the window is opt-in per caller and the `eligible`/`jobs` modes never
+pass it; the worker defaults it OFF; a non-windowed sidecar payload gains no new keys (so it cannot
+400 on PGRST204 even if the migration lags). No GCS, no batch, no LRO.
+
+### ⚠️ Deploy order, and how to verify
+
+**Additive schema BEFORE the writer** (the constant rule): apply `20260902120000` first, then the
+Railway redeploy. **Verify on the sidecar delta, never the tick's own tally:**
+
+```sql
+select * from public.v_lcc_cre_longdoc_backlog;         -- over_docai_page_cap should fall
+select count(*) filter (where partial_extract) as partials,
+       count(*) filter (where reason = 'partial_page_window') as tagged,
+       min(char_len), max(char_len)
+  from public.lcc_cre_property_document_text
+ where extractor_version = 'unit1_v1' and not needs_ocr;
+select sum(partial_docs) as partial, sum(fully_covered_docs) as full,
+       count(*) as properties from public.v_lcc_cre_bov_ready;
+```
+
+⚠️ **`GET …?mode=longdoc` is an UNGATED DRY RUN** — it costs nothing and returns the PLAN (page
+count, marker age, and the exact segment list per document), so the spend is sized before it happens
+rather than discovered afterwards. Run it first.
 
 ---
 

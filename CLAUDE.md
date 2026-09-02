@@ -992,6 +992,39 @@ Registry: `feature_flags_registry.OCR_CLOUD_DOCAI`. Crons 160/167/169 ACTIVE. Fu
     the `At most 15 pages` shape carries NO `details[]` at all**, so both the structured read and
     the prose fallback return null. Inert today (the live path sends no selector); load-bearing for
     DOC18. Full measurement: `docs/architecture/document-capture-ocr-and-deeds.md` (DOC17 ANSWER).
+  - ✅ **DOC18 BUILT THE ROUTE (2026-09-02) — `?mode=longdoc`, ONE document per tick, no GCS.**
+    `planPageWindow` + `ocrCloudCheapWindow` (`api/_shared/document-text.js`) extract the consumer's
+    ~50-page window as three cheap sync calls; `docai-ocr` now takes a `page_range` →
+    `ProcessOptions`. **⚠️ MERGED IS NOT RUNNING — the migration `20260902120000` must be applied
+    BEFORE the Railway redeploy, and the 42 markers are unmoved until both land.** Four things worth
+    carrying:
+    - **⚠️ THE SEAM IS ASSEMBLED BY PAGE NUMBER, NOT BY BLOB** — DocAI returns the document's REAL
+      page numbers for a selected range, so a map keyed on page number makes duplication
+      structurally impossible and DETECTS a gap. **A plausible total length is not evidence of a
+      clean seam.** And because an unknown body field is **ignored SILENTLY**, a silently-ignored
+      selector returns pages 1..N and reads as a clean success — so a segment whose page numbers
+      fall outside the range requested is rejected `page_range_ignored`.
+    - **⚠️ A WINDOWED EXTRACT IS A THIRD STATE AND `needs_ocr` CANNOT EXPRESS IT.** `true` throws
+      away text we paid for; `false` reads as FULL coverage on `v_lcc_cre_bov_ready` about a
+      141-page lease read to page 50. It is `needs_ocr=false` + `partial_extract`/`pages_covered`/
+      `page_ranges`/`reason='partial_page_window'`, and the view gained `partial_docs` /
+      `fully_covered_docs` **appended** — `covered_docs` keeps meaning *consumable* and is qualified,
+      never silently redefined (the DOC9 `ocr_by_engine` lesson). **Membership is unchanged on
+      purpose**: excluding partials would keep 42 real leases out of BOV extract to avoid
+      over-claiming, which is strictly worse than saying so on the row.
+    - **⚠️ `page_count` AND `ocr_pages` USED TO BE THE SAME NUMBER, AND THE WINDOW SPLITS THEM.**
+      Before it, DocAI either read the whole document or refused it, so `buildDocTextRow` wrote the
+      billed count into `page_count` — which for a partial records a 141-page lease as 50 and erases
+      the very fact that makes it partial. **`ocr_pages` = what we were BILLED for; `page_count` =
+      how long the document is.** Caught by the DOC18 guard's own assertion, not by reading the code.
+    - **The budget decision, stated:** a call measured 10–20 s, so three cannot fit the 22 s tick.
+      The lane gets **its own 110 s budget and ONE document per tick, with no cross-tick partial
+      state** — a document is either a partial WITH text or a dated marker, never mid-flight, and
+      **pages already paid for are never discarded**, which is what stops the next attempt
+      double-charging. The marker's `extracted_at` **is the cursor** (a failed attempt refreshes it,
+      so the head rotates — P135/P136). Two ceiling reasons are kept apart:
+      `over_docai_page_cap` = never attempted, `window_failed` = attempted and empty.
+      Read `v_lcc_cre_longdoc_backlog`; ⛔ gpt-4o stays unreachable from this path by construction.
   `INTAKE_OCR_MAX_BYTES` 12MB default; bigger scans go off-box via the `ocr_text` resubmit seam
   (`POST /api/intake?_route=lease-backfill&id=<id>`). Optional: `AI_OCR_MODEL=gpt-4o-mini`.
 - **⚠️ `over_page_cap` → gpt-4o WAS the documented design and it was MEASURED TO FAIL.** Across every

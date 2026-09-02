@@ -103,6 +103,40 @@ const OCR_MIN_CHARS_UNKNOWN_PAGES = Number(process.env.CRE_OCR_MIN_CHARS_UNKNOWN
  */
 export const CRE_OCR_PAGE_CAP = Number(process.env.CRE_OCR_PAGE_CAP || 30);
 
+// ---------------------------------------------------------------------------
+// DOC18 (2026-09-02) — the long-document lane.
+//
+// `over_docai_page_cap` is still written by the ORDINARY drain exactly as DOC8
+// wrote it: the pre-flight sees a document longer than one synchronous call can
+// serve, spends nothing, and marks it. What DOC18 adds is a SECOND lane that
+// picks those markers up and extracts the consumer's window as N cheap sync
+// calls (30 from page 1 imageless + 15 per call after that — DOC17's measured
+// contract). The ordinary lane is byte-identical: the window is opt-in per
+// caller and the eligible/jobs modes never pass it.
+//
+// TWO CEILING REASONS, ON PURPOSE:
+//   `over_docai_page_cap` — the window has NEVER been tried on this document
+//                           (the route is off, or the long lane has not reached
+//                           it). It is still the right terminal state.
+//   `window_failed`       — the window RAN and produced nothing. A different
+//                           fact, so the two are countable apart rather than one
+//                           bucket that hides which is which.
+// Both re-admit on the CEILING expiry for the ordinary lane; both are selected
+// by the long lane, oldest-attempt-first.
+// ---------------------------------------------------------------------------
+
+/** How far into a long document to extract. 0 disables the whole route. */
+export const CRE_OCR_WINDOW_PAGES = Number(process.env.CRE_OCR_WINDOW_PAGES || 50);
+
+/**
+ * Its own wall-clock budget, NOT the 22 s tick budget. Three DocAI calls measured
+ * 10–20 s EACH (DOC17), so a 50-page window cannot fit in the ordinary tick — see
+ * `handleCreDocTextTick`'s `longdoc` mode, which runs ONE document per tick.
+ */
+export const CRE_OCR_WINDOW_BUDGET_MS = Math.max(
+  20000, Number(process.env.CRE_OCR_WINDOW_BUDGET_MS || 110000),
+);
+
 /** The meaningful-char floor an OCR result must clear at this page count. */
 export function ocrThinFloor(pages) {
   if (Number.isFinite(pages) && pages > 0) {
@@ -161,7 +195,7 @@ const CRE_RETRY_AFTER_MS = CRE_RETRY_AFTER_HOURS * 3600 * 1000;
 // different expiry — so the lane self-clears if the cap is raised again or an
 // async/batch tier is added, rather than becoming a permanent tombstone nobody
 // revisits. Re-admission costs a byte fetch and a pdf-parse: ZERO OCR spend.
-export const CRE_CEILING_REASONS = Object.freeze(['over_docai_page_cap']);
+export const CRE_CEILING_REASONS = Object.freeze(['over_docai_page_cap', 'window_failed']);
 export const CRE_CEILING_RETRY_AFTER_HOURS = Math.max(1, Number(process.env.CRE_DOC_TEXT_CEILING_RETRY_AFTER_HOURS || 720));
 const CRE_CEILING_RETRY_AFTER_MS = CRE_CEILING_RETRY_AFTER_HOURS * 3600 * 1000;
 
@@ -213,6 +247,9 @@ export async function buildDocTextRow(regRow, deps = {}) {
       // paying gpt-4o for a fragment. Opt-in per caller; the deed lane does not
       // set it and is unchanged.
       ocrPageCap: deps.ocrPageCap ?? CRE_OCR_PAGE_CAP,
+      // DOC18: only the LONG-DOCUMENT lane sets this. Absent for the ordinary
+      // eligible/jobs drain, which therefore behaves exactly as it does today.
+      ocrPageWindow: deps.ocrPageWindow ?? null,
     },
     deps, // storageGet / fetchImpl / freeOcr / cloudCheapOcr / ocrImpl all pass through
   );
@@ -237,7 +274,8 @@ export async function buildDocTextRow(regRow, deps = {}) {
       // Folding it into `needs_ocr` would hide the whole point of the pre-flight —
       // "we did not spend on this, and here is exactly why" — in a bucket that
       // also holds "there is no text layer and no OCR is configured."
-      outcome: reason === 'over_docai_page_cap' ? 'over_page_cap' : 'needs_ocr',
+      outcome: reason === 'over_docai_page_cap' ? 'over_page_cap'
+        : (reason === 'window_failed' ? 'window_failed' : 'needs_ocr'),
       row: {
         ...base,
         raw_text: null,
@@ -249,6 +287,11 @@ export async function buildDocTextRow(regRow, deps = {}) {
         page_count: Number.isFinite(ext.page_count) ? ext.page_count : null,
         reason,
       },
+      // DOC18: WHY the window produced nothing (a failed segment, the byte cap, an
+      // ignored selector). ⚠️ It rides the TICK RESPONSE, never the sidecar row —
+      // there is no such column, and a payload key the table does not have 400s
+      // every write with PGRST204. Never used to size a retry (trap 1).
+      window_reason: ext.window_reason || null,
     };
   }
 
@@ -266,11 +309,31 @@ export async function buildDocTextRow(regRow, deps = {}) {
   const knownPages = Number.isFinite(ext.ocr_pages) ? ext.ocr_pages
     : (Number.isFinite(ext.page_count) ? ext.page_count : (pages.length || null));
   const meaningful = meaningfulTextLen(ext.text);
+  // ⚠️ The thin floor keys on the pages we actually READ (`knownPages` prefers
+  // ocr_pages), which is right: "is this text too thin to be what we extracted".
   const thinOcr = ext.method === 'ocr' && isThinOcrResult({ meaningfulChars: meaningful, pages: knownPages });
+
+  // ⚠️ DOC18 — BUT THE PERSISTED `page_count` IS THE DOCUMENT'S LENGTH, AND THE
+  // TWO USED TO BE THE SAME NUMBER. Before the window they were: DocAI either
+  // read the whole document or refused it. A windowed extract reads 50 pages of
+  // 141, so `knownPages` (50) is the billed count and writing it to `page_count`
+  // would record a 141-page lease as 141 -> 50 and erase the very fact that makes
+  // it a partial. `ocr_pages` = what we were BILLED for; `page_count` = how long
+  // the document is. Caught by the DOC18 guard, not by reading the code.
+  const documentPages = Number.isFinite(ext.page_count) ? ext.page_count : knownPages;
+
+  // ── DOC18 — THE THIRD STATE: complete for the consumer, incomplete for the
+  // document. A 141-page lease read to page 50 is a PARTIAL. It is NOT a ceiling
+  // marker (needs_ocr stays false, so both consumers can read the text it DOES
+  // have) and it does NOT re-admit (the scan only re-admits needs_ocr rows), but
+  // it must never read as complete coverage — hence the columns and the reason.
+  const windowed = ext.ocr_tier === 'cloud_cheap_window';
+  const partial = windowed && !!ext.partial_extract;
 
   return {
     // A thin OCR result is NOT an extraction, so it does not report as one.
-    outcome: thinOcr ? 'thin_ocr' : (ext.method === 'ocr' ? 'ocr' : 'text_extracted'),
+    outcome: thinOcr ? 'thin_ocr'
+      : (partial ? 'partial_window' : (ext.method === 'ocr' ? 'ocr' : 'text_extracted')),
     row: {
       ...base,
       // ⚠️ The fragment is KEPT. needs_ocr=true alone hides it from both
@@ -283,7 +346,7 @@ export async function buildDocTextRow(regRow, deps = {}) {
       ocr_engine: ext.ocr_engine || null,
       ocr_confidence: typeof ext.ocr_confidence === 'number' ? ext.ocr_confidence : null,
       ocr_pages: Number.isFinite(ext.ocr_pages) ? ext.ocr_pages : (pages.length || null),
-      page_count: knownPages,
+      page_count: documentPages,
       pages: pages.length ? pages : null,
       thin_text_layer: !!ext.thin_text_layer,
       char_len: ext.text.length,
@@ -292,9 +355,32 @@ export async function buildDocTextRow(regRow, deps = {}) {
       // — instead of a 31-character fragment reading as a covered lease forever.
       needs_ocr: thinOcr,
       // gpt-4o transcription (tier 'cloud') has no page anchors; a thin OCR result
-      // is low-confidence. Either way, tag it so Unit 4 flags citation risk.
-      reason: thinOcr ? 'thin_ocr_result' : (ext.ocr_tier === 'cloud' ? 'no_page_anchors_gpt4o' : null),
+      // is low-confidence; a windowed extract stops at the consumer's window.
+      // Either way, tag it so Unit 4 flags citation risk.
+      reason: thinOcr ? 'thin_ocr_result'
+        : (partial ? 'partial_page_window'
+          : (ext.ocr_tier === 'cloud' ? 'no_page_anchors_gpt4o' : null)),
+      // ⚠️ THESE KEYS ARE ADDED ONLY ON A WINDOWED EXTRACT. The ordinary drain's
+      // payload is byte-identical to today's, so if the additive migration has
+      // not landed yet its writes cannot 400 on PGRST204 — the deploy-ordering
+      // rule with a belt as well as braces.
+      ...(windowed ? {
+        pages_covered: Number.isFinite(ext.pages_covered) ? ext.pages_covered : null,
+        page_ranges: Array.isArray(ext.page_ranges) ? ext.page_ranges : null,
+        partial_extract: partial,
+      } : {}),
     },
+    // Tick telemetry only — never persisted.
+    window: windowed ? {
+      calls: ext.window_calls ?? null,
+      target_pages: ext.window_target_pages ?? null,
+      pages_covered: ext.pages_covered ?? null,
+      page_ranges: ext.page_ranges ?? null,
+      page_gaps: ext.page_gaps ?? null,
+      duplicate_pages: ext.duplicate_pages ?? null,
+      incomplete: !!ext.window_incomplete,
+      replanned: !!ext.window_replanned,
+    } : null,
   };
 }
 
@@ -467,6 +553,12 @@ export async function runPropertyDocText(documentId, deps = {}) {
     page_count: built.row.page_count ?? null,
     needs_ocr: !!built.row.needs_ocr,
     reason: built.row.reason || null,
+    // DOC18 — the honest shape of a long-document extract.
+    window_reason: built.window_reason || null,
+    pages_covered: built.row.pages_covered ?? null,
+    page_ranges: built.row.page_ranges ?? null,
+    partial_extract: !!built.row.partial_extract,
+    window: built.window || null,
   };
 }
 
@@ -582,6 +674,60 @@ export async function fetchEligibleCreDocs({ limit = 15, doctype = null, version
     scan_highest_id: highestId,
     retry_admitted: retryAdmitted,
   };
+}
+
+/**
+ * DOC18 — THE LONG-DOCUMENT QUEUE. Sidecar rows the ordinary drain has already
+ * marked as beyond one synchronous call, joined back to their registry rows.
+ *
+ * ⚠️ ORDERED BY `extracted_at` ASC, AND THAT IS THE CURSOR. A window attempt that
+ * produces nothing REFRESHES the marker's `extracted_at` (writeDeferredMarker),
+ * so the head of this queue rotates instead of re-selecting the same unservable
+ * document every tick — the P135/P136 class, third-hand: *what makes a target
+ * stop being selected?* Here the answer is "it was attempted", recorded as a
+ * date, not "it produced output". A document the window SUCCEEDS on leaves the
+ * queue permanently, because the sidecar flips to needs_ocr = false.
+ *
+ * Selects BOTH ceiling reasons: `over_docai_page_cap` (never attempted) and
+ * `window_failed` (attempted, nothing came back). Never touches a filled row.
+ */
+export async function fetchOverCapCreDocs({ limit = 1, version } = {}, deps = {}) {
+  const q = deps.opsQuery || opsQuery;
+  const ver = version || CRE_DOC_TEXT_VERSION;
+  const cap = Math.min(25, Math.max(1, limit));
+
+  const side = await q('GET',
+    `lcc_cre_property_document_text?select=document_id,page_count,reason,extracted_at,char_len` +
+    `&extractor_version=eq.${encodeURIComponent(ver)}` +
+    `&needs_ocr=is.true&reason=in.(${CRE_CEILING_REASONS.join(',')})` +
+    `&order=extracted_at.asc&limit=${cap}`,
+    null, { countMode: 'none' });
+  if (!side.ok || !Array.isArray(side.data)) {
+    return { ok: false, status: side.status, detail: side.data, stage: 'ceiling_probe' };
+  }
+  if (!side.data.length) return { ok: true, rows: [], markers: [] };
+
+  const ids = side.data.map((r) => r.document_id);
+  const reg = await q('GET',
+    `lcc_cre_property_documents?select=id,cre_property_id,file_name,document_type,source_url,source` +
+    `&id=in.(${ids.join(',')})`,
+    null, { countMode: 'none' });
+  // FAIL CLOSED (the fetchEligibleCreDocs rule): a failed registry read must not
+  // be reported as an empty queue, or a stalled lane reads exactly like a drained one.
+  if (!reg.ok || !Array.isArray(reg.data)) {
+    return { ok: false, status: reg.status, detail: reg.data, stage: 'registry_lookup' };
+  }
+  const byId = new Map(reg.data.map((r) => [r.id, r]));
+  // Preserve the marker's oldest-first order; a marker whose registry row has
+  // disappeared is reported, never silently dropped.
+  const rows = [];
+  const missing = [];
+  for (const m of side.data) {
+    const r = byId.get(m.document_id);
+    if (r) rows.push({ ...r, _marker: m });
+    else missing.push(m.document_id);
+  }
+  return { ok: true, rows, markers: side.data, registry_missing: missing };
 }
 
 /**

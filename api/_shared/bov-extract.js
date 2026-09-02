@@ -116,6 +116,15 @@ export function buildClauseRefs(modelClauses, pages) {
 // Extraction prompts (self-contained — no Copilot system prompt biasing the JSON)
 // ---------------------------------------------------------------------------
 
+/**
+ * How much document text reaches the model. ⚠️ DOC18 DERIVES THE OCR PAGE WINDOW
+ * FROM THIS NUMBER: at ~1,800 chars/page in this corpus it is ~50 pages, which is
+ * why the long-document route stops there — every page past it costs money and is
+ * discarded here. `test/doc18-three-call-sync-extract.test.mjs` binds the two, so
+ * moving this without moving `OCR_WINDOW_TARGET_PAGES` goes RED.
+ */
+export const LEASE_TEXT_SLICE_CHARS = 90_000;
+
 function leasePrompt(leaseText) {
   return [
     'You are a commercial real estate lease abstractor. Read the LEASE below and',
@@ -145,7 +154,7 @@ function leasePrompt(leaseText) {
     '',
     'LEASE:',
     '"""',
-    String(leaseText || '').slice(0, 90_000),
+    String(leaseText || '').slice(0, LEASE_TEXT_SLICE_CHARS),
     '"""',
   ].join('\n');
 }
@@ -175,7 +184,7 @@ function realEstatePrompt(ddOmText) {
     '',
     'DOCUMENTS:',
     '"""',
-    String(ddOmText || '').slice(0, 90_000),
+    String(ddOmText || '').slice(0, LEASE_TEXT_SLICE_CHARS),
     '"""',
   ].join('\n');
 }
@@ -215,6 +224,11 @@ export async function gatherPropertyText(crePropertyId, deps = {}) {
     // confidence OCR result (Step 2A flags these in `reason`) → citation risk.
     if (row.ocr_tier === 'cloud') citationRisk = true;
     if (row.reason === 'thin_ocr_result' || row.reason === 'no_page_anchors_gpt4o') citationRisk = true;
+    // DOC18 — a partial window read the FRONT of a long document. The abstract asks
+    // for renewal options, early termination, default cure and holdover, which sit
+    // in the back half of a long lease routinely. That is a real, permanent ceiling
+    // of this route (§5), so it is flagged rather than allowed to read as complete.
+    if (row.reason === 'partial_page_window') citationRisk = true;
     const dt = String(row.document_type || '').toLowerCase();
     if (dt === 'lease') groups.leases.push(row);
     else if (dt === 'dd') groups.dd.push(row);
