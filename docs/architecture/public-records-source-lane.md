@@ -193,7 +193,12 @@ Backfill: batch `pr2_sidebar_parcel_stats_20260902`, 817 rows, reversal ledger
   ceiling of 1,230 `square_footage` / 1,192 `year_built` / 1,155 lot / 310
   zoning across 1,271 gov captures. `scripts/pr2-backfill-sidebar-parcel-stats.mjs
   --domain government --apply` is one command; it was left as a deliberate call
-  rather than quietly widening a dia-scoped change.
+  rather than quietly widening a dia-scoped change. (→ `OPERATOR-ACTIONS.md` §3 **PR2-gov**.)
+- ⚠️ **The backfill is proven; the PRODUCER is not (Class 8).** Re-measured after the merge
+  (2026-09-02 ~17:30 UTC): every dia count above reproduces, **0 new `costar_sidebar` parcel rows
+  have landed since** (last capture 2026-08-31 18:33 UTC) and the Railway redeploy is unconfirmed.
+  The DB half (rungs, backfill, provenance) shipped instantly; the JS writer ships on the redeploy.
+  **The proof is a NEW sidebar parcel row carrying `building_sf`** — today's 767 cannot supply it.
 - ⚠️ **`properties` moved too, via `trg_parcel_propagate_to_property`** (AFTER
   UPDATE OF these very columns, fill-blanks, units correct). **779 properties
   touched**; `lot_sf` **3,704 → 3,794** and `land_area` **3,707 → 3,797** are

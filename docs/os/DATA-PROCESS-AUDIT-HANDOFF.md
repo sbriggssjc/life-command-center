@@ -60,6 +60,10 @@ job, `Run Tests` always reports, **seen RED** (run 33647155312), docs-only path 
 CI arc:** merge #7397 → delete `claude/tmp-red-gate-proof` + `claude/tmp-docs-only-proof` in the UI
 → require `Run Tests` on `main`. ⚠️ Ruff stays masked, correctly — **5,738 findings, not the "11"
 the first handoff said** (GitHub's ten-annotation cap; A5's `815 = 1000 − 185` again).
+**PR2 verify-next (Class 8):** the dia backfill is proven (767/734/714/232 reproduce live); the
+PRODUCER is not — 0 `costar_sidebar` parcel rows since the merge and the Railway redeploy of
+`98248e18` is unconfirmed. Assert on a **new** sidebar parcel row carrying `building_sf`, never on
+today's totals. gov backfill (1,527 rows) is Scott's call → `OPERATOR-ACTIONS.md` §3 **PR2-gov**.
 **PR8 verify-next:** `field_provenance where source='agency_classifier'` reads 0 and it is a
 no-population zero (0 unflushed gov events, last one pre-migration) — it flips on the next gov write
 that fires `gov_classify_agency()`; do not read it as broken.
@@ -71,16 +75,16 @@ that fires `gov_classify_agency()`; do not read it as broken.
    person names, 7 are the Colliers family. **`cbre; smyth & colliers; patel` is minted as one
    company.** Start with **`BR1-confirm`** — 12 brokerage-evidenced orgs ready for a one-decision
    human confirm.
-2. **`PR2` (re-scoped 2026-09-02 — the filed premise was REFUTED)** — the "77% tax coverage" was
-   the gpt-4o leg (25,334 APN-less rows linked to 9,033 properties). The only real source is the
-   **CoStar sidebar** (931 APNs / 883 properties) and its writer **drops the building stats and
-   `tax_amount` the capture sends** (`sidebar-pipeline.js::upsertPublicRecords`). Prompt drafted:
-   `PR2-sidebar-parcel-stats-dropped.md` (with PR11, the model-leg quarantine, if cheap).
-3. **`PR5`** — **39 of 68 registered ladder sources have never written a field** (re-keyed on
+2. **`PR5`** — **39 of 68 registered ladder sources have never written a field** (re-keyed on
    `v_field_provenance_effective_source` after PR8; the raw `source` reads 40 until the next flush).
    Triage into build / rename / retire, **and the reverse arm now has a real member:
    `costar_sidebar` writes `gov.properties.government_type` (52/30d) with no rung.** ✅ PR8 is
    DONE (2026-09-02, #2041) — the registry is the allowlist; nothing blocks PR5 any more.
+   **Prompt drafted: `docs/claude-code/prompts/PR5-ladder-source-triage.md`** (folds PR7/PR9/PR10).
+3. **`PR12`** — `field_provenance.value_text_hash` rejects any value with a double quote (22P02)
+   and the JS path fails OPEN, so provenance is lost silently. **Size the historical loss first**
+   (count quoted values on every curated column the ladder covers), then the `convert_to(...,'UTF8')`
+   rewrite of the generated column.
 4. **`DE3`/`DE4`** (DE4's input is settled: FY2026's 73.66% Medicare is the fallback bucket),
    **`B6e-clinic-metadata`**, **`D2`–`D5`**, **`PR10`** (one source, two ladders), **`SEC1`**
    (91 of 195 SECURITY DEFINER functions anon-executable — filed by PR8, needs its own pass).

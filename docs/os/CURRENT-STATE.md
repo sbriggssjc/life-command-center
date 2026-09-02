@@ -61,6 +61,17 @@ Ownership Resolution Engine; supersession tiers; the gov ownership-transition fe
 → `CLAUDE.md` §"BD spine", `docs/architecture/property-owner-subsystem.md`,
 `government-lease/docs/OWNERSHIP_RESOLUTION_ENGINE.md`
 
+### Public records — one real source, and it now carries its stats (PR1 → PR2, 2026-09-02)
+`county_records` @5 is registered on 93 rungs and has **never written a field, by decision** — both
+domains' `public_record_ingest.py` are gpt-4o recall, not a county fetch (PR1; §2a of the lane page).
+The only genuine acquisition is the **CoStar sidebar** (dia 931 APNs / 883 properties), and since
+PR2 its writer carries `building_sf` / `lot_sf` / `year_built` / `zoning` (767 / 734 / 714 / 232 on
+dia, backfilled; gov writer fixed, backfill pending Scott). ⚠️ The **producer proof is still
+open** — assert on a new post-redeploy sidebar row, not the totals. Ceilings of ZERO are stated for
+`tax_amount` / `land_use` / `owner_name` (never captured). Provenance is the allowlist (PR8):
+`field_source_priority` row ⇒ merges under its own name, else `domain_trigger`.
+→ `docs/architecture/public-records-source-lane.md`; backlog PR1d (`REGRID_API_KEY`), PR5, PR11, PR12.
+
 ### Comms → context
 Outlook/Teams intake → `activity_events` / `email_bodies` → deal attribution → correspondence
 summaries, role evolution, next-step derivation, mailbox mirror + move-queue executor.
