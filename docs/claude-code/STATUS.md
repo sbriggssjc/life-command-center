@@ -112,8 +112,13 @@ outcome above is from the run itself).
   ⚠️ Order was writer-first (Railway auto-deploys on merge); safe only because the non-windowed
   payload carries no new keys. **Ungated dry run** (`mode=longdoc&limit=3` via `pg_net` + the vault
   key): plans correct on docs 61/80/91 — first segment 30, every later segment ≤15.
-- ⚠️ **`'vercel'` is a dead LABEL, not a dead host** — `lcc_cron_post` routes anything not `'edge'`
-  to the Railway URL. The two existing cre-doc-text crons still say `'vercel'` and are fine.
+- ⚠️ **`'vercel'` was a dead LABEL, not a dead host — and it is now RETIRED at the source** (Scott:
+  *correct it so it cannot distract a future chat*). `lcc_cron_post` routes anything not `'edge'` to
+  the Railway URL; 50 of 155 jobs still said or defaulted to `'vercel'`, and C1 had already misread
+  one as "posts to the retired host". Migration `20260902140000` (applied live): default → `'railway'`,
+  all 36 explicit commands relabelled via `cron.alter_job` (0 remain), `'vercel'` kept as a silent
+  alias so a replayed older migration cannot break. `CLAUDE.md` C1 line + backlog **C1-note**
+  corrected in place with strike-through; footgun added under `lcc_cron_post()`.
 - **OCR1 prompt corrected in place before sending — three defects:** (1) **the sample it asked
   for cannot exist** — the longest DocAI baseline is exactly 30 pages *because* of the cap, so
   "≥3 leases over 30pp with a baseline" is structurally empty; split into arm A (head-to-head,
