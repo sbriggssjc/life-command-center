@@ -1,5 +1,7 @@
 # Public records as an independent source lane (assessor / parcel / tax / deed)
 
+> **Sibling canonical page (2026-09-02): `field-provenance-ladder.md`** — the LEDGER (`field_provenance` / `field_source_priority` / `lcc_merge_field` semantics, PR5/PR5c/PR8/PR12 in full). This page is the public-records SOURCE lane; the §2 PR blocks stay here as the dated record.
+
 > **START HERE for anything about assessor, parcel, tax or deed data as a SOURCE** — what it
 > populates, where it sits on the authority ladder, and what is actually missing.
 >

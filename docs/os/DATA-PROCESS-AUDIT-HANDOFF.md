@@ -103,6 +103,8 @@ that fires `gov_classify_agency()`; do not read it as broken.
    speaks the vocabulary. Siblings: **`PR5c-signal`** (PR12's failure counter cannot see the five
    direct callers — 0 open alerts over a 100%-failing population) and **`PR5c-avail-field`**
    (the dia `availability_scraper` rung names `status`; the writer writes `is_active`).
+   **Prompt drafted: `docs/claude-code/prompts/PR5c-entities-provenance-callers.md`.** Canonical
+   page for the whole ladder topic is now `docs/architecture/field-provenance-ladder.md`.
 3. **`PR5d`** — `costar_cmbs_loan`: 121 rungs, the ladder's largest source, for a capture arm with
    0 rows on either domain (`loans.data_source`). Is the CoStar CMBS tab ever captured, or is the
    arm unreachable? One grep of the extension + one count.
