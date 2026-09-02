@@ -16,6 +16,30 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — UX-T0 reconciled (deploy + migrations verified); EXT1 floor MEASURED — two noise classes gone, labels are the next layer → EXT1b
+
+- **UX-T0 (#2061) verified live:** JS in deployed `a3172f44`; `v_manager_overview.is_team_member`
+  reads **42 / 4**; dia `v_listing_verification_summary` **1,400 / 0 evidence / 1,400 cron**. CC's
+  verdicts stand: 9 fixed, 4 owned elsewhere, **4 of my mechanism hypotheses REFUTED** (the "500"
+  was arithmetic, not `limit: 500`; the verification feed was honest about a dead evidence lane;
+  Kelly's writes land — three of four mailboxes are simply not synced; the Woodland Hills flag IS
+  set), **2 removals refused** on measurement. The two refusals are now decisions on
+  `OPERATOR-ACTIONS.md` (UX39/UX41), and the mailbox step is an operator row (UX13a). Not measured:
+  UX22 (per-column comps census — its own pass) and **UX23, which needs the property Scott had on
+  screen** — name it and it is a 20-minute job.
+- **EXT1 floor re-run:** rent disagreements vs tesseract **2 → 0**, date disagreements **4 → 0**;
+  doc 255 reads **101,568** on all three runs (was 8,464 / 89,496 / 84,464). But `year1_rent`
+  self-rate **89 → 89** and dates **90/71 → 80/80**, not the predicted ~100 — the model now
+  mislabels `basis`/`precision` on quotes that are unambiguous in English (431: *"$8,796.50 per
+  month"* labelled `per_sf_annual`; a plain *"March 15, 2021"* labelled `formula` on one of two runs).
+  The 7 new date both-nulls are CORRECT nulls (formula leases). One clean OCR miss now visible:
+  425's dates came through tesseract as garbage and were honestly reported as formula/null.
+  Record: `responses/done/EXT1-floor-measurement.response.md`. **EXT1b staged** — parse
+  `as_stated` in code as the authority.
+- ⚠️ **Lesson for my own predictions:** I predicted the floor would reach ~100% and it did not,
+  because I assumed the model's LABELS would be as reliable as its QUOTES. Read the rows before
+  predicting the aggregate.
+
 ## 2026-09-02 — EXT1 deploy confirmed; the box bake-off graded NO GPU engine (two install misses); harness Windows-python fix; duplicate rows merged
 
 - **EXT1 is deployed**: `985d322` is an ancestor of live `30eaced2` (cache-busted `/version`). The
