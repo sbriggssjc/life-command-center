@@ -514,6 +514,90 @@ test('evidence-backed aliases allow only terminal legal-entity suffix difference
   );
 });
 
+test('approved operating identity aliases bind a CMS sublocation to its parent building', () => {
+  const operatingAlias = {
+    status: 'approved',
+    reason_code: 'legal_entity_operating_identity_same_site',
+    cms_facility_name: 'Synthetic Hudes Endoscopy Center LLC',
+    operating_names: ['Synthetic Johns Creek Endoscopy', 'Synthetic Atlanta Gastroenterology'],
+    address_token: '4275 JOHNS CREEK PKWY|TESTVILLE|GA|30024',
+    authorized_by: 'research_owner',
+    authorized_at: '2026-09-01T12:00:00Z',
+    evidence_citations: [
+      { source: 'official_operator', url: 'https://operator.example/location/endoscopy' },
+      { source: 'official_operator', url: 'https://parent.example/locations/endoscopy' },
+    ],
+  };
+  const target = {
+    candidate_fingerprint: sha('d'),
+    address_token: '4275 JOHNS CREEK PARKWAY BUILDING E|TESTVILLE|GA|30024',
+    cms_identity: {
+      facility_name: 'Synthetic Hudes Endoscopy Center LLC',
+      address: '4275 Johns Creek Parkway, Building E, Suite A',
+      city: 'Testville', state: 'GA', zip: '30024',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Hudes Endoscopy Center LLC'],
+      approved_operating_identity_aliases: [operatingAlias],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/johns-creek',
+    address: '4275 Johns Creek Pky', city: 'Testville', state: 'GA', zip: '30024',
+    square_footage: '13,791', tenant_name: 'Synthetic Atlanta Gastroenterology',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'approved_operating_identity_parent_building');
+  assert.equal(built.identity_match.second_review_required, true);
+  assert.equal(built.identity_match.captured_operating_name, 'SYNTHETIC ATLANTA GASTROENTEROLOGY');
+
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenant_name: 'Unrelated Medical Group' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, address: '4277 Johns Creek Pky' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, zip: '30025' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: {
+        ...target.cms_evidence,
+        approved_operating_identity_aliases: [{
+          ...operatingAlias,
+          evidence_citations: [operatingAlias.evidence_citations[0]],
+        }],
+      },
+    }, context),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: {
+        ...target.cms_evidence,
+        approved_operating_identity_aliases: [{
+          ...operatingAlias,
+          evidence_citations: [
+            operatingAlias.evidence_citations[0],
+            { source: 'official_operator', url: 'https://operator.example/second-page' },
+          ],
+        }],
+      },
+    }, context),
+    /does not match/,
+  );
+});
+
 test('building ranges contain a frozen street number only with exact location and tenant corroboration', () => {
   const target = {
     candidate_fingerprint: sha('9'),

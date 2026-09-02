@@ -10,10 +10,32 @@
 > `CLAUDECODE_PROMPT_deed_capture_at_ingestion.md` (the fix prompt).
 >
 > **Live-verified 2026-08-31; §0 blocker FIXED and re-measured 2026-09-01 (DOC1); the spend
-> escalation and the covered-fragment defect FIXED 2026-09-01 (DOC8 / DOC9 / DOC10 — §0d).**
+> escalation and the covered-fragment defect FIXED 2026-09-01 (DOC8 / DOC9 / DOC10 — §0d).
+> DOC14 (the 31–59 page leases that get NO text) is 🛑 **BLOCKED on an operator prerequisite** —
+> the async contract is verified, the GCS buckets and their IAM do not exist, and nothing was
+> built. Read the DOC14 BLOCKED section before proposing anything about long-document OCR.**
 >
 > ⚠️ **Every number on this page is dated. Before quoting one, run §7b — the standing status check,
 > with its 2026-09-01 baseline.**
+
+---
+
+## CURRENT STATE — read these ten lines first, then §0 for how we got here
+
+**Measured live 2026-09-02 11:39 UTC.** ⚠️ §0 below is a dated worklog; **this block is the truth.**
+
+| | |
+|---|---|
+| **domain store (deeds)** | ✅ **325/325 text — 100%, complete.** Cron 160, `doctype=deed`. ⛔ **Do NOT widen it** (DOC7). |
+| **CRE registry drain** | undrained **771 → 426**, sidecar **345**, `scan_lowest_id` **2** — reaches the oldest document. |
+| **consumer** | **`bov_ready` 5 → 37.** BOV extract is receiving real leases, DDs and OMs. |
+| **OCR tier** | ✅ **22+ events since redeploy, 100% DocAI, ZERO gpt-4o.** The 9.3×-worse escalation is closed. |
+| **🔴 the live gap** | **40 documents carry `over_docai_page_cap` and get NO text at all** — DOC14, blocked on an operator prerequisite. |
+| **retry markers** | 17 (`thin_ocr_result` 14, `fetch_failed` 3). `retry_admitted` is **0 and that is correct** — see DOC13 below. |
+
+**Open, in priority order: DOC16** (page-range sync — probably removes the need for GCS entirely; rests on one API question) · **DOC14** (the fallback; blocked on Scott — GCS + a confidentiality decision) ·
+**DOC13-watch** (retry starvation, benign today) · **DOC2** (cross-repo stale docs) · **DOC3**
+(gov firm-term chain not wired) · **DOC4/5/6**.
 
 ---
 
@@ -524,6 +546,334 @@ v1 discovery document** (DOC8's flag was a top-level boolean, not where the prom
 belongs in the **existing `mode=jobs` lane** as submit → poll → ingest, not a second worker; and
 ⚠️ **if the route is unavailable, stop and say so** — splitting a lease into chunks changes what
 `extractTenantFromLease` receives, and a named honest ceiling beats a plausible workaround.
+
+### 🛑 DOC14 BLOCKED, 2026-09-01 22:35 UTC — the async contract is verified, the prerequisites do NOT exist, nothing was built
+
+**The route is real and the lane was NOT built, because its operator prerequisites are absent.**
+Per the prompt's §2 and §6 this is the intended outcome: *a named, dated, honest ceiling beats a
+half-built lane.* No code, no edge deploy, no `mode=jobs` change. `over_docai_page_cap` is untouched
+and remains the correct terminal state.
+
+#### The async contract, as READ from the live v1 discovery document
+
+Read directly, **not taken from the prompt** (DOC8's own lesson):
+`https://documentai.googleapis.com/$discovery/rest?version=v1`, **revision `20260820`**, fetched
+2026-09-01 22:29 UTC (HTTP 200, 397,842 bytes).
+
+| | shape |
+|---|---|
+| method | `projects.locations.processors.batchProcess` — `POST .../processors/{id}:batchProcess` |
+| request | `GoogleCloudDocumentaiV1BatchProcessRequest` = `inputDocuments` · `documentOutputConfig` · `processOptions` · `skipHumanReview` · `labels` |
+| response | **`GoogleLongrunningOperation`** — `name` · `done` · `error` · `metadata` |
+| poll | `projects.locations.operations.get`; `metadata` is `BatchProcessMetadata` (`state`, `stateMessage`, `individualProcessStatuses[]`) |
+| ingest | each `individualProcessStatuses[]` carries `inputGcsSource`, **`outputGcsDestination`**, `status` — the results are written **as JSON files to GCS**, never returned inline |
+
+⚠️ **THE PROMPT'S PREREQUISITE LIST IS INCOMPLETE, AND THE MISSING HALF IS THE EXPENSIVE ONE.**
+§2 named *"a GCS **output** bucket and its IAM."* The contract requires an **INPUT** bucket as well:
+
+```
+GoogleCloudDocumentaiV1BatchDocumentsInputConfig
+  gcsPrefix    : GcsPrefix     { gcsUriPrefix }
+  gcsDocuments : GcsDocuments  { documents[] { gcsUri, mimeType } }
+```
+
+**Those are its only two fields. `batchProcess` cannot accept bytes.** Compare `ProcessRequest`,
+which has **three** input options — `rawDocument` (bytes), `gcsDocument`, `inlineDocument`. So the
+sync seam this repo already runs (`docai-ocr` POSTs `content_base64`) has **no analogue on the async
+path**: every document must be **uploaded to GCS first**. Our documents arrive as bytes from
+SharePoint through the PA flow and are never persisted anywhere durable, so the lane would have to
+add an upload step — which is where the confidentiality decision below lives.
+
+⚠️ **`imagelessMode` DOES NOT EXIST ON `BatchProcessRequest`.** It is a top-level boolean on
+**`ProcessRequest` only** (`GoogleCloudDocumentaiV1ProcessRequest.imagelessMode`, confirmed again in
+this same read). DOC8's flag therefore does not carry over — which is harmless, since the async
+ceiling is far above it either way, but it is a real contract difference and would have been
+inherited by assumption.
+
+**What §2 guessed and got RIGHT:** it is a long-running operation, it writes to GCS, it cannot
+complete inside the 22 s tick, and it belongs in the existing `mode=jobs` lane as **submit → poll →
+ingest** rather than a second worker.
+
+⚠️ **THE PAGE CEILING IS NOT IN THE DISCOVERY DOCUMENT AND WAS NOT VERIFIED HERE.** Discovery
+defines the request/response *shape*; page limits are quota documentation, and
+**`docs.cloud.google.com` is blocked by this sandbox's egress proxy** (both `curl` and `WebFetch`
+return `EGRESS_BLOCKED`). A web search summarises the Google docs as **sync 15 · imageless sync 30 ·
+batch 500 pages per document**, 1 GB per file, 5,000 files per batch request — consistent with the
+`500 pp` figure `document-capture-and-ocr-status.md` has carried since 2026-08-12, but **that figure
+remains unverified against Google's own page and must not be quoted as measured.** It does not
+change the verdict: our largest observed document is **59 pages**, comfortably under every candidate
+ceiling. **The blocker is GCS, not pages.**
+
+#### 🛑 The operator prerequisites — measured absent on four independent checks
+
+| # | prerequisite | state |
+|---|---|---|
+| 1 | GCS **input** bucket/prefix (mandatory — batch takes no bytes) | ❌ none |
+| 2 | GCS **output** bucket/prefix (`documentOutputConfig.gcsOutputConfig.gcsUri`) | ❌ none |
+| 3 | IAM for the `GOOGLE_DOCAI_SA_KEY` service account — `storage.objects.create` on input, `get`/`list` on output | ❌ ungranted |
+| 4 | IAM for the **Document AI service agent** — `service-<PROJECT_NUMBER>@gcp-sa-prod-dai-core.iam.gserviceaccount.com`, read on input + write on output | ❌ ungranted |
+| 5 | an env var or secret to carry the bucket name | ❌ **no such name exists anywhere** |
+| 6 | a retention/lifecycle + confidentiality decision on the buckets | ❌ never taken |
+
+**This is a measurement, not an inference from silence — four checks, all negative:**
+
+- **Repo grep** for `GCS|gs://|storage.googleapis|bucket` across `api/`, `supabase/`, `scripts/` and
+  the root config returns **exactly one hit**, and it is the prose line in
+  `document-capture-and-ocr-status.md` saying this *would* be needed.
+- **`GET /api/diag?kind=env` has no GCS field at all** — not `false`, *absent*. There is no env var
+  name for an operator to set.
+- **LCC Opps `vault.secrets` holds 7 names** (`dia_supabase_*`, `gov_supabase_*`, `lcc_api_key`,
+  `lcc_health_alert_webhook`, `lcc_railway_url`) — **none GCP or GCS.**
+- **`docai-ocr` reads exactly four GCP envs** — `GOOGLE_DOCAI_SA_KEY`, `GOOGLE_DOCAI_PROCESSOR`,
+  `GOOGLE_DOCAI_PROJECT_ID`, `GOOGLE_DOCAI_LOCATION`. **No bucket, and no Cloud Storage call
+  anywhere in the function.**
+
+⚠️ **THE ONE CHECK THAT COULD NOT BE RUN, STATED PLAINLY:** whether a bucket exists in GCP project
+`modular-conduit-450617-h5` that LCC simply does not reference. The SA key is a Supabase edge secret
+and **`*.supabase.co` is egress-blocked from this sandbox** (`curl` → `000`), so no token can be
+minted here. **It does not change the verdict.** Prerequisite 4 is certainly absent regardless — the
+DocAI service agent has never needed a grant, because every call this system has ever made passed
+`rawDocument` inline — and prerequisite 5 is absent by direct observation.
+
+#### 📋 What the operator needs to do to unblock it
+
+1. Create two GCS locations in project `modular-conduit-450617-h5`, **in the `us` multi-region so
+   they match `GOOGLE_DOCAI_LOCATION`** — e.g. `gs://lcc-docai-in/` and `gs://lcc-docai-out/` (one
+   bucket with two prefixes is fine).
+2. Grant the **`GOOGLE_DOCAI_SA_KEY` service account** `roles/storage.objectAdmin` scoped to those
+   two prefixes (it must write inputs and read outputs).
+3. Grant the **Document AI service agent** `service-<PROJECT_NUMBER>@gcp-sa-prod-dai-core.iam.gserviceaccount.com`
+   `roles/storage.objectViewer` on the input prefix and `roles/storage.objectCreator` on the output
+   prefix. ⚠️ **This is a second, different principal** — granting only the SA fails at submit time
+   with a permission error that names DocAI, not us.
+4. Set a **lifecycle rule** deleting objects after ~7 days on both prefixes. 👤 **This is a decision,
+   not plumbing:** these are confidential executed client leases, and batch writes the **full
+   extracted text** to GCS as JSON. Somebody has to say that is acceptable before the lane ships.
+5. Then, and only then, the build has a place to put a bucket name.
+
+#### ⚠️ Two design constraints for whoever builds this, so they are not rediscovered
+
+- **The in-flight marker needs somewhere to keep the OPERATION NAME.** §2 correctly requires a dated
+  marker distinct from `over_docai_page_cap` so *"waiting on batch"* and *"we will never read this"*
+  are different facts — and DOC1's mechanism supplies the marker. But a poll must find the LRO, and
+  the sidecar has **no column for an operation name**: `reason` is a single text field whose values
+  are consumed as **set membership** by `CRE_RETRY_REASONS`, so stuffing an opaque id into it breaks
+  the re-admission predicate. **A schema addition (an operation-name column, or a small
+  `lcc_cre_doc_ocr_job` table) is part of the build, not an afterthought.**
+- **Idempotency is a COST property here (§3).** A document already in flight must be recognised as
+  in flight, which means the operation name has to be readable *before* the next submit — the same
+  requirement, arrived at from the other direction.
+
+#### 🔬 Re-measured 2026-09-01 22:31 UTC — and it MOVED in the eleven minutes since the prompt
+
+| doctype | drained | **over cap** | rate | pages | still undrained |
+|---|---:|---:|---:|---|---:|
+| **lease** | 89 | **9** | **10.1%** | **31–59** | **357** |
+| dd | 53 | **0** | 0% | — | 203 |
+| om | 30 | **0** | 0% | — | 39 |
+
+**`over_docai_page_cap` went 7 → 9 during this session** (two more landed at 22:00 and 22:30 UTC) —
+**the count grows as the backlog drains, which is exactly what DOC14 predicted.** Still **100%
+leases: zero DDs, zero OMs.** Projected over the 357 undrained leases at 10.1%: **~36 more, ~45
+total.** ⚠️ **Quote the rate over ALL DRAINED LEASES, and re-derive it — it is a moving number, and
+the page-counted denominator still overstates it ~4×.**
+
+**The semantic claim is now READ, not inferred** — all nine, by name:
+
+`LFB Plasma Lease - Florence, SC.pdf` (59) · `McBen Amended and Restated Cultivation lease.PDF` (57)
+· `KEDPlasma - Myrtle Beach, SC - Lease Agreement.pdf` (46) · `Lease.pdf` (44) ·
+`Verizon Lease.pdf` (44) · `Grifols - Sumter, SC - Lease Agreement.pdf` (42) ·
+`Harbor Bay - FAA Lease.pdf` (39) · `Grifols - Greenwood, SC - Lease Agreement.pdf` (34) ·
+`Lease (1).pdf` (31).
+
+**These are full executed leases** — amended-and-restated instruments, named-tenant lease
+agreements. They are precisely what `bov-extract.js` reads to extract the tenant, and they currently
+yield nothing.
+
+**The lane that must not move, verified:** **22 OCR events since the redeploy, ALL `google_docai`,
+ZERO gpt-4o** (char_len 150–43,084). `bov_ready` **13**. Registry 1,066 rows, 894 undrained.
+
+#### 💰 Cost, sized — and it is not what is blocking this
+
+The nine over-cap documents are **396 pages**. Projected at the observed mean (44 pages) over ~45
+documents: **~1,980 pages.** At the rate this page already carries for Enterprise Document OCR
+(**~$1.50 / 1,000 pages**) that is **~$0.59 today and ~$3 for the entire projected backlog.**
+
+⚠️ **That rate is this repo's carried figure, NOT re-verified** — the pricing page is egress-blocked
+too, and batch is not guaranteed to price identically to sync. **The conclusion survives the
+uncertainty by two orders of magnitude: a ~$3 lane is being held up by a bucket that does not
+exist.** The real cost of this lane is the **confidentiality decision** at step 4, not the API bill.
+
+#### ⛔ What was deliberately NOT done
+
+- **No gpt-4o fall-through above the cap** (§3) — measured at 9.3× less text.
+- **`over_docai_page_cap` not removed or weakened** — it is still the right terminal state, and it is
+  what keeps a fragment out of `bov_ready`.
+- **No tick-budget or row-cap change**, no second worker, no schema change, no edge deploy.
+- **No page-splitting** (§6). `extractTenantFromLease` prompts over the document *whole*; chunking
+  changes what the consumer receives and would need its own grading.
+- **Not explored: whether a different processor has a higher synchronous ceiling.** Named, not
+  pursued — a different processor returns a different document shape, which is the same class of
+  substitution §6 rules out.
+
+#### Re-derive this section
+
+```sql
+-- LCC Opps (xengecqvemvfknjvbvrq). BASELINE 2026-09-01 22:31 UTC:
+--   lease 89 drained / 9 over cap (10.1%) / 357 undrained · dd 53/0 · om 30/0 · pages 31–59
+-- ⚠️ over_cap RISES as the backlog drains. A fall means either the lane shipped or the
+--    marker was weakened — check which before celebrating.
+select lower(t.document_type) dt,
+       count(*) as drained,
+       count(*) filter (where t.reason = 'over_docai_page_cap') as over_cap,
+       round(100.0 * count(*) filter (where t.reason = 'over_docai_page_cap')
+             / nullif(count(*), 0), 1) as pct_of_drained,
+       min(t.page_count) filter (where t.reason = 'over_docai_page_cap') as min_pages,
+       max(t.page_count) filter (where t.reason = 'over_docai_page_cap') as max_pages
+from lcc_cre_property_document_text t
+group by 1 order by over_cap desc;
+
+-- The prerequisite gate. Until an operator answers this, the lane cannot be built.
+--   1. does a GCS bucket exist in modular-conduit-450617-h5?
+--   2. is the DocAI service agent granted on it?          <- the one people forget
+--   3. what env var carries its name?                     <- none exists today
+```
+
+### 🔴 DOC14 — BLOCKED ON AN OPERATOR PREREQUISITE, and RE-SIZED ~2× (2026-09-02)
+
+**Nothing was built. The contract was verified from the live v1 discovery document** (revision
+20260820): `batchProcess` → `GoogleLongrunningOperation`, poll
+`projects.locations.operations.get`, output at
+`BatchProcessMetadata.individualProcessStatuses[].outputGcsDestination`. **The prompt's §2 was right
+that this is an LRO writing to GCS, cannot fit the 22 s tick, and belongs in `mode=jobs`.**
+
+⚠️ **TWO WAYS THE PROMPT'S PREREQUISITE LIST WAS WRONG, and the missing half is the expensive one:**
+
+1. **`BatchDocumentsInputConfig` accepts ONLY `gcsPrefix` / `gcsDocuments` — batch takes NO inline
+   bytes**, unlike `ProcessRequest` (`rawDocument`/`gcsDocument`/`inlineDocument`). §2 named an
+   **output** bucket; an **INPUT bucket is mandatory too**, and **every SharePoint byte-stream would
+   have to be uploaded to GCS first.** That is a materially larger build than "add a bucket."
+2. **`imagelessMode` does not exist on `BatchProcessRequest`** — it is a `ProcessRequest` field only.
+   **DOC8's flag does not carry over.**
+
+**Prerequisites are ABSENT on four independent checks:** a repo grep for `GCS|gs://|bucket` across
+`api/`, `supabase/`, `scripts/` returns **one hit and it is the prose line saying it would be
+needed** · `diag?kind=env` has **no GCS field at all** · LCC Opps `vault.secrets` holds 7 names,
+**none GCP** · `docai-ocr` reads 4 GCP envs, **none a bucket**, and makes **no Cloud Storage call**.
+⚠️ **One check could not run** (whether an unreferenced bucket exists in the GCP project — the SA key
+is a Supabase edge secret and `*.supabase.co` is sandbox-blocked); **it does not change the verdict**,
+because the Document AI **service agent** grant is certainly absent — every call this system has ever
+made passed `rawDocument` inline.
+
+⚠️ **The page ceiling could NOT be verified** — `docs.cloud.google.com` is egress-blocked.
+**The ~500 pp figure this repo has carried since 2026-08-12 stays labelled UNVERIFIED.**
+
+**👤 THE REAL GATE IS NOT COST — IT IS CONFIDENTIALITY.** ~$0.59 today and **~$3 for the whole
+projected backlog** (at the repo's carried ~$1.50/1k rate, itself unverified). **Batch writes the
+FULL TEXT of confidential executed client leases to GCS as JSON.** That is Scott's decision, not a
+plumbing step. Unblocking also needs two `us` GCS prefixes, `storage.objectAdmin` for the DocAI SA,
+**separate grants for the Document AI service agent** (`service-<PROJNUM>@gcp-sa-prod-dai-core…` —
+the principal people forget), and a lifecycle rule.
+
+**One build note recorded for whoever picks this up:** the sidecar has **nowhere to keep the LRO
+operation name.** `reason` is consumed as **set membership** by `CRE_RETRY_REASONS`, so parking an
+opaque id there **breaks re-admission**. A column or a small job table is **part of the build, not an
+afterthought** — and it is the same requirement as the in-flight idempotency the prompt asked for.
+
+### ⚠️ AND THE SIZING MOVED ~2× — the "small sample" caveat cashed in exactly as written
+
+| doctype | drained | **over cap** | rate | undrained | max pages |
+|---|---:|---:|---:|---:|---:|
+| **lease** | 212 | **36** | **17.0%** | 234 | **141** |
+| **dd** | 90 | **4** | **4.4%** | 166 | 59 |
+| om | 43 | 0 | 0% | 26 | — |
+
+**Three claims this page carried are now corrected:**
+
+1. **The lease rate is 17.0%, not 8.1%** — it more than doubled as the sample grew 86 → 212.
+2. ⚠️ **"100% leases" is REFUTED — DD is 4 over cap (4.4%).** The exclusivity was an artifact of the
+   smaller sample.
+3. **Max pages is 141, not 57.** ⚠️ **That makes the unverified ~500 pp async ceiling load-bearing
+   after all** — the earlier "not load-bearing, our largest is 59 pages" reasoning no longer holds.
+
+**Projection: ~87 documents total**, roughly double the ~45 recorded yesterday. **`over_docai_page_cap`
+is already 40 with 426 still undrained.**
+
+⚠️ **This is the third time in this arc a rate moved materially when the sample grew** (the gpt-4o
+escalation 86%, `repeat_buyer` 8×, now this). **Quote a rate with its denominator and its sample
+size, and re-measure before acting on it.** The semantic reading is now direct rather than inferred —
+`LFB Plasma Lease` (59), `McBen Amended and Restated Cultivation lease` (57), `KEDPlasma – Myrtle
+Beach Lease Agreement` (46), `Harbor Bay – FAA Lease` (39) — **unmistakably full executed leases.**
+
+### ✅ DOC13 ANSWERED 2026-09-02 — `retry_admitted: 0` is CORRECT, and here is the watch item
+
+**11 of the 14 `thin_ocr_result` markers are now past the 24 h window** (oldest 46 days) and
+**none has re-extracted.** That reads like a failure and is not. Every tick since 10:00 UTC:
+
+```
+retry_admitted:0 · scan_lowest_id:2 · scan_capped:false · scan_pages:2 · eligible:15
+```
+
+**The scan reaches document id 2 and is NOT budget-capped — it simply fills `limit=15` from the 426
+FRESH undrained documents before it needs a retry candidate.** Retries are correctly the lowest
+priority while genuine new work exists. **The 3 `fetch_failed` markers are all under 24 h and are
+correctly not due.**
+
+⚠️ **THE WATCH ITEM — a priority inversion, benign today:** if new documents arrive faster than the
+drain, the retry lane **never runs**. That is Class 12's shape one level up — not a fixed window, but
+**a lower-priority lane that can starve indefinitely.** Today it is fine (426 drains in ~2 days).
+**Verify `retry_admitted` goes non-zero as `undrained` approaches 0** — and if the folder feed keeps
+it permanently non-empty, the retry lane needs a reserved slot rather than the remainder.
+
+### 🟢 DOC16 (2026-09-02) — the consumer truncates at ~50 pages, so the GCS build is probably unnecessary
+
+**Before approving the confidentiality decision DOC14 needs, two facts were measured and they change
+the question.**
+
+**1. `bov-extract.js:147` slices lease text at 90,000 characters before prompting.** Measured on our
+corpus: **1,799 chars/page average, median 1,727 → 90,000 chars ≈ 50 pages.** **The consumer never
+reads past ~page 50 of any lease, however it was extracted.**
+
+| over-cap band | docs | pages | what a FULL extract buys |
+|---|---:|---|---|
+| **31–50pp** | **16** | 31–49 (avg 39) | all of it — genuinely used |
+| **51+pp** | **24** | 51–141 (avg 63) | ⚠️ **nothing past ~page 50 — discarded** |
+
+⚠️ **For 60% of the population, the entire GCS batch build delivers text `extractTenantFromLease`
+throws away.** Input bucket **and** output bucket, IAM, a service-agent grant, a lifecycle rule, an
+upload path for every SharePoint byte-stream, an LRO job table — for discarded characters.
+
+**2. ⚠️ The confidentiality delta is NARROWER than it first appeared.** `document-text.js:262` sends
+`content_base64` of the **whole file**, and deployed `docai-ocr` v24 passes it through as
+`rawDocument`. **Google DocAI already receives every under-cap lease in full, today.** What batch
+adds is **persistence at rest in a GCS bucket** — still a real decision, but a **different and much
+narrower one** than *"may Google see our leases."* **That reframing is load-bearing and was nearly
+missed.**
+
+**The alternative: two sync calls per document, pages 1–30 and 31–50, concatenated into one
+`raw_text`** — ~50 pages ≈ 90,000 chars, **exactly what the consumer can use, with no GCS and no new
+data-at-rest exposure.** Prompt: `docs/claude-code/prompts/DOC16-page-range-sync-ocr.md`.
+
+⚠️ **IT RESTS ON ONE UNVERIFIED ASSUMPTION, AND THE PROMPT SAYS SO FIRST:** does DocAI's sync
+`process` accept a page selector, and **does the 30-page imageless cap apply to the SELECTION or to
+the document's total page count?** **If the latter, the route is impossible — stop and fall back to
+DOC14.** The repo sends **no `processOptions` at all** today, and ⚠️ the existing comment about
+`imagelessMode` being top-level is about a **different field** and is **not evidence** about where a
+page selector belongs (DOC8's exact lesson).
+
+⚠️ **This is NOT the "chunking" DOC14 §6 forbade — the distinction is the point.** That warning was
+against splitting the **analysis** and reassembling answers. This splits the **OCR call** and
+produces **one contiguous text**; the consumer sees a single `raw_text` truncated at the same 90,000
+chars it truncates at anyway.
+
+⚠️ **The honest residual: `raw_text` is not read only by `extractTenantFromLease`.** The `abstract`
+block asks for **renewal options, early termination, default cure, holdover, key lease risks** —
+clauses that routinely sit in the **back half** of a long lease. For a 141-page document, pages
+51–141 are simply not captured. **That is a real ceiling, must be recorded on the row, and a
+`partial_extract` must never count as complete coverage.**
+
+**DOC14 is not withdrawn — it is the fallback**, and the confidentiality decision is **deferred, not
+answered.**
 
 ## 1. Scott's question, answered
 

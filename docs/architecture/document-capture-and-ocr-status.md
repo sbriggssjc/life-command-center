@@ -42,8 +42,16 @@
 >   `ocr_text` resubmit seam (`POST /api/intake?_route=lease-backfill&id=<id>`; Richardson 2840
 >   pattern: pdftoppm + tesseract w/ `--psm 0` rotation detect). Optional knobs (unset):
 >   `INTAKE_OCR_MAX_BYTES=20000000`, `AI_OCR_MODEL=gpt-4o-mini` (cheapens the gpt-4o tail).
->   Future long-doc unlock, only if the tail grows: DocAI **batch** processing (async, 500 pp,
->   needs GCS buckets) — an edge-fn extension, not a new provider.
+>   Future long-doc unlock: DocAI **batch** processing — ⚠️ **this line was written 2026-08-12 and
+>   is now half-corrected by DOC14 (2026-09-01), which read the contract from the live v1 discovery
+>   document.** The tail DID grow (9 leases at 31–59 pages, 100% of the over-cap population, ~45
+>   projected). **"needs GCS buckets" is right and understated: batch takes NO inline bytes**, so an
+>   INPUT bucket is mandatory as well as the output one, and the Document AI **service agent** — a
+>   second principal, not our SA — needs its own grants. `imagelessMode` does **not** exist on
+>   `BatchProcessRequest`, so DOC8's flag does not carry over. ⚠️ **The `500 pp` figure is carried
+>   from this 2026-08-12 note and has never been verified against Google's own docs** (their docs
+>   host is egress-blocked from the sandbox); it is not load-bearing, since our largest document is
+>   59 pages. 🛑 **BLOCKED, not built** — see `document-capture-ocr-and-deeds.md` DOC14 BLOCKED.
 
 > **⚠️ RECONCILED 2026-08-12 (evening session) — the "open loop" below was grounded and is
 > mostly CLOSED. The premise "lease OCR is config-gated / unconfigured" was WRONG:**
