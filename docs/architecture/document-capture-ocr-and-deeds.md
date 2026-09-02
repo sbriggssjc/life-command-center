@@ -38,13 +38,14 @@ gap" / "retry markers" rows and two "Open" lists; collapsed to one.)*
 | **CRE registry drain** | undrained **771 → 401**, consumer-visible sidecars **289**, `scan_lowest_id` **2** — reaches the oldest document. |
 | **consumer** | **`bov_ready` 5 → 43**, `lcc_cre_bov_extraction` **25**. BOV extract is receiving real leases, DDs and OMs. |
 | **OCR tier** | ✅ **88 DocAI events since the 2026-09-01 15:00 redeploy; gpt-4o = 2, both in the first two ticks (15:00 and 16:00 on 09-01, `thin_ocr_result` fragments of 116 / 211 chars — the exact waste shape DOC8 closed) and ZERO since 16:01.** ⚠️ The earlier "ZERO gpt-4o since redeploy" wording was true of the window it was read in and is corrected here. |
-| **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (18 at 31–50pp, 24 at >50pp, max 141) — **unmoved.** ✅ DOC17 measured the cheap route OPEN; ✅ **DOC18 LIVE 2026-09-02 14:40 UTC** — PR #2032 merged, `/version` = `f8d42593`, migration `20260902120000` applied and censused (3 columns · cron `lcc-cre-doc-text-longdoc` active · `v_lcc_cre_longdoc_backlog` = 42 / pages 31–141 / 0 unknown), ungated dry run returned correct plans (39pp → `[1..30]+[31..39]`). **The cron now takes one document per tick at :07/:37 — read `v_lcc_cre_longdoc_backlog` and the partial count, never the tick's tally.** |
+| **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (18 at 31–50pp, 24 at >50pp, max 141) — **unmoved.** ✅ DOC17 measured the cheap route OPEN; ✅ **DOC18 LIVE 2026-09-02, VERIFIED ON A REAL DOCUMENT 15:30 UTC** — PR #2032, migration applied 14:40, **and the `docai-ocr` edge function deployed to v25 at 15:29** (⚠️ the first cron tick at 15:07 failed `window_failed / cloud_ocr_non_ok` because v24 ignored the `page_range` selector — a THIRD deploy surface; see the DOC18 section). **Doc 80 (31pp): 2 calls, 31 pages, `[[1,31]]`, 0 gaps, 0 duplicates, 76,346 chars, full coverage.** Backlog **42 → 41** `over_docai_page_cap` + 1 `window_failed` (doc 61, retries when its marker rotates to the head). **The cron takes one document per tick at :07/:37 — read `v_lcc_cre_longdoc_backlog` and the partial count, never the tick's tally.** ⚠️ Still owed: boundary text at a real 30/31 seam (doc 80's seam is at page 30/31 — read it), measured cost, and the 12 MB byte residual. |
 | **retry markers** | 17 (`thin_ocr_result` 14, `fetch_failed` 3). `retry_admitted` is **0 and that is correct** — see DOC13 below. |
 
-**Open, in priority order: DOC18 — LIVE, verify on the first ticks** (see the DOC18 section for the
-verification queries; still owed: boundary text at pages 30/31 and 45/46 on three real leases,
-measured cost, and the `over_ocr_cap` byte-size residual) · **OCR1** (the local-OCR
-bake-off — if it wins, DOC18's partial ceiling and DOC14 both become unnecessary) · **DOC14** (👤
+**Open, in priority order: DOC18 — LIVE, draining one document per tick** (still owed: boundary
+text at real seams, measured cost, the `over_ocr_cap` byte-size residual) · **OCR1** (👤 **harness
+built, the bake-off is Scott's run** — `OCR1_LOCAL_OCR_BAKEOFF_2026-09-02.md` §6; if local wins,
+DOC18's partial ceiling and DOC14 become unnecessary, ⚠️ but the CONSUMPTION cap
+`LEASE_TEXT_SLICE_CHARS` = ~52pp median / ~33pp p90 stays until the extractor moves) · **DOC14** (👤
 Scott — probably close now that sync reaches the whole window) · ✅ **DOC17 ANSWERED** · ⛔ **DOC16
 REFUTED (consequence superseded; do not re-propose the two-call design without re-reading the DOC16
 GATE section)** · **DOC13-watch** (retry starvation, benign today) · **DOC2** (cross-repo stale
