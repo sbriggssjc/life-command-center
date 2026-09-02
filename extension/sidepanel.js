@@ -358,6 +358,10 @@ async function wireAscResearchAction(ctx, actions) {
       zip: liveCtx.zip,
       page_url: liveCtx.page_url,
       source: domain,
+      costar_property_id: domain === 'costar'
+        ? (liveCtx.costar_property_id
+          || window.LccPropertyIdentity.costarPropertyId(liveCtx.page_url))
+        : null,
     };
     const capture = await apiCall('/api/asc-research-capture', { target, context });
     if (capture.ok) {
