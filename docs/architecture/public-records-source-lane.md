@@ -489,6 +489,87 @@ rewritten.** Guards: `test/provenance-relabel-registration.test.mjs` (7 tests) +
   skipped as markers; a rung nobody can exercise is **PR7**'s class). The `domain_trigger` rungs are
   **kept**. `lcc_merge_field` is untouched.
 
+### ✅ 2026-09-02 — PR5 SHIPPED: the 39 are triaged, and 25 of them are not defects
+
+`docs/audits/PR5_LADDER_SOURCE_TRIAGE_2026-09-02.md`; migration
+`20261009120000_lcc_pr5_ladder_source_triage.sql` (applied live); guard
+`test/pr5-ladder-source-triage.test.mjs` (13 tests, **15/15 mutations RED**); operator check
+`scripts/check-field-source-priority-columns.mjs`.
+
+| verdict | sources | rungs |
+|---|---:|---:|
+| `build_pending` | 9 | 209 |
+| `refused_by_decision` (`county_records`) | 1 | 93 |
+| **`retire`** | **14** | 42 |
+| `writer_live_zero_rows` | 6 | 30 |
+| `exercised_elsewhere` | 7 | 11 |
+| `retired_by_decision` (`gliner_extract`) | 1 | 9 |
+| `keep_structural` (`domain_trigger`) | 1 | 6 |
+
+Every verdict + its evidence is stamped into `field_source_priority.notes` and surfaced on
+**`v_field_source_priority_triage`** (426 rungs verdicted, 49 marked `PR7:orphan_column`,
+51 retired). Counts after: **68 registered SOURCES (unchanged — `costar_sidebar` already had 73
+rungs, so this adds a RUNG, 2,140 → 2,141) · 39 never written · 21 write-but-unregistered ·
+`v_field_provenance_unranked` 30 → 29.**
+
+- 🚨 **SEVEN OF THE 39 ARE LIVE ON A SECOND LADDER.** `manual`, `rel_purchase`, `rel_owns`,
+  `sf_seller`, `domain_true_owner`, `gov_ownership_transition` are the property-owner authority
+  ladder on `lcc.lcc_property_owner` — **15,052 rows in `lcc_property_owner_evidence`, and
+  `domain_true_owner` wrote the day of the audit.** They are scored by
+  `lcc_reconcile_property_owner`, which emits no `field_provenance`. The seventh,
+  `property_sale_events`, is B6c-dup's gov trigger writing gov's own `field_value_provenance`.
+  **A detector keyed on ONE ledger reports a second ledger's whole population as absent** — PR10 at
+  seven times the size, and the P197 shape.
+- 🚨 **`field_provenance` has never run on ANY LCC-internal table**: `entities` (13 rungs),
+  `entity_relationships` (2), `lcc.lcc_property_owner` (6), `lcc.lcc_entity_portfolio_facts` (2),
+  `public.lcc_cre_properties` (7), `public.lcc_cre_property_documents` (3) — **33 rungs, 0 rows**,
+  with live `lcc_merge_field` call sites on four of the six. → **PR5c**.
+- **⚠️ THE BRIEF'S PREDICTED REVERSE-ARM DELTA (21 → 20) WAS WRONG AND STAYED 21.**
+  `costar_sidebar` is a REGISTERED source (73 rungs), so it never appeared in a source-grain arm.
+  The `gov.properties.government_type` gap exists only at **(table, field, source)** grain — and
+  there it is **1 of 30**, not 1 of 1. **A detector's grain decides what it can see**; the other 29
+  are **PR5a**.
+- **The one registration: `costar_sidebar` → `gov.properties.government_type` @95, BELOW
+  `agency_classifier`@90.** Measured first: the classifier holds the value on 6,564 of 6,581
+  records and the sidebar has **never once overridden it** (38 of 38 attempts skipped
+  `unregistered_source_with_existing_value`). Deliberately below costar_sidebar's own
+  `gov.properties` family (45–70) — a per-field call. **Paired with `agency_classifier`: if PR10
+  re-ranks that source, this rung moves in the same change** (stated in the stored `notes`).
+- 🚨 **YOU CANNOT REGISTER OR DE-REGISTER A SOURCE WITHOUT CHANGING BEHAVIOUR — "unregistered" is
+  not a rung, it is a DIFFERENT BRANCH of `lcc_merge_field`** (may fill a blank, may never override,
+  and is itself overridable by anyone via `replacing_unregistered_source`). A **72-combination
+  replay**, run twice in one rolled-back transaction, measured **four** decision classes changing
+  from that single registration — predicted = actual, total live exposure **17 records**. One of
+  them (**class A**) is a real loss of blank-filling, 0 records today, because once both priorities
+  are known the function never consults the null again. **This is why nothing is deleted:** pruning
+  a "dead" rung is not neutral.
+- **⚠️ PR7 IS 19 ORPHAN PAIRS / 49 RUNGS, NOT 1 — AND ONLY ONE IS LIVE.** Split by *when the writes
+  stopped*: **LIVE** `gov.properties.recorded_owner_name` (448 rows, **28 in 30 days**);
+  **STOPPED** `gov.sales_transactions.buyer_name` (7,916) / `.seller_name` (6,039) /
+  `.procuring_broker` (33) all ending 2026-07-14..29, `gov.properties.tenant` + `.parcel_number`
+  ending 2026-04-28; **NEVER** the remaining 13. The gov `buyer_name`/`seller_name` residue is
+  **closed at source** — the gov branch was corrected to write `buyer`/`seller`, which run to
+  2026-09-02. **13,955 rows that read as live drift are historical, and only the dates say so.**
+  `dia.recorded_owners.sf_company_id` is on the **wrong table** (`dia.true_owners` has it).
+- **⚠️ A LOGICAL PREFIX IS NOT A SCHEMA.** `to_regclass('lcc.lcc_property_owner')` is NULL because
+  `lcc.` is a logical database prefix like `dia.`/`gov.`. The tables with no physical counterpart
+  are `comp_provenance`, `comparable_sales`, `deal_provenance`, `listing_provenance` and bare
+  `properties` — **526,192 provenance rows** between them, Salesforce-side logical namespaces.
+  Reading the prefix as a schema flags six healthy tables and misses five real ones (Class 11).
+- **⚠️ Anchor a parse on a token, never an offset.** The triage view's first cut used
+  `split_part(notes,'PR5:',2)` and silently returned NULL for the 26 rungs the PR7 marker stamps in
+  front — **400 verdicted before the regex, 426 after**, with `county_records` reading 92 of its 93.
+- **PR9 stated, not decided:** all **673** `manual_verify` rows are one thing — a human confirming a
+  clinic↔property LINK (`dia.medicare_clinics.property_id` 339, `dia.properties.medicare_id` 334).
+  It competes with the `auto_link_*` family, **never with `manual_edit`**, and has never asserted a
+  value. 👤 The question is whether a human-confirmed link should outrank an automated one — not the
+  comparison the row was filed under.
+- **⚠️ Six `writer_live_zero_rows` sources have a correct `lcc_merge_field` call site wrapped in
+  `catch (_e) { /* best-effort */ }`**, so their zero **cannot distinguish "never ran" from "ran and
+  the stamp was dropped"** — the **PR12** mechanism. Size PR12 before grading them.
+- **`costar_cmbs_loan` holds 121 rungs — the largest single source in the ladder — for a capture arm
+  that has never produced a row** (`loans.data_source` carries none on either domain). → **PR5d**.
+
 ### The corrected sequence
 
 **source → verdict → consumer → cron.** The lane's real acquisition path already exists and is
