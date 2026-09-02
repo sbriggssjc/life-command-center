@@ -16,6 +16,52 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — PR5 SHIPPED (#2051, `d8beb555`): the 39 never-written ladder sources are triaged IN THE DATABASE, 25 of them are not defects, and 7 are live on a second ledger. PR7 re-measured 1 → 19 orphan pairs. PR9 stated for Scott.
+
+**Verified live on LCC Opps after the merge:** `field_source_priority` **2,141** rungs (+1, the
+`costar_sidebar → gov.properties.government_type` rung); **426** rungs carry a `PR5:` verdict (=
+`v_field_source_priority_triage`); **49** rungs marked `PR7:orphan_column`; `v_field_provenance_unranked`
+**29**. Every number in the audit reproduces. ⚠️ **No deploy gap on this one** — the diff touches no
+`api/` file (CC corrected its own "ships on the next redeploy" line); the migration was live before
+the PR existed.
+
+- **Seven of the 39 are LIVE — on the property-owner authority ladder** (`manual`, `rel_purchase`,
+  `rel_owns`, `sf_seller`, `domain_true_owner`, `gov_ownership_transition` → 15,052 rows in
+  `lcc_property_owner_evidence`, scored by `lcc_reconcile_property_owner`, which writes no
+  `field_provenance`) plus `property_sale_events` (B6c-dup's gov trigger → gov's own
+  `field_value_provenance`). **Enumerate the LEDGERS before recording a source as never written.**
+- 🚨 **`field_provenance` has never run on ANY LCC-internal table** — 33 rungs across `entities`,
+  `entity_relationships`, `lcc.lcc_property_owner`, portfolio facts, `lcc_cre_properties`,
+  `lcc_cre_property_documents`, with live `lcc_merge_field` call sites on four of them → **PR5c**
+  (graded against PR12 first, since a silent 22P02 is one candidate cause).
+- 🚨 **"Unregistered" is NOT a low rung — it is a different branch of `lcc_merge_field`.** A
+  72-combination rolled-back replay showed ONE registration changing four decision classes,
+  including a loss of blank-filling. So rungs are **soft-retired in `notes`, never deleted** —
+  which is why `never_written` correctly stays 39 and `write_but_unregistered` stays 21 (the
+  brief's predicted 21 → 20 was wrong: at source grain `costar_sidebar` was always registered on
+  73 other rungs; the field-grain detector is the one that moved, 30 → 29).
+- **PR7 is 19 orphan (table, column) pairs / 49 rungs, only ONE live** (`gov.properties.recorded_owner_name`,
+  28 writes/30d → **PR7a**). 13,955 rows of apparent drift on `gov.sales_transactions.buyer_name/seller_name`
+  stop dead 2026-07-29 — historical residue, closed at source (**PR7b**). Standing check
+  `scripts/check-field-source-priority-columns.mjs` — **operator-run, not a merge gate** (neither
+  domain schema is derivable from this repo).
+- **PR9 restated with its data:** `manual_verify`@20's 673 rows are all one field — a human-confirmed
+  clinic↔property link — competing with the `auto_link_*` family, not with `manual_edit`. 👤 Scott.
+- **Filed, not built:** PR5a (29 field-grain gaps, mostly `dia.sales_transactions` bookkeeping
+  columns — decide whether a ladder should govern them at all), PR5b (`om_extraction` unregistered
+  where it competes), PR5d (**`costar_cmbs_loan`: 121 rungs, the ladder's largest source, for a
+  capture arm that has never produced a row**), PR5e (`gov_ownership_chain` dead constant — A2's
+  304 facts carry no provenance stamp).
+- Guard `test/pr5-ladder-source-triage.test.mjs`; CI **5,087 / 5,081 pass / 0 fail / 6 skipped**,
+  count byte-identical to local (the Node-20 tell checked, not just the conclusion).
+
+**PR8 verify-next is STILL open**: `field_provenance where source='agency_classifier'` = 0 — still
+a no-population zero (no gov write has fired `gov_classify_agency()` since the migration).
+
+Docs: `docs/audits/PR5_LADDER_SOURCE_TRIAGE_2026-09-02.md` · lane page §2 · `CLAUDE.md` PR5 block ·
+backlog PR5 ✅ / PR7 ✅ / PR9 👤 / PR5a–e, PR7a–b (by CC). Handoff + OPERATOR-ACTIONS + CURRENT-STATE
+this turn. Prompt + response filed to `done/`.
+
 ## 2026-09-02 — PR2 SHIPPED (#2045, `98248e18`): the sidebar writer now carries the parcel stats — and the parser was the load-bearing half. PR11 re-scoped, PR12 found.
 
 **Verified live after merge (dia `zqzrriwuavgrquhisnoa`, LCC Opps):** `costar_sidebar` parcel rows
