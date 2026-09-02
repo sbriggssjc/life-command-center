@@ -47,14 +47,20 @@ and the Dialysis test suite had never executed a test in the repo's history — 
 - **A1→B1a** ownership-chain arc: `establish_ownership_history` 0 completions in 69 days → **1,302**;
   gov `ownership_history` 16,177 → **18,953**.
 
+- **B6e-ci-last5 / B6e-ci-unmask (2026-09-02, Dialysis PR #7393)** — the pytest `|| echo` is gone
+  and the step is green once on `main`: **3,147 collected / 3,139 passed / 0 failed**, read from
+  the job log. `baseline39` closed by supersession (`main` at `ff712e0` measured **3**, never 39).
+  ⚠️ **Not yet a merge gate — see 🔄 below.**
+
 ### 🔄 In flight
 
-**`B6e-ci-last5-decisions-resolved.md` is with CC.** It clears the last CI failures and then unmasks
-the pytest line. ⚠️ **It must also settle `B6e-ci-baseline39`** — the suite read **39 failed against
-a documented baseline of 14**, and *isolation cannot adjudicate it* (the same 12 files give 7
-failures alone and ~34 in-suite, which is the documented stub pollution). **Do not call 14 → 39 a
-regression or noise until the apples-to-apples baseline run lands, and do not ship the unmask over
-an unexplained count.**
+**Nothing is with CC.** ⚠️ **But the Dialysis gate is one operator step short:** `ci.yml`'s header
+says CI is *not* a required check, and #7393 merged 8 s after its test job started. A red suite
+fails the job and blocks nothing → **`B6e-ci-required-check`** (👤 Scott, with the `paths-ignore`
+docs-only fix in the same change). Ruff is `continue-on-error` and **red on `main` right now** (11
+errors, root `.tmp_*.py` + `alias_review.py`) behind a green check → **`B6e-ci-mask-ruff`**.
+⚠️ **Verify next:** the gate has only been proven green — it has not yet been seen to fail a red
+PR; and the `exit code 128` gitlink warning's absence was not read from a checkout log.
 
 ### 🔴 Next, in recommended order
 
@@ -74,6 +80,7 @@ an unexplained count.**
 
 ### 👤 Waiting on Scott
 
+`B6e-ci-required-check` (Dialysis branch protection — until flipped the unmasked suite gates nothing) ·
 `BR1-confirm` (12 brokerages) · `B6d-sam` (re-issue `SAM_API_KEY`, 401) · `PR1d` (`REGRID_API_KEY` —
 a complete vendor client that has never run) · `I16b` (delete the dormant `life-command-center`
 Railway service) · `B6e-fred-cm-exposure` (did a book go out after 2026-08-07?).
@@ -161,6 +168,10 @@ git push -u origin docs/<topic-slug>
 - **A year-based guard and a quality-based guard are not substitutes.**
 - **Isolation before traceback** — one `pytest <file>` per failing file separates harness pollution
   from product failures before any error text is read.
+- **"Fails the job" ≠ "blocks the merge."** An unmasked step on a repo with no branch protection
+  is a badge again. Read the workflow header and the PR merge timing, not the PR body.
+- **A "within 0.3%" that four pages repeated did not reproduce (−4.90%).** A figure that sounds
+  right and has been copied is not thereby measured — re-run it before it lands on a canonical page.
 - **Grouping-for-review ≠ identity-for-write.** Never fuzzy-match a residue of abbreviations,
   surnames and co-listings.
 
