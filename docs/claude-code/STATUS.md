@@ -300,6 +300,23 @@ gate has only been proven green, never proven to fail); the checkout log free of
 `B6e-ci-required-check` flipped. Prompt + response filed to `done/`
 (`B6e-ci-last5-decisions-resolved.response.md` is a transcription of the mid-flight `.docx`; the
 outcome above is from the run itself).
+## 2026-09-02 — OCR1c built (self-agreement floor + honest engine probes); branch pushed, NO PR opened
+
+CC delivered all four changes on `claude/ocr-bakeoff-self-agreement-qnyl9z` (`837a7ba`): quote/dash/
+NBSP normalization and sentinel→null before comparing (accounts for 4 of the 11 non-agreements),
+`--control self` (two independent model calls on the DocAI text, same scorer, `rate − self` column,
+red NOT RUN banner when absent), last-300-chars stderr + tri-state engine probe (`wrapper only` /
+`could not check` / `needs a Docker VLM server`), arm-B values in the JSON. 30 guards, **25/25
+mutations RED**; two guard defects found by the mutation pass (a code-shape grep must blank string
+literals too, and comments must be stripped BEFORE literals or a prose apostrophe swallows code).
+⚠️ **As of this reconciliation the branch is NOT in `main` and no PR exists** — CC ended with "say the
+word if you want one." Merge first, then the re-run (`OPERATOR-ACTIONS.md` OCR1). No real-document
+verdict changed. Response + prompt → `done/`.
+
+**DOC18 at 17:10 UTC:** 6 attempted, 4 windowed (169 pages billed), 1 true partial, `bov_ready` 48; the
+predicted 12 MB residual appeared on doc 128 (`over_ocr_cap`, 0 calls) → **DOC18-bytes**, sized after
+the drain. Dedupe grep clean.
+
 ## 2026-09-02 — OCR1 first REAL run reconciled: page-cap case measured TRUE; quality unprovable until the harness has a self-agreement control
 
 Scott's re-run (after the main-guard fix) completed on **15 real documents + 3 fixtures, tesseract

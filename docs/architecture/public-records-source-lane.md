@@ -99,6 +99,132 @@ And the 22,131 APN-less tax links are residue to quarantine, reversibly, so no c
 them as coverage (→ **PR11**). Same lesson as PR1a's `0 % 100000 = 0`: **split by source before
 quoting a coverage number, or the generator's output reads as reach.**
 
+### ✅ 2026-09-02 — PR2 SHIPPED: the sidebar writer now carries the stats, and the parser was the load-bearing half
+
+**Re-measure before quoting the split table above — the `costar_sidebar` parcel row is no longer all zeros.**
+
+| dia `parcel_records` where `source='costar_sidebar'` (932 rows) | before | after |
+|---|---:|---:|
+| `building_sf` | 0 | **767** |
+| `lot_sf` | 0 | **734** |
+| `year_built` | 0 | **714** |
+| `year_renovated` | 0 | **86** |
+| `zoning` | 0 | **232** |
+| `land_use` / `owner_name` | 0 | **0 — ceiling is zero, see below** |
+| `lot_sf` below 100 sq ft (the sentinel shape) | — | **0** |
+| dia `tax_records.tax_amount` where `source='costar_sidebar'` | 0 | **0 — ceiling is zero** |
+
+Writer: `api/_handlers/sidebar-pipeline.js::upsertPublicRecords` (both domains).
+Rungs: `supabase/migrations/20261008120000_lcc_pr2_sidebar_parcel_stat_rungs.sql` (16 rows, applied).
+Backfill: batch `pr2_sidebar_parcel_stats_20260902`, 817 rows, reversal ledger
+`dia._pr2_parcel_stats_backup_20260902`, script
+`scripts/pr2-backfill-sidebar-parcel-stats.mjs`. Guard:
+`test/pr2-sidebar-parcel-stats.test.mjs` (12 tests, **15/15 mutations RED**).
+
+- 🚨 **THE DOMINANT LOT-SIZE FORMAT WAS BEING READ AS 1 SQUARE FOOT, AND FIXING
+  THE WRITER WITHOUT FIXING THE PARSER WOULD HAVE SHIPPED THAT INTO
+  `parcel_records`.** CoStar renders lot size as **`"1.00 (43,560 sf)"`** —
+  acres, with the square footage in parentheses — on **1,679 of 2,477 live
+  captures (68%)**. `parseLotSF` matched `/([\d.]+)\s*AC/i`, which that string
+  does not contain, then fell through to `parseSF`, which strips the `sf` token
+  and `parseFloat`s the **leading** number: **1**. Measured on the backfill's own
+  population, **476 of 760 lot values came through that arm** — i.e. the majority
+  of what PR2 wrote would have been an acres-as-square-feet error. `properties.lot_sf`
+  had **0 rows below 100 sq ft**, so the defect was latent there, not live; it is
+  fixed anyway, and `properties.lot_sf` / `land_area` now come from ONE parse
+  (+90 each, in lockstep — I12 satisfied by construction rather than by two
+  writers agreeing).
+- ⚠️ **AND THE KEY CAN LIE ABOUT THE UNIT TOO — I12, one level up.**
+  `metadata.lot_sf` names square feet and holds **both**: live values include
+  `78300`, `43560`, `100000`, `41817.6` (sq ft) alongside `1.71`, `0.94`, `1.24`,
+  `0.7` (acres). Preferring it *because of its name* turned a 1.71-acre lot into
+  **2 square feet** in this backfill's own dry run — caught by auditing the
+  parsed outliers, not by reading the code. It is excluded from the precedence;
+  `land_sf` (850 rows, every one `"N SF"`) and `lot_size` (unit in the value)
+  are kept. **A key whose contents are mixed does not carry a unit.**
+- ⚠️ **`"0.00 (1 sf)"` IS CoStar's NO-DATA RENDERING, NOT A ONE-SQUARE-FOOT
+  PARCEL** — the PR1a sentinel-as-measurement defect wearing a new format. **10
+  captures fleet-wide** render that shape and **every parenthetical below 100 sq
+  ft is one of them**, so a 100 sq ft floor refuses exactly the sentinels and
+  nothing real (the smallest genuine lot in the population is 3,528 sq ft).
+- ⚠️ **THE CEILING FOR `tax_amount`, `land_use` AND `owner_name` IS ZERO, AND
+  THAT IS A MEASUREMENT.** Those keys have **never appeared on any of 55,901
+  entity captures**. `tax_amount` is present as a KEY in all 932 parcel
+  `raw_payload`s and non-null on **0** — independent confirmation from a second
+  store. All three are wired (the county-assessor scanner
+  `extension/content/public-records.js::scanAssessor` emits them, so a future
+  assessor capture lands), and they will read 0 until it does. **A wired field
+  with a stated ceiling of zero is not the same as a gap left silent.**
+- ⚠️ **`parcel_records.owner_name` IS NOT FILLED FROM THE OWNER WE ALREADY
+  HOLD.** That column means *the party the county names on this parcel*; filling
+  it from the CoStar owner panel restates our own value as if a county had said
+  it — the gov ORE Phase A1 finding, where 9,749 gov parcel `owner_name`s are
+  the recorded owner echoed back and have read as independent corroboration ever
+  since. Guarded by name in the test.
+- ⚠️ **`land_use` IS NOT MAPPED FROM `property_type`.** On an assessor capture
+  that key holds a use code; on a CoStar capture it holds the CRE property type
+  ("Medical Office"). One key, two meanings.
+- **Provenance: 2,532 rows, 2,532 `write` / 0 `skip` / 0 `conflict`**, all
+  `no_prior_provenance`, and **`v_field_provenance_unranked` unchanged at 30** —
+  which is what registering the 16 rungs BEFORE writing was for. ⚠️ Note the
+  brief's mechanism was off by one layer: `lcc_merge_field` writes the caller's
+  source verbatim; the `domain_trigger` relabel PR8 replaced lives in the ASYNC
+  `lcc_flush_provenance_events` drain. The consequence of writing unregistered
+  is drift-detector growth, not a relabel.
+- 🔴 **FOUND, FILED, NOT FIXED — `field_provenance` CANNOT STORE A VALUE
+  CONTAINING A DOUBLE QUOTE.** `value_text_hash` is `GENERATED AS
+  encode(sha224((value)::text::bytea),'hex')`; a jsonb string renders its inner
+  quotes with backslashes and `::bytea` rejects them with **22P02**, aborting
+  the whole `lcc_merge_field` call. One live value hits it (apn `145416`, zoning
+  `"C" - Commercial`) and it is the reason provenance is 2,532 and not 2,533.
+  The live writer degrades quietly rather than failing — `shouldWriteField`
+  catches and fails open — so this has been silently dropping provenance for any
+  quoted value for as long as the column has existed. Backlog **PR12**.
+- **Fill-blanks proven, not asserted:** all 817 snapshotted pre-states are
+  **fully blank across every touched column**, so the backfill overwrote
+  nothing. Re-run plans 0.
+- **The `$/SF` comp residue is a DISJOINT population — this recovers 0 of it.**
+  `property-metadata-coverage.md`'s "82 properties with a sale price and no
+  building size" reads **84** today, and **0 of the 84 have a sidebar parcel
+  capture at all**. That gap is not reachable from this source; do not re-file it
+  against PR2.
+- **gov is fixed in the WRITER and NOT backfilled.** Same defect, bigger
+  population — **1,527 `costar_sidebar` parcel rows, 0 stats**, against a capture
+  ceiling of 1,230 `square_footage` / 1,192 `year_built` / 1,155 lot / 310
+  zoning across 1,271 gov captures. `scripts/pr2-backfill-sidebar-parcel-stats.mjs
+  --domain government --apply` is one command; it was left as a deliberate call
+  rather than quietly widening a dia-scoped change.
+- ⚠️ **`properties` moved too, via `trg_parcel_propagate_to_property`** (AFTER
+  UPDATE OF these very columns, fill-blanks, units correct). **779 properties
+  touched**; `lot_sf` **3,704 → 3,794** and `land_area` **3,707 → 3,797** are
+  exact. `building_size` / `year_built` / `zoning` were **not baselined before
+  the run** — an omission, not a measurement — so only upper bounds are
+  available (≤708 / ≤685 / ≤232). Quote them as upper bounds.
+
+### PR11 — the APN-less residue: the marker already exists; the consumer and the producer gate do not
+
+Sized 2026-09-02: **25,331 APN-less `tax_records` + 671 APN-less `parcel_records`**,
+**22,171 `property_public_records` links** (22,131 tax + 40 parcel) reaching
+**9,033 properties** — 93% of the whole link table. **Not quarantined here**, for
+two reasons that are worth stating rather than working around:
+
+1. **The marker half is already shipped.** `v_dia_public_record_acquisition` +
+   `dia_public_record_source_is_trustworthy()` already name this population
+   (`acquisition_class = 'ai_gpt4o_presumed'`, `trustworthy_source = false`) and
+   now show the contrast directly: the model leg's 40 parcel "stat" rows read
+   `year_built_zero: 37`, against the sidebar leg's 714 real years. Stamping
+   `metadata.quarantined_reason` on 48k rows would add a flag **nothing reads** —
+   inert, and easily mistaken later for "PR11 done". What is missing is
+   **consumers filtering on `trustworthy_source`**, which is a change to those
+   consumers, not to these rows.
+2. **The producer gate belongs with a retirement decision, not with plumbing.**
+   Refusing a NULL-APN write in `Dialysis/src/public_record_ingest.py` would stop
+   essentially the model leg's entire output — which is §2a's explicit warning:
+   *"Do not 'fix' this by deleting the GPT fallback in the same change — it is
+   the only thing writing these tables today... Gate it, measure, then retire."*
+
+**PR11 therefore stays filed**, re-scoped to those two halves.
+
 **The clinching detail:** `dia.properties.year_built` carries **3,586 `field_provenance` rows and
 the only source is `salesforce`** (priority 20). The county source registered at priority 5 — which
 would outrank it on every one of those rows — has contributed nothing, while `parcel_records` sits
@@ -401,7 +527,10 @@ measure, then retire.
 - ⚠️ **I12 — acres vs square feet.** `parcel_records` carries `lot_sf`; `dia.properties` carries
   **both `land_area` (acres) and `lot_sf`**, with 3,702 paired rows and **0 equal**. Any
   reconciliation must write **one** and derive the other, not populate whichever the source happened
-  to express. Same hazard live at `sidebar-pipeline.js` ~4597.
+  to express. ✅ **The `sidebar-pipeline.js` hazard is CLOSED (PR2, 2026-09-02) and it was WORSE
+  than "same hazard": CoStar's dominant lot-size format `"1.00 (43,560 sf)"` was being read as
+  **1 square foot**, on 68% of captures. `lot_sf` and `land_area` now come from one
+  `parseLotSize` call that reads the unit rather than the leading number.**
   - ⚠️ **Re-measured 2026-09-01: the disagreement is 213 rows (5.8%), not 27.** At a 0.1% relative
     tolerance 3,489 of 3,702 sit at the 43,560 ratio and **213 do not**; on a strict ±1 absolute
     test it is 300. **The "27 genuine disagreements (0.8%)" figure in circulation does not

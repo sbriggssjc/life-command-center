@@ -4596,6 +4596,37 @@ Related invariants from the same round:
     **The real first step is `REGRID_API_KEY`** — `Dialysis/src/regrid_client.py` is a complete
     vendor client, gated on that key, that has never run. Full measurement + the shipped instrument:
     `docs/architecture/public-records-source-lane.md` §2a. Backlog **PR1a/PR1b**.
+  - ✅ **AND THE ONE GENUINE SOURCE IN THE LANE WAS BEING TRUNCATED BY ITS OWN WRITER — PR2, FIXED
+    2026-09-02.** The CoStar sidebar is the only real public-record acquisition dia has (932 parcel
+    rows, 931 true APNs, 883 properties), and `upsertPublicRecords` built its INSERT from
+    `apn/county/state/assessed_value` only — so `building_sf` / `lot_sf` / `year_built` / `zoning`
+    were **0 on all 932** while the model leg's APN-less rows were the only ones carrying any. Now
+    767 / 734 / 714 / 232. **`tax_amount` was stashed in the parcel `raw_payload` instead of the
+    `tax_records.tax_amount` column**, where nothing reads it.
+    - 🚨 **THE LOAD-BEARING HALF WAS THE PARSER, AND FIXING THE WRITER ALONE WOULD HAVE SHIPPED A
+      43,560× UNIT ERROR.** CoStar renders lot size as **`"1.00 (43,560 sf)"`** — acres with the
+      square footage in parentheses — on **68% of live captures**. `parseLotSF` matched
+      `/([\d.]+)\s*AC/i`, which that string does not contain, then fell through to `parseSF`,
+      which strips the `sf` token and `parseFloat`s the **leading** number: **1 square foot for a
+      one-acre lot**. 476 of the 760 backfilled lot values came through that arm.
+    - ⚠️ **I12 ONE LEVEL UP: THE KEY CAN LIE ABOUT THE UNIT TOO.** `metadata.lot_sf` names square
+      feet and holds **both** — `78300`/`43560`/`100000` beside `1.71`/`0.94`/`0.7`. Preferring it
+      *because of its name* turned a 1.71-acre lot into **2 square feet** in the backfill's own dry
+      run, caught by auditing the parsed outliers rather than by reading the code. **A key whose
+      contents are mixed does not carry a unit.**
+    - ⚠️ **`"0.00 (1 sf)"` IS CoStar's NO-DATA RENDERING** — the PR1a sentinel-as-measurement defect
+      in a new format. 10 captures fleet-wide, and every parenthetical below 100 sq ft is one of
+      them, so a 100 sq ft floor refuses exactly the sentinels and nothing real.
+    - ⚠️ **A MEASURED CEILING OF ZERO IS NOT A GAP LEFT SILENT.** `tax_amount`, `land_use` and
+      `owner_name` are wired and will read 0: those keys have **never appeared on any of 55,901
+      entity captures**, and `tax_amount` is present as a KEY in all 932 parcel `raw_payload`s and
+      non-null on 0 — a second store confirming the same zero.
+    - 🔴 **`field_provenance` CANNOT STORE A VALUE CONTAINING A DOUBLE QUOTE, AND IT FAILS
+      SILENTLY.** `value_text_hash` is `GENERATED AS encode(sha224((value)::text::bytea),'hex')`;
+      a jsonb string renders inner quotes with backslashes and `::bytea` rejects them **22P02**,
+      aborting the whole `lcc_merge_field` call — while `shouldWriteField` catches and **fails
+      open**, so the write proceeds and the provenance is lost with no signal. Backlog **PR12**;
+      the size of the historical loss is unmeasured.
     - ⚠️ **"It needs no new acquisition" was the tell, not the selling point.** No new acquisition
       means the values are whatever the current producer emits — so *the cheapest consumer to build
       is exactly the one whose source nobody re-graded.* **Before wiring any registered-but-unused
