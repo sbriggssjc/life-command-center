@@ -31,6 +31,20 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   // Accumulated data: merges across CoStar tab switches and popups
   let accumulated = { contacts: [], sales_history: [], tenants: [] };
 
+  function resetForProperty(propertyKey) {
+    accumulated = {
+      contacts: [],
+      sales_history: [],
+      tenants: [],
+      _property_key: propertyKey,
+    };
+    lastPaginatedPage = 0;
+    paginationInProgress = false;
+    lastCommentaryPage = 0;
+    commentaryPaginationInProgress = false;
+    commentaryPropertyKey = null;
+  }
+
   // Auto-pagination state for Public Record sale/loan history
   let paginationInProgress = false;
   let lastPaginatedPage = 0;
@@ -124,6 +138,16 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // (last-write-wins in chrome.storage.session.pageContext).
     if (!url || url === 'about:blank' || url === 'about:srcdoc') return;
     if (!/^https?:\/\/[^/]*\.costar\.com\//i.test(url)) return;
+
+    // A street address is not a record boundary: CoStar can assign the same
+    // display address to adjacent buildings/parcels. Reset before reading the
+    // new DOM whenever the stable numeric CoStar record changes.
+    const propertyKey = window.LccPropertyIdentity?.propertyIdentityKey(url) || url;
+    if (accumulated._property_key && accumulated._property_key !== propertyKey) {
+      resetForProperty(propertyKey);
+    } else if (!accumulated._property_key) {
+      accumulated._property_key = propertyKey;
+    }
 
     let address = null;
     let headingEl = null;
@@ -228,16 +252,8 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     const compMatch = url.match(/\/Comp\/(\d+)\//i);
     if (compMatch) accumulated.costar_comp_id = compMatch[1];
 
-    // If address changed (navigated to different property), reset accumulation
-    if (accumulated._address && accumulated._address !== identifier) {
-      accumulated = { contacts: [], sales_history: [], tenants: [] };
-      lastPaginatedPage = 0;
-      paginationInProgress = false;
-      // Round 76ek.d: reset commentary pager too on property switch
-      lastCommentaryPage = 0;
-      commentaryPaginationInProgress = false;
-      commentaryPropertyKey = null;
-    }
+    // Address changes within one CoStar record are display normalization, not
+    // identity changes. Numeric record identity above is the sole reset gate.
     accumulated._address = identifier;
 
     if (!lines) lines = getPageLines();
@@ -607,26 +623,32 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       }
     }
 
+    const snapshot = {
+      domain: 'costar',
+      entity_type: 'property',
+      _version: 32,
+      address: address || parseAddress(document.title),
+      page_url: url,
+      city: accumulated.city,
+      state: accumulated.state,
+      zip: accumulated.zip,
+      ...accumulated,
+      contacts: accumulated.contacts,
+      sales_history: accumulated.sales_history,
+      tenants: accumulated.tenants,
+      source_property_key: propertyKey,
+      costar_property_id: window.LccPropertyIdentity?.costarPropertyId(url) || null,
+    };
+    snapshot._source_field_provenance = {};
+    for (const [field, value] of Object.entries(snapshot)) {
+      if (field.startsWith('_')) continue;
+      if (value == null || value === '' || (Array.isArray(value) && value.length === 0)) continue;
+      snapshot._source_field_provenance[field] = propertyKey;
+    }
+
     safeSendMessage({
       type: 'CONTEXT_DETECTED',
-      data: {
-        domain: 'costar',
-        entity_type: 'property',
-        _version: 31,
-        // Round 76cg: never let raw document.title leak through as the
-        // address. parseAddress(title) will succeed when the title contains
-        // a real address (after stripping 'Properties | ' style prefixes).
-        // If both fail, emit null and let the matcher use other signals.
-        address: address || parseAddress(document.title),
-        page_url: url,
-        city: accumulated.city,
-        state: accumulated.state,
-        zip: accumulated.zip,
-        ...accumulated,
-        contacts: accumulated.contacts,
-        sales_history: accumulated.sales_history,
-        tenants: accumulated.tenants,
-      },
+      data: snapshot,
     });
 
     if (headingEl) injectLccButton(headingEl);

@@ -1,3 +1,5 @@
+import './shared/property-identity.js';
+
 // ============================================================================
 // LCC Assistant — Background Service Worker (Manifest V3)
 // Proxies API calls, manages page context detection, badge updates
@@ -147,7 +149,8 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
       const existing = result.pageContext || {};
       const existingKey = propertyIdentityKey(existing.page_url);
       const incomingKey = propertyIdentityKey(info.url);
-      if (existingKey && incomingKey && existingKey !== incomingKey) {
+      const ownsStoredContext = existing._source_tab_id == null || existing._source_tab_id === tabId;
+      if (ownsStoredContext && existingKey && incomingKey && existingKey !== incomingKey) {
         // Different property: drop the cached context. The content script
         // will re-emit CONTEXT_DETECTED for the new page when it loads.
         chrome.storage.session.remove('pageContext');
@@ -177,7 +180,7 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
 const SCRAPER_INJECTIONS = [
   {
     match: /^https:\/\/[^/]*\.costar\.com\//i,
-    files: ['content/_sale-merge.js', 'content/costar.js'],
+    files: ['shared/property-identity.js', 'content/_sale-merge.js', 'content/costar.js'],
     allFrames: true,
   },
   {
@@ -316,6 +319,9 @@ async function testConnection() {
 //   /detail/lookup/12345/sale     -> product.costar.com/12345  (different)
 //   /properties/abc-def-uuid-...  -> rca.../abc-def-uuid-...   (UUID kept)
 function propertyIdentityKey(url) {
+  if (globalThis.LccPropertyIdentity) {
+    return globalThis.LccPropertyIdentity.propertyIdentityKey(url);
+  }
   if (!url || typeof url !== 'string') return null;
   try {
     const u = new URL(url);
@@ -435,6 +441,26 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
 
       const existingKey = propertyIdentityKey(existing.page_url);
       const incomingKey = propertyIdentityKey(incoming.page_url);
+
+      // CoStar snapshots are record-bound. Reject a late message emitted by
+      // the old SPA DOM after the tab has already navigated to another numeric
+      // property ID, and reject any snapshot whose fields do not all declare
+      // the same record provenance. Address equality is explicitly irrelevant:
+      // adjacent CoStar records can share one display address.
+      if (incoming.domain === 'costar') {
+        const senderTabKey = propertyIdentityKey(sender?.tab?.url);
+        const integrity = globalThis.LccPropertyIdentity.contextIntegrity(incoming, incoming.page_url);
+        if ((senderTabKey && incomingKey && senderTabKey !== incomingKey) || !integrity.ok) {
+          console.warn('[LCC CoStar] discarded stale or mixed-record snapshot', {
+            incomingKey,
+            senderTabKey,
+            reasons: integrity.reasons,
+          });
+          respond({ ok: false, error: 'costar_record_identity_mismatch' });
+          return;
+        }
+        incoming._source_tab_id = sender?.tab?.id ?? null;
+      }
 
       // Primary: URL-based identity. Both keys present and equal = same property.
       // Secondary: when URLs are unavailable (legacy/non-CoStar source), fall
@@ -582,10 +608,9 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         merged.contacts = merged.contacts.filter(c => !isGarbageContact(c.name));
       }
 
-      chrome.storage.session.set({ pageContext: merged });
+      chrome.storage.session.set({ pageContext: merged }, () => respond({ ok: true }));
     });
-    respond({ ok: true });
-    return false;
+    return true;
   }
 
   if (msg.type === 'LCC_API_CALL') {
