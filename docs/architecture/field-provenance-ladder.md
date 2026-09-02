@@ -77,11 +77,15 @@ has written: `lcc_owner_contact_propagate_log`'s newest row is **2026-08-15**, 1
 table itself is busy — **8,775 `field_provenance` rows in the last 24 h, newest 21:30 UTC** — so the
 zero is scoped to `entities` and means *those two workers have not run*, not *the wiring is absent*.
 **Assert on the population that passed through the window, never on the count alone.** The lane that
-does run daily is the Salesforce bridge, wired by PR5c-entities-b.
+does run daily is the Salesforce bridge, wired by PR5c-entities-b. **Measured 22:08 UTC, minutes after its deploy:** `source='salesforce'` on `entities` = 0 with 3 SF
+contacts minted in the prior 24 h — read it again tomorrow (~12 rows/day predicted), never today.
 
 **Deploy state:** migrations for PR8/PR5/PR12/PR5c all applied live. ✅ **Railway CONFIRMED
-2026-09-02 21:41 UTC — live `/version` = `f5bc8cc0f868`** (= `origin/main` HEAD), and
-`git merge-base --is-ancestor e9c74357 f5bc8cc` is true, so the PR5c-entities JS **is running**.
+2026-09-02 22:08 UTC — live `/version` = `886cdf8622f4`** (= `main` HEAD incl. #2072), so every JS
+half of this arc — PR2, PR12's failure signal, PR5c's five callers, PR5c-entities, PR5c-entities-b —
+**is running**. (Earlier read 21:41 UTC: `f5bc8cc0f868`.) The host is
+`https://tranquil-delight-production-633f.up.railway.app` — the `-633f` suffix matters; the bare
+`tranquil-delight-production` host answers 404 `Application not found`, which reads like a dead deploy.
 ⚠️ The sandbox has no Railway egress (proxy 403, `connect_rejected`); `/version` was read with
 `net.http_get` **from the DB**, which does — cheaper than any handler behavioural probe and immune
 to the auth-401 misread that made an empty grep look like a stale deploy (B5). ⚠️ An unanswered
