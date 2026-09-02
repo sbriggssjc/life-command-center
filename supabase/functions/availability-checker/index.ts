@@ -178,6 +178,18 @@ function authorize(req: Request): { ok: boolean; error?: string } {
   return { ok: false, error: "Invalid or missing API key" };
 }
 
+// ── PR5c: field_provenance.target_database is a CLOSED vocabulary ───────────
+// CHECK (target_database = ANY (ARRAY['lcc_opps','dia_db','gov_db'])). This
+// function passed the bare domain key ("dia" / "gov"), so EVERY availability
+// provenance stamp raised 23514 and was swallowed by the best-effort catch --
+// availability_scraper has never written a field_provenance row. Mirrors
+// sf-promotion-worker's provenanceDbName(), which had it right all along.
+function provenanceTargetDatabase(v: string): string {
+  if (v === "dia" || v === "dialysis" || v === "dia_db") return "dia_db";
+  if (v === "gov" || v === "government" || v === "gov_db") return "gov_db";
+  return "lcc_opps";
+}
+
 // ── Domain configs ──────────────────────────────────────────────────────────
 
 function diaConfig(): DomainConfig | null {
@@ -477,7 +489,7 @@ async function recordProvenance(
   // lcc_merge_field's value column stores.
   const body = {
     p_workspace_id: null,
-    p_target_database: cfg.domain,
+    p_target_database: provenanceTargetDatabase(cfg.domain),
     p_target_table: cfg.provTargetTable,
     p_record_pk: String(listingId),
     p_field_name: cfg.provFieldName,
@@ -566,7 +578,7 @@ async function maybeCorrectListingDate(
         },
         body: JSON.stringify({
           p_workspace_id: null,
-          p_target_database: "dia",
+          p_target_database: provenanceTargetDatabase("dia"),
           p_target_table: "dia.available_listings",
           p_record_pk: String(row.listing_id),
           p_field_name: "listing_date",
