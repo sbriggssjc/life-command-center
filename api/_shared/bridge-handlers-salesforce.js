@@ -23,8 +23,51 @@ import { domainQuery } from './domain-db.js';
 import { normalizeCanonicalName } from './entity-link.js';
 import { resolveExternalUser } from './external-user-mappings.js';
 import { appendActivityEvent } from './activity-events.js';
+import { recordFieldWrites, provenanceTargetDatabase } from './field-priority-guard.js';
 
 const SF_INSTANCE_URL = process.env.SF_INSTANCE_URL || '';
+
+// ---------------------------------------------------------------------------
+// PR5c-entities-b (2026-09-02) — provenance on the CREATE path.
+//
+// This is the highest-traffic writer of entities.email/phone: 10,086 lifetime
+// salesforce/Contact identities, 336 in 30 days across 22 distinct days,
+// 329 of which MINTED the entity. It establishes the value every later source
+// is judged against, and it recorded nothing — `field_provenance` for
+// target_table='entities' was 0 (positive control: dia.properties, 49,571).
+//
+// ⚠️ THIS RECORDS. IT DOES NOT GATE, AND IT MUST NOT.
+//    Two independent reasons, both structural:
+//      1. A create has no prior value to protect. lcc_merge_field reads its
+//         "current value" from field_provenance, which is empty for a row that
+//         does not exist yet, so the decision is always
+//         write/no_prior_provenance. Gating on it would be theatre.
+//      2. Both salesforce rungs (email@20, phone@20) are enforce_mode
+//         ='record_only', where even a `skip` allows the write (behaviour
+//         matrix in field-priority-guard.js). Flipping that is a separate,
+//         graded decision — backlog PR5c-enforce.
+//    So the INSERT happens first and is never conditioned on the result. The
+//    point is that the NEXT writer finally has something to be judged against.
+//
+// The spelling must match the registry byte-for-byte: the target table is the
+// bare 'entities' (not 'lcc.entities') and the source is 'salesforce'. A
+// mismatch does not error — it takes lcc_merge_field's UNREGISTERED branch,
+// which still writes a row, so the ladder would simply not be consulted (PR5).
+//
+// target_database goes through provenanceTargetDatabase(), the single owner of
+// that closed vocabulary. It is CHECK-enforced: passing the logical prefix
+// 'lcc' instead of 'lcc_opps' aborts the whole call with 23514 and takes the
+// provenance row with it. A sibling call site that looks right is not evidence
+// (PR5c) — this is asserted by a rolled-back live control, not by reading.
+// ---------------------------------------------------------------------------
+const PROVENANCE_TARGET_DB = provenanceTargetDatabase('lcc_opps');
+const PROVENANCE_TARGET_TABLE = 'entities';
+const PROVENANCE_SOURCE = 'salesforce';
+// Registry-governed columns this file writes on the CREATE path. address/city/
+// title/org_type carry NO entities rung, so routing them through
+// lcc_merge_field would mint provenance for unregistered triples and push them
+// onto v_field_provenance_unranked (PR5a owns whether they should be rungs).
+const PROVENANCE_FIELDS = ['email', 'phone'];
 
 // ---- helpers --------------------------------------------------------------
 
@@ -203,7 +246,43 @@ async function insertEntity({ workspaceId, entityType, fields }) {
   if (!r.ok || !Array.isArray(r.data) || !r.data.length) {
     throw new Error(`entity insert failed: ${r.status}`);
   }
-  return r.data[0].id;
+  const entityId = r.data[0].id;
+
+  // PR5c-entities-b: record the ladder-governed values this create ESTABLISHED.
+  // Audit-only by construction — recordFieldWrites never blocks and is called
+  // AFTER the row exists, so a registry outage costs the provenance row and
+  // nothing else. field-priority-guard.js counts that loss and opens
+  // lcc_health_alerts(provenance_write_failed) rather than dropping it silently
+  // (PR12). Only fields carrying a real value are recorded: the Account create
+  // passes neither, and a null here would assert "Salesforce says this contact
+  // has no email", which is a positive claim the payload never made.
+  const provenanceFields = {};
+  for (const f of PROVENANCE_FIELDS) {
+    const v = fields[f];
+    if (v != null && String(v).trim() !== '') provenanceFields[f] = v;
+  }
+  if (Object.keys(provenanceFields).length) {
+    try {
+      await recordFieldWrites({
+        targetDb:    PROVENANCE_TARGET_DB,
+        targetTable: PROVENANCE_TARGET_TABLE,
+        recordPk:    entityId,
+        source:      PROVENANCE_SOURCE,
+        workspaceId,
+        // The value is copied verbatim out of the Salesforce record; there is
+        // no match or inference step to be less than certain about. This is
+        // NOT a claim that Salesforce is right, which is what the rung's
+        // priority (20) is for.
+        confidence:  1.0,
+        fields:      provenanceFields,
+      });
+    } catch (err) {
+      // Belt and braces: recordFieldWrites already swallows per-field failures.
+      console.warn('[sf-bridge] provenance record failed (entity written):', err?.message);
+    }
+  }
+
+  return entityId;
 }
 
 /**
