@@ -55,7 +55,7 @@ on a 401 → **B6d-sam**) from 4 at the start of the arc.
 | repo | does a red suite block a merge? | notes |
 |---|---|---|
 | **life-command-center** | ✅ **yes** | `npm test` is a bare unmasked `run:` and a **required check** since 2026-08-27; all 7 workflows carry `timeout-minutes`. **Verified clean 2026-09-01** — its `exit 0` / `\|\| true` are deliberate control flow inside `set -euo pipefail` |
-| **Dialysis** | ⚠️ **the JOB fails, the MERGE does not** | ✅ pytest **UNMASKED 2026-09-02 (PR #7393)** and **green once on `main`** — `3,147 collected / 3,139 passed / 0 failed`, read from the job log. ❌ **But there is NO branch protection**: `ci.yml`'s own header says CI is not a required check, and PR #7393 merged **8 s after its test job started**. → **B6e-ci-required-check** (👤 Scott; file the `paths-ignore` docs-only fix with it). Still masked: ruff (**red on `main` today**, 11 errors), `pip-audit`, the secrets grep, `import src.main` / `import app` → **B6e-ci-mask-ruff / -security / -srcimport** |
+| **Dialysis** | ⚠️ **the JOB fails, the MERGE does not — one toggle away** | ✅ pytest **UNMASKED (PR #7393)**, green once on `main` (3,153 / 3,145 / 0 at `8ee8412`), **seen RED on a throwaway** (run 33647155312: 1 failed → `failure`), and **the docs-only path is proven** (#7397: `Run Tests` reports SUCCESS in 5 s on a `.md`-only change). `paths-ignore` is GONE (#7395) — it matched `**/*.txt` incl. `requirements*.txt`, so a dependency bump used to skip every job silently; a ~6 s Scope job decides inside the run. ❌ **Still no branch protection** — #7395 itself merged 3 m 30 s in with the suite running (third instance in this arc). 👤 **Scott: merge #7397, delete the two throwaway branches, require `Run Tests`** → **B6e-ci-required-check**. Still masked, correctly: ruff (**5,738 findings**, not "11" — see below), `ruff format` (1,292 files), `pip-audit` (**red: pypdf2 `PYSEC-2026-1835`**), the secrets grep (**red: 5 fixture matches**), `import src.main` / `import app` → **B6e-ci-mask-ruff / -ruff-format / -security / -srcimport** |
 | **government-lease** | ❓ unmeasured | not swept |
 
 ⚠️ **"Fails the job" and "blocks the merge" are two different facts, and a workflow can deliver
@@ -186,16 +186,30 @@ time, in this order: ruff (red on `main` today — clear the red first) → `pip
 the two `src` imports (which need import-time side effects removed from `src/` before they can ever
 pass).**
 
-⚠️ **Lint is the same defect one job over.** Both ruff steps carry `continue-on-error: true`, and on
-2026-09-02 the *Lint & Type Check* job shows a green check with **11 ruff errors** behind it — root
-scratch files `.tmp_source_gap_classify.py` / `.tmp_prop_diag.py` and `alias_review.py`. **Grep the
-SHAPE** (`continue-on-error` is on the list below); a green lint badge over a red linter is exactly
-the `|| echo` finding wearing YAML.
+⚠️ **Lint is the same defect one job over — and my first reading of its size was the instrument,
+not the population.** Both ruff steps carry `continue-on-error: true`. I wrote here that the green
+*Lint & Type Check* hid "11 ruff errors". **GitHub caps step annotations at ten**; ruff emits in
+path order and the three files I named sort first. Measured with the CI's own command on `main`:
+**`ruff check .` = 5,746 (5,738 after #7395)**, **`ruff format --check` = 1,293 files.** A5's
+`815 = 1000 − 185` again — a count that equals a UI window is a reading of the instrument. **So
+ruff correctly stays masked** (unmasking ships a red job on day one); the route is one RULE at a
+time, F821/F811 first because those can be real bugs (**B6e-ci-mask-ruff**). **Grep the SHAPE**
+(`continue-on-error` is on the list below); a green lint badge over a red linter is exactly the
+`|| echo` finding wearing YAML.
+
+⚠️ **`paths-ignore` was a THIRD masking idiom, at the trigger.** Dialysis's listed `**/*.txt`, which
+matched `requirements.txt` / `requirements_utf8.txt` / `runtime.txt` — **a dependency bump or a
+runtime pin skipped tests, lint, pip-audit and the import check, with no status and no trace.** And
+once a check is required, a filtered-out trigger reports nothing, so the PR shows *Expected*
+forever. Decide inside the run (a Scope job), never at the trigger; gate STEPS not jobs (a
+job-level `if:` is the same deadlock one layer down); write every gate `!= 'false'` so a broken
+scope runs everything. Add `paths-ignore` / `paths:` to the shape list.
 
 ### The masking idioms — grep the SHAPE, never one spelling
 
 `|| echo` · `| tee` without `set -o pipefail` · `2>/dev/null` · `continue-on-error: true` ·
-`exit 0` · `|| true`.
+`exit 0` · `|| true` · **`paths-ignore:` / `paths:` on the trigger** (a run that never starts
+reports nothing) · **a job-level `if:` on a required job** (a skipped job reports no conclusion).
 
 ⚠️ **`|| echo` is worse than `| tee` because it looks deliberate.** And 🎯 **the cruellest instance
 found: `python -c "import src.main" 2>/dev/null || echo` — the repo already had the detector that

@@ -17,9 +17,9 @@ Two audit windows run in parallel against this repo and they must not collide:
 | **this one — data-process & automation** | **lettered** (`A*`, `B*`, `C1`, `D*`, `PR*`, `DE*`, `BR*`) | ingestion, producers, CI enforcement, data coherence, source lanes |
 | app audit (Scott's desktop) | **numeric** (`189`, `194`…) and `C4`–`C13`, `DOC*`, `N*` | the LCC app surfaces, Tier 0, prospecting brief, OCR |
 
-⚠️ **Prompts in `docs/claude-code/prompts/` starting `C6/C8/C10/C11/C13/DOC*` belong to the OTHER
-window. Do not action them.** Only `B6e-ci-last5-decisions-resolved.md` is this window's, and it is
-already with CC.
+⚠️ **Prompts in `docs/claude-code/prompts/` starting `C6/C8/C10/C11/C13/DOC*/OCR*` belong to the
+OTHER window. Do not action them.** This window's queued prompts are the lettered ones; check
+`prompts/` for what is currently drafted (the `done/` folder holds everything already run).
 
 ## 2. The through-line of everything below
 
@@ -54,13 +54,15 @@ and the Dialysis test suite had never executed a test in the repo's history — 
 
 ### 🔄 In flight
 
-**Nothing is with CC.** ⚠️ **But the Dialysis gate is one operator step short:** `ci.yml`'s header
-says CI is *not* a required check, and #7393 merged 8 s after its test job started. A red suite
-fails the job and blocks nothing → **`B6e-ci-required-check`** (👤 Scott, with the `paths-ignore`
-docs-only fix in the same change). Ruff is `continue-on-error` and **red on `main` right now** (11
-errors, root `.tmp_*.py` + `alias_review.py`) behind a green check → **`B6e-ci-mask-ruff`**.
-⚠️ **Verify next:** the gate has only been proven green — it has not yet been seen to fail a red
-PR; and the `exit code 128` gitlink warning's absence was not read from a checkout log.
+**Nothing is with CC.** The Dialysis gate prep is DONE (#7395 + #7397): `paths-ignore` gone, Scope
+job, `Run Tests` always reports, **seen RED** (run 33647155312), docs-only path **proven**
+(#7397, 5 s), `exit code 128` **gone** from a checkout log. 👤 **Three operator steps close the B6
+CI arc:** merge #7397 → delete `claude/tmp-red-gate-proof` + `claude/tmp-docs-only-proof` in the UI
+→ require `Run Tests` on `main`. ⚠️ Ruff stays masked, correctly — **5,738 findings, not the "11"
+the first handoff said** (GitHub's ten-annotation cap; A5's `815 = 1000 − 185` again).
+**PR8 verify-next:** `field_provenance where source='agency_classifier'` reads 0 and it is a
+no-population zero (0 unflushed gov events, last one pre-migration) — it flips on the next gov write
+that fires `gov_classify_agency()`; do not read it as broken.
 
 ### 🔴 Next, in recommended order
 
@@ -69,14 +71,19 @@ PR; and the `exit code 128` gitlink warning's absence was not read from a checko
    person names, 7 are the Colliers family. **`cbre; smyth & colliers; patel` is minted as one
    company.** Start with **`BR1-confirm`** — 12 brokerage-evidenced orgs ready for a one-decision
    human confirm.
-2. **`PR2`** — why does one live producer return tax rows for 9,107 properties and parcel stats for
-   **41**? The tax fetcher reaches 77%, so this is a *fetcher* question, not an acquisition one.
-3. **`PR5`** — **39 of 67 registered ladder sources (58%) have never written a field.** Triage into
-   build / rename / retire. ⚠️ Blocked on **`PR8`** first (see below).
-4. **`PR8`** — `lcc_flush_provenance_events()` relabels any source off a 4-item allowlist to
-   `domain_trigger`, **so PR5's count is an upper bound** and a source-name verification can read
-   zero on a correct write.
-5. **`DE3`/`DE4`**, **`B6e-worktree-gitlinks`**, **`B6e-clinic-metadata`**, **`D2`–`D5`**.
+2. **`PR2` (re-scoped 2026-09-02 — the filed premise was REFUTED)** — the "77% tax coverage" was
+   the gpt-4o leg (25,334 APN-less rows linked to 9,033 properties). The only real source is the
+   **CoStar sidebar** (931 APNs / 883 properties) and its writer **drops the building stats and
+   `tax_amount` the capture sends** (`sidebar-pipeline.js::upsertPublicRecords`). Prompt drafted:
+   `PR2-sidebar-parcel-stats-dropped.md` (with PR11, the model-leg quarantine, if cheap).
+3. **`PR5`** — **39 of 68 registered ladder sources have never written a field** (re-keyed on
+   `v_field_provenance_effective_source` after PR8; the raw `source` reads 40 until the next flush).
+   Triage into build / rename / retire, **and the reverse arm now has a real member:
+   `costar_sidebar` writes `gov.properties.government_type` (52/30d) with no rung.** ✅ PR8 is
+   DONE (2026-09-02, #2041) — the registry is the allowlist; nothing blocks PR5 any more.
+4. **`DE3`/`DE4`** (DE4's input is settled: FY2026's 73.66% Medicare is the fallback bucket),
+   **`B6e-clinic-metadata`**, **`D2`–`D5`**, **`PR10`** (one source, two ladders), **`SEC1`**
+   (91 of 195 SECURITY DEFINER functions anon-executable — filed by PR8, needs its own pass).
 
 ### 👤 Waiting on Scott
 
@@ -172,6 +179,11 @@ git push -u origin docs/<topic-slug>
   is a badge again. Read the workflow header and the PR merge timing, not the PR body.
 - **A "within 0.3%" that four pages repeated did not reproduce (−4.90%).** A figure that sounds
   right and has been copied is not thereby measured — re-run it before it lands on a canonical page.
+- **A count that equals a UI window is a reading of the instrument.** "11 ruff errors" was
+  GitHub's ten-annotation cap; the real number was 5,746. Same shape as `815 = 1000 − 185`. Before
+  quoting a count off any paginated/capped surface, ask what the cap is.
+- **`paths-ignore` is a masking idiom at the trigger.** `**/*.txt` matched `requirements*.txt`; a
+  dependency bump skipped every job with no status. Decide inside the run, gate steps not jobs.
 - **Grouping-for-review ≠ identity-for-write.** Never fuzzy-match a residue of abbreviations,
   surnames and co-listings.
 
