@@ -9,6 +9,7 @@
 // POST   /api/entities?action=link            — link external identity to entity
 // GET    /api/entities?action=search&q=       — search by name across types
 // GET    /api/entities?action=lookup_asset&address=&city=&state= — find asset entity by address
+// GET    /api/entities?action=ownership_chain&domain=&property_id= — OWN-T0: the ONE reconciled ownership chain the property panel reads
 // GET    /api/entities?action=duplicates      — find duplicate candidates
 // POST   /api/entities?action=merge           — merge two entities (manager+)
 // POST   /api/entities?action=add_alias       — add alias for entity
@@ -1710,6 +1711,77 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
     // First non-empty result wins. This lets the sidebar identify a
     // CoStar-saved property from any of source_url/parcel/property_id even
     // if the address text on the live page has drifted.
+    // ── OWN-T0 ───────────────────────────────────────────────────────────
+    // GET /api/entities?action=ownership_chain&domain=dia|gov&property_id=123
+    //
+    // The SINGLE ownership read for the property panel's Ownership tab.
+    //
+    // The tab used to assemble its own answer from four stores that nobody
+    // reconciled -- the domain's v_ownership_current, the domain's
+    // v_ownership_chain, lcc_property_owner (via lookup_asset) and the
+    // portfolio facts behind the owner card -- and rendered whatever each one
+    // said, side by side, with no relationship between them. Measured
+    // 2026-09-02: the resolved owner disagrees with the domain true_owner on
+    // 1,260 of 7,678 comparable assets, 756 properties carry more than one
+    // CURRENT owner, and gov's own two stores disagree on 43.4% of the
+    // properties that have a recorded transition. That is what Scott sees as
+    // "conflicting on the property's own ownership history tab".
+    //
+    // v_lcc_property_ownership_reconciled is the one place those stores meet.
+    // It does not pick a winner and hide the rest: every claim comes back as a
+    // link, labelled with the KIND of record that made it, and the property
+    // carries an explicit property_state / conflict_class.
+    if (action === 'ownership_chain') {
+      const domain = String(req.query.domain || '').trim().toLowerCase();
+      const pid    = String(req.query.property_id || '').trim();
+      if (domain !== 'dia' && domain !== 'gov') {
+        return res.status(400).json({ error: 'ownership_chain requires domain=dia|gov' });
+      }
+      if (!/^\d{1,18}$/.test(pid)) {
+        return res.status(400).json({ error: 'ownership_chain requires a numeric property_id' });
+      }
+      const cols = [
+        'owner_entity_id', 'owner_name', 'ownership_start_date', 'ownership_end_date',
+        'is_current', 'annual_rent', 'link_source', 'evidence_level',
+        'is_resolved_owner', 'resolver_confidence', 'resolver_rung', 'resolved_at',
+        'is_domain_true_owner', 'is_operator', 'is_brokerage', 'is_placeholder',
+        'is_owner_candidate', 'n_current_claims', 'n_current_owners', 'is_primary',
+        'primary_reason', 'property_state', 'conflict_class', 'gap_before',
+        'start_date_unknown', 'asset_entity_id',
+      ].join(',');
+      const path = `v_lcc_property_ownership_reconciled`
+        + `?source_domain=eq.${encodeURIComponent(domain)}`
+        + `&source_property_id=eq.${encodeURIComponent(pid)}`
+        + `&select=${cols}`
+        + `&order=is_current.desc,ownership_start_date.desc.nullslast,owner_name.asc`
+        + `&limit=200`;
+      const r = await opsQuery('GET', path, null, { countMode: 'none' });
+      if (!r.ok) {
+        // Never swallow the DB's own message (P132): a handler that discards it
+        // turns a one-line fix into an outage of unknown duration.
+        return res.status(502).json({
+          error: 'ownership_chain query failed',
+          detail: (r.data && (r.data.message || r.data.error)) || null,
+          status: r.status,
+        });
+      }
+      const links   = Array.isArray(r.data) ? r.data : [];
+      const primary = links.find((l) => l.is_primary) || null;
+      return res.status(200).json({
+        domain,
+        property_id: pid,
+        // `no_owner_on_file` is the EMPTY case and is deliberately a different
+        // word from the view's `no_current_owner` (which means we hold history
+        // but nobody current). Absence and a closed chain are not the same fact.
+        property_state:   links.length ? links[0].property_state : 'no_owner_on_file',
+        conflict_class:   links.length ? links[0].conflict_class : null,
+        n_current_owners: links.length ? links[0].n_current_owners : 0,
+        n_current_claims: links.length ? links[0].n_current_claims : 0,
+        primary,
+        links,
+      });
+    }
+
     if (action === 'lookup_asset') {
       const select = 'id,entity_type,name,address,city,state,domain,asset_type,metadata';
       const baseFilter = `workspace_id=eq.${workspaceId}&entity_type=eq.asset`;
