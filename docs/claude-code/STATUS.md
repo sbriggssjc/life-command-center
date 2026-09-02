@@ -50,6 +50,22 @@
   honest nulls — that is a real OCR miss.
 - **Next:** Scott's `--run --model real --control self --engines tesseract`, then read the same two
   floor rows.
+## 2026-09-02 — UX23 went wholesale: 9.4% of properties carry >1 CURRENT owner and the conflict detector reads 0 → OWN-T0; two operator decisions recorded
+
+Scott on UX23: *almost every property* shows owner gaps/lapses and the ownership tab conflicts with
+itself — asked for a wholesale approach rather than a named record. **Measured before writing the
+prompt:** `lcc_entity_portfolio_facts` has **756 of 8,068 properties with >1 `is_current` owner**
+(33 with 3+); `lcc_property_owner` disagrees with the current fact on **667 of 8,223**;
+`v_lcc_portfolio_ownership_conflict` = **0** (built for P175a's ghost-vs-ended pair; structurally
+blind to two live current owners). And `chain_2plus` is 178, so a developer→owner gap is the DEFAULT
+state the panel never labels. **OWN-T0 staged**: disagreement matrix over every store the tab reads
++ ten named rows → fix the supersession writer that leaves the prior current fact un-ended
+(reversible, predicted delta) → `v_lcc_property_ownership_reconciled` as the ONE view the panel
+reads with `gap` / `conflict` / `operator_not_owner` as words → detector sees 756 before, 0 after.
+⚠️ **A detector reading 0 over a 9% defect is the P182 class, again.**
+
+Decisions: **UX39/UX41** keep both, move off the headline tabs to a back-end screen (UX39b/UX41b,
+with UX-T2). **UX13a** deferred to user onboarding. EXT1b sent to CC.
 
 ## 2026-09-02 — UX-T0 reconciled (deploy + migrations verified); EXT1 floor MEASURED — two noise classes gone, labels are the next layer → EXT1b
 
