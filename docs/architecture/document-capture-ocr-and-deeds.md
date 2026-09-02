@@ -11,12 +11,15 @@
 >
 > **Live-verified 2026-08-31; §0 blocker FIXED and re-measured 2026-09-01 (DOC1); the spend
 > escalation and the covered-fragment defect FIXED 2026-09-01 (DOC8 / DOC9 / DOC10 — §0d).
-> DOC14 (the 31–59 page leases that get NO text) is 🛑 **BLOCKED on an operator prerequisite** —
-> the async contract is verified, the GCS buckets and their IAM do not exist, and nothing was
-> built. ⛔ **DOC16, which proposed to make DOC14 unnecessary, is REFUTED at its own gate
-> (2026-09-02) — the extended 30-page cap is "only applicable when processing pages contiguously
-> starting from page 1", so its pages-31–50 call cannot exist. DOC14 is the route again.**
-> Read the DOC16 GATE and DOC14 BLOCKED sections before proposing anything about long-document OCR.**
+> 🟢 **DOC17 MEASURED IT (2026-09-02) AND THE SYNC ROUTE IS ALIVE: the page limit is measured
+> against the SELECTION, not the document total.** `individualPageSelector {pages:[31..45]}` on a
+> 316-page PDF returns pages 31–45; the `fromStart:15` positive control on the same document also
+> passes. **30 pages per call contiguously from page 1 (imageless), 15 pages per call anywhere
+> else** — so ~50 pages is THREE sync calls with **no GCS, no IAM and no confidentiality decision**,
+> and the whole 42-document backlog costs about **$3.30**. DOC16 was refuted correctly and its
+> *consequence* is superseded: its pages-31–50 call exists, it just needs two calls, not one.
+> DOC14 is no longer the only route — see the DOC17 ANSWER section.
+> Read DOC17 ANSWER, then the DOC16 GATE, before proposing anything about long-document OCR.**
 >
 > ⚠️ **Every number on this page is dated. Before quoting one, run §7b — the standing status check,
 > with its 2026-09-01 baseline.**
@@ -33,10 +36,10 @@
 | **CRE registry drain** | undrained **771 → 426**, sidecar **345**, `scan_lowest_id` **2** — reaches the oldest document. |
 | **consumer** | **`bov_ready` 5 → 37.** BOV extract is receiving real leases, DDs and OMs. |
 | **OCR tier** | ✅ **22+ events since redeploy, 100% DocAI, ZERO gpt-4o.** The 9.3×-worse escalation is closed. |
-| **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (18 at 31–50pp, 24 at >50pp, max 141) — **DOC17 probes the cheap route; DOC14 is the fallback.** |
+| **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (18 at 31–50pp, 24 at >50pp, max 141; re-verified unmoved 2026-09-02 after DOC17) — ✅ **DOC17 measured the cheap route OPEN. DOC18 (three sync calls per document, no GCS) is the build; DOC14 is now the alternative, not the fallback.** |
 | **retry markers** | 17 (`thin_ocr_result` 14, `fetch_failed` 3). `retry_admitted` is **0 and that is correct** — see DOC13 below. |
 
-**Open, in priority order: DOC17** (a one-call probe that decides between no-GCS and the full GCS build) · **DOC14** (the fallback; blocked on Scott — GCS persistence + confidentiality) · ⛔ **DOC16 REFUTED** ·
+**Open, in priority order: DOC18** (the three-call sync route DOC17 unlocked — no GCS) · **DOC14** (the alternative; still blocked on Scott — GCS persistence + confidentiality, and 👤 whether it is still worth doing at all now that sync reaches the whole window) · ✅ **DOC17 ANSWERED** · ⛔ **DOC16 REFUTED (consequence superseded)** ·
 | **🔴 the live gap** | **42 documents carry `over_docai_page_cap` and get NO text at all** (re-measured 2026-09-02; **18 at 31–50pp, 24 at >50pp**, max 141) — DOC14, blocked on an operator prerequisite. ⚠️ DOC16 was the proposed way round it and is **refuted** — see the DOC16 GATE section. |
 | **retry markers** | 17 (`thin_ocr_result` 14, `fetch_failed` 3). `retry_admitted` is **0 and that is correct** — see DOC13 below. |
 
@@ -834,6 +837,79 @@ drain, the retry lane **never runs**. That is Class 12's shape one level up — 
 **Verify `retry_admitted` goes non-zero as `undrained` approaches 0** — and if the folder feed keeps
 it permanently non-empty, the retry lane needs a reserved slot rather than the remainder.
 
+### 🟢 DOC17 ANSWER — the cap is measured against the SELECTION (2026-09-02, live probe)
+
+**DOC16 §3 left one question unmeasured and refused to guess it: for a selection that does NOT
+start at page 1, is the synchronous page limit measured against the SELECTION or the DOCUMENT
+TOTAL? It is the SELECTION.** Measured live against the Enterprise Document OCR processor
+`…5ecc6339861c88e1` on a **316-page** PDF, seven arms:
+
+| # | selection | imageless | result |
+|---|---|---|---|
+| 0 | whole document, **no selector** | off | ❌ `Document pages exceed the limit: 30 got 316` · `{page_limit:"30", pages:"316"}` |
+| **1** | **pages 31–45 (15 pp)** | **off** | ✅ **200 · pages `[31..45]` · 65,297 chars** |
+| **2** | **`fromStart: 15` — POSITIVE CONTROL** | **off** | ✅ **200 · pages `[1..15]` · 64,747 chars** |
+| 3 | pages 31–61 (31 pp) | off | ❌ `exceed the limit: 30 got 31` · `{page_limit:"30", pages:"31"}` |
+| 4 | pages 31–60 (30 pp) | off | ❌ `pages **in non-imageless mode** exceed the limit: **15** got 30` · `{page_limit:"30", pages:"30"}` |
+| 5 | pages 31–60 (30 pp) | **on** | ❌ **`At most 15 pages in one call please.`** — no `details[]` |
+| 6 | `fromStart: 30` | on | ✅ 200 · pages `[1..30]` · 151,776 chars |
+
+**Row 3 settles §2:** a 31-page selection out of 316 pages is refused for being **31**. The
+document total never enters the arithmetic. **Row 1 + row 2 together are the answer** — the page
+NUMBERS are the evidence, because a selector that is silently ignored returns pages 1..N and would
+otherwise read as a clean success (the DOC8 silent-no-op shape). **Row 5 confirms Google's Limits
+sentence behaviourally:** the extended 30 really is available only contiguously from page 1.
+
+**⇒ 30 pages per call from page 1 (imageless), 15 pages per call anywhere else.** A 50-page window
+is **three** calls (`fromStart:30` + `[31..45]` + `[46..50]`); the 141-page maximum is nine. Per-page
+cost is unchanged, so the whole 42-document backlog (2,182 pages) is about **$3.30** — **with no GCS
+bucket, no IAM, no service-agent grant, no lifecycle rule, no LRO job table and no new data-at-rest
+exposure.** That is DOC18. Full writeup: `docs/claude-code/responses/DOC17-page-selector-probe.response.md`.
+
+#### ⚠️ Four traps, all of which the DOC18 build will hit
+
+- **`metadata.page_limit` REPORTS THE MAXIMUM ACHIEVABLE LIMIT, NOT THE ONE IN FORCE.** Row 4 fails
+  because the applicable limit is **15**, and its metadata says **`page_limit: "30"`**. DOC8's
+  parser prefers the structured field over the prose *by design* — and here the structured field is
+  the misleading one. Both are true statements about different things; a caller that sizes a retry
+  off `page_limit` will re-send a 30-page selection forever.
+- **ROW 5 CARRIES NO `details[]` AT ALL.** `pageLimitFromError` returns `{limit:null, got:null}` and
+  the prose fallback misses too — `At most 15 pages in one call please.` matches neither
+  `exceed the limit: N got M` nor `got N`. **A third error shape exists and both halves of the
+  parser are blind to it.** Inert today (the live path sends no selector, so it cannot produce this
+  error) and load-bearing the moment DOC18 ships.
+- **THE BASE LIMIT IS STILL 15, AND THE BASELINE ARM SAID 30.** Row 0, imageless OFF, reports
+  `page_limit: 30`. Reading only that arm — the obvious single measurement — concludes the base cap
+  moved to 30 and produces a route that fails on every non-page-1 call. It took row 4 to show
+  otherwise. **One error's metadata is not a limits table.**
+- **`docai-ocr` RESOLVES ONE SHARED SECRET WITH `||`, SO THE FIRST ENV VAR SET SHADOWS THE OTHERS.**
+  Two of the three are set on LCC Opps and `lcc_cron_post(..., 'edge')` sends the third, so a caller
+  holding a valid key gets a 401. Not a defect for Railway (it holds the one that wins), but it
+  makes the function unreachable from pg_net — the only channel a sandbox has.
+
+#### The probe, and its one honest limitation
+
+`supabase/functions/docai-page-probe` is a **SEPARATE** edge function (LCC Opps, v3). **`docai-ocr`
+is byte-identical, still sends no `processOptions`, and the drain is untouched.** The probe
+**writes nothing** — its only three POSTs are Google's OAuth token endpoint, the PA fetch flow and
+DocAI `:process`. Nothing calls it: no cron row, no caller in `api/`. It follows the `docai-diag`
+precedent (a one-off diagnostic later neutered to a 410 stub) and can be retired the same way.
+
+⚠️ **THE PROBE DOCUMENT IS NOT ONE OF THE 42.** All 42 are SharePoint refs fetched through the PA
+"Get Artifact" flow, and **`SHAREPOINT_FETCH_URL` is a RAILWAY env var, not a Supabase edge
+secret** — the probe's health check reports `sharepoint_fetch_url: false`, so those bytes are not
+reachable from where the DocAI credentials live. It used a real 316-page document out of
+`lcc-om-uploads` instead, **with its page count established by the baseline arm rather than
+assumed**. Nothing in the answer depends on which document it was. To re-run against document 319
+(the 141-page CVS lease), set `SHAREPOINT_FETCH_URL` as a Supabase secret and POST
+`{"document_id":319,"arms":[…]}` — that path is written and today returns an honest
+`SHAREPOINT_FETCH_URL unset` rather than a silent empty result.
+
+**Nothing moved:** `over_docai_page_cap` 42 / 18 / 24 / max 141, identical before and after;
+`CRE_OCR_PAGE_CAP` untouched. Spend: 60 pages ≈ **$0.09**.
+
+---
+
 ### ⛔ DOC16 GATE — REFUTED 2026-09-02, and the refutation is NOT the branch the prompt predicted
 
 **Before approving the confidentiality decision DOC14 needs, two facts were measured and they change
@@ -913,7 +989,14 @@ discard pages 31–50, which §4 of the prompt itself names as where renewal, ea
 default cure and holdover clauses sit.** The prompt's central claim, *"on the consumer's terms this
 is lossless"*, holds only if call 2 exists. It does not.
 
-#### What is left unmeasured, and why it was not guessed at
+#### What was left unmeasured — ✅ ANSWERED BY DOC17 THE SAME DAY, in the selection's favour
+
+> ✅ **SUPERSEDED, and the discipline paid off.** DOC17's live probe answers this: the limit is
+> measured against the **SELECTION**. So a `1–30` + `31–45` + `46–50` triple reaches the whole
+> ~50-page window with no GCS. **Read the DOC17 ANSWER section above; the paragraph below is kept
+> because it is why the question survived to be answered rather than being guessed wrong.**
+> ⚠️ The one detail DOC16 could not have known: **off page 1 the cap is 15, not 30**, so the pair
+> it hoped for is a triple. The refutation was correct; its *consequence* is not.
 
 **One question remains genuinely open: for a selection that does NOT start at page 1, is the base
 15-page online limit measured against the selection or against the document total?** Google states
@@ -935,6 +1018,13 @@ nothing:** the live error `"Document pages exceed the limit: 30 got 40"` with
 where selection and total are the same thing.
 
 #### Verdict
+
+> ⚠️ **THE SECOND SENTENCE BELOW IS SUPERSEDED BY DOC17 (2026-09-02).** DOC16 is still CLOSED as
+> designed — its two-call route genuinely does not exist. But **DOC14 is NOT "the route again"**:
+> a THREE-call sync route does exist, reaches the whole consumer window, and needs no GCS, so the
+> confidentiality decision is deferred once more — this time on a *measured* premise rather than an
+> inferred one. **Do not quote the 54,000-chars / 60%-of-window figure below as the alternative to
+> a GCS build.** See the DOC17 ANSWER section.
 
 **DOC16 is CLOSED. DOC14 is the route again, and the confidentiality decision it needs is live
 again — it was deferred on the strength of a premise that did not hold.** ⚠️ **Do not re-propose
