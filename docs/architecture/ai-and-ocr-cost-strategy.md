@@ -191,7 +191,7 @@ OCR on savings is arguing from a number that does not support it.**
      neither arithmetic nor a label. The model chose a **different LINE** for the same field and
      **both lines were verbatim** (doc 255 base-plus-equipment vs the total; doc 299 two schedule
      periods; a DBA vs the registered entity). `responses/done/EXT1b-floor-measurement.response.md`.
-   - 🟡 **EXT2 (2026-09-03, BUILT — awaiting the floor re-run):** Scott's decision is that **each
+   - ✅ **EXT2 (2026-09-03, BUILT + floor re-run VERIFIED — 7/8 source agreement; residue = EXT2a schedule-blend double count + one spot-check):** Scott's decision is that **each
      lease defines these terms itself**, so the extractor quotes the lease's own definition
      (`defined_term` / `definition_as_stated`, separately-stated components as their own
      `additional_rent` rows, Rent Commencement as its own date, every named Tenant party) and code

@@ -465,7 +465,7 @@ into the surface the operator is meant to trust:
 |---|---|---|
 | ~~**UX-T1a-mirror-dia-lease**~~ ✅ **SHIPPED 2026-09-03** | mirror dia `leases` → `lcc_property_attributes` | 0 → 1,747 properties; dia `term_unknown` 2,127 → 1,252 |
 | ~~**UX-T1a-debt**~~ ✅ **SHIPPED 2026-09-03** | produce `loan_maturity` into `v_lcc_bd_worklist` | 0 → 172 rows / 109 owners, owner-attributed (the domain fan-out was not) |
-| ~~**UX-T1a-queue**~~ ✅ **SHIPPED 2026-09-03** | `v_lcc_seller_prospect_queue` (variant F) | **520 rows / 453 owners / 466 properties** (gov 405 / dia 115). Record: `docs/claude-code/responses/UX-T1a-queue.response.md` |
+| ~~**UX-T1a-queue**~~ ✅ **SHIPPED 2026-09-03** | `v_lcc_seller_prospect_queue` (variant F) | **520 rows / 453 owners / 466 properties** (gov 405 / dia 115). Record: `docs/claude-code/responses/done/UX-T1a-queue.response.md` |
 | **UX-T1a-today** | Significant / Important / Urgent split | depends on the queue |
 | **UX-T1a-cadence** | 6-month spacing + role steady state | needs `current_touch` fixed first |
 | **UX-T1a-touchcount** | `current_touch` max 8,198 | a cadence position nobody can read |
