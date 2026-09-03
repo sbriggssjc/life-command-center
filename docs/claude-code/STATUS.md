@@ -16,6 +16,22 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-02 — EXT1b floor MEASURED (rent + expiration 100%); OWN-T0 verified live; my prescribed remedy refuted on named rows; EXT2 filed
+
+- **EXT1b floor:** `year1_rent` 89→**100%**, `lease_expiration` 80→**100%**, floor **94%** on 10 docs.
+  The residue is a DEFINITION: the model now quotes faithfully and picks a different rent LINE per
+  side (255: base $7,445 vs total $8,464 with equipment; 299: two schedule periods) or a different
+  tenant name (DBA vs entity). → **EXT2**, a decision for Scott before code. Record
+  `responses/done/EXT1b-floor-measurement.response.md`. **EXT1/EXT1b are closed as builds.**
+- **OWN-T0 (#2074) verified live:** deployed `47d0a934`; three views present; detector positive
+  control **756 = 745 + 11**; 2,095 conflicts on the panel view. ⚠️ **CC refuted the remedy I
+  prescribed** (end-date the earlier owner): the top-60-by-rent pairs are sponsor↔SPE — both true —
+  and 121 rows carry no date to order by. Nothing was end-dated; the producer predicate (P117, the
+  wrong grain) was fixed, the reconciled view built, the detector made to see. Same lesson as A3:
+  **a ten-row read turns a plausible remedy into a refuted one.** Follow-ups OWN-T0a–g filed by CC;
+  **OWN-T0e** (sponsor-family confirm lane) is the leverage.
+- Files → `done/`. Prompts folder: handoff + PR5c (other window) only.
+
 ## 2026-09-02 — EXT1b shipped + deployed; three named rows re-score exactly; floor re-run owed
 
 `#2068`, deployed `a013aea6`. 431 rent → **105,558** (`basis_source: as_stated`), 336 → **75,000**,
