@@ -38,7 +38,7 @@
 > ⚠️ **The Part A audit's "loan_maturity has no producer" is TRUE of the VIEW and FALSE of the
 > HANDLER** — `assembleBdWorklist` always fanned out to the domains' `v_loan_maturity_watch`. The
 > gap was owner ATTRIBUTION (`entity_id: null`), which is what blocked an owner-keyed queue.
-> Record: [`UX-T1a-gates.response.md`](../claude-code/responses/UX-T1a-gates.response.md);
+> Record: [`UX-T1a-gates.response.md`](../claude-code/responses/done/UX-T1a-gates.response.md);
 > guard `test/uxt1a-gates-coverage.test.mjs` (18 tests, 19/19 mutations RED).
 > **UX-T1a-queue (`v_lcc_seller_prospect_queue`, variant F) is UNBLOCKED and is the next step.**
 >
