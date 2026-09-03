@@ -94,12 +94,24 @@ describe('PR5c-entities-b-dupes: domain must not scope the canonical identity ke
     { who: 'John Rooney',    email: 'jrooney@torreyfinancial.com', oldDomain: null,  newDomain: 'lcc' },
     { who: 'Frank Johnson',  email: 'fdj6665@gmail.com',           oldDomain: 'dia', newDomain: 'lcc' },
     { who: 'Blaze Katz',     email: 'bkatz@logiccre.com',          oldDomain: null,  newDomain: 'dia' },
+    // PR5c-entities-c completed the replay: the window holds NINE cross-domain
+    // pairs, not five, and a guard that names only five leaves four unproven.
+    { who: 'Joshua Jacobs',   email: 'jj@theblueoxgroup.com',       oldDomain: 'lcc', newDomain: 'dia' },
+    { who: 'Martin Ding',     email: 'martin@macroreal.com',        oldDomain: 'lcc', newDomain: 'dia' },
+    { who: 'Sukhpreet Sidhu', email: 'sidhu.sukhpreet@gmail.com',   oldDomain: 'lcc', newDomain: 'gov' },
+    // Alexander Moore's stored emails are NOT byte-identical — they differ in
+    // CASE. `ilike` matches anyway and normalizeEmail() lowercases both sides;
+    // the older row is given its real mixed-case value so that is actually under
+    // test rather than assumed.
+    { who: 'Alexander Moore', email: 'alexander.moore@srsre.com',
+      oldEmail: 'Alexander.Moore@SRSRE.com',                        oldDomain: 'lcc', newDomain: 'gov' },
   ];
 
   for (const c of CASES) {
     it(`attaches cross-domain instead of minting: ${c.who} (${c.oldDomain ?? 'NULL'} -> ${c.newDomain})`, async () => {
       const { result, minted } = await run({
-        existing: [person({ canonical_name: c.who.toLowerCase(), name: c.who, email: c.email, domain: c.oldDomain })],
+        existing: [person({ canonical_name: c.who.toLowerCase(), name: c.who,
+                            email: c.oldEmail ?? c.email, domain: c.oldDomain })],
         domain: c.newDomain,
         seedFields: { name: c.who, email: c.email }
       });
