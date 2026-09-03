@@ -6531,12 +6531,16 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     const loStr = lo.toISOString().split('T')[0];
     const hiStr = hi.toISOString().split('T')[0];
 
-    // SALE1 (2026-09-03): cap_rate_notes rides along on both domains so the
-    // price-disagreement guard below (matched-row branch) can flag a
-    // clobber attempt without a second lookup.
+    // SALE1 (2026-09-03): cap_rate_notes + data_source ride along on both
+    // domains so the price-disagreement guard below (matched-row branch)
+    // can flag a clobber attempt without a second lookup, and can tell a
+    // same-source self-overwrite (the proven bug — this writer re-matching
+    // its own earlier row) from a cross-source disagreement, which
+    // filterByFieldPriority (below) already arbitrates by source rank and
+    // must not be short-circuited by this guard.
     const lookupSelect = domain === 'government'
-      ? 'sale_id,sale_date,sold_price,firm_term_years_at_sale,firm_term_locked,cap_rate_notes'
-      : 'sale_id,sale_date,sold_price,stated_cap_rate,calculated_cap_rate,cap_rate_confidence,cap_rate_notes';
+      ? 'sale_id,sale_date,sold_price,firm_term_years_at_sale,firm_term_locked,cap_rate_notes,data_source'
+      : 'sale_id,sale_date,sold_price,stated_cap_rate,calculated_cap_rate,cap_rate_confidence,cap_rate_notes,data_source';
 
     let lookup = { ok: false, data: [] };
 
@@ -7089,7 +7093,9 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       }
 
       // SALE1 (2026-09-03): never let a re-match silently overwrite an
-      // already-recorded sold_price with a DIFFERENT one. The lookup above
+      // already-recorded sold_price with a DIFFERENT one — but ONLY when
+      // the existing row was itself written by this same writer
+      // (costar_sidebar, or no data_source recorded yet). The lookup above
       // only proves "same sale" within a ±5%/±14d (or ±$1,000/±60d) window —
       // it does not prove the incoming price is more correct than what's
       // already there, and a later capture is not automatically the truth
@@ -7100,7 +7106,16 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
       // NON-NULL price that disagrees by more than 1% is not — surface it
       // on cap_rate_notes instead of clobbering it. Same tolerance as the
       // Stage-3 "close enough to be the same observation" dedup collapse.
-      if (existing.sold_price != null && patchData.sold_price != null) {
+      //
+      // SALE1b (2026-09-03): measured on gov, 57 of 98 (58%) ledger_disagreement
+      // rows are CROSS-source (e.g. costar_sidebar re-matching a
+      // dia_master_sales/excel_master row) — filterByFieldPriority already
+      // exists to arbitrate those by source-trust rank, and this guard must
+      // not override that arbitration by blocking the write outright. Scoping
+      // to same-source-only is what makes that true for both domains.
+      const existingSource = existing.data_source || null;
+      const sameWriterSource = existingSource == null || existingSource === 'costar_sidebar';
+      if (sameWriterSource && existing.sold_price != null && patchData.sold_price != null) {
         const existingPrice = Number(existing.sold_price);
         const incomingPrice = Number(patchData.sold_price);
         if (Number.isFinite(existingPrice) && existingPrice > 0
