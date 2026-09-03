@@ -859,7 +859,7 @@ plumbing.** The priority queue is **seller prospecting** — $2.5M–$25M, newer
 sell, an owner not yet reached. An SF link is a marker, never evidence we are prospecting someone;
 the truth is who we have *actively* and *ever* touched, across the whole ownership chain. Every tab
 answers one question exactly. **Full catalog + queue: `docs/architecture/app-ux-review-2026-09-02.md`,
-backlog §P16.** ✅ **In the canon since 1.7.0 (2026-09-03): `docs/os/canon/blocks/operator-doctrine.md` + Global invariant 8** — the canon is the source now; this paragraph is the pointer.
+backlog §P16.** ✅ **In the canon since 1.7.0 (2026-09-03): `docs/os/canon/blocks/operator-doctrine.md` + Global invariant 8; QUANTIFIED in 1.8.0 the same day** (newer lease relative to the swimlane's standard term · reason to sell = death / debt / divorce / value creation · $2.5M–$25M per property sale · not-reached = no touch by anyone · 7 touches / 6 months then ≈1/quarter · Today = Significant / Important / Urgent; source `app-ux-review-2026-09-02.md` §0b) — the canon is the source now; this paragraph is the pointer.
 
 ### Producer/Consumer (Consumption Layer)
 
