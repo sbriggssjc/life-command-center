@@ -148,13 +148,17 @@ that fires `gov_classify_agency()`; do not read it as broken.
    Record: `docs/audits/ENTC_JUNK80_AND_P195_UNMERGE_2026-09-03.md`.
    ⚠️ **`SEC1` moved a step**: all three definer *unmerge* functions are now `service_role` only;
    the other 88 anon-executable definer functions are untouched.
-3. **`PR5c-enforce`** — the ten `entities` `email`/`phone` rungs are all `enforce_mode='record_only'`,
-   so PR5c-entities/-b record and protect nothing. Grading needs ledger history, which the
-   2026-09-03 propagate tick started (4 rows) and the SF bridge adds ~12/day. **CC's own
-   recommendation over PR5d-a, and I agree.** ⚠️ These columns also have a SECOND, enforcing
-   ladder (`metadata.field_sources` in `planContactFieldPromotion`) — deciding which owns the
-   decision is the PR10 *one source, two ladders* question, so answer that first or in the
-   same pass.
+3. **`CONTACT1`** — ⚠️ **`PR5c-enforce` and `PR10` are BOTH BLOCKED and the reason is measurable:
+   neither `entities.email`/`phone` ladder has governed anything.** Ladder A
+   (`field_provenance`) holds **4 rows, all `phone`/`domain_owner_contact`, from one manual tick —
+   `email` has never been recorded once**; Ladder B (`metadata.field_sources`) exists on **exactly 1
+   entity fleetwide**. So "flip to `warn` then `strict` once the ledger has history" has no history.
+   The real question is why nothing runs: `contact-writeback.js` is gated `SF_CONTACT_WRITEBACK`
+   (**off**, `off_since` NULL — nobody recorded why), `owner-contact-propagate` **has no cron**
+   (11 contact jobs are active and none is this writer), and the SF bridge CREATE path predicted
+   ~12/day is at 0. **Prompt drafted: `CONTACT1-both-entities-ladders-govern-nothing.md`** — it
+   subsumes PR5c-enforce and PR10 and asks for the numeric unblock condition so the next session
+   does not re-derive this.
 4. **`DE3`/`DE4`** (DE4's input is settled: FY2026's 73.66% Medicare is the fallback bucket),
    **`B6e-clinic-metadata`**, **`D2`–`D5`**, **`PR10`** (one source, two ladders), **`SEC1`**
    (91 of 195 SECURITY DEFINER functions anon-executable — filed by PR8, needs its own pass).

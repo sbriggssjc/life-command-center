@@ -410,7 +410,8 @@ test('the lease prompt asks for the lease\'s OWN label and the separately-stated
 
 test('the consumer routes year-1 rent, the total and the credit through the resolvers', () => {
   assert.match(CODE, /resolveYear1Rent\(\{/, 'year-1 selection has ONE owner');
-  assert.match(CODE, /resolveYear1TotalRent\(year1Rent, additionalRent\)/);
+  assert.match(CODE, /resolveYear1TotalRent\(year1Rent, mergedAdditionalRent, \{/,
+    'EXT2a — the period-quote split components are merged in before the total is computed');
   assert.match(CODE, /resolveCreditEntity\(parsed\)/);
   assert.match(CODE, /name: credit\.tenant_legal_entity/,
     'the graded tenant name must be the legal entity the resolver decided, not the raw model field');
@@ -459,4 +460,111 @@ test('the six graded consumer keys keep their names and types', async () => {
   assert.equal(t.lease_expiration, '2031-03-14');
   assert.equal(t.year1_rent, 89340, 'the graded field is BASE rent — the total rides beside it');
   assert.equal(t.year1_total_rent, 101568);
+});
+
+// --- 8. EXT2a — a schedule PERIOD's own quote may carry the base/additional
+//        split, and the applier must read it before trusting the period figure
+
+const DOC255_PERIOD_QUOTE =
+  'Months 1-60 - Base rent of $7,445 per month plus $1,019 per month for equipment. Total payment each month $8,464.';
+
+test('EXT2a doc 255 — the schedule period states its OWN split; year1 is the base, not the total', async () => {
+  const r = await extract({
+    rent_schedule: [
+      { label: 'Months 1-60', start_date: '2021-03-15', end_date: '2026-03-14',
+        base_rent: { amount: 8464, basis: 'monthly', as_stated: DOC255_PERIOD_QUOTE },
+        status: 'Contracted' },
+    ],
+  });
+  const t = r.tenant;
+  assert.equal(t.year1_rent_source, 'schedule_period_1');
+  assert.equal(t.year1_rent, 89340, 'the period\'s own BASE figure ($7,445/mo), never its stated TOTAL');
+  assert.equal(t.year1_total_rent, 101568, 'base + the period\'s own equipment component');
+  assert.equal(t.year1_total_rent_note, null);
+  assert.ok(Array.isArray(t.additional_rent) && t.additional_rent.length === 1);
+  assert.equal(t.additional_rent[0].kind, 'equipment');
+  assert.equal(t.additional_rent[0].annual_rent, 12228, '$1,019/mo x 12');
+});
+
+test('EXT2a — a component already reported at the top level is never double-counted', async () => {
+  const r = await extract({
+    additional_rent: [
+      { label: 'Equipment Rent', amount: 1019, basis: 'monthly', as_stated: '$1,019 per month for equipment', kind: 'equipment' },
+    ],
+    rent_schedule: [
+      { label: 'Months 1-60',
+        base_rent: { amount: 8464, basis: 'monthly', as_stated: DOC255_PERIOD_QUOTE },
+        status: 'Contracted' },
+    ],
+  });
+  const t = r.tenant;
+  assert.equal(t.additional_rent.length, 1, 'the period-quote component and the top-level one are the SAME row, not two');
+  assert.equal(t.year1_total_rent, 101568);
+});
+
+test('EXT2a degraded shape — the period quote is a bare figure, so no split can be read: honest, not fabricated', async () => {
+  const r = await extract({
+    rent_schedule: [
+      { label: 'Months 1-60',
+        base_rent: { amount: 8464, basis: 'monthly', as_stated: '$8,464.00 per month' },
+        status: 'Contracted' },
+    ],
+  });
+  const t = r.tenant;
+  assert.equal(t.year1_rent_source, 'schedule_period_1');
+  assert.equal(t.year1_rent, 101568, 'the only figure the degraded quote states — 8,464 x 12');
+  assert.equal(t.additional_rent, null);
+  assert.equal(t.year1_total_rent, null);
+  assert.equal(t.year1_total_rent_note, 'no_additional_rent_stated');
+});
+
+test('EXT2a composition guard — a schedule figure with unresolved composition and a DIFFERENT top-level additional-rent component reports null, not a guess', async () => {
+  const r = await extract({
+    base_rent: { amount: 7445, basis: 'monthly', as_stated: '$7,445 per month', defined_term: 'Base Rent' },
+    additional_rent: [
+      { label: 'Equipment Rent', amount: 1019, basis: 'monthly', as_stated: '$1,019 per month for equipment', kind: 'equipment' },
+    ],
+    rent_schedule: [
+      // states a DIFFERENT figure than the top-level base quote, and no split of
+      // its own — composition unknown: does this already include equipment?
+      { label: 'Months 1-60', base_rent: { amount: 8464, basis: 'monthly', as_stated: '$8,464.00 per month' }, status: 'Contracted' },
+    ],
+  });
+  const t = r.tenant;
+  assert.equal(t.year1_rent_source, 'schedule_period_1');
+  assert.equal(t.year1_rent, 101568);
+  assert.equal(t.year1_total_rent, null, 'never double-count OR silently ignore — the composition is unknown');
+  assert.equal(t.year1_total_rent_note, 'schedule_composition_unknown');
+});
+
+test('EXT2a — a single-figure schedule period is unaffected (no false split)', async () => {
+  const r = await extract({
+    rent_schedule: [
+      { label: 'Y1', base_rent: { amount: 7373.17, basis: 'monthly', as_stated: '$7,373.17 per month' }, status: 'Contracted' },
+    ],
+  });
+  const t = r.tenant;
+  assert.equal(t.year1_rent_source, 'schedule_period_1');
+  assert.equal(t.year1_rent, 88478.04);
+  assert.equal(t.additional_rent, null);
+});
+
+test('EXT2a — a schedule figure equal to the top-level base quote is composition-known (base alone)', async () => {
+  const r = await extract({
+    base_rent: { amount: 7445, basis: 'monthly', as_stated: '$7,445 per month', defined_term: 'Base Rent' },
+    rent_schedule: [
+      { label: 'Months 1-60', base_rent: { amount: 7445, basis: 'monthly', as_stated: '$7,445 per month' }, status: 'Contracted' },
+    ],
+  });
+  const t = r.tenant;
+  assert.equal(t.year1_rent, 89340);
+  assert.equal(t.year1_total_rent, null, 'no additional_rent stated at all here');
+  assert.equal(t.year1_total_rent_note, 'no_additional_rent_stated');
+});
+
+test('EXT2a source: the new resolvers exist, wired through year1_period', () => {
+  assert.match(CODE, /export function baseFromPeriodQuote\(/);
+  assert.match(CODE, /function periodComponentsToAdditionalRent\(/);
+  assert.match(CODE, /year1_period:\s*atCommencement/);
+  assert.match(CODE, /year1_period:\s*first/);
 });
