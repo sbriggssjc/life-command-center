@@ -28,6 +28,7 @@ import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { recalculateSaleCapRates } from '../_shared/rent-projection.js';
 import { reconcileLatestEvidence } from '../_shared/rent-reconcile-hook.js';
 import { isOwnFirmAddress } from '../_shared/own-firm-addresses.js';
+import { findContactOfficeAddressBleed } from '../_shared/contact-address-bleed-guard.js';
 // Round 76co: BEFORE-write priority gate. filterByFieldPriority drops
 // fields whose strict-mode rules block this source from updating; the
 // existing after-the-fact provenance recorder (recordCoStarFieldsProvenance)
@@ -1986,6 +1987,16 @@ let _lastClassifierDiag = null;
 // propagateToDomainDbDirect into the propagation result, then reset on the
 // next call.
 let _lastDomainPropertyError = null;
+
+// ADDR1 (2026-09-03): count of contact-office-address-bleed refusals since
+// process start — read-only observability, never reset (mirrors no other
+// counter in this file resetting; a restart is the only "reset").
+// Exported for tests/diagnostics; not persisted.
+let _contactOfficeAddressBleedRefusals = 0;
+export function getContactOfficeAddressBleedRefusalCount() {
+  return _contactOfficeAddressBleedRefusals;
+}
+
 function classifyDomainWithDiag(metadata, entityFields) {
   const result = classifyDomain(metadata, entityFields);
   // Build diagnostic snapshot
@@ -4479,6 +4490,26 @@ export async function upsertDomainProperty(domain, entity, metadata) {
   if (isOwnFirmAddress(address)) {
     _lastDomainPropertyError = `own_firm_address_rejected:${address}`;
     console.warn(`[upsertDomainProperty] Refusing to write firm office address: "${address}" (${domain})`);
+    return null;
+  }
+
+  // ADDR1 (2026-09-03): refuse a property address that literally matches a
+  // CONTACT's own office address captured on this SAME page, when that
+  // contact's city/state differs from the property's — the server-side belt
+  // for the "Sales Company"/broker/buyer-entity office bleed
+  // (api/_shared/contact-address-bleed-guard.js has the full mechanism +
+  // live evidence). Narrow and role-agnostic: a same-address SAME-city/state
+  // contact (an owner genuinely at the property) is left untouched.
+  const bleedContact = findContactOfficeAddressBleed(
+    address, entity.city, entity.state, metadata?.contacts,
+  );
+  if (bleedContact) {
+    _lastDomainPropertyError = `contact_office_address_bleed_rejected:${address}`;
+    _contactOfficeAddressBleedRefusals++;
+    console.warn(
+      `[upsertDomainProperty] Refusing property address "${address}" — matches contact ` +
+      `"${bleedContact.name || '(unnamed)'}"'s own office at ${bleedContact.city || '?'}, ${bleedContact.state || '?'} (${domain})`,
+    );
     return null;
   }
 
