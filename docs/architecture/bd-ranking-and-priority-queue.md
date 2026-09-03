@@ -48,7 +48,7 @@
 > `GET /api/seller-prospect-queue` (chips filter server-side and their counts gate on the same
 > predicate; the response carries a real `pagination` block). Migration
 > `20261016120000_lcc_uxt1a_seller_prospect_queue.sql`; record
-> [`UX-T1a-queue.response.md`](../claude-code/responses/UX-T1a-queue.response.md); guard
+> [`UX-T1a-queue.response.md`](../claude-code/responses/done/UX-T1a-queue.response.md); guard
 > `test/uxt1a-queue.test.mjs` (22 tests, 24/24 mutations RED).
 > **`value_unknown`, `term_unknown`, `no_linked_person` and `reason_to_sell_unmeasured` are
 > STATES, never 0 / false / "none".** `reason_to_sell` carries only the two RECORDED arms (debt,

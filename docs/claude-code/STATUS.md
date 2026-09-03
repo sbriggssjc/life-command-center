@@ -16,6 +16,22 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-03 — UX-T1a-queue SHIPPED (#2092) + EXT2 floor re-run DONE
+
+- **The doctrine's queue exists: 520 rows / 453 owners** (`v_lcc_seller_prospect_queue`, variant F,
+  gates as named columns; funnel + chips + pager on `/api/seller-prospect-queue`). CC's key
+  corrections: the debt arm is **asset-scoped** (a 95-row decision, stated); **§7b's 89.6%
+  disjointness is true of the newer-lease HALF only** — the whole queue overlaps the band queue
+  34.8% because a maturing loan usually sits on a late-term lease, so the queue **sits beside** the
+  band queue, not replacing it. `no_linked_person` = 384 of 520 — the binding constraint is links.
+  No front-end yet (a separate change); UX-T1a-today / -cadence untouched.
+- **EXT2 floor re-run (workstation):** 7/8 decided docs agree on `year1_rent_source`; 299's
+  two-period residue GONE; **the named residual risk fired on 255** — schedule blend won AND
+  `year1_total_rent` double-counted equipment → **EXT2a** (null the total under `schedule_*` unless
+  schedule == base quote) + 👤 Chesterbrook spot-check (OPERATOR-ACTIONS). 431 flips credit basis on
+  a model guaranty-quote omission — code correct, variance is omission. Record:
+  `responses/done/EXT2-floor-measurement.response.md`. **The extractor arc is closed** modulo EXT2a.
+
 ## 2026-09-03 — PR5d: the ladder's largest source is a capture that never happened, not a wiring gap
 
 `costar_cmbs_loan` holds **121 rungs** — more than any other source — and PR5 had it filed
