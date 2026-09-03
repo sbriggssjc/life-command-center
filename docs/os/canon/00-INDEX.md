@@ -1,6 +1,6 @@
 # Canon Index & Invariants
 
-**CANON_VERSION: 1.7.0** — 2026-09-03. (1.7.0: new block `operator-doctrine` + Global invariant 8 — the human sees only the minimum effective dose; the priority queue is SELLER prospecting; buyers are pursued by showing them deals; truth over signal. 1.6.0: new block `deliverable-presentation` — branded output is
+**CANON_VERSION: 1.8.0** — 2026-09-03. (1.8.0: `operator-doctrine` gains the QUANTIFIED queue — newer lease relative to the swimlane's standard term; reason to sell = death / debt / divorce / value creation; $2.5M–$25M per property sale; not-reached = no touch by anyone; 7 touches / 6 months then ≈1/quarter; Today = Significant / Important / Urgent. 1.7.0: new block `operator-doctrine` + Global invariant 8 — the human sees only the minimum effective dose; the priority queue is SELLER prospecting; buyers are pursued by showing them deals; truth over signal. 1.6.0: new block `deliverable-presentation` — branded output is
 styled by an element's ROLE, never its content; full spec in `../BRANDED-DELIVERABLE-PRESENTATION-STANDARD.md`.
 1.5.0: Global invariant 6 states WHO we prospect — the ultimate
 individual in control; agents of the LLC/SPE are prospectable, prior listing/procuring brokers are not,
@@ -64,6 +64,15 @@ Canon: v<X.Y.Z>
 ```
 
 ## Changelog
+- **1.8.0** (2026-09-03) — **`operator-doctrine` quantified**, from Scott's answers to the five ordering
+  questions (`../../architecture/app-ux-review-2026-09-02.md` §0b): *newer lease* is relative to the
+  swimlane's standard initial term (first 2–3 years; dialysis 15-yr new build → 12+ remaining, retrofit
+  7–12-yr → 7–10; gov = FIRM term, gov-only); *reason to sell* = **death, debt, divorce, value creation**;
+  *$2.5M–$25M* is the individual property sale, the objective being transaction velocity in one size and
+  type; *not reached* = no touch ever attempted by anyone / not in the pipeline; cadence **7 in 6 months,
+  then ≈1 per account per quarter** (one-off/former 1–2/yr, developers/large holders ≈ monthly); **Today =
+  the day's tasks only, ranked by client value, split Significant / Important / Urgent** so Urgent cannot
+  crowd out Significant. Enforcement: UX-T1a (`v_lcc_seller_prospect_queue` + the Today re-cut).
 - **1.7.0** (2026-09-03) — **New block `operator-doctrine.md` + Global invariant 8**, in Scott's words from
   the 2026-09-02 app walk-through (41 screenshots, one rule stated five ways): **the human sees only the
   minimum effective dose** — a card is earned only by a step only a human can take (send the email, make the

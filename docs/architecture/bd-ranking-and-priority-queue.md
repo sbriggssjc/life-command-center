@@ -26,6 +26,26 @@
 > for the state of this surface: 126 rows, gated, legible, each stating its basis; **~4 defective
 > rows remain** (C11b, C11c, one C9 split). ⚠️ **C11a is REFUTED** (sponsor↔SPE, not a defect) and
 > **C9's 45 splits touch exactly 1 sheet row** — neither is a call-sheet priority.
+> 🚨 **UX-T1a PART A MEASURED 2026-09-03 — THIS QUEUE IS 89.6% DISJOINT FROM THE DOCTRINE'S POPULATION.**
+> Read [`../audits/UX_T1a_SELLER_QUEUE_MEASUREMENT_2026-09.md`](../audits/UX_T1a_SELLER_QUEUE_MEASUREMENT_2026-09.md)
+> before touching a band. Scott's §0b answers quantify the queue as **seller prospecting: $2.5M–$25M per
+> property, a NEWER lease (first 2–3 years of its initial term), a reason to sell, an owner not yet reached.**
+> Measured funnel: **8,858 current facts → 3,529 in band → 259 newer lease → 31 with a reason to sell → 23
+> not reached.** Of those 259 in-band newer-lease assets, **27 appear here at the (owner, asset) grain and 232
+> do not** — because **P1 `lease_expiry_24mo`, P2 `firm_term_ending_24mo` and P3 `ten_year_window` select
+> assets LATE in their term, the opposite of "newer lease".** The two are near-disjoint populations, so the
+> doctrine's queue is a **NEW view (`v_lcc_seller_prospect_queue`), not a re-rank of these bands** — and that
+> is the number that decides it. ⚠️ Separately, **956 of 1,650 rows (58%) are not seller prospecting**:
+> P0.4 `resolve_ownership_control` 555 · P-CONTACT `select_prospecting_contact` 231 · P0.5
+> `open_bd_opportunity_needed` 148 · P-BUYER 22 — automation, CRM hygiene and buyer work, which §0.2 says
+> never earns a card. Seller-timing bands are 694 (42%). **Hide them from the human surface, do not delete
+> them** — they have automated consumers (A2/cron 244; C1's `sf_link_candidate`).
+> **Part B is deliberately NOT built:** two gates are coverage gaps — dia has **no lease dates in
+> `lcc_property_attributes` at all** (a mirror gap; dia `leases` holds 3,823 live leases / 1,940 properties)
+> and the **debt** D has no LCC table despite **192 loans maturing inside 24 months** at source and an
+> already-labelled `loan_maturity` slot on the home page that **was never implemented**. See backlog
+> **UX-T1a-mirror-dia-lease** and **UX-T1a-debt**.
+>
 > **Open and Scott's: C4a** (the pitch/bucket). **C4b** (`user_owner`) is resolved as inert —
 > ⚠️ **and "inert" now means *awaiting human confirmation*, not *unproduced*: C13b (2026-09-01)
 > built the arm and its 13-candidate lane. See §5 and `owner-role-classification.md` §7.**

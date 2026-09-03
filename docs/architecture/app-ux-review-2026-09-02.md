@@ -34,6 +34,75 @@ rather than re-deriving it:
 → ✅ **In the canon: v1.7.0 (2026-09-03), `docs/os/canon/blocks/operator-doctrine.md` + Global invariant 8**,
 rendered to all five surfaces (UX0 done; the external pastes are on `OPERATOR-ACTIONS.md`).
 
+## 0b. The queue, quantified — Scott's answers to the five ordering questions (2026-09-03)
+
+Recorded here in substance so UX-T1a builds against these and no chat re-asks them. Canon 1.8.0 carries
+the portable form (`docs/os/canon/blocks/operator-doctrine.md`).
+
+1. **"Newer lease" is RELATIVE to the swimlane's standard initial term, not an absolute N.** A lease is
+   newer when it is within the first **2–3 years** of its initial term at that location. Dialysis: Fresenius
+   and DaVita new builds carry a standard **15-year** initial term, so **12+ years remaining = newer**;
+   retrofits/backfills run **7–12 years**, so **7–10 remaining = newer**. Government: **firm term** is the
+   operative measure (GSA leases carry termination rights after conditions — appropriations clauses, or a
+   period of years; "10 years / 5 firm" is the common shape: the first five are free of government
+   termination rights = firm, the next five = soft). Firm term is a government-only concept; do not apply it
+   to dialysis.
+2. **"A reason to sell" = death, debt, divorce, value creation.** *Death* — estate, inheritance, generational
+   transition. *Debt* — a maturity coming due where current rates make realizing beat refinancing. *Divorce* —
+   marital, OR the wind-up/dissolution of a partnership, development agreement, DST, tenant-in-common
+   structure, or fund. *Value creation* — the BTS merchant-developer realization (profit is the arbitrage
+   between build cost/cap and exit cost/cap — the developer model we pursue), or a completed value event:
+   longer-term renewal, option exercised, expansion, lease-up of vacant space, renovation.
+3. **$2.5M–$25M is the INDIVIDUAL property sale price**, and the objective is **transaction velocity**:
+   repeatable deals of similar size and type, so the wake from marketing one asset carries the next
+   ("1 + 1 = 3"). Larger deals pay more per deal but sit in larger markets with more competition and
+   incumbent relationships; the value proposition in the band is that **national reach + the shared
+   database + net-lease specialization beats the local broker**. Deal size and deal COUNT, not owner
+   holdings.
+4. **"Not yet reached" = we never attempted a touchpoint OR they are not in the LCC BD pipeline at all.**
+   Cadence doctrine: **7 touchpoints in the first 6 months**, then an average of **1 touch per unique
+   account per quarter**, with **one-off / former owners nearer 1–2 per year** and **developers / larger
+   holders nearer one per month**. Any team member's touch counts.
+5. **Ordering: the DAY's tasks only, ranked by client value, inside the cadence structure** — and the day is
+   split three ways. **Significant** = BD that pays in 5 years (new-client research, initial outreach,
+   follow-up touchpoints, in hierarchical value order). **Important** = BD that pays within a year (BOVs,
+   ELA negotiation, touchpoints that generate BOVs or working buyers, marketing existing listings).
+   **Urgent** = pipeline management, deal correspondence, anything that pays within ~90 days. **All three
+   must get done; the surface must stop Urgent from crowding out Significant** — "if I spent all my time in
+   urgent I would wake up one day without any new listings."
+
+## 0c. §0b measured — UX-T1a Part A (2026-09-03)
+
+Scott's five answers were turned into gates and each was measured. Evidence:
+[`../audits/UX_T1a_SELLER_QUEUE_MEASUREMENT_2026-09.md`](../audits/UX_T1a_SELLER_QUEUE_MEASUREMENT_2026-09.md).
+**Nothing was built** — two gates are coverage gaps (below), so Part B is queued rather than shipped.
+
+| gate | admits | note |
+|---|---:|---|
+| current holdings (universe) | 8,858 rows / 6,480 owners / 8,068 props | reproduces OWN-T0's count exactly |
+| + $2.5M–$25M per property | 3,529 | value is DERIVED and domain-aware; `value_unknown` 1,608 (18.2%) |
+| + newer lease | **259** | 93% cut — **dia has no lease dates in the LCC mirror at all** |
+| + a reason to sell | **31** | 88% cut — **the debt D has no LCC table** |
+| + not yet reached | **23** | 5,862 of 6,480 owners (90.5%) are unreached |
+
+- **UX2/UX3/UX5/UX7 are now measured, not just asserted:** **956 of 1,650 `v_priority_queue` rows (58%)**
+  are automation, CRM plumbing or buyer work (P0.4 555 · P-CONTACT 231 · P0.5 148 · P-BUYER 22), and the
+  home *Top BD actions* tile is **100%** of it — `v_lcc_bd_worklist` emits only `ownership_chain` (3,534) and
+  `contact_writeback` (1,646), both of which already have automated consumers. Its three BD-meaningful signal
+  types (`loan_maturity`, `suspected_sale`, `owner_source_conflict`) are **labelled in the renderer and never
+  produced** — never implemented, not dead branches (positive-controlled).
+- 🚨 **The queue is about DIFFERENT ASSETS, not just mis-ranked.** Of the 259 in-band newer-lease assets,
+  **27** are in `v_priority_queue` and **232 are not**, because P1/P2/P3 select assets **late** in term while
+  §0b.1's sweet spot is the **first 2–3 years**. So UX7's fix is a new view, not a re-label.
+- **§0b.1 confirmed empirically:** the dia initial term is **p50 15.0 / p90 21.0 years**. ⚠️ But the
+  BTS-vs-retrofit split has **no recorded fact** on dia and the `year_built`-vs-`lease_start` proxy does not
+  discriminate (median initial term is 15.0 in every bucket).
+- **§0b.4's cadence has no implementation by role**, and `PROSPECTING_SEQUENCE` sums to **67 days** against
+  the stated 6 months — though the *realised* median gap is **28 days**, close to the ~26 the doctrine implies.
+  92% of cadences have never been touched; 98.7% are overdue.
+- ⚠️ **Recorded so it is not repeated:** a trust/estate regex written for this measurement matched 265 owners,
+  **111 of them (42%) on the phrase "REAL ESTATE"**. It is sized for reporting and must not decide a write.
+
 ## 1. The catalog
 
 Types: **DEFECT** (wrong today, measurable) · **DESIGN** (right data, wrong surface) · **DOCTRINE**

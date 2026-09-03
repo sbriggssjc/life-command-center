@@ -16,6 +16,21 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-03 — C4a answered → canon 1.8.0 (the queue, quantified) → UX-T1a prompt ready
+
+- Scott answered the five ordering questions (app-ux-review **§0b**, verbatim in substance): newer lease is
+  relative to the swimlane's standard initial term (first 2–3 yrs; dialysis 15-yr new build → 12+
+  remaining; retrofit 7–12 → 7–10; gov = FIRM term, gov-only) · reason to sell = **death, debt, divorce,
+  value creation** · $2.5M–$25M is the individual property sale (velocity; repeatable size; the wake) ·
+  not-reached = no touch ever by anyone / not in pipeline · 7 touches in 6 months then ≈1/quarter by role ·
+  Today = day's tasks, client-value ranked, **Significant / Important / Urgent**.
+- Canon **1.8.0** (operator-doctrine quantified), rendered, parity 0 drift (copilot region 7,472 chars).
+- `prompts/UX-T1a-seller-first-queue-and-today-recut.md`: Part A measures each gate's admitted population on
+  named rows (unknown as its own state) before Part B builds `v_lcc_seller_prospect_queue` + the
+  three-section Today; buyer/plumbing bands leave the human surface; cadence spacing proposed, not changed.
+- Fixed a jammed backlog row (UX-T1a had been appended to the OWN-T0b/c/d/f/g line with no newline — the
+  dedupe grep is line-anchored and could not see it).
+
 ## 2026-09-03 — UX0 DONE: operator doctrine is canon 1.7.0
 
 - `canon/blocks/operator-doctrine.md` + Global invariant 8 (minimum effective dose · seller-first queue
