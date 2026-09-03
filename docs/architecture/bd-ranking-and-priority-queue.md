@@ -81,11 +81,15 @@
 > `open_bd_opportunity_needed` 148 · P-BUYER 22 — automation, CRM hygiene and buyer work, which §0.2 says
 > never earns a card. Seller-timing bands are 694 (42%). **Hide them from the human surface, do not delete
 > them** — they have automated consumers (A2/cron 244; C1's `sf_link_candidate`).
-> **Part B is deliberately NOT built:** two gates are coverage gaps — dia has **no lease dates in
-> `lcc_property_attributes` at all** (a mirror gap; dia `leases` holds 3,823 live leases / 1,940 properties)
-> and the **debt** D has no LCC table despite **192 loans maturing inside 24 months** at source and an
-> already-labelled `loan_maturity` slot on the home page that **was never implemented**. See backlog
-> **UX-T1a-mirror-dia-lease** and **UX-T1a-debt**.
+> ✅ **Part B SHIPPED same day, 2026-09-03 (UX-T1a-gates) — both named coverage gaps are closed.**
+> dia lease dates now reach `lcc_property_attributes` (0 → 1,747 properties; dia `term_unknown`
+> 2,127 → 1,252) and `v_lcc_bd_worklist` gained an owner-attributed `loan_maturity` arm (0 → 172
+> rows / 109 owners, over a new `lcc_loan_maturity` mirror of the 192 source-maturing loans — owner-
+> attributed where the domain fan-out was not). See `UX_T1a_SELLER_QUEUE_MEASUREMENT_2026-09.md`
+> §backlog for the shipped-state table. **Residual, not re-opened:** `UX-T1a-debt-badge` (the
+> summary badge undercounts by 2, inherited into UX-T1a-queue) and the domain
+> `v_loan_maturity_watch` defects (latest-not-soonest, no distress flag) are separate, smaller,
+> unfixed items — they do not reopen either shipped unit.
 >
 > **Open and Scott's: C4a** (the pitch/bucket). **C4b** (`user_owner`) is resolved as inert —
 > ⚠️ **and "inert" now means *awaiting human confirmation*, not *unproduced*: C13b (2026-09-01)
