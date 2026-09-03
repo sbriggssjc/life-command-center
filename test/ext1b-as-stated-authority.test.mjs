@@ -267,10 +267,15 @@ test('a rent-schedule period reconciles against its own quote', async () => {
 test('the consumer reconciles the rent and BOTH dates against their quotes', () => {
   assert.match(CODE, /reconcileBaseRentWithQuote\(normalizeBaseRent\(/,
     'the rent quote must be the authority before annualizeRent runs');
-  assert.match(CODE, /reconcileQuotedDateWithQuote\(resolveQuotedDate\(/,
-    'both dates must be reconciled against their quotes');
-  const dateWires = CODE.match(/reconcileQuotedDateWithQuote\(resolveQuotedDate\(/g) || [];
-  assert.equal(dateWires.length, 2, 'commencement AND expiration — one wired and one not is the silent half-fix');
+  // ⚠️ EXT2 (2026-09-03) added a THIRD quoted date (`rent_commencement`), so a
+  // COUNT of the wiring stopped describing the shipped code. The substance was
+  // never the count — it is that EVERY quoted date goes through the reconcile;
+  // one wired and one not is the silent half-fix. Assert that per NAMED date, so
+  // the next date added is covered rather than turning this red.
+  for (const field of ['lease_commencement', 'lease_expiration', 'rent_commencement']) {
+    assert.ok(CODE.includes(`reconcileQuotedDateWithQuote(resolveQuotedDate(parsed.${field}))`),
+      `${field} must be reconciled against its own quote`);
+  }
 });
 
 test('there is exactly ONE date parser in the module', () => {
