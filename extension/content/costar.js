@@ -1143,7 +1143,27 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   // No trailing \b: CoStar's two-column panels often render the label
   // concatenated with its value ("True BuyerBoyd Watterson Global"), so a
   // word-boundary after the header would miss the concatenated form.
-  const FOREIGN_PARTY_HEADER_RE = /^(recorded\s+buyer|true\s+buyer|recorded\s+seller|true\s+seller|recorded\s+owner|true\s+owner|current\s+owner|listing\s+broker|buyer\s+broker|lender|borrower|originator)/i;
+  //
+  // ADDR1 (2026-09-03): the redesigned For-Sale "Contacts" tab's section
+  // headers — "Sales Company"/"Sales Contacts"/"Listing Contacts" (the
+  // listing/sales BROKERAGE FIRM's own office, not the subject property) and
+  // "Property Manager"/"Property Management" — were absent from this list, so
+  // findAddressInLines (the fallback path used whenever the Contacts tab's
+  // address isn't inside an <h1>/<h2>/<h3>) walked straight past the brokerage
+  // office block and captured ITS street as the property's. Live: a Wisconsin
+  // Dells, WI DaVita clinic (property 35722) got a phantom duplicate
+  // (property 37491) carrying SRS Capital Markets' Newport Beach, CA office
+  // street ("680 Newport Center Dr") under the CORRECT Wisconsin Dells
+  // city/state/zip — the asymmetry comes from `city`/`state`/`zip` being
+  // resolved by the separate, unguarded findLocationInLines() off whichever
+  // "City, ST ZIP" line appears FIRST on the page (usually the property's own
+  // persistent header, above the Contacts panel), while `address` is
+  // recomputed fresh per extract() and has no such early-exit — it fell all
+  // the way to the brokerage block. These labels mirror SECTION_ROLE_MAP
+  // (the structured Contacts-panel extractor already treats them as
+  // party-designation headers, not property fields) so both readers of the
+  // page agree on what counts as "not the subject property".
+  const FOREIGN_PARTY_HEADER_RE = /^(recorded\s+buyer|true\s+buyer|recorded\s+seller|true\s+seller|recorded\s+owner|true\s+owner|current\s+owner|listing\s+broker|buyer\s+broker|lender|borrower|originator|sales?\s+comp(?:any|anies)|sales?\s+contacts?|listing\s+contacts?|property\s+manage(?:r|ment))/i;
   function isInsideForeignAddressSection(lines, idx, lookback) {
     const back = Math.max(0, idx - (lookback || 6));
     for (let k = idx - 1; k >= back; k--) {
