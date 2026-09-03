@@ -7,7 +7,7 @@
 > and which two decisions are Scott's.
 >
 > 🔴 **SUPERSEDED IN PART, 2026-09-03 by UX-T1a-gates** — both coverage gates are now closed
-> (`docs/claude-code/responses/UX-T1a-gates.response.md`). **Two claims below are CORRECTED there
+> (`docs/claude-code/responses/done/UX-T1a-gates.response.md`). **Two claims below are CORRECTED there
 > and must not be quoted from this page:**
 > 1. **§5a / §7d — "`loan_maturity` has no producer" is TRUE of `v_lcc_bd_worklist` and FALSE of
 >    the handler.** `api/operations.js::assembleBdWorklist` has always fanned out to the domains'

@@ -4359,7 +4359,7 @@ Both coverage gates from the UX-T1a Part A audit are closed. dia rows in `lcc_pr
 carrying a `lease_expiration` **0 → 1,747**; `v_lcc_bd_worklist.loan_maturity` **0 → 172** rows /
 109 owners; priority-queue human surface **1,635 → 694**. gov and the two existing worklist arms
 unmoved (the positive controls). Record:
-`docs/claude-code/responses/UX-T1a-gates.response.md`; canonical page
+`docs/claude-code/responses/done/UX-T1a-gates.response.md`; canonical page
 `docs/architecture/bd-ranking-and-priority-queue.md`; guard
 `test/uxt1a-gates-coverage.test.mjs` (18 tests, **19/19 mutations RED**).
 

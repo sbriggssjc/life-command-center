@@ -117,9 +117,9 @@ that fires `gov_classify_agency()`; do not read it as broken.
 | PR5c-entities-b-dupes rate | baseline 3.37% (11/326); **not yet measurable post-fix** — 0 mints since `d5b0ac8` | the §6 query in `PR5c_entities_c_…md` over the next 30 days; expect ~0.6% (races) |
 | PR2 producer | 0 `costar_sidebar` parcel rows since 2026-08-31 — nobody has captured a dia page since; the code is live | 👤 one sidebar capture on a dia property page → a NEW parcel row carrying `building_sf` |
 | PR5c callers | `field_provenance` on the six internal tables = 0, correctly | a row on `public.lcc_cre_property_documents` after the next CRE folder-feed registration, post-deploy |
-| PR5c-entities | `target_table='entities'` = 0 for `domain_owner_contact` — neither writer has a cron; `SF_CONTACT_WRITEBACK` is `off` | 👤 one `owner-contact-propagate` tick → `0 → N` split by source/decision |
+| ~~PR5c-entities~~ | ✅ **TICKED 2026-09-03 (Cowork): `field_provenance` on `entities` 0 → 4** (`domain_owner_contact`, batch `ocp_20260903`; tick also filled 4 org phones + queued 31 reviews) | done |
 | PR8 | `source='agency_classifier'` = 0 — no-population zero | the next gov write that fires `gov_classify_agency()` |
-| PR5c-deploy | `availability-checker` edge fn fixed in source, undeployed | `list_edge_functions.updated_at` after the merge → 👤 Scott |
+| ~~PR5c-deploy~~ | ✅ **DEPLOYED 2026-09-03 (Cowork): v21, health green, live 3-listing run clean** | done |
 | Dialysis CI gate | prep DONE (#7395 + #7397: `paths-ignore` gone, Scope job, seen RED, docs-only proven) | 👤 three operator steps: merge #7397 → delete the two `claude/tmp-*` branches → require `Run Tests`. ⚠️ Ruff stays masked, correctly — **5,738** findings, not "11" (annotation cap). |
 
 ### 🔴 Next, in recommended order

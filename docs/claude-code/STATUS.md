@@ -71,6 +71,18 @@ made it non-zero**, and a second writer would destroy the detector without break
 (a slice anchored on a token a gate moves past; a manifest check that a narrowed match still
 satisfied; `SET priority =` never spelled by a second SET clause on its own line).
 Audit: `docs/audits/PR5d_COSTAR_CMBS_LOAN_ARM_2026-09-03.md`.
+## 2026-09-03 — UX-T1a-gates SHIPPED (#2088): both queue gates honest; UX-T1a-queue prompt drafted
+
+- Deltas: dia lease dates in mirror **0 → 1,747** (the break was the dia SOURCE VIEW — never carried
+  lease columns; three edits, any one alone a silent no-op); `v_lcc_bd_worklist.loan_maturity`
+  **0 → 172 / 109 owners** (the real gap was owner attribution, not a missing producer — the handler
+  always read the domain watch views but with `entity_id: null`); operator queue **1,635 → 694**
+  (941 hidden by `lcc_priority_band_is_human_surface`, fails open, chips gate on the same predicate).
+- CC already updated backlog + CLAUDE.md + the bd-ranking page. This turn: CURRENT-STATE row, files
+  to `done/`, and **`prompts/UX-T1a-queue-seller-prospect-view.md`** — variant F as one view, gates
+  as named columns, recorded reasons only (debt + developer; death/divorce stay unmeasured), reach
+  via person-links with `no_linked_person` first-class, rank = value then lease recency.
+- `PR5d-costar-cmbs-loan-arm.md` in prompts/ belongs to the parallel provenance window — left alone.
 
 ## 2026-09-03 — UX-T1a Part A MEASURED (#2084): the queue is 89.6% disjoint from the doctrine; Part B held; UX-T1a-gates prompt drafted
 
@@ -312,6 +324,30 @@ with UX-T2). **UX13a** deferred to user onboarding. EXT1b sent to CC.
   silently.
 - Full suite **5,102 pass / 0 fail / 6 skipped**. Record:
   `responses/EXT1-lease-rent-basis-quoted-dates.response.md`.
+
+## 2026-09-03 — OPERATOR QUEUE RUN SERVER-SIDE (Cowork): junk80 SEEDED (80), the propagate tick TICKED (`entities` provenance 0 → 4), `availability-checker` DEPLOYED (v21, verified live).
+
+All three via the DB (`lcc_cron_post` / direct SQL / the Supabase MCP), because the sandbox has no
+Railway egress and Scott's PowerShell hit two doc errors:
+
+- **junk80: seeded 80 proposals (41 dismiss / 39 holds), batch `junk80_sql_20260903`** — by direct
+  SQL replicating the handler byte-for-byte, because `?_route=junk80-seed` **500s on the deployed
+  build** (filed **ENTC-seed-500**) and the doc said `?action=` where the dispatcher keys on
+  `?_route=`. Two schema traps en route, both already in this file's catalogue: `review_id` is
+  `GENERATED ALWAYS` identity (`information_schema` shows no default for identity columns — the
+  P195 428C9 shape), and the first insert attempt guessed uuid for a bigint.
+- **`owner-contact-propagate` tick: `field_provenance` on `entities` 0 → 4** (`domain_owner_contact`,
+  batch `ocp_20260903`; 24 owners with candidates, 4 org phones filled, 31 reviews queued, 192
+  `no_contact_detail`). The PR5c-entities verify-next is CLOSED.
+- **`availability-checker` v20 → v21 deployed** (index + parsers + `_shared/cors`, verify_jwt off as
+  before). Health green; a live `domain=dia&limit=3` run returned a clean 200 apply envelope
+  (3 × `skipped_no_url` — the head of the overdue queue has no URLs; a data fact). PR5c-deploy CLOSED.
+  ⚠️ `lcc_cron_post`'s edge arm prefixes `https://…/functions/v1` itself — an endpoint carrying
+  `/functions/v1/` doubles the path and 404s `Requested function was not found`.
+
+**Scott's remaining queue is now only:** work the junk cards · ENTC-confirm (15 merges) · one dia
+sidebar capture (PR2 producer) · gov backfill · N15e / PR9 / BR1-confirm decisions · Dialysis CI
+toggle · SAM/Regrid keys.
 
 ## 2026-09-03 — PR5c-entities-c-review + -oldest (#2083, `dc52e922`): the 15-pair merge plan is built and WAITING ON SCOTT; the oldest-row gate is measured and REFUSED; and the round trip broke `lcc_p195_unmerge`.
 
