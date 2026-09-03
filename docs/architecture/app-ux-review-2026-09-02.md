@@ -71,6 +71,38 @@ the portable form (`docs/os/canon/blocks/operator-doctrine.md`).
    must get done; the surface must stop Urgent from crowding out Significant** — "if I spent all my time in
    urgent I would wake up one day without any new listings."
 
+## 0c. §0b measured — UX-T1a Part A (2026-09-03)
+
+Scott's five answers were turned into gates and each was measured. Evidence:
+[`../audits/UX_T1a_SELLER_QUEUE_MEASUREMENT_2026-09.md`](../audits/UX_T1a_SELLER_QUEUE_MEASUREMENT_2026-09.md).
+**Nothing was built** — two gates are coverage gaps (below), so Part B is queued rather than shipped.
+
+| gate | admits | note |
+|---|---:|---|
+| current holdings (universe) | 8,858 rows / 6,480 owners / 8,068 props | reproduces OWN-T0's count exactly |
+| + $2.5M–$25M per property | 3,529 | value is DERIVED and domain-aware; `value_unknown` 1,608 (18.2%) |
+| + newer lease | **259** | 93% cut — **dia has no lease dates in the LCC mirror at all** |
+| + a reason to sell | **31** | 88% cut — **the debt D has no LCC table** |
+| + not yet reached | **23** | 5,862 of 6,480 owners (90.5%) are unreached |
+
+- **UX2/UX3/UX5/UX7 are now measured, not just asserted:** **956 of 1,650 `v_priority_queue` rows (58%)**
+  are automation, CRM plumbing or buyer work (P0.4 555 · P-CONTACT 231 · P0.5 148 · P-BUYER 22), and the
+  home *Top BD actions* tile is **100%** of it — `v_lcc_bd_worklist` emits only `ownership_chain` (3,534) and
+  `contact_writeback` (1,646), both of which already have automated consumers. Its three BD-meaningful signal
+  types (`loan_maturity`, `suspected_sale`, `owner_source_conflict`) are **labelled in the renderer and never
+  produced** — never implemented, not dead branches (positive-controlled).
+- 🚨 **The queue is about DIFFERENT ASSETS, not just mis-ranked.** Of the 259 in-band newer-lease assets,
+  **27** are in `v_priority_queue` and **232 are not**, because P1/P2/P3 select assets **late** in term while
+  §0b.1's sweet spot is the **first 2–3 years**. So UX7's fix is a new view, not a re-label.
+- **§0b.1 confirmed empirically:** the dia initial term is **p50 15.0 / p90 21.0 years**. ⚠️ But the
+  BTS-vs-retrofit split has **no recorded fact** on dia and the `year_built`-vs-`lease_start` proxy does not
+  discriminate (median initial term is 15.0 in every bucket).
+- **§0b.4's cadence has no implementation by role**, and `PROSPECTING_SEQUENCE` sums to **67 days** against
+  the stated 6 months — though the *realised* median gap is **28 days**, close to the ~26 the doctrine implies.
+  92% of cadences have never been touched; 98.7% are overdue.
+- ⚠️ **Recorded so it is not repeated:** a trust/estate regex written for this measurement matched 265 owners,
+  **111 of them (42%) on the phrase "REAL ESTATE"**. It is sized for reporting and must not decide a write.
+
 ## 1. The catalog
 
 Types: **DEFECT** (wrong today, measurable) · **DESIGN** (right data, wrong surface) · **DOCTRINE**
