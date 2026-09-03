@@ -16,6 +16,62 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-03 — PR5d: the ladder's largest source is a capture that never happened, not a wiring gap
+
+`costar_cmbs_loan` holds **121 rungs** — more than any other source — and PR5 had it filed
+`build_pending` on one measurement. The three-way question (no scanner / dropped keys / unreachable
+page) resolves to **the third**, and there is a second blocker underneath it that the third does not
+describe.
+
+**Verdicts written** (migration `20261010120000`, applied live; `v_field_source_priority_triage`
+gains `pr5d_verdict`): `page_never_captured` **94** · `page_never_captured_flag_off` **27**.
+PR5's `build_pending` is preserved underneath on all 121 — PR5d refines it, and `pr5_verdict`,
+`pr5c_verdict`, `is_orphan_column` and `is_retired` are unmoved (2,141 rungs / 426 / 33 / 49 / 51).
+
+- **The scanner, the writer and the host match are all live and correct.**
+  `extension/content/costar.js parseCmbsLoanDetail` (76ek.b) + `parseCmbsFinancials` (76ek.e) →
+  `sidebar-pipeline.js upsertLoanRecords` / `upsertPropertyFinancials`, and `manifest.json` matches
+  `https://*.costar.com/*`. Nothing has ever visited `/detail/lookup/{N}/loan`.
+- **Ruling out the rename class needed a column only that arm writes.** `loans.costar_loan_id` and
+  `loans.source_url` are **0 of 2,219 rows across both domains**; `loan_snapshots`,
+  `loan_top_tenants` and `loan_commentary` are **0 rows on both**; `property_financials` carries
+  **0** `costar_cmbs_loan` rows against gov's 98,510 and dia's 676. What *does* write `loans` is a
+  different scanner on the property page (`costar_sidebar`, gov 1,393 / dia 358) — and it sets
+  `cmbs_deal_name` from a lender-name regex, which is why gov reads `is_cmbs` 285 and
+  `special_servicer` 126 and **looks like CMBS capture while being nothing of the kind.**
+- ⚠️ **This supersedes R54 Unit 3's mechanism** (*"the captures so far are the basic loan layout, not
+  the full CMBS Performance walk"*). R54's disposition was right and its explanation was wrong, and
+  the wrong explanation is what made this read as a coverage question for 75 days.
+- ⚠️ **The dia blocker is a second one, not the same one.** `properties.track_cmbs_snapshots` is
+  **false on 11,803 of 11,803** and gates snapshots / top-tenants / financials, so capturing the page
+  tomorrow would still write nothing there. The dia `loans` row and `loan_commentary` are ungated —
+  that boundary is exactly the 94/27 split, and both sides are guarded.
+- **NOT retired, and the reason is a starved consumer rather than the ladder.** R54's
+  `is_distressed` arm on `v_loan_maturity_watch` reads **0 of 178** gov rows, with watchlist /
+  num_delinquent / special_servicing / modification / dscr at **0 across 285 CMBS loans / 210
+  properties** — captured only by this arm. Backlog **PR5d-a** (gov capture: an operator question
+  about Scott's CoStar workflow) and **PR5d-b** (the dia opt-in).
+
+**UX-T1a reconciled in three places.** Part A's *"the debt D has no LCC table at all / 192 loans
+maturing ≤24 mo … none of it reaches LCC"* was true on 09-02 and is superseded by UX-T1a-gates the
+next day: `lcc_loan_maturity` holds **568 rows carrying exactly those 192** (gov 170 + dia 22 at
+source — reproduces to the row). ⚠️ **And `costar_cmbs_loan` supplied 0 of the 192** — they come
+from `costar_sidebar` (113), `sec_edgar` (58), `ops_asset_metadata_loan` (20) and one null. So the
+121 rungs are the supply side of a demand already met from elsewhere; **the residual debt gap is
+DISTRESS, not maturity.** Corrected in `app-ux-review-2026-09-02.md`, the audit's recommendation
+list, and `CLAUDE.md`.
+
+**Nothing built:** no scanner, no rung added or deleted, no priority or `enforce_mode` change, no
+fuzzy loan↔property matching, and `track_cmbs_snapshots` not flipped.
+
+Guard `test/pr5d-costar-cmbs-loan-verdict.test.mjs` (12 tests, **21/21 mutations RED**) — it pins
+the single-writer property, because **a zero is evidence only while exactly one writer could have
+made it non-zero**, and a second writer would destroy the detector without breaking anything.
+⚠️ Three of my own assertions survived their first mutation and the mutation pass found all three
+(a slice anchored on a token a gate moves past; a manifest check that a narrowed match still
+satisfied; `SET priority =` never spelled by a second SET clause on its own line).
+Audit: `docs/audits/PR5d_COSTAR_CMBS_LOAN_ARM_2026-09-03.md`.
+
 ## 2026-09-03 — UX-T1a Part A MEASURED (#2084): the queue is 89.6% disjoint from the doctrine; Part B held; UX-T1a-gates prompt drafted
 
 **ENTC verify (Cowork, post-merge):** every number reproduces live — junk80 view **80**

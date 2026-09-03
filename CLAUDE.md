@@ -890,8 +890,11 @@ not a re-rank** — and the number that decides that is the overlap, which nobod
 - **⚠️ A LABEL IN THE RENDERER IS NOT A LANE.** `renderTodayBdActions` labels `loan_maturity`,
   `suspected_sale` and `owner_source_conflict`; `v_lcc_bd_worklist` has **never** emitted any of them
   (positive-controlled). The Today BD tile serves **100% automation/plumbing** — both of its lanes already
-  have automated consumers. The strongest reason-to-sell (192 loans maturing ≤24 mo at source) has no LCC
-  table at all.
+  have automated consumers. The strongest reason-to-sell (192 loans maturing ≤24 mo at source) ~~has no LCC
+  table at all~~ — ⚠️ **superseded 2026-09-03: UX-T1a-gates shipped `lcc_loan_maturity` (568 rows,
+  exactly those 192) and `v_lcc_bd_worklist` emits 172 owner-attributed rows. PR5d re-verified the
+  192 and found `costar_cmbs_loan` supplied 0 of them; the residual debt gap is DISTRESS, not
+  maturity.**
 - **Quote both the CONFIGURED and the REALISED cadence.** `PROSPECTING_SEQUENCE` sums to 67 days for 7
   touches (2.7× the doctrine's 6 months) while the realised median gap is 28 days; tier is inert (41 A /
   2 C), role is not an input, and `current_touch` reads max **8,198** on a 7-step sequence — cadence
@@ -1116,6 +1119,26 @@ Every cross-table field write to curated tables is observed:
   Unioning columns per FILE then reported `bridge-handlers-salesforce.js` as an `email`/`phone`
   PATCHer when only its CREATE path carries them and both PATCHes are `metadata`-only. **Count with
   a parser and read the payload per SITE** (the N15c lesson, at column grain).
+- **⚠️ A RUNG WITH NO WRITES HAS AN EIGHTH CAUSE: THE CAPTURE EXISTS AND THE PAGE IS NEVER
+  VISITED (PR5d, 2026-09-03).** `costar_cmbs_loan` is **121 rungs — the ladder's largest source** —
+  and its scanner (`extension/content/costar.js parseCmbsLoanDetail`), its writer
+  (`sidebar-pipeline.js upsertLoanRecords`) and the extension's `https://*.costar.com/*` match are
+  **all live and correct**; the CoStar loan sub-page has simply never been captured. **Ruling out
+  the rename class needed a column only that arm writes** — `loans.costar_loan_id` and
+  `loans.source_url` are **0 of 2,219 rows across both domains**, and `loan_snapshots` /
+  `loan_top_tenants` / `loan_commentary` are 0 rows on both. **A zero is evidence only while exactly
+  one writer could have made it non-zero**, so that single-writer property is now guarded: a second
+  writer would destroy the detector without breaking anything. ⚠️ **And a blocker can be LAYERED** —
+  27 of the 121 additionally sit behind dia's `properties.track_cmbs_snapshots`, **false on 11,803 of
+  11,803**, so capturing the page would still write nothing there. Two blockers, two verdicts
+  (`page_never_captured` 94 / `page_never_captured_flag_off` 27 on
+  `v_field_source_priority_triage.pr5d_verdict`). ⚠️ **It also SUPERSEDES R54 Unit 3's mechanism**
+  (*"the captures so far are the basic loan layout"*): the rows are not partial CMBS captures, they
+  come from a different scanner on the property page, and the wrong explanation is what made this
+  read as a coverage question for 75 days. **Not retired** — R54's `is_distressed` arm is built,
+  ranked and starved (**0 of 178 gov watch rows**, with watchlist/delinquency/DSCR at 0 across 285
+  CMBS loans), and only this arm can feed it. Backlog **PR5d-a** / **PR5d-b**; audit
+  `docs/audits/PR5d_COSTAR_CMBS_LOAN_ARM_2026-09-03.md`.
 - **`target_database` is a CLOSED vocabulary** (`lcc_opps`/`dia_db`/`gov_db`, CHECK-enforced) and
   is NOT part of the rung lookup, so a wrong value passes every ladder check and fails 23514 at the
   INSERT. Single owner: `provenanceTargetDatabase()` in `api/_shared/field-priority-guard.js`.
