@@ -16,6 +16,19 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-03 — the Chesterbrook lease was READ; EXT2a ground-truthed and prompt drafted
+
+- Scott uploaded the actual lease; OCR'd and read in-session. Exhibit B defines the split in its own
+  words: base $7,445/mo + $1,019/mo equipment, "Total payment each month $8,464"; escalations apply
+  to the base; months 121-180 exclude the equipment payment. **So base = 89,340/yr, equipment is
+  `additional_rent`, total = 101,568 — the current schedule-wins output (101,568 base / 113,796
+  total) is wrong on both fields for this lease.** 15-yr initial term + one 5-yr renewal, consistent
+  with the swimlane-standard doctrine.
+- `prompts/EXT2a-schedule-line-carries-its-own-definition.md`: `baseFromPeriodQuote` (a schedule
+  line carrying its own base/additional split is parsed, components deduped into `additional_rent`)
+  + a composition guard (total = null + `schedule_composition_unknown` when a schedule figure's
+  makeup is unknown). Ground truth encoded as the fixture. EXT2-spotcheck closed.
+
 ## 2026-09-03 — UX-T1a-queue SHIPPED (#2092) + EXT2 floor re-run DONE
 
 - **The doctrine's queue exists: 520 rows / 453 owners** (`v_lcc_seller_prospect_queue`, variant F,
