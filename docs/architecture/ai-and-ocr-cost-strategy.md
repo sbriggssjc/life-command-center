@@ -200,6 +200,14 @@ OCR on savings is arguing from a number that does not support it.**
      `year1_total_rent` a SECOND field, never blended in; and **`credit_entity` = the guarantor only
      where the lease carries an express guaranty, else the tenant** — a parent merely NAMED can never
      become the credit. Record: `responses/done/EXT2-lease-defines-rent-and-tenant.response.md` (#2078, `f83c2d99`).
+   - ✅ **EXT2a (2026-09-03, BUILT) — the named residual risk fired on doc 255 and was closed.**
+     Ground-truthed against the actual lease (Exhibit B): base = $7,445 (the schedule's own
+     escalation clauses re-state it, "not including the equipment payment"); $8,464 is labelled
+     "Total payment", never the base. `baseFromPeriodQuote` now reads a base/additional split
+     directly out of a SCHEDULE PERIOD's own quote (never the top-level `base_rent` quote alone);
+     `resolveYear1TotalRent` gained a `schedule_composition_unknown` guard for the case where the
+     schedule states an unsplit figure that disagrees with the top-level base quote — null, never a
+     guess in either direction. Record: `responses/EXT2a-schedule-line-definition.response.md`.
    Stand an OCR endpoint on the GaryBuilt box
    (Surya / PaddleOCR / ocrmypdf-Tesseract, all already named in the design) behind the **existing**
    tunnel + CF Access, and inject `deps.freeOcr` at the two server call sites. **The seam already

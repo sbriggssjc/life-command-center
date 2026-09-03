@@ -171,6 +171,11 @@ function leasePrompt(leaseText) {
     'commencement); quote any free-rent / abated period verbatim into "abatement"',
     'and do NOT net it out of the rent.',
     '',
+    'A SCHEDULE PERIOD\'S "base_rent.as_stated" MUST BE THE PERIOD\'S FULL LINE, not',
+    'just a bare figure. If a period reads: Base rent of $7,445 per month plus',
+    '$1,019 per month for equipment, total payment each month $8,464 — copy the',
+    'WHOLE line into "as_stated", not just the $8,464 total.',
+    '',
     'THE TENANT is the legal entity the lease defines as Tenant/Lessee — the party',
     'that signs and is the counterparty to Landlord. Put it in',
     '"tenant_legal_entity" exactly as written, entity suffix included. A trade name',
@@ -829,11 +834,11 @@ export function resolveYear1Rent({ baseRent, rentSchedule, rentCommencement, lea
   const commencedOn = rentCommencement && rentCommencement.date ? rentCommencement.date : null;
   const atCommencement = commencedOn ? periods.find((p) => periodContains(p, commencedOn)) : null;
   if (atCommencement && atCommencement.annual_rent != null) {
-    return { year1_rent: atCommencement.annual_rent, year1_rent_source: 'schedule_at_rent_commencement' };
+    return { year1_rent: atCommencement.annual_rent, year1_rent_source: 'schedule_at_rent_commencement', year1_period: atCommencement };
   }
   const first = periods[0];
   if (first && first.annual_rent != null) {
-    return { year1_rent: first.annual_rent, year1_rent_source: 'schedule_period_1' };
+    return { year1_rent: first.annual_rent, year1_rent_source: 'schedule_period_1', year1_period: first };
   }
   return fallback();
 }
@@ -847,9 +852,20 @@ export function resolveYear1Rent({ baseRent, rentSchedule, rentCommencement, lea
  * convert one) are different facts, and a bare null wearing both would be exactly
  * the P180 unknown-is-not-a-value failure this repo keeps paying for.
  *
+ * EXT2a — a fourth case: `year1_rent` came from the SCHEDULE and the schedule's
+ * own period quote did not state its composition (no base/additional split was
+ * found in it), while the schedule figure differs from the top-level base-rent
+ * quote. That is `schedule_composition_unknown` — we do not know whether the
+ * period figure already includes the top-level additional-rent components, so
+ * adding them would double-count (doc 255's original defect) and NOT adding them
+ * might under-state. `opts.year1RentSource` / `opts.baseRentYear1` /
+ * `opts.periodSplitFound` are all optional so every prior caller (and every prior
+ * test) is unaffected.
+ *
  * @returns {{year1_total_rent:number|null, year1_total_rent_note:string|null}}
  */
-export function resolveYear1TotalRent(year1Rent, additionalRent) {
+export function resolveYear1TotalRent(year1Rent, additionalRent, opts = {}) {
+  const { year1RentSource = null, baseRentYear1 = null, periodSplitFound = false } = opts || {};
   const components = (Array.isArray(additionalRent) ? additionalRent : [])
     .filter((c) => c && TOTAL_RENT_KINDS.has(c.kind));
   if (!components.length) {
@@ -858,6 +874,11 @@ export function resolveYear1TotalRent(year1Rent, additionalRent) {
   if (year1Rent == null) {
     return { year1_total_rent: null, year1_total_rent_note: 'year1_rent_unresolved' };
   }
+  const fromSchedule = typeof year1RentSource === 'string' && year1RentSource.startsWith('schedule');
+  const scheduleMatchesBaseQuote = baseRentYear1 != null && Math.abs(baseRentYear1 - year1Rent) < 0.01;
+  if (fromSchedule && !periodSplitFound && !scheduleMatchesBaseQuote) {
+    return { year1_total_rent: null, year1_total_rent_note: 'schedule_composition_unknown' };
+  }
   const unresolved = components.filter((c) => c.annual_rent == null);
   if (unresolved.length) {
     const labels = unresolved.map((c) => c.label || c.kind || 'component').join('|');
@@ -865,6 +886,73 @@ export function resolveYear1TotalRent(year1Rent, additionalRent) {
   }
   const total = components.reduce((sum, c) => sum + c.annual_rent, year1Rent);
   return { year1_total_rent: toCents(total), year1_total_rent_note: null };
+}
+
+// ---------------------------------------------------------------------------
+// EXT2a — a schedule PERIOD's own quote may state its own base/additional split
+// ("Base rent of $7,445 per month plus $1,019 per month for equipment. Total
+// payment each month $8,464."). When it does, the period's rent is the BASE
+// figure — never the schedule's own stated TOTAL — and each `plus` component
+// rides as an additional_rent row for that period, exactly like the top-level
+// `additional_rent` array. A period quote stating only one figure is untouched.
+// ---------------------------------------------------------------------------
+
+const PERIOD_BASE_LABEL_RE = /\b(?:base|minimum|fixed)\s+rent\s+of\s*\$\s*(\d[\d,]*(?:\.\d+)?)/i;
+const PERIOD_PLUS_COMPONENT_RE = /\bplus\s*\$\s*(\d[\d,]*(?:\.\d+)?)(?:\s*per\s+month)?\s*for\s+([a-z][a-z0-9 /&\x27-]*?)(?=[.,;]|\s+plus\b|$)/gi;
+
+/**
+ * Read a base/additional split directly out of one schedule period's verbatim
+ * quote. Returns null when the quote states only one figure (the ordinary case).
+ *
+ * @param {string|null} asStated  the period's own `base_rent.as_stated`
+ * @returns {{base_amount:number, components:{label:string, amount:number}[]}|null}
+ */
+export function baseFromPeriodQuote(asStated) {
+  const s = asStated == null ? '' : String(asStated);
+  const m = PERIOD_BASE_LABEL_RE.exec(s);
+  if (!m) return null;
+  const baseAmount = Number(m[1].replace(/,/g, ''));
+  if (!Number.isFinite(baseAmount)) return null;
+  const components = [];
+  const re = new RegExp(PERIOD_PLUS_COMPONENT_RE.source, PERIOD_PLUS_COMPONENT_RE.flags);
+  let cm;
+  while ((cm = re.exec(s)) !== null) {
+    const amount = Number(cm[1].replace(/,/g, ''));
+    const label = cm[2] == null ? '' : cm[2].trim();
+    if (!Number.isFinite(amount) || !label) continue;
+    components.push({ label, amount });
+  }
+  if (!components.length) return null;
+  return { base_amount: baseAmount, components };
+}
+
+/**
+ * Turn a period-quote split's `components` into additional_rent rows, using the
+ * period's OWN resolved basis (the components are quoted in the same cadence as
+ * the base figure they sit beside). Mirrors `normalizeAdditionalRent`'s output
+ * shape so the two can be concatenated without a caller telling them apart.
+ */
+function periodComponentsToAdditionalRent(components, basis, leasedSf) {
+  const out = [];
+  for (const c of components || []) {
+    const kindRaw = String(c.label || '').trim().toLowerCase();
+    const kind = ADDITIONAL_RENT_KINDS.has(kindRaw) ? kindRaw : 'other';
+    const { year1_rent: annual, rent_basis_unresolved } = annualizeRent(
+      { amount: c.amount, basis, as_stated: null }, leasedSf,
+    );
+    out.push({
+      label: c.label,
+      kind,
+      amount: c.amount,
+      basis,
+      as_stated: null,
+      annual_rent: annual,
+      rent_basis_unresolved,
+      basis_source: 'period_quote_split',
+      amount_source: 'period_quote_split',
+    });
+  }
+  return out;
 }
 
 /**
@@ -1019,11 +1107,28 @@ export async function extractTenantFromLease(leaseRow, deps = {}) {
     ? parsed.rent_schedule.map((p) => cleanRentPeriod(p, sf)).filter(Boolean)
     : null;
   const additionalRent = normalizeAdditionalRent(parsed.additional_rent, sf);
-  const { year1_rent: year1Rent, year1_rent_source: year1RentSource } = resolveYear1Rent({
+  const { year1_rent: year1Rent, year1_rent_source: year1RentSource, year1_period: year1Period } = resolveYear1Rent({
     baseRent, rentSchedule, rentCommencement, leasedSf: sf, modelYear1: parsed.year1_rent,
   });
+  // EXT2a — if the YEAR-1 period's own quote stated a base/additional split
+  // (`cleanRentPeriod`), fold those components in alongside the top-level
+  // `additional_rent` list, deduped by (label, amount) so a component the model
+  // ALSO reported at the top level is never double-counted.
+  let mergedAdditionalRent = additionalRent;
+  let periodSplitFound = false;
+  if (year1Period && Array.isArray(year1Period.additional_rent) && year1Period.additional_rent.length) {
+    periodSplitFound = true;
+    // Dedup on (kind, amount) rather than (label, amount): the model's top-level
+    // "Equipment Rent" and the period quote's bare "equipment" are the SAME
+    // component under two labels, and both normalize to the same `kind`.
+    const dedupeKey = (c) => `${c.kind || (c.label || '').toLowerCase()}|${c.amount}`;
+    const seen = new Set(additionalRent.map(dedupeKey));
+    const extra = year1Period.additional_rent.filter((c) => !seen.has(dedupeKey(c)));
+    mergedAdditionalRent = additionalRent.concat(extra);
+  }
+  const baseRentYear1 = baseRent ? annualizeRent(baseRent, sf).year1_rent : null;
   const { year1_total_rent: year1TotalRent, year1_total_rent_note: year1TotalRentNote } =
-    resolveYear1TotalRent(year1Rent, additionalRent);
+    resolveYear1TotalRent(year1Rent, mergedAdditionalRent, { year1RentSource, baseRentYear1, periodSplitFound });
   const credit = resolveCreditEntity(parsed);
 
   const tenant = {
@@ -1049,7 +1154,7 @@ export async function extractTenantFromLease(leaseRow, deps = {}) {
     // EXT2 — the separately-stated components, and the TOTAL as its own field.
     // Never folded into `year1_rent`: doc 255 states $7,445 base plus $1,019
     // equipment, and blending them is what made two verbatim quotes disagree.
-    additional_rent: additionalRent.length ? additionalRent : null,
+    additional_rent: mergedAdditionalRent.length ? mergedAdditionalRent : null,
     year1_total_rent: year1TotalRent,
     year1_total_rent_note: year1TotalRentNote,
     abatement: normalizeAbatement(parsed.abatement),
@@ -1085,7 +1190,17 @@ function numOrNull(v) {
  */
 function cleanRentPeriod(p, leasedSf) {
   if (!p || typeof p !== 'object') return null;
-  const baseRent = reconcileBaseRentWithQuote(normalizeBaseRent(p.base_rent));
+  let baseRent = reconcileBaseRentWithQuote(normalizeBaseRent(p.base_rent));
+  let periodAdditionalRent = null;
+  if (baseRent && baseRent.as_stated) {
+    const split = baseFromPeriodQuote(baseRent.as_stated);
+    if (split) {
+      // EXT2a — the period's own quote states its composition; the period's
+      // rent is the BASE figure, never whatever total the quote also states.
+      baseRent = { ...baseRent, amount: split.base_amount, amount_source: 'period_quote_split' };
+      periodAdditionalRent = periodComponentsToAdditionalRent(split.components, baseRent.basis, leasedSf);
+    }
+  }
   const { year1_rent: annualized, rent_basis_unresolved } = annualizeRent(baseRent, leasedSf);
   const annual = baseRent ? annualized : numOrNull(p.annual_rent);
   const start = resolveQuotedDate(p.start_date);
@@ -1099,6 +1214,7 @@ function cleanRentPeriod(p, leasedSf) {
     status: p.status === 'Option' ? 'Option' : 'Contracted',
     base_rent: baseRent,
     rent_basis_unresolved: baseRent ? rent_basis_unresolved : false,
+    additional_rent: periodAdditionalRent,
   };
 }
 
