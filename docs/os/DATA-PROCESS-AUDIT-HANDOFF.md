@@ -129,14 +129,17 @@ that fires `gov_classify_agency()`; do not read it as broken.
    person names, 7 are the Colliers family. **`cbre; smyth & colliers; patel` is minted as one
    company.** Start with **`BR1-confirm`** — 12 brokerage-evidenced orgs ready for a one-decision
    human confirm.
-2. **`PR5c-entities-c-review`** — 15 genuine same-person pairs on
-   `v_lcc_entity_email_tier_blind_pairs` (Andy/Andrew Nathan, Nick/Nicholas Borrelli, …) need a
-   human merge one row at a time via `lcc_merge_entity` (reversible). Cheap and real. Then
-   **`PR5c-entities-c-oldest`** — the email tier attaches an inbound person to the OLDEST row on a
-   mailbox even when that row is a P131 label (`Income & Expenses` predates the real broker on
-   `alex.sharrin@am.jll.com`) — a behaviour change to R39 Unit 1 nobody has graded; measure the
-   population before proposing a gate (the person-shape gate was measured NOT to fix the hard case).
-   **Prompt drafted (both halves): `docs/claude-code/prompts/PR5c-entities-c-review-and-oldest.md`.**
+2. **`PR5c-entities-c-junk80`** — retire the 80 live junk-named person entities holding real
+   emails (vendor party-slot labels; 0 in `junk_entity_review`, 0 flagged — invisible to both
+   existing junk lanes). The oldest-row GATE is refused on measurement (reach 22/193, accuracy
+   12/26); the sweep is the real fix, and its open question is which retirement path (the
+   TM-misparse machinery is for a different class). ⚠️ 30 carry an SF identity; 37 are alone on
+   their mailbox.
+   **`PR5c-entities-c-p195-unmerge`** — `lcc_p195_unmerge` strands byte-identical edges while
+   reporting `restored` (P196's trigger skips them before `ON CONFLICT`); either route it through
+   `lcc_unmerge_entity` or fix the re-insert to UPDATE surviving rows. Small, sharp, proven by a
+   fingerprint round trip.
+   **Prompt drafted (both): `docs/claude-code/prompts/ENTC-junk80-and-p195-unmerge.md`.**
 3. **`PR5d`** — `costar_cmbs_loan`: 121 rungs, the ladder's largest source, for a capture arm with
    0 rows on either domain (`loans.data_source`). Is the CoStar CMBS tab ever captured, or is the
    arm unreachable? One grep of the extension + one count.
@@ -146,6 +149,7 @@ that fires `gov_classify_agency()`; do not read it as broken.
 
 ### 👤 Waiting on Scott
 
+`ENTC-confirm` (the 15-pair merge plan — `v_lcc_entities_c_review_merge_plan`, reverse only via `lcc_unmerge_entity`) ·
 `N15e` (make `(workspace_id, canonical_name)` UNIQUE? 6,608 violating groups; blocks the last 2 duplicate-mint races) ·
 `PR9` (should a human-confirmed clinic↔property link outrank `auto_link_*`, or stay recorded-only @20?) ·
 `PR2-gov` (run the gov parcel backfill; the `98248e18` redeploy is confirmed) · `B6e-ci-required-check` (Dialysis branch protection — until flipped the unmasked suite gates nothing) ·
