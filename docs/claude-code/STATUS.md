@@ -23,11 +23,13 @@
   `(kind,amount)`; `resolveYear1TotalRent` gained a `schedule_composition_unknown` guard (null total
   rather than guessing when a schedule figure's makeup can't be determined). Doc 255 now resolves
   **89,340 base / 101,568 total / `schedule_period_1`** (was 101,568/113,796 — equipment counted
-  twice). Guard extended, full suite green, 39/39 new-area.
+  twice). Guard: 6 new tests, 39/39 in file, 162/162 across the whole `bov-extract`-touching
+  population.
 - **Found + fixed along the way:** a literal apostrophe inside a regex character class
-  (`[a-z0-9 /&'-]`) defeated the test file's own literal-blanking regex and silently blanked ~20
-  lines of real code, failing an unrelated test — fixed with `\x27`. Transferable to any future
-  comment/literal-stripping guard.
+  (`[a-z0-9 /&'-]`, in the test file's own literal-blanking regex — the OCR1c apostrophe-in-prose
+  bug one syntax class over) was mistaken for a string delimiter and blanked ~20 lines of real code,
+  failing an unrelated test — fixed with `\x27`. Transferable to any future comment/literal-stripping
+  guard.
 - Docs closed in the same reconciliation: EXT2 residual-risk framing, `ai-and-ocr-cost-strategy.md`,
   `CURRENT-STATE.md`, `PLANNED-BACKLOG.md`, `OPERATOR-ACTIONS.md`. Record
   `responses/done/EXT2a-schedule-line-definition.response.md`. The EXT arc (EXT1→EXT1b→EXT2→EXT2a)
