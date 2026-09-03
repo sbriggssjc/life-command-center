@@ -16,6 +16,19 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-03 — UX-T1a-gates SHIPPED (#2088): both queue gates honest; UX-T1a-queue prompt drafted
+
+- Deltas: dia lease dates in mirror **0 → 1,747** (the break was the dia SOURCE VIEW — never carried
+  lease columns; three edits, any one alone a silent no-op); `v_lcc_bd_worklist.loan_maturity`
+  **0 → 172 / 109 owners** (the real gap was owner attribution, not a missing producer — the handler
+  always read the domain watch views but with `entity_id: null`); operator queue **1,635 → 694**
+  (941 hidden by `lcc_priority_band_is_human_surface`, fails open, chips gate on the same predicate).
+- CC already updated backlog + CLAUDE.md + the bd-ranking page. This turn: CURRENT-STATE row, files
+  to `done/`, and **`prompts/UX-T1a-queue-seller-prospect-view.md`** — variant F as one view, gates
+  as named columns, recorded reasons only (debt + developer; death/divorce stay unmeasured), reach
+  via person-links with `no_linked_person` first-class, rank = value then lease recency.
+- `PR5d-costar-cmbs-loan-arm.md` in prompts/ belongs to the parallel provenance window — left alone.
+
 ## 2026-09-03 — UX-T1a Part A MEASURED (#2084): the queue is 89.6% disjoint from the doctrine; Part B held; UX-T1a-gates prompt drafted
 
 **ENTC verify (Cowork, post-merge):** every number reproduces live — junk80 view **80**
