@@ -3434,6 +3434,63 @@ Writeup: `docs/audits/N15d_N15e_PRODUCER_VERIFY_AND_HELD_RECOMPUTE_2026-08-27.md
   against. Whether `canonical_name` becomes an enforced UNIQUE key is **still Scott's**, and the
   honest input is 6,608.
 
+## PR5c-entities-b-dupes — `domain` was scoping the IDENTITY key (2026-09-02)
+
+`ensureEntityLink`'s canonical_name tier — the primary dedup key, the one N15c gave a
+single writer — carried a hard **`&domain=eq.<domain>`** filter. `entities.domain` is a
+PROVENANCE TAG that legitimately carries `lcc` and `cre` beside `dia`/`gov`, so a party
+already held under `gov` (or with a NULL domain) was **structurally invisible** when the
+same party arrived tagged `lcc`, and the tier minted a duplicate on the very key that
+exists to prevent one. Fixed in `api/_shared/entity-link.js`: domain is now a RANKING
+PREFERENCE, and a cross-domain attach additionally requires an exact non-generic email
+match. Guard `test/pr5c-entities-dupes-domain-scope.test.mjs` (11 tests, 4/4 mutations
+RED; reverting the filter turns 6 red). Review surface
+`v_lcc_entity_duplicate_mint_review` (read-only, **no `auto_mergeable` column** — P198).
+
+- **⚠️ THE PROMPT NAMED THE WRONG MODULE, AND THE RUN LEDGER SETTLED IT IN ONE QUERY.**
+  The brief located the defect in `findEntityForUpsert`
+  (`bridge-handlers-salesforce.js`). Measured on `bridge_runs`: **zero Salesforce bridge
+  runs in the entire incident window** (2026-08-07..20) — the only bridge running was
+  `outlook.messages`, 41,519 runs. That handler never executed for these rows. The real
+  writers are the **`lcc-sf-contact-resolve` tick (cron 165, `*/30`)** — 10 of 13 mints
+  land within seconds of `:00`/`:30` — and the **CoStar sidebar** (3 off-cadence mints
+  carrying a `costar/contact` identity). Both mint through `ensureEntityLink`. **Before
+  fixing a lookup, prove from a run ledger that it RAN** — this is C1's *read a handler's
+  direction before counting it as a consumer* one step earlier.
+- **🚨 A SHALLOW CLONE MAKES `git log -S` REPORT THE GRAFT BOUNDARY AS THE "ADD", AND I
+  PUBLISHED THAT AS A FINDING BEFORE CATCHING IT.** `git log -S findEntityForUpsert`
+  returned a single commit dated **2026-09-02**, which read as *the lookup did not exist
+  during the incident* — a clean, wrong refutation. The repo was `--depth`-limited (149 of
+  7,709 commits); after `git fetch --unshallow` the true introduction is **2026-05-09**,
+  and the function was byte-identical throughout the window. **Run
+  `git rev-parse --is-shallow-repository` before dating anything from history.**
+  Compounding it: my "absent in the parent" check was `git show <sha>^:file | grep -c`,
+  and `<sha>^` did not exist — grep printed `0` over empty input and the `|| echo`
+  fallback printed too, so **a failed command rendered as a confirming zero.** The
+  file's own doctrine, committed by its author: *never let an error render as a zero.*
+- **⚠️ THE OBVIOUS FIX — DROP THE DOMAIN FILTER — WAS MEASURED AND NARROWED.** Over live
+  shared-email person groups, **44 of 75 carry DIFFERENT names**: `colt.neal@nmrk.com`
+  holds two different real brokers, `alex.sharrin@am.jll.com` holds OM row-labels
+  (`expenses`, `per sf` — P131), `bcorriston@northmarq.com` holds a person and
+  `ace hardware`. And **two distinct "Frank Johnson"s exist here under different
+  domains.** So a shared canonical_name alone is NOT identity for a common person name;
+  the cross-domain arm requires email corroboration. **No name-similarity test is used —
+  fuzzy name matching stays banned for identity.**
+- **⚠️ THE `intra_request_race` IS A SECOND MECHANISM AND THIS CHANGE DOES NOT FIX IT.**
+  Two mints (W. Aaron Poling, Ransome Foose) are **0.14 seconds apart with the SAME
+  domain** — the lookup ran before the sibling insert committed. A lookup fix cannot close
+  a race; that needs a unique constraint on `(workspace_id, canonical_name)` — the open
+  operator decision N15e sized at **6,608 violating groups** — or retry-on-conflict.
+- **Honest rate, with its definition.** Over 30 days: **326** `salesforce/Contact` creates,
+  **17** landed on an existing live canonical key (5.21%), of which **11 are probable
+  duplicates (3.37%)** — 9 `cross_domain_canonical_miss` (fixed here) + 2 races. Expect
+  ~0.6%, not 0. ⚠️ The brief's "14 / 4.3%" does not reproduce; **re-derive before quoting.**
+- **⚠️ THE LARGEST BUCKET IS DELIBERATELY LEFT ALONE.** At 90 days, `older_row_has_no_email`
+  is **553 pairs / 495 entities** — same name, older row carries no email, so there is no
+  corroboration for a cross-domain identity claim, and the bucket visibly contains orgs
+  misfiled as people (`Ace Hardware`, `Sperry Van Ness`). Attaching them would be the
+  destructive guard. Named on the view, not swept.
+
 ## N18 — a column compared to ITSELF returns a plausible, wrong number (2026-08-27)
 
 `v_lcc_developer_classification_candidates.attributed_rent` correlated on
