@@ -281,6 +281,43 @@ mints since `d5b0ac8` (the post-fix rate remains unmeasurable).
 All docs closed by CC in the same change (audit, canonical page §5, CLAUDE.md invariants, backlog ×5).
 👤 **The 15-pair confirm is Scott's** → OPERATOR-ACTIONS. Prompt + response filed to `done/` this turn.
 
+## 2026-09-03 — ENTC: the junk80 census (**the 80 are not one class**), the entity-mint gate, and `lcc_p195_unmerge` FIXED — retiring it would have made 66 live merges irreversible.
+
+Migrations `20261014120000` (p195 fix) + `20261015120000` (`v_lcc_entities_c_junk80`), both applied.
+Guard `test/entc-junk80-and-p195-unmerge.test.mjs` — 13 tests, **19/19 mutations RED**; full suite
+5,278 pass / 0 fail. **Nothing retired, renamed, merged or swept; the seeder is dry-run and unapplied.**
+
+- ⚠️ **BEFORE RETIRING A SUPERSEDED FUNCTION, CHECK THE POPULATION IT STILL OWNS — NOT THE DATE THE
+  SUCCESSOR SHIPPED.** `lcc_p195_merge_log` holds **66 open merges, ZERO with a
+  `lcc_entity_merge_log` row**; they ran hours before P196 taught `lcc_merge_entity` to
+  self-snapshot, so `lcc_unmerge_entity` answers `no_open_merge_log_row` for all of them. Both
+  ledgers start 2026-08-27, which is exactly why "redundant now" reads true and is false. Fixed to
+  P196's shape + a want-vs-have `note`; round trip 24/24, **0 lost, 0 stranded**, `restored` 17 → 19.
+- ⚠️ **A GUARD-DEFINED POPULATION IS NOT A CLASS.** 41 `sweep_candidate` / 27
+  `hold_salesforce_identity` / **6 `hold_email_corroborated`** / 4 `hold_inbound_reference` / 2
+  `hold_name_repairable`. The six carry a name token inside their own mailbox localpart
+  (`Eyal (Al) Elkayam`/`eyal@`, `Hunt`/`hunt@`, `Jackson`/`kjackson@`) — **the row IS that
+  mailbox's person; clearing its email is the harm.** Two more are a real person behind a CoStar
+  `Seller Contacts…` prefix (a `rename`, not a retire). Only sweep candidates propose an action.
+- ⚠️ **TWO WRITERS ON ONE CAPTURE, TWO DEFINITIONS OF "JUNK", AND THE WEAKER ONE MINTED THE
+  ENTITY.** `upsertSidebarContacts` always dropped `isJunkContactName` failures; the entity mint
+  (`unpackContacts`) applied only the TrafficMetrix detector. Gated by INJECTING the existing guard
+  into `planContactMinting`, **PERSON-ONLY** (it rejects firm suffixes, so on an organization it
+  would block every real company mint). **38 of 80 (47.5%), 0 of the 6 real people.**
+- ⚠️ **THE REMEDY WAS UNREACHABLE AND THE TEMPTING FIX WAS A LIE.** `unstampMisparseMember` fired
+  only for `heuristic === TM_MISPARSE_HEURISTIC`; relabelling junk80 rows `tm_misparse` to reach it
+  would have put a false fact in the ledger. Keyed on the CLASS now (`EMAIL_CONFLATION_HEURISTICS`).
+- ⚠️ **Two corrections to the prior audit: 11 of the 80 DO carry `metadata.junk_name_flagged`**
+  (not 0), and **"37 alone on their mailbox" is domain-scoped — by address it is 31** (both emitted).
+- ⚠️ **The brief's two verification targets are in tension and the protective one wins:** junk-oldest
+  contested mailboxes **14 → 3**, but alone only **37 → 29**, because 23 of the 37 carry an SF
+  identity and go to review by design. 35 mailboxes freed, 49 identities detached, **0 relationships
+  touched**. (The prior audit's 26 was a HUMAN read; the guard-measurable figure is 14.)
+- All three definer unmerge functions narrowed to `service_role` (0 PostgREST callers), revoking
+  from **both** `public` and the explicit grants, **asserted with `has_function_privilege()`**.
+
+👤 **`junk80-apply` is Scott's** (OPERATOR-ACTIONS). Open: `junk80-gate-p131`, `p195-unmerge-callers`.
+
 ## 2026-09-03 — PR5c-entities-b-dupes (#2076, `d5b0ac8`) + PR5c-entities-c (#2079, `cbac828a`): the duplicate-mint mechanism was `entities.domain` scoping the IDENTITY key — and the sibling tier must NOT get the same fix. Entity-identity topic consolidated.
 
 **Verified live 07:40 UTC:** `/version` = `cbac828a` = `main` (both PRs running); drift **0**;
