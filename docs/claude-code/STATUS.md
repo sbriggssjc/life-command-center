@@ -16,6 +16,23 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-03 — EXT2a SHIPPED (PR #2098): the schedule-blend double count is fixed
+
+- `baseFromPeriodQuote` reads a schedule period's own labelled base/additional split (ground-truthed
+  against the real Chesterbrook lease); components merge into `additional_rent` deduped
+  `(kind,amount)`; `resolveYear1TotalRent` gained a `schedule_composition_unknown` guard (null total
+  rather than guessing when a schedule figure's makeup can't be determined). Doc 255 now resolves
+  **89,340 base / 101,568 total / `schedule_period_1`** (was 101,568/113,796 — equipment counted
+  twice). Guard extended, full suite green, 39/39 new-area.
+- **Found + fixed along the way:** a literal apostrophe inside a regex character class
+  (`[a-z0-9 /&'-]`) defeated the test file's own literal-blanking regex and silently blanked ~20
+  lines of real code, failing an unrelated test — fixed with `\x27`. Transferable to any future
+  comment/literal-stripping guard.
+- Docs closed in the same reconciliation: EXT2 residual-risk framing, `ai-and-ocr-cost-strategy.md`,
+  `CURRENT-STATE.md`, `PLANNED-BACKLOG.md`, `OPERATOR-ACTIONS.md`. Record
+  `responses/done/EXT2a-schedule-line-definition.response.md`. The EXT arc (EXT1→EXT1b→EXT2→EXT2a)
+  is now fully closed — no open residue.
+
 ## 2026-09-03 — the Chesterbrook lease was READ; EXT2a ground-truthed and prompt drafted
 
 - Scott uploaded the actual lease; OCR'd and read in-session. Exhibit B defines the split in its own
@@ -353,6 +370,57 @@ with UX-T2). **UX13a** deferred to user onboarding. EXT1b sent to CC.
   silently.
 - Full suite **5,102 pass / 0 fail / 6 skipped**. Record:
   `responses/EXT1-lease-rent-basis-quoted-dates.response.md`.
+
+## 2026-09-03 — ✅ PR2's PRODUCER PROOF IS CLOSED (a new sidebar capture wrote a parcel row WITH stats), and the same session surfaced 🚨 ADDR1: the Contacts tab's broker office address minted as a property.
+
+### PR2 — Class 8 closed, on the state delta
+
+Scott captured three dia properties chosen because they had **no** `property_public_records` row,
+forcing an INSERT. **A new `costar_sidebar` parcel row landed 20:08:42 UTC** — APN `08H-61-0665`,
+St. Louis MO, **`building_sf` 5,600 · `lot_sf` 196,543 · `year_built` 2020** — the first parcel row
+since 2026-08-31 and the first ever written by the FIXED writer. **0 sub-100-sq-ft lots**, so the
+acres bug is absent on the forward path too. The verify-next that had been open since 09-02 is done:
+**the producer is fixed, not just the backfill.**
+⚠️ **Why the earlier Hillsboro capture did NOT prove it:** APN `145416` already had a parcel row from
+**April**, and its stats came from the 09-02 backfill (its zoning is `"C" - Commercial` — the exact
+PR12 quote-loss row). `fetched_at` never moved. **An existing row makes the proof invisible** — pick a
+subject with no row when testing a writer.
+
+### 🚨 ADDR1 (new) — a phantom property minted from the broker's office address
+
+Capturing `E10196 County Road P — DaVita, Wisconsin Dells WI` **with the Contacts tab open** created
+**property 37491 = `680 Newport Center Dr, Wisconsin Dells, WI 53965`** — SRS Capital Markets'
+Newport Beach office street stapled to the subject's city/zip, carrying the real property's stats
+(7,895 SF / 2017 / 45,302 lot) and **already holding 1 sale and 3 listings**. It is a live duplicate
+competing with the real row 35722. **Not a one-off — property 50990 is `680 Newport Center Dr,
+Gary, IN 46408` from 09-02.**
+- ⚠️ **The city/state/zip came out RIGHT and only the street was wrong** — that asymmetry is the
+  diagnostic and it is in the prompt.
+- ⚠️ **The naive detectors are too loose and must not be used to drive a repair:** 108 addresses
+  across 2+ cities / 242 rows, and 98 across 2+ states / 202 rows, are dominated by placeholders
+  (`Dialysis Unit`, `TBD`, `1 sect`) and common street names — **not this bug.**
+- Same producer and same shape as the Prompt-89 TrafficMetrix misparse (reading the wrong region of
+  a CoStar page); `tm-misparse.js` is the existing guard for the CONTACT version.
+- Prompt drafted: `ADDR1-broker-office-address-minted-as-property.md`.
+
+### The Loan tab is being captured — and the CMBS fields still do not land
+
+Scott confirms he opens the Loan tab on every capture, and **3 `loans` rows were touched today**
+(`Oklahoma Fidelity Bank`, `Wells Fargo Bank Na`, `National Medical Care Inc`). But all three carry
+`data_source='costar_sidebar'`, `is_cmbs=false`, and **`costar_loan_id` NULL — still 0 of 662 dia
+rows.** So the property-page scanner is writing the loan summary while
+`parseCmbsLoanDetail` never fires. **PR5d's verdict is refined, not overturned:** the loan
+SUMMARY is captured; the CMBS servicer detail is not. → **PR5d-a is now a question about WHICH
+sub-page/section, not about subscription access** (Scott has the Loan tab). A screenshot of the Loan
+tab on a CMBS-financed property is the cheapest next input.
+
+### Junk lane — worked, with a named residue
+
+All 80 decided: **41 mailboxes freed** (email cleared + identities detached on all 41), 37 holds
+correctly untouched, 2 renames. The 41 show `status='conflict'` = `conflict_fk`: **the un-stamp ran
+first and the soft-retire was then blocked because other rows still reference the entity.** That is
+the design working — harm stopped, nothing destroyed — but they remain live, flagged, de-emailed and
+un-retired. → backlog **ENTC-junk80-fk-residue**.
 
 ## 2026-09-03 — gov parcel backfill RUN server-side (1,230 rows, 0 unit errors) and PR5d verified: the CoStar CMBS arm is a page nobody has ever captured, with a second blocker underneath.
 
