@@ -61,6 +61,14 @@ Ownership Resolution Engine; supersession tiers; the gov ownership-transition fe
 → `CLAUDE.md` §"BD spine", `docs/architecture/property-owner-subsystem.md`,
 `government-lease/docs/OWNERSHIP_RESOLUTION_ENGINE.md`
 
+### Entity identity — one key, one writer, two tiers (P189 → PR5c-entities-c, 2026-09-03)
+`entities.canonical_name` is trigger-owned (N15c, drift 0 at 4,618 mints). `ensureEntityLink`'s
+canonical_name tier no longer scopes identity by `entities.domain` — a provenance tag, not a scope —
+which minted 9 of 11 recent duplicates (`d5b0ac8`); its email tier keeps the filter ON PURPOSE (27%
+precision without it). All merge review views carry no `auto_mergeable`; `lcc_merge_entity` is
+reversible. 👤 N15e: 6,608 groups violate a `(workspace_id, canonical_name)` unique key.
+→ **`docs/architecture/entity-identity-and-dedup.md`** (canonical).
+
 ### Public records — one real source, and it now carries its stats (PR1 → PR2, 2026-09-02)
 `county_records` @5 is registered on 93 rungs and has **never written a field, by decision** — both
 domains' `public_record_ingest.py` are gpt-4o recall, not a county fetch (PR1; §2a of the lane page).
