@@ -4330,6 +4330,81 @@ Overview on-market **461 → 207**, Metrics roster **42 → 4**, building SF **2
   the surface states how many rows it is not showing. The producer that mints those memberships
   from correspondence is **UX48a, not fixed**.
 
+## UX-T1a-gates — a mirror gap, a slot with the wrong producer, and 941 rows off the human surface (2026-09-03)
+
+Both coverage gates from the UX-T1a Part A audit are closed. dia rows in `lcc_property_attributes`
+carrying a `lease_expiration` **0 → 1,747**; `v_lcc_bd_worklist.loan_maturity` **0 → 172** rows /
+109 owners; priority-queue human surface **1,635 → 694**. gov and the two existing worklist arms
+unmoved (the positive controls). Record:
+`docs/claude-code/responses/UX-T1a-gates.response.md`; canonical page
+`docs/architecture/bd-ranking-and-priority-queue.md`; guard
+`test/uxt1a-gates-coverage.test.mjs` (18 tests, **19/19 mutations RED**).
+
+- **⚠️ WHEN ONE OF TWO NEAR-IDENTICAL FEEDS WORKS, DIFF THEIR COLUMN LISTS BEFORE READING EITHER
+  CONSUMER.** dia read 0 of 17,225 lease dates while gov read 11,725 of 13,838 **through the same
+  apply function**. The break was neither the tick nor the function: dia's
+  `v_property_attributes_portfolio` had never carried lease columns and gov's always had. One
+  `information_schema` query settled it. The fix then needed **three** edits — source view, tick
+  `select=`, apply branch — and **any one alone is a silent no-op** (asking for a column nothing
+  writes, or writing one that never arrives, is P137 at column grain).
+- **⚠️ A SUPERSEDED ROW IS NOT THE ROW IN EFFECT, AND INCLUDING IT INFLATES EVERY CEILING BUILT ON
+  IT.** The audit's dia ceiling of 1,940 properties counts **1,986 superseded leases**; excluding
+  them gives 1,776, of which 1,747 resolve to a property. The derived sub-counts move with it
+  (within-first-3-years 71 → **134**). ⚠️ And **say which population a term statistic is over**:
+  `initial_term_years` p50 reads **14.9** over live-lease properties (Scott's 15-year standard,
+  confirmed) and **10.0** over all properties with any initial term — expired short leases drag it.
+- **⚠️ TEACHING A SHARED DISPATCHER A NEW CASE NEEDS EVERY GATE, AND A `CONTINUE` IS INVISIBLE TO A
+  PRESENCE CHECK.** Adding a `loan_maturity` leg to `lcc_mirror_tick` took **five** edits, not the
+  three that were obvious (keyset key column, apply dispatch, source path/select) — it also has a
+  DEFAULT leg array and a hard-coded `IF v_leg NOT IN (...) THEN CONTINUE`. With three of five made,
+  every asserted replacement passed and every wiring probe (path / dispatch / keycol present in the
+  definition) returned **true**, and the leg did nothing: the tick returned
+  `{"fired":0,"errors":0,"applied":0,"consumed":0}`, **byte-identical to a leg that is genuinely
+  caught up**. Found by WALKING the leg and reading the state delta. **Assert on rows landed, never
+  on the wiring.**
+- **⚠️ `pg_net` DISPATCHES A QUEUED REQUEST ONLY ON COMMIT, SO A DRIVER LOOP INSIDE ONE TRANSACTION
+  IS A NO-OP THAT READS AS A LOOP.** A `DO $$ … FOR i IN 1..8 LOOP perform lcc_mirror_tick(); …`
+  block fires exactly ONE page (on the block's commit) and every later iteration sees its own
+  pending request id and skips. Drive a mirror **one page per transaction**.
+- **⚠️ TWO PRODUCERS FOR ONE SIGNAL ON ONE SURFACE DEGRADE THE BETTER ONE, AND THE DEDUP KEY DECIDES
+  WHICH.** `assembleBdWorklist` dedups `(signal_type, domain, property_id)` keeping the higher
+  `rank_value`. The domain `v_loan_maturity_watch` fan-out emits **`entity_id: null`**; the new LCC
+  arm emits an owner but reports **NULL rank_value for the 39 unpriced assets** — so on value alone
+  the ownerless row wins *exactly where it hurts*, and the card names a maturing loan with nobody to
+  call. **Decide ATTRIBUTION before VALUE**; value still breaks ties within a class, so no other
+  signal type moves.
+- **⚠️ "THE SLOT HAS NO PRODUCER" WAS TRUE OF THE VIEW AND FALSE OF THE HANDLER — CHECK BOTH LAYERS
+  BEFORE BUILDING ONE.** The audit measured `v_lcc_bd_worklist` (correctly: 0 rows) and concluded the
+  highest-value D had no producer and the Today tile was 100% plumbing. The **handler** had always
+  fanned out to the domains' `v_loan_maturity_watch` (gov 178 / dia 72, both live). What was
+  genuinely missing was **owner attribution**, which is a different build and the actual blocker for
+  an owner-keyed queue. **A renderer reads the handler, not the view it is documented against.**
+- **⚠️ `CREATE OR REPLACE VIEW` MATCHES COLUMNS BY POSITION — A MID-LIST INSERT RENAMES EVERYTHING
+  AFTER IT.** Appending `is_distressed` in the middle failed **42P16 "cannot change name of view
+  column loan_ref to is_distressed"**. New columns go at the END of **every** view in the chain, not
+  only the one being read.
+- **⚠️ READ EACH DOMAIN'S SCHEMA; NEVER ASSUME THE SIBLING'S.** dia's `lenders.lender_name` vs gov's
+  `lenders.name` failed 42703 on first apply — and dia has no `status` (it has `is_active`), which is
+  a **different fact**: mapping it onto gov's `active/defaulted` would have reported every dia loan
+  "active" in the column where gov's `defaulted` is a real signal. It is an honest NULL instead.
+- **`human_surface` is a FLAG, NOT A FILTER, and it is keyed on the BAND.** 941 rows (P0.4 555 /
+  P-CONTACT 216 / P0.5 148 / P-BUYER 22) leave the operator surface; **694** seller-timing rows
+  remain, reproducing the audit's figure exactly. Nothing is deleted — every hidden band has an
+  automated consumer that still reads it — and an explicit `?band=` request still reaches one, so
+  hidden ≠ unreachable. It **fails OPEN** (an unclassified band is shown: unknown-as-noise is a
+  visible problem, unknown-as-hidden is an invisible one), and it keys on `priority_band` because
+  `reason` carries per-row suffixes (`agency_active_solicitations:23`). ⚠️ **The chip counts gate on
+  the SAME predicate** — a chip counting a band the list does not show is the P139 lying badge.
+- **⚠️ A GUARD THAT MATCHES A SHAPE IS DEFEATED BY A NAME THAT LEGITIMATELY APPEARS ELSEWHERE —
+  FOUR OF MINE WERE, AND THE MUTATION PASS FOUND ALL FOUR.** An ordering assertion over the tokens
+  `entity_id`/`rank_value` survived deleting the whole attribution branch (the `const ra =
+  r.entity_id ? 1 : 0` declarations remain) — replaced with a **behavioural** test that invokes
+  `assembleBdWorklist` with a priced ownerless row and an unpriced owned one. A `superseded_at IS
+  NULL` presence check survived deleting it from the lease-date lateral (a second lateral still
+  carried one). A `RAISE EXCEPTION` check pinned the IF condition, not the raise. And one matched
+  the **summary** `?select=signal_type` instead of the list query — the very C10 class under test,
+  because `.match()` returns the first occurrence.
+
 ## OWN-T0 — the panel showed four ownership stores and reconciled none of them (2026-09-02)
 
 > 📍 **The property panel's ownership read is now ONE view:

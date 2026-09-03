@@ -22,6 +22,26 @@
 > and all of dia unchanged (positive-controlled). Migration
 > `supabase/migrations/20261002110000_lcc_c6_current_holding_seller_bands.sql`; evidence
 > [`C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md`](../audits/C6_CURRENT_HOLDING_SELLER_BANDS_2026-08-29.md).
+> ✅ **UX-T1a-gates SHIPPED 2026-09-03 — the queue's two coverage gates are now HONEST, and
+> 941 of 1,635 queue rows have left the human surface.**
+> `v_priority_queue_enriched` and `v_priority_queue_band_counts` carry **`human_surface`**
+> (`lcc_priority_band_is_human_surface`): FALSE for the four bands that already have an automated
+> consumer — **P0.4** 555 (A2/cron 244), **P-CONTACT** 216 (Tier 0 auto-attach), **P0.5** 148 (CRM
+> hygiene), **P-BUYER** 22 (buyers are pursued by showing them deals) — TRUE for the **694**
+> seller-timing rows (P8 213, P3 166, P1 147, P2 95, P5 59, P4 14). **A flag, not a filter: nothing
+> is deleted, the automated consumers still read their bands, and an explicit `?band=` request
+> still reaches a hidden one.** Fails OPEN — an unclassified band is shown.
+> Also shipped: dia lease dates now reach `lcc_property_attributes` (**0 → 1,747**, so the
+> doctrine's newer-lease gate is computable for the dia swimlane for the first time), and
+> `v_lcc_bd_worklist` gained an owner-attributed **`loan_maturity`** arm (**0 → 172** rows / 109
+> owners) over the new `lcc_loan_maturity` mirror.
+> ⚠️ **The Part A audit's "loan_maturity has no producer" is TRUE of the VIEW and FALSE of the
+> HANDLER** — `assembleBdWorklist` always fanned out to the domains' `v_loan_maturity_watch`. The
+> gap was owner ATTRIBUTION (`entity_id: null`), which is what blocked an owner-keyed queue.
+> Record: [`UX-T1a-gates.response.md`](../claude-code/responses/UX-T1a-gates.response.md);
+> guard `test/uxt1a-gates-coverage.test.mjs` (18 tests, 19/19 mutations RED).
+> **UX-T1a-queue (`v_lcc_seller_prospect_queue`, variant F) is UNBLOCKED and is the next step.**
+>
 > ✅ **C11 SHIPPED 2026-08-31 — the call-sheet arc (C6 → C8 → C10 → C11) is COMPLETE.** See **§4b**
 > for the state of this surface: 126 rows, gated, legible, each stating its basis; **~4 defective
 > rows remain** (C11b, C11c, one C9 split). ⚠️ **C11a is REFUTED** (sponsor↔SPE, not a defect) and

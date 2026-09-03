@@ -1768,7 +1768,11 @@ export function assembleBdWorklist(sources = {}) {
       what: r.what,
       who: r.who || null,
       rank_value: num(r.rank_value),
-      is_distressed: false,
+      // UX-T1a-debt: the LCC view now SETS this (loan_maturity arm, gov
+      // loan_status='defaulted'). It was hard-coded false, so the renderer's
+      // ⚠ "Distressed loan" badge could never fire on an LCC row — C10's class
+      // one field over: a renderer reading a key no producer sets.
+      is_distressed: !!r.is_distressed,
       city: r.city || null,
       state: r.state || null,
       detail: r.detail || {},
@@ -1847,13 +1851,35 @@ export function assembleBdWorklist(sources = {}) {
   addConflict('gov', sources.owner_conflict?.gov);
   addConflict('dia', sources.owner_conflict?.dia);
 
-  // Dedup one row per (signal_type, domain, property_id|entity_id), keep the
-  // highest-value occurrence.
+  // Dedup one row per (signal_type, domain, property_id|entity_id).
+  //
+  // ⚠ UX-T1a-debt (2026-09-03): `loan_maturity` now has TWO producers for the same
+  // property — the domain `v_loan_maturity_watch` fan-out below, and the new
+  // owner-attributed LCC arm in `v_lcc_bd_worklist`. They collapse to one row here,
+  // and on rank_value ALONE the domain row can win, which SILENTLY DROPS the
+  // entity_id: the domain arm emits `entity_id: null` (it cannot resolve an LCC
+  // owner), so the card loses its owner deep-link and the operator is told a loan
+  // matures with nobody to call. That is likeliest exactly where it hurts most —
+  // the LCC arm reports rank_value NULL (→ 0 here) for the 39 unpriced assets,
+  // so it would lose every one of those ties.
+  //
+  // So attribution wins BEFORE value: a row that names an owner entity beats one
+  // that does not, and value only breaks ties within the same attribution class.
+  // This cannot affect the other signal types — contact_writeback and
+  // ownership_chain rows all carry entity_id, suspected_sale and
+  // owner_source_conflict rows all carry null, so within any one key the class is
+  // uniform and the comparison falls through to rank_value as before.
   const seen = new Map();
+  const betterThan = (r, prev) => {
+    const ra = r.entity_id ? 1 : 0;
+    const pa = prev.entity_id ? 1 : 0;
+    if (ra !== pa) return ra > pa;
+    return r.rank_value > prev.rank_value;
+  };
   for (const r of out) {
     const key = r.signal_type + ':' + (r.domain || '') + ':' + (r.property_id || r.entity_id || '');
     const prev = seen.get(key);
-    if (!prev || r.rank_value > prev.rank_value) seen.set(key, r);
+    if (!prev || betterThan(r, prev)) seen.set(key, r);
   }
   const deduped = [...seen.values()];
 
@@ -1904,6 +1930,14 @@ async function getBdWorklist(req, res, user, workspaceId) {
     const [cwC, chC, lmGovC, lmDiaC, ssGovC, ocGovC, ocDiaC] = await Promise.all([
       want('contact_writeback') ? opsQuery('GET', lccSel + '&signal_type=eq.contact_writeback&limit=1', null, { countMode: 'exact' }) : Promise.resolve({ count: 0 }),
       want('ownership_chain') ? opsQuery('GET', lccSel + '&signal_type=eq.ownership_chain&limit=1', null, { countMode: 'exact' }) : Promise.resolve({ count: 0 }),
+      // ⚠ UX-T1a-debt: this badge counts the DOMAIN watch views only, while the list
+      // below merges those with the LCC loan_maturity arm. Measured 2026-09-03, the
+      // LCC arm's properties are a strict SUBSET of the domain views on gov (106 of
+      // 178, 0 outside) but NOT on dia (16, of which 2 are absent from dia's
+      // v_loan_maturity_watch), so this badge UNDERCOUNTS by exactly 2 against the
+      // deduped list (250 vs 252). Stated rather than silently inconsistent; an exact
+      // union needs the merged list, which this count-only path deliberately avoids
+      // fetching. Backlog: UX-T1a-debt-badge.
       want('loan_maturity') ? domainSelectCount('gov', 'v_loan_maturity_watch?select=property_id') : Promise.resolve({ count: 0 }),
       want('loan_maturity') ? domainSelectCount('dia', 'v_loan_maturity_watch?select=property_id') : Promise.resolve({ count: 0 }),
       want('suspected_sale') ? domainSelectCount('gov', 'v_suspected_sale?select=property_id') : Promise.resolve({ count: 0 }),
@@ -1921,11 +1955,20 @@ async function getBdWorklist(req, res, user, workspaceId) {
     return res.status(200).json({ ok: true, summary: true, total, by_signal_type });
   }
 
-  const lccTypes = ['contact_writeback', 'ownership_chain'].filter(want);
-  const lccFilter = lccTypes.length === 2 ? '' : `&signal_type=eq.${lccTypes[0] || 'none'}`;
+  // ⚠ UX-T1a-debt: `loan_maturity` MUST be listed here. This array is the only thing
+  // that decides which signal types are fetched from the LCC view, so the new
+  // owner-attributed loan_maturity arm added to `v_lcc_bd_worklist` would have been
+  // fetched by nothing and been invisible on every surface — a producer with no
+  // consumer, one layer above the gap this round exists to close.
+  const LCC_SIGNAL_TYPES = ['contact_writeback', 'ownership_chain', 'loan_maturity'];
+  const lccTypes = LCC_SIGNAL_TYPES.filter(want);
+  // Length-keyed on the array, not a literal: a hard-coded `=== 2` silently becomes a
+  // per-type filter the moment a fourth arm is added, serving one type under a chip
+  // that claims all of them.
+  const lccFilter = lccTypes.length === LCC_SIGNAL_TYPES.length ? '' : `&signal_type=eq.${lccTypes[0] || 'none'}`;
   const [lccRes, lmGov, lmDia, ssGov, ocGov, ocDia] = await Promise.all([
     lccTypes.length
-      ? opsQuery('GET', `v_lcc_bd_worklist?select=signal_type,source_domain,property_id,entity_id,what,who,rank_value,rank_property_count,city,state,detail${lccFilter}&order=rank_value.desc.nullslast&limit=${CAP}`, null, { countMode: 'none' })
+      ? opsQuery('GET', `v_lcc_bd_worklist?select=signal_type,source_domain,property_id,entity_id,what,who,rank_value,rank_property_count,address,city,state,detail,is_distressed${lccFilter}&order=rank_value.desc.nullslast&limit=${CAP}`, null, { countMode: 'none' })
       : Promise.resolve({ ok: true, data: [] }),
     want('loan_maturity') ? domainSelect('gov', `v_loan_maturity_watch?select=property_id,owner_name,annual_rent,maturity_date,months_to_maturity,maturity_band,is_distressed,distress_reason,loan_balance,city,state&order=is_distressed.desc,annual_rent.desc.nullslast&limit=${CAP}`) : Promise.resolve({ ok: true, data: [] }),
     want('loan_maturity') ? domainSelect('dia', `v_loan_maturity_watch?select=property_id,owner_name,annual_rent,maturity_date,months_to_maturity,maturity_band,is_distressed,distress_reason,loan_balance,city,state&order=is_distressed.desc,annual_rent.desc.nullslast&limit=${CAP}`) : Promise.resolve({ ok: true, data: [] }),

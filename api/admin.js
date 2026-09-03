@@ -7079,10 +7079,20 @@ async function handlePriorityQueueList(req, res) {
   const orderClause = (band && CONNECT_BANDS.has(band))
     ? 'rank_annual_rent.desc.nullslast,days_overdue.desc.nullslast'
     : 'priority_band.asc,days_overdue.desc.nullslast,rank_annual_rent.desc.nullslast';
+  // UX-T1a Unit 3 (2026-09-03): the operator surface serves only bands that earn a
+  // human. P0.4 / P-CONTACT / P0.5 / P-BUYER (941 of 1,635 rows) each already have an
+  // AUTOMATED consumer — A2/cron 244, the Tier 0 auto-attach sweep, CRM hygiene, and
+  // "buyers are pursued by showing them deals" — so 58% of this queue was plumbing
+  // wearing an operator badge. They are HIDDEN, not deleted: the flag lives on the view
+  // (lcc_priority_band_is_human_surface) and the automated consumers still read their
+  // bands. Human surface = 694 rows.
+  //   An explicit ?band= request is honoured even for a hidden band, so a deliberate
+  //   drill-in still works and the rows are never unreachable — only un-defaulted.
   let itemsPath = 'v_priority_queue_enriched?select=' + selectCols
     + '&order=' + orderClause
     + '&limit=' + limit + '&offset=' + offset;
   if (band) itemsPath += '&priority_band=eq.' + pgFilterVal(band);
+  else itemsPath += '&human_surface=is.true';
   if (domainFilter) itemsPath += '&effective_domain=eq.' + pgFilterVal(domainFilter);
 
   // Per-band counts for the chip row. Unfiltered: read the pre-aggregated view
@@ -7090,9 +7100,11 @@ async function handlePriorityQueueList(req, res) {
   // collapses the queue to one row per band. Domain-filtered (R31): the
   // band-counts view isn't domain-aware, so count from the enriched view scoped
   // to effective_domain (bounded — dia/gov are each well under 1000 rows).
+  // Both count paths gate on the SAME human_surface predicate as the item list above.
+  // A chip counting a band the list does not show is a lying badge (P139).
   const countsPath = domainFilter
-    ? ('v_priority_queue_enriched?select=priority_band&effective_domain=eq.' + pgFilterVal(domainFilter) + '&limit=2000')
-    : 'v_priority_queue_band_counts?select=priority_band,n';
+    ? ('v_priority_queue_enriched?select=priority_band&human_surface=is.true&effective_domain=eq.' + pgFilterVal(domainFilter) + '&limit=2000')
+    : 'v_priority_queue_band_counts?select=priority_band,n&human_surface=is.true';
 
   // R7 Phase 0 (2026-06-07): the ~5-7s queue floor is gone. v_priority_queue
   // and its buyer-SPE root are now materialized into cron-refreshed cache
