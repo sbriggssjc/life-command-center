@@ -88,6 +88,14 @@ two independent official HTTPS hosts. It may support a parent-building attachmen
 tenant exactly equals an allow-listed operating name. It never becomes a global name rewrite, and every use
 requires second review.
 
+The same approved operating-identity alias may support a captured parent-building range only when the frozen
+civic number falls inclusively inside that range and the remaining normalized street, city, state, and postal
+components agree. A terminal street type present only in the licensed property source is recorded as a
+formatting extension, not written back to the frozen address. When the alias carries a CoStar property ID or
+parcel number, those pins are mandatory and exact; a different source, record, or parcel remains blocked.
+Range containment never substitutes for the approved operating tenant, independent official-host citations,
+or second review.
+
 A same-parcel address-conflict alias must also be candidate-scoped. It binds one frozen service-location
 token to one captured property token and one exact parcel identifier, requires an exact captured facility or
 enrollment-organization tenant, and cites both an official facility registry and the licensed property public
