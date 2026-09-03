@@ -270,6 +270,36 @@ with UX-T2). **UX13a** deferred to user onboarding. EXT1b sent to CC.
 - Full suite **5,102 pass / 0 fail / 6 skipped**. Record:
   `responses/EXT1-lease-rent-basis-quoted-dates.response.md`.
 
+## 2026-09-03 — ENTC-confirm EXECUTED (15/15 merged, `goes_by` stamped) and 🚨 SALE1 FOUND: one price propagated across several sales of one property, with the source's own "not a comp" markers ignored.
+
+**Merges (Scott approved all 15):** every pair merged cleanly through `lcc_merge_entity` — 14 moved
+an external identity, 1 moved none, 0 portfolio edges (contact-only rows, as the plan predicted).
+Reversible per row with `lcc_unmerge_entity(loser)`. **`metadata.goes_by` stamped on all 15
+survivors** (`goes_by_source='entc_merge_20260903'`) at Scott's request — Vincent Curran carries
+`["Vince Curran"]`, etc. ⚠️ **Nothing reads it yet** → backlog **ENTC-goes-by**; it is an ALIAS,
+never an identity key.
+
+**SALE1 (new, 🚨):** Scott's Hillsboro capture surfaced **three sales of dia property 35612 at an
+identical $1,593,750**, all `live` and all in comps — a 2009 **Nominal Transfer**, a 2024 Resale,
+and a 2026 row whose own CoStar note says **"not suitable for sales comparable purposes"** —
+yielding **three different cap rates (5.24 / 7.48 / 7.84%)** from one price.
+- Class: **668 (property, price) groups / 1,517 rows / 568 properties**; **272 span >1yr, 166 of
+  those with 2+ rows still in comps.**
+- ⚠️ **The dedup machinery is working and cannot see it.** `dedup_natural_key` is
+  `property|price|YYYY-MM` (UNIQUE; 485 same-month collisions correctly `duplicate_superseded`) —
+  property 26404 shows both halves at once, two pairs correctly deduped and three cross-month rows
+  at $10,260,000 all live. **A key that encodes the month is structurally blind to a cross-month
+  repeat**, which is exactly the propagation shape.
+- Second defect: `transaction_type ilike '%nominal%'` = **38 rows, 28 in comps**; the CoStar "not
+  suitable" string = 1 row, in comps. `exclude_from_market_metrics` is set on 1,750 of 4,785 rows,
+  so the column is used — just not from these signals.
+- `cap_rate_final` derives from `sold_price`, so this reaches every CM consumer. Prompt drafted:
+  `SALE1-repeated-price-and-comp-eligibility.md`.
+
+**Also:** the Hillsboro capture landed on the EXISTING property 35612 (no new property needed) and
+wrote no `parcel_records` row — **PR2's producer proof is still open**; it needs a dia capture whose
+CoStar page exposes the Public Record panel.
+
 ## 2026-09-03 — OPERATOR QUEUE RUN SERVER-SIDE (Cowork): junk80 SEEDED (80), the propagate tick TICKED (`entities` provenance 0 → 4), `availability-checker` DEPLOYED (v21, verified live).
 
 All three via the DB (`lcc_cron_post` / direct SQL / the Supabase MCP), because the sandbox has no
