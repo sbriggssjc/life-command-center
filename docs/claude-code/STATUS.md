@@ -325,6 +325,61 @@ with UX-T2). **UX13a** deferred to user onboarding. EXT1b sent to CC.
 - Full suite **5,102 pass / 0 fail / 6 skipped**. Record:
   `responses/EXT1-lease-rent-basis-quoted-dates.response.md`.
 
+## 2026-09-03 — gov parcel backfill RUN server-side (1,230 rows, 0 unit errors) and PR5d verified: the CoStar CMBS arm is a page nobody has ever captured, with a second blocker underneath.
+
+### gov PR2 backfill — executed from Cowork, not the script
+
+Scott's shell has no `*_SUPABASE_*` vars, so this ran DB-side. ⚠️ **The parse was NOT
+re-implemented in SQL** — the metadata was pulled from LCC Opps, run through the SHIPPED
+`parcelStatsFromMetadata` in the sandbox, and only the parsed values were written. That keeps the
+lot-unit rule (I12) in exactly one place, which is the whole reason the script exists.
+**gov `costar_sidebar` parcels: `building_sf` 0 → 1,192 · `land_area_sf`/`land_area_acres` 0 → 1,109 ·
+`year_built` 0 → 1,153 · `zoning` 0 → 291** (1,230 rows touched of 1,527). Snapshot
+`_pr2_parcel_stats_backup_pr2govcowork20260903` (1,230 rows, **all pre-states blank** — fill-blanks
+proven, not asserted); reversible by batch tag `pr2_gov_cowork_20260903`.
+- **0 sub-100-sq-ft lots and 0 absurd lots after the write** — the acres-as-square-feet bug (43,560×)
+  is absent, confirmed on all three CoStar formats present in the data (`5.26 AC`,
+  `6.00 (261,360 sf)`, `68,259 SF`).
+- ⚠️ **One row EXCLUDED before writing:** APN `0403` parsed to **2,304,454,680 sq ft / 52,903 acres**
+  — 82 square miles. The parser is faithful; CoStar's own string is `52,903.00 (2,304,454,680 sf)`.
+  Writing it would poison every land metric, so it was left blank and is named here rather than
+  silently dropped. **The dia run had no such outlier** — worth a look if a land ratio ever reads odd.
+- ⚠️ **`tax_amount` / `land_use` / `owner_name` stay 0 on gov too**, same measured ceiling as dia —
+  those keys have never appeared on any capture.
+
+### PR5d (#2098 lineage, migration `20261010120000`) — verified live
+
+**121 rungs verdicted: `page_never_captured` 94 / `page_never_captured_flag_off` 27.** Rungs 2,141,
+PR5 426, PR5c 33, orphan 49 — all unmoved. `lcc_loan_maturity` 568.
+- **The answer is (c): the scanner, the writer and the manifest match are ALL live and correct** —
+  `parseCmbsLoanDetail` → `upsertLoanRecords`, `https://*.costar.com/*`, and `pageUrl` read from
+  `window.location.href` at extract time so SPA routing is a non-issue. **The CoStar loan sub-page
+  has simply never been captured.**
+- **Ruling out the rename class needed a column only that arm writes:** `loans.costar_loan_id` and
+  `loans.source_url` are **0 of 2,219 rows on both domains**, and `loan_snapshots` /
+  `loan_top_tenants` / `loan_commentary` are 0 rows on both. ⚠️ **That zero is evidence only while
+  exactly one writer could have made it non-zero** — the guard now pins that single-writer property.
+- ⚠️ **A second blocker the (c) framing misses:** dia's `properties.track_cmbs_snapshots` is `false`
+  on **11,803 of 11,803**, so capturing the page tomorrow would still write nothing there. That
+  boundary IS the 94/27 split.
+- ⚠️ **It supersedes R54 Unit 3's mechanism (75 days old):** gov reads `is_cmbs` 285 /
+  `special_servicer` 126 and looks like CMBS capture — but those come from a DIFFERENT scanner on the
+  property page deriving `cmbs_deal_name` from a lender-name regex. R54's disposition was right, its
+  mechanism wrong, which is why this read as a coverage question for 75 days.
+- **Not retired, and the reason is a starved consumer:** R54's `is_distressed` arm is built, ranked
+  and has never had an input — **0 of 178 gov watch rows**, with watchlist / delinquency / DSCR at 0
+  across 285 CMBS loans. Only this arm can feed it. → **PR5d-a** (👤 does Scott's CoStar session reach
+  that sub-page, and does the subscription expose the servicer report?) and **PR5d-b** (the dia flag).
+- **UX-T1a reconciled in place:** its *"192 loans maturing ≤24 mo has no LCC table at all"* was true
+  on 09-02 and superseded the next day by UX-T1a-gates — `lcc_loan_maturity` holds those 192 exactly
+  (gov 170 + dia 22), and `costar_cmbs_loan` supplied **0** of them. **The residual debt gap is
+  DISTRESS, not maturity.** Corrected in `app-ux-review-2026-09-02.md`, the audit and `CLAUDE.md`.
+- Guard 12 tests, **21/21 mutations RED** — three of CC's own assertions survived their first
+  mutation and the pass caught all three. Suite 5,314 / 0.
+
+**CC's own recommendation, and I agree:** `PR5c-enforce` outranks PR5d-a — the ten `entities`
+contact rungs are all `record_only`, so that ladder records and protects nothing.
+
 ## 2026-09-03 — ENTC-confirm EXECUTED (15/15 merged, `goes_by` stamped) and 🚨 SALE1 FOUND: one price propagated across several sales of one property, with the source's own "not a comp" markers ignored.
 
 **Merges (Scott approved all 15):** every pair merged cleanly through `lcc_merge_entity` — 14 moved

@@ -95,6 +95,13 @@ break-class, all hashing. **Exposure was ~1,101, not 67** — the newline in `sa
 narrative on NON-rung columns; the ladder-scoped census could not see it. JS failure signal
 (`provenance_failed` + alert) ships on the Railway redeploy. PR12b filed (flush watermark skips an
 errored event permanently).
+**PR5d (2026-09-03) CLOSED** — the CoStar CMBS arm is (c): scanner, writer and URL match all live;
+the page has never been captured (`costar_loan_id` 0 of 2,219 both domains). 121 rungs verdicted
+94 `page_never_captured` / 27 `page_never_captured_flag_off` (dia's `track_cmbs_snapshots` false on
+11,803 of 11,803 — a SECOND blocker). Supersedes R54 Unit 3's mechanism; reconciles UX-T1a's
+"no LCC table" claim (superseded by UX-T1a-gates — the residual debt gap is DISTRESS, not maturity).
+Not retired: R54's `is_distressed` arm is starved (0 of 178) and only this arm feeds it → 👤 PR5d-a/b.
+**PR2-gov backfill RUN 2026-09-03 server-side** — 1,230 rows, 0 unit errors, reversible by batch tag.
 **PR5 (2026-09-02, #2051) closed with PR7** — 426 verdicts + 49 orphan markers live on
 `v_field_source_priority_triage`; no deploy gap (no `api/` change). **`never_written` stays 39 BY
 DESIGN** (rungs are soft-retired in `notes`, never deleted — "unregistered" is a different
@@ -141,11 +148,13 @@ that fires `gov_classify_agency()`; do not read it as broken.
    Record: `docs/audits/ENTC_JUNK80_AND_P195_UNMERGE_2026-09-03.md`.
    ⚠️ **`SEC1` moved a step**: all three definer *unmerge* functions are now `service_role` only;
    the other 88 anon-executable definer functions are untouched.
-3. **`PR5d`** — `costar_cmbs_loan`: 121 rungs, the ladder's largest source, for a capture arm with
-   0 rows on either domain (`loans.data_source`). Is the CoStar CMBS tab ever captured, or is the
-   arm unreachable? One grep of the extension + one count.
-   **Prompt drafted: `docs/claude-code/prompts/PR5d-costar-cmbs-loan-arm.md`** (also reconciles
-   UX-T1a's "loan maturity has no LCC table" claim against the `loans` tables).
+3. **`PR5c-enforce`** — the ten `entities` `email`/`phone` rungs are all `enforce_mode='record_only'`,
+   so PR5c-entities/-b record and protect nothing. Grading needs ledger history, which the
+   2026-09-03 propagate tick started (4 rows) and the SF bridge adds ~12/day. **CC's own
+   recommendation over PR5d-a, and I agree.** ⚠️ These columns also have a SECOND, enforcing
+   ladder (`metadata.field_sources` in `planContactFieldPromotion`) — deciding which owns the
+   decision is the PR10 *one source, two ladders* question, so answer that first or in the
+   same pass.
 4. **`DE3`/`DE4`** (DE4's input is settled: FY2026's 73.66% Medicare is the fallback bucket),
    **`B6e-clinic-metadata`**, **`D2`–`D5`**, **`PR10`** (one source, two ladders), **`SEC1`**
    (91 of 195 SECURITY DEFINER functions anon-executable — filed by PR8, needs its own pass).
