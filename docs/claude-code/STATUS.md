@@ -250,6 +250,37 @@ with UX-T2). **UX13a** deferred to user onboarding. EXT1b sent to CC.
 - Full suite **5,102 pass / 0 fail / 6 skipped**. Record:
   `responses/EXT1-lease-rent-basis-quoted-dates.response.md`.
 
+## 2026-09-03 — PR5c-entities-c-review + -oldest (#2083, `dc52e922`): the 15-pair merge plan is built and WAITING ON SCOTT; the oldest-row gate is measured and REFUSED; and the round trip broke `lcc_p195_unmerge`.
+
+**Verified live:** `v_lcc_entities_c_review_merge_plan` **15 rows / 2 bases** (`initial_only_expansion`
+6 — a structural rule that fires on 0 of the other 49; `human_read` 9 — the honest basis, since the
+alternative is the banned comparator); blind pairs 55; drift 0; nothing merged; still **0** SF-Contact
+mints since `d5b0ac8` (the post-fix rate remains unmeasurable).
+
+- 🚨 **`lcc_p195_unmerge` STRANDS byte-identical edges while reporting `restored`** — three identical
+  `(from,to,'brokers')` edges are all snapshotted, and P196's own BEFORE-INSERT trigger skips the 2nd
+  and 3rd as duplicates so they never reach `ON CONFLICT (id) DO UPDATE`. **P196's exact finding, in
+  the one reversal path that never got P196's fix.** Row count identical in both runs — only the
+  identity-keyed fingerprint exposed it; a count-based unmerge verification is worthless.
+  **Reverse with `lcc_unmerge_entity`, never `lcc_p195_unmerge`** (now in the invariants). Filed
+  `PR5c-entities-c-p195-unmerge`.
+- ⚠️ **The P195 winner rule DEGENERATES on contact-only populations** — owns/rent/facts are 0 on 92
+  of 93 endpoints, so the winner falls to external-ids-then-relationships and picks `Frank Johnson`
+  over the older, better-connected `Frank D. Johnson`. The plan exposes `winner_decided_by` +
+  `ownership_tiers_all_zero` so a row can be swapped before confirming.
+- **The oldest-row gate is REFUSED on measurement:** reach 22 of 193 groups, accuracy 12 of 26 on
+  the population it exists for (`lcc_looks_like_person` PASSES 16 of the 26 junk rows), useless for
+  the 37 junk rows alone on their mailbox, and 171 of 193 groups have ≥2 rows passing every guard so
+  no shape gate can pick. **Retire the junk rows instead** → `PR5c-entities-c-junk80` (80 live
+  junk-named person entities with emails; 0 in `junk_entity_review`, 0 flagged — invisible to both
+  existing lanes). Two unstated facts recorded: the email tier's `.find` scans the **oldest 10 rows
+  only**, and an inbound with no domain searches the whole workspace.
+- **The race count is 3, not 2** — two live `Matthew Dodson` entities 0.107 s apart that the prior
+  audit read as a duplicate view row (backlog corrected).
+
+All docs closed by CC in the same change (audit, canonical page §5, CLAUDE.md invariants, backlog ×5).
+👤 **The 15-pair confirm is Scott's** → OPERATOR-ACTIONS. Prompt + response filed to `done/` this turn.
+
 ## 2026-09-03 — PR5c-entities-b-dupes (#2076, `d5b0ac8`) + PR5c-entities-c (#2079, `cbac828a`): the duplicate-mint mechanism was `entities.domain` scoping the IDENTITY key — and the sibling tier must NOT get the same fix. Entity-identity topic consolidated.
 
 **Verified live 07:40 UTC:** `/version` = `cbac828a` = `main` (both PRs running); drift **0**;
