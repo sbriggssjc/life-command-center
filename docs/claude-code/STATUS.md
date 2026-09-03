@@ -16,6 +16,21 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-03 — UX-T1a Part A MEASURED (#2084): the queue is 89.6% disjoint from the doctrine; Part B held; UX-T1a-gates prompt drafted
+
+- Funnel 8,858 → 3,529 → 259 → 31 → 23. G3 (newer lease) cuts 93% and G4 (reason to sell) 88% — both
+  COVERAGE gaps: dia has no lease dates in the mirror (3,823 live leases at source), and debt (192
+  maturities ≤24 mo) has no LCC table while Today already renders a `loan_maturity` label nothing fills.
+  P1/P2/P3 select assets late in term — the opposite of "newer". 58% of queue rows are plumbing.
+- CC updated the backlog (UX-T1a + six sequenced rows) and the bd-ranking page itself; this turn adds the
+  CURRENT-STATE row, the CLAUDE.md lessons (circular `sale_price` validation; portfolio price; reach
+  floor/ceiling; 42% regex FP; label-is-not-a-lane), and moves files to `done/`.
+- **Next CC prompt: `prompts/UX-T1a-gates-dia-lease-mirror-and-loan-maturity.md`** — three units:
+  mirror dia leases (find the break first: view columns vs `select=` list vs anon read), `loan_maturity`
+  via a `*_portfolio` view + mirror leg + worklist emission, hide P0.4/P-CONTACT/P0.5/P-BUYER as a
+  `human_surface` column. Then UX-T1a-queue.
+- Two stray `.docx` copies of prompts sit untracked in `responses/` (EXT2, UX-T1a) — delete locally.
+
 ## 2026-09-03 — C4a answered → canon 1.8.0 (the queue, quantified) → UX-T1a prompt ready
 
 - Scott answered the five ordering questions (app-ux-review **§0b**, verbatim in substance): newer lease is
