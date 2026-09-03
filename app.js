@@ -1108,8 +1108,7 @@ function handlePageLoad(pageId) {
       if (!dailyBriefingLoaded) loadDailyBriefingData();
       renderNextBestActionPanel();
       if (!nbaLoaded) loadNextBestActionData();
-      if (typeof renderOutreachOnramp === 'function') renderOutreachOnramp();
-      if (typeof renderTodayBdActions === 'function') renderTodayBdActions();
+      if (typeof renderTodaySections === 'function') renderTodaySections();
       break;
     case 'pagePipeline':
       // Reflect the active sub-view's display state, then render it.
@@ -2121,6 +2120,7 @@ const ROUTE_SLUG_TO_PAGE = {
   business: 'pageBiz',
   capmarkets: 'pageBiz',
   metrics: 'pageMetrics',
+  'seller-prospects': 'pageSellerProspectQueue',
   calendar: 'pageCal',
   'sync-health': 'pageSyncHealth',
   'ops-health': 'pageOpsHealth',
@@ -7390,158 +7390,166 @@ function openNbaItem(srcDomain, propertyId) {
 }
 window.openNbaItem = openNbaItem;
 
-// R59 Unit 2 — Today "Top BD Actions" card: the BD-action cockpit's top slice on
-// the home screen. Reads the same unified, value-ranked v_lcc_bd_worklist as the
-// full Priority-Queue "Top BD Actions" list, shows the top 5, and routes each row
-// to the property carrying its signal (NEXT STEP becomes the signal's action).
-let _todayBdLoaded = false;
-let _todayBdInFlight = false;
-// R60 Unit 1 — the card used to early-return forever when ops.js's opsApi wasn't
-// ready yet AND was never invoked on the initial Home render (bootApp loads the
-// NBA panel but not this card; renderTodayBdActions only fired via
-// handlePageLoad('pageHome'), which doesn't run on the default-page boot). The
-// result was a card stuck on its static spinner. This version (a) retries if
-// opsApi isn't loaded yet instead of dying on the spinner, (b) wraps the render
-// in try/catch with a watchdog timeout so it can NEVER leave an indefinite
-// spinner, and (c) only marks "loaded" on a clean result so a later nav retries.
-function _todayBdFallback(msg) {
-  const el = document.getElementById('todayBdActionsContent');
-  if (!el) return;
-  el.innerHTML = '<div class="nba-empty">' + esc(msg || 'BD actions unavailable.')
-    + ' <button class="retry-btn" onclick="renderTodayBdActions(true)">Retry</button>'
-    + ' <button class="retry-btn" onclick="navTo(&quot;pagePriorityQueue&quot;);setTimeout(function(){if(typeof renderBdWorklist===&quot;function&quot;)renderBdWorklist();},300)">View all →</button></div>';
-}
-// Work Your Outreach — the Today on-ramp (2026-06-26). An honest, actionable
-// count of reachable, value-ranked prospect cadences DUE, with a button that
-// lands directly in the focus session (ops.js renderOutreachFocus). N = overdue
-// actionable cadences, $X = sum of their rank_value (in-reach value); both are
-// the workable set, never raw producer output. Reuses the cadence_dashboard
-// action — same data the focus session works.
-// UX1 (2026-09-02) — turn "unavailable" into a stated cause. The four ways
-// this tile can fail need four different fixes (an auth expiry, a server 500
-// carrying the DB's own message, a client-side 12 s fuse, and a transport
-// error), and until now they were one indistinguishable sentence on screen.
-function _outreachFailureReason(res) {
-  if (!res) return 'no response';
-  if (res._timedOut) return 'timed out after 12s in the browser';
-  if (res.status === 401 || res.status === 403) return 'not authorised (HTTP ' + res.status + ') — try signing in again';
-  if (res.ok === false && res.status) {
-    const detail = (res.data && (res.data.detail || res.data.error)) || res.error || '';
-    return 'HTTP ' + res.status + (detail ? ': ' + String(typeof detail === 'string' ? detail : JSON.stringify(detail)).slice(0, 160) : '');
-  }
-  if (res.error) return String(res.error).slice(0, 160);
-  if (res.data && res.data.ok === false) {
-    return String(res.data.error || res.data.detail || 'server reported failure').slice(0, 160);
-  }
-  return 'unrecognised response shape';
+// UX-T1a-today (2026-09-03) — Today recut into Significant / Important /
+// Urgent (docs/os/canon/blocks/operator-doctrine.md 1.8.0). Replaces the old
+// "Work Your Outreach" + "Top BD Actions" cards, which had no section
+// structure and no due-today boundary. Reads GET /api/operations?
+// action=today_sections (api/_shared/today-sections.js owns the pure
+// classification; this renderer only draws what the server already ranked).
+let _todaySectionsLoaded = false;
+let _todaySectionsInFlight = false;
+
+function _todaySectionsFallback(msg) {
+  ['todaySignificantContent', 'todayImportantContent', 'todayUrgentContent'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = '<div class="nba-empty">' + esc(msg || 'Today unavailable.')
+      + ' <button class="retry-btn" onclick="renderTodaySections(true)">Retry</button></div>';
+  });
 }
 
-let _outreachOnrampLoaded = false;
-let _outreachOnrampInFlight = false;
-async function renderOutreachOnramp(force) {
-  const el = document.getElementById('outreachOnrampContent');
+function _todayMoney(x) {
+  const n = Number(x);
+  return (x !== null && x !== undefined && isFinite(n)) ? '$' + Math.round(n).toLocaleString() : 'value unknown';
+}
+
+// Renders one section's rows into its content div. `openFn` returns the
+// onclick JS for a row (or '' for a non-clickable row) — kept per-section
+// because Significant/Important open an entity, Urgent's worklist half opens
+// a decision-center lane.
+function _renderTodaySection(contentId, section, viewAllLabel, viewAllOnclick) {
+  const el = document.getElementById(contentId);
   if (!el) return;
-  if (_outreachOnrampLoaded && !force) return;
-  if (_outreachOnrampInFlight) return;
-  if (typeof opsApi !== 'function') { setTimeout(() => renderOutreachOnramp(force), 300); return; }
-  _outreachOnrampInFlight = true;
-  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const items = (section && Array.isArray(section.items)) ? section.items : [];
+  if (!items.length) { el.innerHTML = '<div class="nba-empty">Nothing here right now. ✓</div>'; return; }
+  let html = '';
+  items.forEach((it) => {
+    const dl = it.deep_link || {};
+    const clickable = dl.surface === 'entity' && !!dl.entity_id;
+    const onclick = clickable ? 'openEntityDetail(' + JSON.stringify(String(dl.entity_id)) + ')' : '';
+    const title = it.who || it.what || it.property_id || '—';
+    const meta = [];
+    const v = _todayMoney(it.value);
+    if (v && v !== 'value unknown') meta.push(v);
+    if (it.basis) meta.push(esc(it.basis));
+    html += '<div class="nba-item' + (clickable ? ' clickable' : '') + '"'
+      + (clickable ? ' onclick=\'' + onclick.replace(/'/g, "\\'") + '\'' : '')
+      + ' style="cursor:' + (clickable ? 'pointer' : 'default') + '">'
+      + '<div class="nba-item-head"><span class="nba-item-title">' + esc(String(title)) + '</span></div>'
+      + (meta.length ? '<div class="nba-item-sub">' + meta.join(' · ') + '</div>' : '')
+      + '</div>';
+  });
+  const total = section.total_open || items.length;
+  if (viewAllLabel && total > items.length) {
+    html += '<button type="button" class="nba-viewall" onclick="' + viewAllOnclick + '">'
+      + esc(viewAllLabel) + ' (' + total + ') →</button>';
+  } else if (viewAllLabel) {
+    html += '<button type="button" class="nba-viewall" onclick="' + viewAllOnclick + '">' + esc(viewAllLabel) + ' →</button>';
+  }
+  el.innerHTML = html;
+}
+
+async function renderTodaySections(force) {
+  const el = document.getElementById('todaySignificantContent');
+  if (!el) return;
+  if (_todaySectionsLoaded && !force) return;
+  if (_todaySectionsInFlight) return;
+  if (typeof opsApi !== 'function') { setTimeout(() => renderTodaySections(force), 300); return; }
+  _todaySectionsInFlight = true;
+  ['todaySignificantContent', 'todayImportantContent', 'todayUrgentContent'].forEach((id) => {
+    const e = document.getElementById(id);
+    if (e) e.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  });
   try {
     const res = await Promise.race([
-      opsApi('/api/operations?action=cadence_dashboard&limit=200'),
+      opsApi('/api/operations?action=today_sections'),
       new Promise((resolve) => setTimeout(() => resolve({ ok: false, _timedOut: true }), 12000)),
     ]);
     if (!res.ok || !res.data || !res.data.ok) {
-      // UX1 (2026-09-02): this used to render ONE string for a 401, a 500, a
-      // client timeout and a network error, so "Outreach list unavailable"
-      // could not be diagnosed without reproducing it. The source view is
-      // healthy — v_bd_cadence_dashboard measured 2,119 ms / 313 actionable
-      // rows against a 12 s client fuse and an 8 s PostgREST timeout — so the
-      // failure is in the REQUEST path, and which one it is decides the fix.
-      // Name it. A handler that discards the reason turns a one-line fix into
-      // an outage of unknown duration.
-      el.innerHTML = '<div class="nba-empty">Outreach list unavailable — '
-        + esc(_outreachFailureReason(res))
-        + '. <button class="retry-btn" onclick="renderOutreachOnramp(true)">Retry</button></div>';
-      console.error('renderOutreachOnramp failed:', _outreachFailureReason(res), res);
+      _todaySectionsFallback('Today unavailable — HTTP ' + (res && res.status || '?'));
+      console.error('renderTodaySections failed:', res);
       return;
     }
-    _outreachOnrampLoaded = true;
-    const items = Array.isArray(res.data.items) ? res.data.items : [];
-    if (!items.length) { el.innerHTML = '<div class="nba-empty">No prospects to work right now. ✓</div>'; return; }
-    const overdue = items.filter((it) => Number(it.days_overdue) > 0).length;
-    const valueSum = items.reduce((s, it) => { const v = Number(it.rank_value); return s + (isFinite(v) && v > 0 ? v : 0); }, 0);
-    const money = (x) => { const n = Number(x); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; };
-    const valStr = valueSum > 0 ? ' · ' + money(valueSum) + ' in reach' : '';
-    const dueLabel = overdue > 0 ? ('<strong>' + overdue + '</strong> due') : ('<strong>' + items.length + '</strong> ready');
-    el.innerHTML = '<div class="nba-meta"><span class="nba-count">' + dueLabel
-      + (overdue > 0 && items.length !== overdue ? ' · ' + items.length + ' total ready' : '') + valStr + '</span></div>'
-      + '<button type="button" class="nba-viewall" style="margin-top:8px;font-weight:600;color:var(--nm-blue,#003DA5)" '
-      + 'onclick="navTo(\'pagePriorityQueue\');setTimeout(function(){if(typeof renderOutreachFocus===\'function\')renderOutreachFocus();},300)">'
-      + '▶ Start working →</button>';
+    _todaySectionsLoaded = true;
+    const data = res.data;
+    _renderTodaySection('todaySignificantContent', data.significant, 'See all seller prospects',
+      "navTo('pageSellerProspectQueue')");
+    _renderTodaySection('todayImportantContent', data.important, 'See all opportunities',
+      "navTo('pagePipeline')");
+    _renderTodaySection('todayUrgentContent', data.urgent, 'See all BD actions',
+      "navTo('pagePriorityQueue');setTimeout(function(){if(typeof renderBdWorklist==='function')renderBdWorklist();},300)");
   } catch (e) {
-    el.innerHTML = '<div class="nba-empty">Outreach list unavailable — '
-      + esc((e && e.message) ? String(e.message).slice(0, 160) : 'request threw')
-      + '. <button class="retry-btn" onclick="renderOutreachOnramp(true)">Retry</button></div>';
-    console.error('renderOutreachOnramp threw:', e);
+    _todaySectionsFallback('Today unavailable — ' + ((e && e.message) ? String(e.message).slice(0, 160) : 'request threw'));
+    console.error('renderTodaySections threw:', e);
   } finally {
-    _outreachOnrampInFlight = false;
+    _todaySectionsInFlight = false;
   }
 }
-window.renderOutreachOnramp = renderOutreachOnramp;
+window.renderTodaySections = renderTodaySections;
 
-async function renderTodayBdActions(force) {
-  const el = document.getElementById('todayBdActionsContent');
+// UX-T1a-today — the seller-prospect-queue page (v_lcc_seller_prospect_queue's
+// first front-end surface; the API existed with no page since UX-T1a-queue).
+// Server-side chips + real pagination, mirroring the API's own contract.
+let _sellerProspectPage = { chip: 'all', offset: 0 };
+async function renderSellerProspectQueuePage(force, opts) {
+  const el = document.getElementById('sellerProspectQueueContent');
   if (!el) return;
-  if (_todayBdLoaded && !force) return;
-  if (_todayBdInFlight) return;
-  // ops.js provides opsApi; on a very early call (e.g. boot) it may not have
-  // executed yet. Retry shortly instead of leaving the static spinner forever.
-  if (typeof opsApi !== 'function') { setTimeout(() => renderTodayBdActions(force), 300); return; }
-  _todayBdInFlight = true;
+  if (typeof opsApi !== 'function') { setTimeout(() => renderSellerProspectQueuePage(force, opts), 300); return; }
+  if (opts && opts.chip) { _sellerProspectPage.chip = opts.chip; _sellerProspectPage.offset = 0; }
+  if (opts && typeof opts.offset === 'number') { _sellerProspectPage.offset = opts.offset; }
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   try {
-    // Watchdog: opsApi already aborts at 30s, but the Today card should fall back
-    // faster — never hang the home screen on a spinner.
-    const res = await Promise.race([
-      opsApi('/api/operations?action=bd_worklist&limit=5'),
-      new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: 'timeout' }), 12000)),
-    ]);
-    if (!res.ok || !res.data || !res.data.ok) { _todayBdFallback('BD actions unavailable.'); return; }
-    const items = Array.isArray(res.data.worklist) ? res.data.worklist : [];
-    _todayBdLoaded = true; // clean result — don't auto-refetch on re-nav
-    if (!items.length) { el.innerHTML = '<div class="nba-empty">No BD actions right now. ✓</div>'; return; }
-    window._bdWorklistItems = items; // reuse the ops.js index-based open handler
-    const labels = { loan_maturity: 'Loan maturity', suspected_sale: 'Suspected sale',
-      owner_source_conflict: 'Owner conflict', contact_writeback: 'Push to CRM', ownership_chain: 'Ownership chain' };
-    const money = (x) => { const n = Number(x); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; };
+    const q = 'chip=' + encodeURIComponent(_sellerProspectPage.chip) + '&limit=50&offset=' + _sellerProspectPage.offset;
+    const res = await opsApi('/api/seller-prospect-queue?' + q);
+    if (!res.ok || !res.data) {
+      el.innerHTML = '<div class="nba-empty">Seller prospect queue unavailable — HTTP ' + (res && res.status || '?')
+        + '. <button class="retry-btn" onclick="renderSellerProspectQueuePage(true)">Retry</button></div>';
+      return;
+    }
+    const data = res.data;
+    const chipsEl = document.getElementById('sellerProspectChips');
+    if (chipsEl && Array.isArray(data.chips)) {
+      chipsEl.innerHTML = data.chips.map((c) =>
+        '<button type="button" class="nba-domain-btn' + (c.key === data.chip ? ' active' : '') + '" '
+        + 'onclick="renderSellerProspectQueuePage(true,{chip:' + JSON.stringify(c.key) + '})">'
+        + esc(c.label) + (c.n != null ? ' (' + c.n + ')' : '') + '</button>'
+      ).join(' ');
+    }
+    const items = Array.isArray(data.items) ? data.items : [];
+    if (!items.length) { el.innerHTML = '<div class="nba-empty">No prospects for this filter. ✓</div>'; return; }
     let html = '';
-    items.slice(0, 5).forEach(function (it, ix) {
-      const dom = String(it.domain || '');
-      const pid = it.property_id == null ? '' : String(it.property_id);
-      const val = money(it.rank_value);
-      const meta = [];
-      if (val) meta.push(val + ' rent');
-      if (it.who) meta.push(esc(it.who));
-      if (it.city || it.state) meta.push(esc([it.city, it.state].filter(Boolean).join(', ')));
-      const clickable = !!(dom && pid);
+    items.forEach((r) => {
+      const clickable = !!r.entity_id;
       html += '<div class="nba-item' + (clickable ? ' clickable' : '') + '"'
-        + (clickable ? ' onclick="bdOpenWorklistItem(' + ix + ')"' : '')
+        + (clickable ? ' onclick=\'openEntityDetail(' + JSON.stringify(String(r.entity_id)) + ')\'' : '')
         + ' style="cursor:' + (clickable ? 'pointer' : 'default') + '">'
-        + '<div class="nba-item-head"><span class="nba-item-title">' + esc(it.what || '—') + '</span>'
-        + '<span class="q-badge type">' + esc(labels[it.signal_type] || it.signal_type) + '</span>'
-        + (it.is_distressed ? '<span class="q-badge pri-high" title="Distressed loan">⚠</span>' : '') + '</div>'
-        + (meta.length ? '<div class="nba-item-sub">' + meta.join(' · ') + '</div>' : '')
-        + '</div>';
+        + '<div class="nba-item-head"><span class="nba-item-title">' + esc(r.owner_name || r.entity_name || '—') + '</span>'
+        + '<span class="q-badge type">' + esc(r.reach_state || '') + '</span></div>'
+        + '<div class="nba-item-sub">' + esc(_todayMoney(r.rank_value))
+        + ([r.newer_lease ? 'newer lease' : null, r.reason_debt ? 'debt maturing' : null,
+            r.reason_value_creation_developer ? 'developer' : null].filter(Boolean).length
+              ? ' · ' + [r.newer_lease ? 'newer lease' : null, r.reason_debt ? 'debt maturing' : null,
+                  r.reason_value_creation_developer ? 'developer' : null].filter(Boolean).join(', ') : '')
+        + ([r.city, r.state].filter(Boolean).length ? ' · ' + esc([r.city, r.state].filter(Boolean).join(', ')) : '')
+        + '</div></div>';
     });
     el.innerHTML = html;
+    const pager = document.getElementById('sellerProspectPager');
+    if (pager && data.pagination) {
+      const p = data.pagination;
+      pager.innerHTML = (p.total != null ? 'Page ' + p.page + ' of ' + p.total_pages + ' (' + p.total + ' total)' : '')
+        + ' '
+        + '<button type="button" class="retry-btn" ' + (p.offset > 0 ? '' : 'disabled')
+        + ' onclick="renderSellerProspectQueuePage(true,{offset:' + Math.max(0, p.offset - p.limit) + '})">← Prev</button> '
+        + '<button type="button" class="retry-btn" ' + (p.has_more ? '' : 'disabled')
+        + ' onclick="renderSellerProspectQueuePage(true,{offset:' + (p.offset + p.limit) + '})">Next →</button>';
+    }
   } catch (e) {
-    _todayBdFallback('BD actions unavailable.');
-  } finally {
-    _todayBdInFlight = false;
+    el.innerHTML = '<div class="nba-empty">Seller prospect queue unavailable — '
+      + esc((e && e.message) ? String(e.message).slice(0, 160) : 'request threw') + '</div>';
   }
 }
-window.renderTodayBdActions = renderTodayBdActions;
+window.renderSellerProspectQueuePage = renderSellerProspectQueuePage;
+
 
 function renderNextBestActionPanel() {
   const el = document.getElementById('nextBestActionContent');
@@ -9144,8 +9152,8 @@ function bootApp() {
       applyFeatureFlags();
       autoConnectCredentials().then(() => {
         Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks(), loadCanonicalData(), loadDailyBriefingData(), loadNextBestActionData()])
-          .then(() => { updateGreeting(); if (typeof renderOutreachOnramp === 'function') renderOutreachOnramp(); if (typeof renderTodayBdActions === 'function') renderTodayBdActions(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
-          .catch(() => { updateGreeting(); if (typeof renderOutreachOnramp === 'function') renderOutreachOnramp(); if (typeof renderTodayBdActions === 'function') renderTodayBdActions(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
+          .then(() => { updateGreeting(); if (typeof renderTodaySections === 'function') renderTodaySections(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
+          .catch(() => { updateGreeting(); if (typeof renderTodaySections === 'function') renderTodaySections(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
       });
     });
   });

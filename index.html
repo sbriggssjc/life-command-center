@@ -115,20 +115,34 @@
         <div class="greeting-date" id="greetingDate"></div>
         <div class="home-layout">
           <div class="home-main">
-            <!-- Work Your Outreach — the daily on-ramp into the outreach focus
-                 session (2026-06-26). Honest, actionable count of reachable,
-                 value-ranked prospect cadences due, landing directly in the
-                 card-at-a-time focus flow (renderOutreachFocus). Distinct from the
-                 cockpits below: this is "go knock out today's touches". -->
-            <div class="widget" id="outreachOnrampWidget">
+            <!-- Today: Significant / Important / Urgent (UX-T1a-today, 2026-09-03) —
+                 docs/os/canon/blocks/operator-doctrine.md 1.8.0's three sections.
+                 Replaces the old "Work Your Outreach" + "Top BD Actions" cards,
+                 which carried no section structure and no due-today boundary.
+                 GET /api/operations?action=today_sections. -->
+            <div class="widget" id="todaySectionsWidget">
               <div class="widget-title">
-                Work Your Outreach
+                Today
                 <div class="nba-controls">
-                  <button type="button" class="nba-refresh-btn" onclick="renderOutreachOnramp(true)" title="Refresh">↻</button>
+                  <button type="button" class="nba-refresh-btn" onclick="renderTodaySections(true)" title="Refresh">↻</button>
                 </div>
               </div>
-              <div class="nba-subhead">Your reachable, value-ranked prospect cadences — knock them out one at a time.</div>
-              <div id="outreachOnrampContent"><div class="loading"><span class="spinner"></span></div></div>
+              <div class="nba-subhead">The day's tasks only, ranked by client value. All three must be done — Urgent must never crowd out Significant.</div>
+
+              <div class="today-section" id="todaySignificantSection">
+                <div class="today-section-head">Significant <span class="today-section-sub">— pays in 5 years: new-client research, first outreach, follow-ups</span></div>
+                <div id="todaySignificantContent"><div class="loading"><span class="spinner"></span></div></div>
+              </div>
+
+              <div class="today-section" id="todayImportantSection">
+                <div class="today-section-head">Important <span class="today-section-sub">— pays within a year: BOVs, ELAs, working buyers, marketing live listings</span></div>
+                <div id="todayImportantContent"><div class="loading"><span class="spinner"></span></div></div>
+              </div>
+
+              <div class="today-section" id="todayUrgentSection">
+                <div class="today-section-head">Urgent <span class="today-section-sub">— pays in ~90 days: pipeline management, deal correspondence</span></div>
+                <div id="todayUrgentContent"><div class="loading"><span class="spinner"></span></div></div>
+              </div>
             </div>
 
             <!-- Top Data Gaps to Close — cross-domain data-quality gap queue, ranked
@@ -153,22 +167,6 @@
               <button type="button" class="nba-viewall" onclick="navTo('pagePriorityQueue')">Looking for who to pursue? Open the Priority Queue →</button>
             </div>
 
-            <!-- Top BD Actions — the BD-action cockpit's top slice surfaced on Today
-                 (R59 Unit 2, 2026-06-21). The single highest-value MOVE (suspected
-                 sales / maturities / owner conflicts / contacts / chains), value-ranked.
-                 Distinct from Top Data Gaps above (data-quality) — this is "who/what to
-                 pursue". Links to the full Top BD Actions list. -->
-            <div class="widget" id="todayBdActionsWidget">
-              <div class="widget-title">
-                Top BD Actions
-                <div class="nba-controls">
-                  <button type="button" class="nba-refresh-btn" onclick="renderTodayBdActions(true)" title="Refresh">↻</button>
-                </div>
-              </div>
-              <div class="nba-subhead">Your highest-value moves — suspected sales, loan maturities, owner conflicts, contacts to push. Click to work the deal.</div>
-              <div id="todayBdActionsContent"><div class="loading"><span class="spinner"></span></div></div>
-              <button type="button" class="nba-viewall" onclick="navTo('pagePriorityQueue');setTimeout(function(){if(typeof renderBdWorklist==='function')renderBdWorklist();},300)">See all BD actions →</button>
-            </div>
 
             <!-- Stats -->
             <div class="widget-grid" id="homeStats">
@@ -324,6 +322,26 @@
     <div class="page" id="pagePriorityQueue">
       <div class="page-inner">
         <div id="priorityQueueContent"><div class="loading"><span class="spinner"></span></div></div>
+      </div>
+    </div>
+
+    <!-- SELLER PROSPECT QUEUE — UX-T1a-today's first front-end surface for
+         v_lcc_seller_prospect_queue / GET /api/seller-prospect-queue (the queue
+         existed with no page since UX-T1a-queue; this is the "See all →" target
+         for the Today "Significant" section). Minimal: chip filters + a ranked
+         list, reusing the same server-side chip/pagination contract Today reads
+         from the summary card. -->
+    <div class="page" id="pageSellerProspectQueue">
+      <div class="page-inner">
+        <div class="widget-title">Seller Prospects
+          <div class="nba-controls">
+            <button type="button" class="nba-refresh-btn" onclick="renderSellerProspectQueuePage(true)" title="Refresh">↻</button>
+          </div>
+        </div>
+        <div class="nba-subhead">$2.5M–$25M, a newer lease or a recorded reason to sell, an owner not yet reached — ranked by client value.</div>
+        <div id="sellerProspectChips" style="margin:8px 0"></div>
+        <div id="sellerProspectQueueContent"><div class="loading"><span class="spinner"></span></div></div>
+        <div id="sellerProspectPager" style="margin-top:10px"></div>
       </div>
     </div>
 
