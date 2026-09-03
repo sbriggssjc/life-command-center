@@ -16,6 +16,17 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-03 — EXT2 DECIDED: the lease defines it; prompt drafted. OWN-T0e sent to CC.
+
+- Scott's answer to all three EXT2 questions is the same shape: **there is no house rule — each
+  lease defines base rent, rent commencement and the tenant.** So the extractor quotes the lease's
+  OWN definition (`defined_term`, `definition_as_stated`, `additional_rent[]` never summed,
+  `rent_commencement`, `tenant_legal_entity` / `tenant_dba` / `co_tenants` / `parent_mentioned`)
+  and code applies it (`resolveYear1Rent`, `resolveCreditEntity`). **Credit = the counterparty
+  legal entity that guarantees the lease; a parent named without an express guaranty is never
+  promoted.** `prompts/EXT2-lease-defines-base-rent-year1-and-tenant.md`.
+- OWN-T0e (sponsor-family confirm lane) is with CC.
+
 ## 2026-09-02 — EXT1b floor MEASURED (rent + expiration 100%); OWN-T0 verified live; my prescribed remedy refuted on named rows; EXT2 filed
 
 - **EXT1b floor:** `year1_rent` 89→**100%**, `lease_expiration` 80→**100%**, floor **94%** on 10 docs.
