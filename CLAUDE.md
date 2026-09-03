@@ -3216,7 +3216,7 @@ this person"* — ranked `hub_email > hub_entity_id > sf_campaign > entity_captu
   `test/tier0-park-reasons.test.mjs` reads the **P196 file**, which no longer describes the shipped
   definition.
 
-## Entity identity & dedup — invariants (P189→P195→N15c/d/e→PR5c-entities-b-dupes→PR5c-entities-c; canonical page `docs/architecture/entity-identity-and-dedup.md`)
+## Entity identity & dedup — invariants (P189→P195→N15c/d/e→PR5c-entities-b-dupes→PR5c-entities-c→-review/-oldest; canonical page `docs/architecture/entity-identity-and-dedup.md`)
 
 - **`entities.canonical_name` has ONE writer — a `BEFORE INSERT OR UPDATE OF name` trigger over
   `lcc_entity_canonical_key(name)` (N15c).** Ten code paths used to write it with five
@@ -3234,18 +3234,39 @@ this person"* — ranked `hub_email > hub_entity_id > sf_campaign > entity_captu
   carries **no `auto_mergeable` column** (P198 — `lcc_apply_fuzzy_merges()` loops on that flag).
   Merge candidates found by domain/email co-proposal graded at **25% / 7% / 27%** precision three
   separate times — a review lane, never a rule.
+  - 🚨 **REVERSE WITH `lcc_unmerge_entity`, NEVER `lcc_p195_unmerge` (2026-09-03).** The P195
+    wrapper reports `restored` while **stranding byte-identical edges on the winner**: three
+    identical `(from, to, 'brokers')` edges are all snapshotted, and P196's own
+    `trg_lcc_entity_rel_resolve_survivor` (BEFORE INSERT) skips the 2nd and 3rd as duplicates so
+    they never reach `ON CONFLICT (id) DO UPDATE` — **P196's exact finding in the one reversal path
+    that never got P196's fix.** Measured on one live pair, rolled back: **26 rows before / 26
+    after**, `restored=17`, 2 edges left behind; the P196 path on the same pair is 0/0/0. **The row
+    COUNT is identical in both runs — only an identity-keyed fingerprint exposes it**, so a
+    count-based verification of any unmerge is worthless. Backlog `PR5c-entities-c-p195-unmerge`.
 - **`entities.domain` is a PROVENANCE tag (`dia`/`gov`/`lcc`/`cre`), not an identity scope.**
   `ensureEntityLink`'s canonical_name tier carried `&domain=eq.` and minted duplicates on 9 of 11
   same-email pairs (fixed `d5b0ac8`). **The email tier keeps the same filter ON PURPOSE** — read on
   named rows, 40 of 55 cross-domain same-email pairs are two real brokers on one mailbox, firms filed
   as persons, or P131 row labels; **an attach is worse than a duplicate** (a duplicate merges
   reversibly later; a wrong attach folds two people at write time). Guard goes RED if it is removed.
+  - ⚠️ **AND THE OLDEST-ROW-WINS GATE WAS MEASURED AND REFUSED (2026-09-03).** The email tier takes
+    the oldest match without checking it is person-shaped, so an inbound real person can attach to a
+    P131 document row label. Over the 193 same-domain mailboxes holding ≥2 live person entities,
+    **26 oldest rows are clearly not one person and every SQL guard combined catches 12 of them**
+    (`lcc_looks_like_person` PASSES 16); **171 of 193 groups have ≥2 rows passing every guard**, so
+    a shape gate cannot pick; and **37 of the 80 junk-named rows are alone on their mailbox**, where
+    no tiebreak exists. **Retire the junk rows instead** (`PR5c-entities-c-junk80`) — none of the 80
+    is in `junk_entity_review` or carries `metadata.junk_name_flagged` today. Also unstated in every
+    prior note: the tier's `.find` runs over the **oldest 10 rows only**, and an inbound with **no**
+    domain searches the whole workspace.
 - **Before fixing a lookup, prove from a run ledger that it RAN.** The dupes brief named
   `findEntityForUpsert` (the SF bridge); `bridge_runs` showed **zero** bridge runs in the window —
   the writers were the `lcc-sf-contact-resolve` tick (cron 165) and the CoStar sidebar. And
   **`git rev-parse --is-shallow-repository` before dating anything from history** — a shallow clone
   reports the graft boundary as the "add" (published as a finding, retracted the same day).
-- **Two 0.14 s intra-request races remain and no predicate fixes them** — they need the
+- **THREE ~0.14 s intra-request races remain and no predicate fixes them** (re-measured
+  2026-09-03: the third is two live `Matthew Dodson` entities on one gov mailbox, created 0.107 s
+  apart, which the prior audit read as a duplicate view row) — they need the
   `(workspace_id, canonical_name)` unique constraint, which is N15e's open operator decision
   (**6,608** violating groups on the N15c key — up from 3,930 because collapsing keys is what
   creates collisions; surfacing them is the fix working). Expect ~0.6% residual duplicate mint.

@@ -17,7 +17,7 @@
 | `ensureEntityLink` (`api/_shared/entity-link.js`) | the choke point every producer mints through. Two identity tiers: **canonical_name** (domain is a ranking preference since `d5b0ac8`; cross-domain attach requires an exact non-generic email) and **email** (`&domain=eq.` kept ON PURPOSE — 27% precision without it). Dual-reads the legacy key. |
 | `lcc_merge_entity` / `lcc_unmerge_entity` | the ONLY merge path; reversible since P196 (`lcc_entity_merge_log`, `r40_merge_reconcile_backup`); resolves both endpoints to the survivor; refuses cycles. |
 | `lcc_entity_survivor(uuid)` | hop-capped tombstone follow; every writer keyed on a domain-supplied id must resolve through it (P175). |
-| Review surfaces | `v_lcc_merge_candidates` (+ `dc:` fallback key for normalizer-blind names, P189) · `v_lcc_n15e_canonical_collision_candidates` · `v_lcc_entity_duplicate_mint_review` (PR5c-entities-b-dupes) · `v_lcc_entity_email_tier_blind_pairs` (55; 15 genuine) · `v_lcc_tier0_coproposed_owner_duplicates` (7; 4 must never merge). **None carries `auto_mergeable`.** |
+| Review surfaces | `v_lcc_merge_candidates` (+ `dc:` fallback key for normalizer-blind names, P189) · `v_lcc_n15e_canonical_collision_candidates` · `v_lcc_entity_duplicate_mint_review` (PR5c-entities-b-dupes) · `v_lcc_entity_email_tier_blind_pairs` (55; 15 genuine) → `v_lcc_entities_c_review_merge_plan` (the 15, winner + deltas + `winner_decided_by`) over the `lcc_entities_c_pair_verdict` ledger (all 55 verdicts) · `v_lcc_tier0_coproposed_owner_duplicates` (7; 4 must never merge). **None carries `auto_mergeable`.** |
 | Drift / rate instruments | `v_lcc_canonical_name_drift` (must be 0, positive-controlled) · `v_lcc_p195_resurrection_watch` + cron 243 · the duplicate-mint query (`PR5c_entities_c_…md` §6): creates landing on an existing live key, 30-day window |
 
 **Banned for identity:** `lcc_normalize_entity_name`, `dup-pair-planner.ownerCore`/`nameSimilarity`,
@@ -31,8 +31,15 @@ cross-domain email-tier attach (27%). Each was measured on named rows before bei
 window incl. the 553-pair `older_row_has_no_email` bucket — deliberately not swept); **0**
 `salesforce/Contact` identities minted since `d5b0ac8`, so the post-fix rate is **not yet
 measurable** (baseline 3.37%, expect ~0.6% residual from the two races). `auto_mergeable` last
-read 3,006 (C2e-T2a). 👤 **N15e unique-key decision open: 6,608 groups violate
-`(workspace_id, canonical_name)` today.**
+read **3,007** (2026-09-03; 3,006 on 2026-08-28 — re-derive, never quote).
+👤 **N15e unique-key decision open: 6,608 groups violate `(workspace_id, canonical_name)` today.**
+👤 **PR5c-entities-c-review open: the 15-pair plan is built and NOTHING is merged** — one
+`confirm_sql` per row on `v_lcc_entities_c_review_merge_plan`, Scott's call, row by row.
+
+**Junk-named person rows holding a real mailbox (PR5c-entities-c-oldest, 2026-09-03): 80** — 30
+carry a Salesforce identity, 37 are alone on their mailbox, and **0 are in `junk_entity_review`
+(281 rows) or carry `metadata.junk_name_flagged` (706 live)**. That is the live landmine the email
+tier resolves onto; sizing the sweep is **PR5c-entities-c-junk80**.
 
 ## 3. The arc — one line each
 
@@ -46,13 +53,19 @@ read 3,006 (C2e-T2a). 👤 **N15e unique-key decision open: 6,608 groups violate
 | N15d/e | 08-27 | producer proven at 4,618 mints; 537 held rows recomputed; collisions 3,930 → 6,608 | `N15d_N15e_PRODUCER_VERIFY_AND_HELD_RECOMPUTE_2026-08-27.md` |
 | PR5c-entities-b-dupes | 09-02 | `&domain=eq.` scoped the canonical_name tier; 9 of 11 dupes; fixed `d5b0ac8` (#2076) | §4 below (no separate audit) |
 | PR5c-entities-c | 09-03 | the EMAIL tier keeps the filter — 27% precision without it; blind-pair view; guard goes red on removal (#2079) | `PR5c_entities_c_EMAIL_TIER_DOMAIN_SCOPE_2026-09-03.md` |
+| PR5c-entities-c-review | 09-03 | the 15 as a plan Scott confirms row by row; the P195 winner rule degenerates here; **`lcc_p195_unmerge` strands duplicate edges** | `PR5c_entities_c_review_oldest_2026-09-03.md` |
+| PR5c-entities-c-oldest | 09-03 | sized and the gate REFUSED — every guard catches 12 of 26 junk-oldest rows, reaches 22 of 193 groups, and cannot help the 37 alone on their mailbox | same |
 
 **Open (backlog ids):** N15e (👤 unique key — 6,608 groups) · N15f (`[MERGED]` PATCH bypasses the
 trigger) · N15g (dead `canonical_name` argument in the asset mint) · N16 (retire r9's unattached
 mints) · N20 (gov address-punctuation duplicate properties) · N21 (`sync.js`/`domains.js` POST
 without looking up by key) · N3h (9 $0 duplicates on three firms; Gardner Tanenbaum's history split)
-· PR5c-entities-c-race (needs N15e) · PR5c-entities-c-oldest (email tier attaches to the OLDEST row,
-row-label or not — live within a domain) · PR5c-entities-c-review (15 genuine pairs, human merge).
+· PR5c-entities-c-race (needs N15e)
+· ~~PR5c-entities-c-oldest~~ **MEASURED AND THE GATE REFUSED 2026-09-03** — superseded by
+**PR5c-entities-c-junk80** (retire the 80 junk-named person rows holding a real mailbox; 0 are in
+the junk lane that exists) · **PR5c-entities-c-review — 👤 the 15-pair plan is BUILT, nothing
+merged, Scott confirms row by row** · **PR5c-entities-c-p195-unmerge** (`lcc_p195_unmerge` strands
+byte-identical edges on the winner and reports `restored` — use `lcc_unmerge_entity`).
 
 ## 4. Lessons carried verbatim from `CLAUDE.md` (moved 2026-09-03, unedited)
 
@@ -413,3 +426,65 @@ no `%`/`_`/`+`/whitespace, no tombstone. **The named lookup would have found it*
   row label that predates them (**live within a domain today**); and the 15 genuine pairs are a
   human merge decision. **No merges were performed.**
 
+## 5. Lessons from rounds recorded here directly (never in `CLAUDE.md`)
+## PR5c-entities-c-review + -oldest — the plan, and the reversal path that reported success (2026-09-03)
+
+`v_lcc_entities_c_review_merge_plan` (15 rows) over the `lcc_entities_c_pair_verdict` ledger (all 55
+verdicts, so the 40 non-merges are a recorded DECISION). Migration `20261013120000`. **No merges, no
+`ensureEntityLink` change.** Writeup: `docs/audits/PR5c_entities_c_review_oldest_2026-09-03.md`.
+
+- **⚠️ THE SELECTION IS TWO BASES AND SAYING SO IS THE DELIVERABLE.** A structural rule reaches **6
+  of 15**: strip single-character tokens from both canonical names and require identical multi-token
+  residues — it fires on 6 of the 55 and **0 of the other 49**, and the "extra tokens must be
+  initials" clause is what refuses `Income & Expenses` / `Expenses`. The other **9 have no rule**:
+  Andy/Andrew, Jim/James, Nick/Nicholas, Steve/Steven, Vince/Vincent, Ravi/Ravindra, Greg/Gregory
+  need a nickname dictionary or a shared prefix, and Randy Blankstein/Blankenstein needs edit
+  distance — all banned for identity. They ride as `basis='human_read'` with the reason on the row,
+  never inferred. **A partial deterministic rule plus a named human read beats one comparator that
+  covers everything.**
+- **⚠️ THE P195 WINNER RULE DEGENERATES ON A BROKER POPULATION — READ `winner_decided_by`.**
+  `owns_assets → current_rent → portfolio_facts` are **zero on all 30 endpoints, and on 92 of the 93
+  endpoints across all 55 pairs**, so the ownership-first tiers are constant and the winner is
+  decided entirely by `external_ids` (9) then `relationships` (6). That tie-break says nothing about
+  which NAME should survive: it picks `Frank Johnson` over the older, better-connected
+  `Frank D. Johnson`, and `Steve Karlson` over `Steven Karlson`. **A rule calibrated on owners is
+  not wrong here, it is SILENT** — the plan names the deciding tier and hands Scott an explicit
+  `(loser, winner)` to swap.
+- **🚨 `lcc_p195_unmerge` STRANDS ROWS AND REPORTS `restored` — USE `lcc_unmerge_entity`.** Round trip
+  on the Harrison pair, rolled back: the P195 wrapper restored 17 rows and left **two byte-identical
+  `brokers` edges on the winner**, because `trg_lcc_entity_rel_resolve_survivor` (BEFORE INSERT)
+  SKIPS a duplicate of an edge the now-live loser already holds, so the row never reaches
+  `ON CONFLICT (id) DO UPDATE`. **P196's exact finding, in the one reversal path that never got
+  P196's fix.** The plain P196 path (`lcc_merge_entity`, self-snapshotting since P196, then
+  `lcc_unmerge_entity`) round-tripped **0 lost / 0 new / 0 changed**. ⚠️ **Row COUNT was 26 before
+  and after in BOTH runs** — counting rows reads the broken path as clean; only an identity-keyed
+  fingerprint (`id:from>to:type`) exposes it. The wrapper is also now redundant (it double-snapshots
+  and double-folds). Filed **PR5c-entities-c-p195-unmerge**.
+- **⚠️ THE `-oldest` GATE WAS MEASURED AND REFUSED, AND THE REFUTATION IS THE GUARDS THEMSELVES.**
+  193 same-domain mailboxes hold ≥2 live person entities. Reading all 193 oldest names, **26 are
+  clearly not a single person** — firms (`CBRE`, `Kidder Mathews`, `Northmarq`), row labels (`Condo`,
+  `Taxes`, `Public`), whole sentences (`This transaction was not financed.`), a country, a street and
+  **UI chrome (`View Less`)**. Every SQL guard combined catches **12 of the 26**, and
+  `lcc_looks_like_person` **PASSES 16 of them** (P188's documented leak on a new population). The
+  rule's reach is the **22** groups where exactly one row is plausible; on the **171** where ≥2 rows
+  pass every guard it is silent, and switching oldest → most-evidenced would re-pick the winner on
+  **139** of those for no reason connected to identity. **A gate whose own instrument fails on half
+  the population it exists for is not a fix.**
+- **⚠️ AND THE REAL DEFECT IS UPSTREAM AND ALREADY LIVE.** **80 live person entities carry a
+  non-generic email and a junk-shaped name**; **30 carry a Salesforce identity** (21 of them named
+  `--`, the N15c empty-key population, each holding a real broker's mailbox; plus a job title on
+  `steven.weinstock@marcusmillichap.com`, a sentence on `teamherrold@northmarq.com`, `Switzerland` on
+  `peter.gilbertie@ubs.com`, a listing TEAM on `daniel.chumbley@marcusmillichap.com`). **37 of the 80
+  are ALONE on their mailbox, so no tiebreak can help them** — there is nothing to prefer. And **0 of
+  the 80 are in `junk_entity_review` (281 rows) or carry `metadata.junk_name_flagged` (706 live)**:
+  the junk lane exists and has never seen this population. Retiring them is the cheap reversible fix
+  (**PR5c-entities-c-junk80**), not a new gate at the choke point.
+- **⚠️ SEPARATE THE VENDOR DEFECT FROM THIS TIER.** `Cushman & Wakefield` carries **710**
+  relationships, `Public` (on Joey Agree's mailbox) **380**, `View Less` **245**, `Northmarq` (on
+  Scott's own address) 17 — those edges are the RCA/CoStar deal-party slot minting a COMPANY as a
+  `person`, i.e. **C13c's `entity_type` defect, not an attach this tier made.** They are what a
+  future attach would fold a real person into, which is the reason to care, but attributing them to
+  the email tier would be wrong.
+- **Two nuances the brief did not state.** The `.find` runs over the oldest **10** rows only (one
+  group holds 24, outside the window entirely), and **`if (domain)` means an inbound with no domain
+  searches the whole workspace** — the tier is not always same-domain.
