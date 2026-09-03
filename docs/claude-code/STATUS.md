@@ -415,6 +415,44 @@ with UX-T2). **UX13a** deferred to user onboarding. EXT1b sent to CC.
 - Full suite **5,102 pass / 0 fail / 6 skipped**. Record:
   `responses/EXT1-lease-rent-basis-quoted-dates.response.md`.
 
+## 2026-09-03 — ADDR1 SHIPPED (#2108, `9bff5289`) and verified live: the mechanism was FOUR missing section headers in one regex, and my "second phantom" reading was WRONG.
+
+**The mechanism, and it explains the asymmetry my prompt asked about.**
+`extension/content/costar.js`'s `FOREIGN_PARTY_HEADER_RE` — the guard that stops
+`findAddressInLines` from taking an address out of a foreign-party block — knew
+`recorded buyer / listing broker / lender / borrower / …` and **did not know
+`Sales Company` / `Sales Contacts` / `Listing Contacts` / `Property Manager`.** So on the Contacts
+tab the first address-shaped line the one-pass scanner met was SRS's office, and it won. **City/state/
+zip came out right because they come from a different field** — that was the tell, and it is now
+four alternations wider, plus a server-side belt (`api/_shared/contact-address-bleed-guard.js`,
+wired into `upsertDomainProperty`) so a future client build cannot re-open it alone.
+
+**⚠️ My reading of the second row was wrong, and the correction matters.** I filed 50990 as a
+probable duplicate of the same phantom. It is **a REAL, DISTINCT Gary, IN property** with different
+stats and its own broker, which merely lost its street to the same bleed. CC read it before acting
+and applied the right doctrine: **the corrupted street is QUARANTINED (nulled, original preserved in
+`notes`, `address_source='addr1_quarantined_contact_bleed'`), not guessed at** — *write no address
+rather than a wrong one*. city/state/zip were already correct and were left alone. **A "repair" that
+treated it as a duplicate would have destroyed a real property.**
+
+**37491 was the duplicate, and its attached sale was real data.** Merged into 35722 via the EXISTING
+reversible `dia_merge_property_reversible` (walks every FK, snapshots the dropped row) — verified:
+37491 gone, `dia_property_merge_backup` holds 1 row under `addr1_costar_contacts_bleed_20260903`,
+and **35722 now carries 1 sale + 3 listings**, i.e. the phantom's $4.38M 2017 sale (buyer OSAGE
+TOWERS, seller LAKE DELTON RE — Lake Delton adjoins Wisconsin Dells) came home to the real property
+rather than being deleted with the shell. `properties where address='680 Newport Center Dr'` = **0**.
+
+**The detector is narrow ON PURPOSE and that is the load-bearing choice.** It requires a captured
+CONTACT to name that exact street as *its own* office at a DIFFERENT city/state — so an owner
+genuinely headquartered at its property (**12 of 13 raw matches on this table**) is excluded by
+construction. This is why my two loose detectors (108 addresses over 2+ cities / 242 rows; 98 over
+2+ states / 202 rows) were correctly refused: they were dominated by `Dialysis Unit`, `TBD` and
+common street numbers. **`v_dia_contact_office_address_bleed_review` reads 2 today** — property
+37503 (`3121 Michelson Dr` ← IRA Capital, Irvine CA) and 37783 (`4700 Wilshire Blvd` ← CIM Group,
+Los Angeles) — **both `buyer`-role contacts, i.e. a DIFFERENT capture surface from the Sales-Company
+block the regex fix covers.** Neither is auto-repaired. The gov mirror view exists and is applied.
+Guards: `addr1-costar-foreign-party-header.test.mjs` + `addr1-contact-office-address-bleed.test.mjs`.
+
 ## 2026-09-03 — ✅ PR2's PRODUCER PROOF IS CLOSED (a new sidebar capture wrote a parcel row WITH stats), and the same session surfaced 🚨 ADDR1: the Contacts tab's broker office address minted as a property.
 
 ### PR2 — Class 8 closed, on the state delta
