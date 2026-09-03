@@ -82,7 +82,7 @@ Scott's five answers were turned into gates and each was measured. Evidence:
 | current holdings (universe) | 8,858 rows / 6,480 owners / 8,068 props | reproduces OWN-T0's count exactly |
 | + $2.5M–$25M per property | 3,529 | value is DERIVED and domain-aware; `value_unknown` 1,608 (18.2%) |
 | + newer lease | **259** | 93% cut — **dia has no lease dates in the LCC mirror at all** |
-| + a reason to sell | **31** | 88% cut — **the debt D has no LCC table** |
+| + a reason to sell | **31** | 88% cut — ~~the debt D has no LCC table~~ ⚠️ **superseded 2026-09-03:** UX-T1a-gates shipped `lcc_loan_maturity` (568 rows, **192** maturing ≤24 mo — the same 192 this audit measured at source). PR5d re-verified it and found the CMBS capture arm contributed **0** of them; the debt D's residual gap is DISTRESS, not maturity. |
 | + not yet reached | **23** | 5,862 of 6,480 owners (90.5%) are unreached |
 
 - **UX2/UX3/UX5/UX7 are now measured, not just asserted:** **956 of 1,650 `v_priority_queue` rows (58%)**

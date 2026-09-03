@@ -37,6 +37,17 @@
 - **`lcc.`, `dia.`, `gov.` in `target_table` are logical prefixes, not schemas** (`to_regclass` is NULL
   for them). Five `target_table` values have no physical table at all (`comp_provenance`,
   `comparable_sales`, `deal_provenance`, `listing_provenance`, bare `properties` — 526k rows, Salesforce-side).
+- **⚠️ A rung with no writes has an EIGHTH cause: the capture exists and the page is never
+  visited (PR5d).** `costar_cmbs_loan` is 121 rungs — the ladder's largest source — and the
+  scanner, the writer and the extension's host match are all live and correct. Ruling out the
+  rename class needed a column **only that arm writes** (`loans.costar_loan_id`, `loans.source_url`:
+  0 of 2,219 rows on both domains); the sibling tables it alone feeds are 0 rows on both domains
+  too. **A zero is evidence only while exactly one writer could have made it non-zero** — that
+  single-writer property is now guarded, because a second writer would destroy the detector without
+  breaking anything. And **the blocker can be layered**: 27 of the 121 sit behind a dia opt-in flag
+  that is false on 11,803 of 11,803 properties, so capturing the page would still write nothing
+  there. Two blockers, two verdicts.
+
 - **Two ladders exist.** The property-OWNER authority ladder (`manual` > `domain_true_owner` >
   `rel_purchase` > `sf_seller` > `rel_owns`) is scored by `lcc_reconcile_property_owner` into
   `lcc_property_owner_evidence` and writes NO `field_provenance`. Seven "never-written" sources are
@@ -48,7 +59,7 @@
 |---|---|---|
 | `v_field_provenance_unranked` | writers with no rung, **30-day rolling window** — should be 0 | it MOVES (35 → 22 → 30 → 29 on different days); re-measure, never quote |
 | `v_field_provenance_effective_source` | the writer's real name behind a `domain_trigger` relabel | requires the full `^.+:evt[0-9]+$` shape — bare `split_part` invents 9,950 names |
-| `v_field_source_priority_triage` | every rung's `pr5_verdict` / `pr5c_verdict` / `is_orphan_column` / `is_retired` | verify on this, never on the never-written COUNT (it only moves when a producer runs) |
+| `v_field_source_priority_triage` | every rung's `pr5_verdict` / `pr5c_verdict` / **`pr5d_verdict`** / `is_orphan_column` / `is_retired` | verify on this, never on the never-written COUNT (it only moves when a producer runs) |
 | `v_never_first_class` | sources refused as effective source by decision (`county_records`) | — |
 | `scripts/check-field-source-priority-columns.mjs` | rungs on nonexistent columns (PR7) | **operator-run**, not a merge gate — no DB can see both rungs and both schemas |
 | `provenance_failed` counter + `lcc_health_alerts(alert_kind='provenance_write_failed')` | JS-side RPC failures, with SQLSTATE | blind to callers that hit the RPC directly (PR5c-signal) |
@@ -105,6 +116,7 @@ probe is not a negative result: pg_net may take minutes to persist the row, so r
 | PR12 | 09-02 | `::bytea` hash aborted `lcc_merge_field` on quotes/newlines; JS failed open; fixed in place | `PR12_PROVENANCE_QUOTE_LOSS_2026-09-02.md` |
 | PR5c | 09-02 | 33 zero-row internal rungs = five callers sending an invalid `target_database` (23514, 100%) | `PR5c_INTERNAL_RUNG_VERDICTS_2026-09-02.md` |
 | PR5c-entities | 09-02 | the 13 `entities` rungs had no caller; the two contact writers now consult the ladder — **recording only, because every rung is `record_only`** | `PR5c_entities_LADDER_WIRED_2026-09-02.md` |
+| PR5d | 09-03 | `costar_cmbs_loan`'s 121 rungs: the scanner, the writer and the host match all exist — **the CoStar loan sub-page has never been captured**, and 27 dia rungs are additionally behind an opt-in flag that is false on 11,803 of 11,803 | `PR5d_COSTAR_CMBS_LOAN_ARM_2026-09-03.md` |
 | PR5c-entities-b | 09-02 | the Salesforce bridge CREATE path — the lane that actually runs (329 entity creates / 30 d) — records `email`/`phone` provenance; **records, never gates** | this page §3 + `PR5c_entities_LADDER_WIRED_2026-09-02.md` §5 |
 
 **Open (backlog ids):** PR1d (`REGRID_API_KEY`, Scott) · PR5a (29 field-grain gaps — should a ladder
@@ -113,7 +125,7 @@ govern bookkeeping columns at all?) · PR5b (`om_extraction` unregistered where 
 `record_only`, so nothing is protected yet) · ~~PR5c-entities-b~~ ✅ (wired 09-02) ·
 ~~PR5c-entities-b-dupes~~ ✅ (09-02, `d5b0ac8` — `entities.domain` was scoping the identity key; see
 `entity-identity-and-dedup.md`, which owns duplicate-mint from here) · PR5c-signal · PR5c-avail-field ·
-PR5c-deploy (Scott) · PR5d (`costar_cmbs_loan`: 121 rungs, 0 rows ever) · PR5e (`gov_ownership_chain`
+PR5c-deploy (Scott) · ~~PR5d~~ ✅ (09-03, verdicted `page_never_captured` 94 / `page_never_captured_flag_off` 27; follow-ups **PR5d-a** gov capture, **PR5d-b** the dia `track_cmbs_snapshots` opt-in) · PR5e (`gov_ownership_chain`
 dead constant) · PR7a (the live orphan column) · PR7b (prune 15 inert rungs — NOT neutral) · PR9
 (`manual_verify`@20 — Scott) · PR10 (one source, two ladders) · PR11 (model-leg quarantine) · PR12a
 (the 67 residual) · PR12b (flush watermark skips an errored event).

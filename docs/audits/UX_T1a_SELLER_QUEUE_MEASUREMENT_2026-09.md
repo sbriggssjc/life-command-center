@@ -361,6 +361,14 @@ populations, and the overlap was measured:
 **The queue is not mis-ranked relative to the doctrine; it is largely about different assets.** This is
 the single number that justifies Part B being a new view rather than a re-rank of the old one.
 
+> 🔴 **QUALIFIED 2026-09-03 by UX-T1a-queue. The 27 reproduces exactly (27 of 285 in-band
+> newer-lease rows), and the disjointness claim is TRUE OF THIS POPULATION ONLY.** Measured over
+> the shipped variant-F queue, **181 of 520 (34.8%)** exact (owner, asset) pairs ARE in
+> `v_priority_queue` — because the reason-to-sell half is dominated by maturing loans, which
+> usually sit on a LATE-term lease, exactly what P1/P2/P3 select. **Quote 89.6% for the
+> newer-lease population, never for variant F.** Consequence: the seller queue ships BESIDE the
+> band queue rather than replacing it.
+
 Note also that one asset can emit two rows for two owners — `pid 250` appears in the strict 23 twice
 (`Gardner-Tanenbaum` and `Tep Pt. Huron, LLC`), which is the OWN-T0 sponsor↔SPE class (756 properties
 with >1 current owner). Row / asset / owner counts are three different numbers here, as C6 §3 warned.
@@ -423,8 +431,13 @@ into the surface the operator is meant to trust:
 1. **G3 for dia** needs `leases` (3,823 live leases / 1,940 properties) mirrored into
    `lcc_property_attributes`. Until then a dia asset can only ever read `term_unknown`, and a view
    claiming to implement §0b.1 would silently exclude the whole dia swimlane.
-2. **G4's debt arm** — the strongest D, 192 loans maturing inside 24 months — has no LCC table and no
-   producer behind the `loan_maturity` slot that already exists on the home page. Its death and divorce
+2. **G4's debt arm** — the strongest D, 192 loans maturing inside 24 months — ~~has no LCC table and no
+   producer behind the `loan_maturity` slot that already exists on the home page.~~
+   ⚠️ **SUPERSEDED 2026-09-03 (UX-T1a-gates, re-verified by PR5d): `lcc_loan_maturity` holds 568 rows
+   carrying exactly these 192, and `v_lcc_bd_worklist` emits 172 owner-attributed `loan_maturity` rows.**
+   The maturity half of G4 is closed. What remains open is DISTRESS (watchlist / delinquency / DSCR),
+   which reads 0 across all 285 gov CMBS loans because its only capture arm has never fired
+   (`PR5d_COSTAR_CMBS_LOAN_ARM_2026-09-03.md`). Its death and divorce
    arms are only reachable through new lexical rules, one of which **measured 42% false-positive** (§5c)
    and the other of which is ungraded. Encoding those as a `reason_to_sell` column would ship exactly the
    class of gate this repo has refused four times (P189 25%, P198 7%, A3, P196).
@@ -452,7 +465,7 @@ into the surface the operator is meant to trust:
 |---|---|---|
 | ~~**UX-T1a-mirror-dia-lease**~~ ✅ **SHIPPED 2026-09-03** | mirror dia `leases` → `lcc_property_attributes` | 0 → 1,747 properties; dia `term_unknown` 2,127 → 1,252 |
 | ~~**UX-T1a-debt**~~ ✅ **SHIPPED 2026-09-03** | produce `loan_maturity` into `v_lcc_bd_worklist` | 0 → 172 rows / 109 owners, owner-attributed (the domain fan-out was not) |
-| **UX-T1a-queue** | `v_lcc_seller_prospect_queue` (variant F) | **UNBLOCKED** — both gates are honest as of 2026-09-03 |
+| ~~**UX-T1a-queue**~~ ✅ **SHIPPED 2026-09-03** | `v_lcc_seller_prospect_queue` (variant F) | **520 rows / 453 owners / 466 properties** (gov 405 / dia 115). Record: `docs/claude-code/responses/UX-T1a-queue.response.md` |
 | **UX-T1a-today** | Significant / Important / Urgent split | depends on the queue |
 | **UX-T1a-cadence** | 6-month spacing + role steady state | needs `current_touch` fixed first |
 | **UX-T1a-touchcount** | `current_touch` max 8,198 | a cadence position nobody can read |

@@ -40,7 +40,28 @@
 > gap was owner ATTRIBUTION (`entity_id: null`), which is what blocked an owner-keyed queue.
 > Record: [`UX-T1a-gates.response.md`](../claude-code/responses/done/UX-T1a-gates.response.md);
 > guard `test/uxt1a-gates-coverage.test.mjs` (18 tests, 19/19 mutations RED).
-> **UX-T1a-queue (`v_lcc_seller_prospect_queue`, variant F) is UNBLOCKED and is the next step.**
+> ✅ **UX-T1a-queue SHIPPED 2026-09-03 — the doctrine's queue exists as its own view.**
+> **`v_lcc_seller_prospect_queue` = 520 rows / 453 owners / 466 properties** (gov 405, **dia 115**
+> — dia contributes at all only because the gates round mirrored its lease dates), over
+> `v_lcc_seller_prospect_universe` (8,383 holdings, every gate a named column) with
+> `v_lcc_seller_prospect_queue_summary` carrying the funnel. Surface:
+> `GET /api/seller-prospect-queue` (chips filter server-side and their counts gate on the same
+> predicate; the response carries a real `pagination` block). Migration
+> `20261016120000_lcc_uxt1a_seller_prospect_queue.sql`; record
+> [`UX-T1a-queue.response.md`](../claude-code/responses/UX-T1a-queue.response.md); guard
+> `test/uxt1a-queue.test.mjs` (22 tests, 24/24 mutations RED).
+> **`value_unknown`, `term_unknown`, `no_linked_person` and `reason_to_sell_unmeasured` are
+> STATES, never 0 / false / "none".** `reason_to_sell` carries only the two RECORDED arms (debt,
+> developer): **UX-T1a-regex stays refused** — the audit's own trust/estate regex measured 42%
+> false-positive, and the guard goes RED if any `~*`/`ILIKE` arm appears in the classifier.
+> ⚠️ **THE 89.6% DISJOINTNESS IS TRUE OF THE NEWER-LEASE HALF, NOT OF THIS QUEUE.** §7b
+> reproduces exactly (**27 of 285** in-band newer-lease rows are in `v_priority_queue`), but
+> **181 of 520 (34.8%)** of the whole seller queue's exact (owner, asset) pairs already appear
+> here — because a maturing loan usually sits on a LATE-term lease, which is what P1/P2/P3
+> select. So the seller queue **sits BESIDE this band queue, not in place of it**; quote the
+> disjointness for the newer-lease population only.
+> ⚠️ The debt arm is keyed on the **PROPERTY**, not the owner — owner-scoping admits 615 rows
+> instead of 520.
 >
 > ✅ **C11 SHIPPED 2026-08-31 — the call-sheet arc (C6 → C8 → C10 → C11) is COMPLETE.** See **§4b**
 > for the state of this surface: 126 rows, gated, legible, each stating its basis; **~4 defective

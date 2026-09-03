@@ -122,6 +122,10 @@ import {
 } from './_shared/intake-classify.js';
 import { normalizeState, parseContactFromJunk, normalizeCanonicalName } from './_shared/entity-link.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
+import {
+  SELLER_QUEUE_CHIPS, buildQueuePath, buildChipCountPath, buildPagination,
+  resolveChip, normalizeDomain, clampLimit, clampOffset,
+} from './_shared/seller-prospect-queue.js';
 import { createHash, randomUUID } from 'node:crypto';
 
 // Default flag values — safe defaults for gradual rollout
@@ -216,6 +220,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'resolve-cms-chain-drift':    return handleResolveCmsChainDrift(req, res);
     case 'priority-band':              return handlePriorityBand(req, res);
     case 'priority-queue':             return handlePriorityQueueList(req, res);
+    case 'seller-prospect-queue':      return handleSellerProspectQueue(req, res);
     case 'priority-trigger-properties': return handlePriorityTriggerProperties(req, res);
     case 'review-counts':              return handleReviewCounts(req, res);
     case 'news-alerts':                return handleNewsAlerts(req, res);
@@ -7168,6 +7173,79 @@ async function handlePriorityQueueList(req, res) {
     .map(b => ({ band: b, n: countMap[b] }));
 
   return res.status(200).json({ counts, total, band: band || null, domain: domainFilter || null, items });
+}
+
+// ============================================================================
+// SELLER PROSPECT QUEUE (UX-T1a-queue, 2026-09-03)
+// GET /api/seller-prospect-queue?chip=<key>&domain=<gov|dia>&limit=&offset=
+//
+//   The doctrine's queue: $2.5M-$25M per property, a newer lease OR a recorded
+//   reason to sell, an owner nobody has reached. Reads v_lcc_seller_prospect_queue,
+//   which owns every gate; this handler only filters, pages and ranks.
+//
+//   ⚠️ THIS IS A NEW SURFACE, NOT A RE-RANK OF /api/priority-queue, and the number
+//   that decides that is the OVERLAP: of the 259 in-band newer-lease assets Part A
+//   measured, 27 appear in v_priority_queue at the (owner, asset) grain and 232 do
+//   not -- 89.6% disjoint, because P1/P2/P3 select assets LATE in their term and the
+//   doctrine's sweet spot is the FIRST two or three years. The two surfaces are about
+//   different assets, so this one sits BESIDE the band queue rather than replacing it;
+//   the band queue keeps serving its six seller-timing bands (694 rows) and its four
+//   hidden automated ones.
+//
+//   Every row carries its own gate columns (value_basis, newer_lease_basis,
+//   reason_to_sell, reach_state, months_to_maturity, owners_on_asset) so the card can
+//   say WHY this owner and WHY now -- C11's rule: the basis rides on the card, because
+//   a legible sheet that names a party without a basis is more dangerous than an
+//   illegible one.
+// ============================================================================
+async function handleSellerProspectQueue(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const chip = resolveChip(req.query.chip);
+  const domain = normalizeDomain(req.query.domain);
+  const limit = clampLimit(req.query.limit);
+  const offset = clampOffset(req.query.offset);
+
+  // count=exact on the list gives the pager an exact total for the ACTIVE filter --
+  // so `has_more` is a fact, not "the page came back full".
+  const itemsR = await opsQuery('GET', buildQueuePath({ chipKey: chip.key, domain, limit, offset }),
+    undefined, { countMode: 'exact' });
+  if (!itemsR.ok) {
+    console.warn('[seller-prospect-queue] items query failed:', itemsR.status, itemsR.data);
+    // Pass the DB's own message through. A handler that discards it turns a one-line
+    // fix into an outage of unknown duration (P132).
+    return res.status(502).json({ error: 'list_failed', detail: itemsR.data });
+  }
+  const items = Array.isArray(itemsR.data) ? itemsR.data : [];
+
+  // Chip counts: ONE query per chip, each carrying the SAME predicate its click sends,
+  // so a chip can never report a population the list would not show (P139). Chips
+  // soft-fail independently -- a hiccup on the counts must not take down the page --
+  // and a failed chip reports n: null (not 0), because "we could not count" and "there
+  // are none" are different facts (P180).
+  const countResults = await Promise.all(SELLER_QUEUE_CHIPS.map((c) =>
+    opsQuery('GET', buildChipCountPath({ chipKey: c.key, domain }), undefined, { countMode: 'exact' })
+      .then((r) => ({ key: c.key, label: c.label, n: r.ok ? r.count : null }))
+      .catch((e) => {
+        console.warn('[seller-prospect-queue] chip count threw:', c.key, e?.message || e);
+        return { key: c.key, label: c.label, n: null };
+      })));
+
+  // The funnel, so the EXCLUDED populations stay visible instead of silently vanishing
+  // (the producer/consumer honest-counts rule). Soft-fails to null.
+  const summaryR = await opsQuery('GET', 'v_lcc_seller_prospect_queue_summary?select=*',
+    undefined, { countMode: 'none' }).catch(() => ({ ok: false, data: null }));
+
+  return res.status(200).json({
+    chip: chip.key,
+    domain: domain || null,
+    chips: countResults,
+    pagination: buildPagination({ total: itemsR.count, limit, offset }),
+    funnel: (summaryR.ok && Array.isArray(summaryR.data)) ? summaryR.data : null,
+    items,
+  });
 }
 
 // ============================================================================
