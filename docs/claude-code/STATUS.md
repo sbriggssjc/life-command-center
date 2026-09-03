@@ -16,6 +16,23 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-03 — EXT2a SHIPPED (PR #2098): the schedule-blend double count is fixed
+
+- `baseFromPeriodQuote` reads a schedule period's own labelled base/additional split (ground-truthed
+  against the real Chesterbrook lease); components merge into `additional_rent` deduped
+  `(kind,amount)`; `resolveYear1TotalRent` gained a `schedule_composition_unknown` guard (null total
+  rather than guessing when a schedule figure's makeup can't be determined). Doc 255 now resolves
+  **89,340 base / 101,568 total / `schedule_period_1`** (was 101,568/113,796 — equipment counted
+  twice). Guard extended, full suite green, 39/39 new-area.
+- **Found + fixed along the way:** a literal apostrophe inside a regex character class
+  (`[a-z0-9 /&'-]`) defeated the test file's own literal-blanking regex and silently blanked ~20
+  lines of real code, failing an unrelated test — fixed with `\x27`. Transferable to any future
+  comment/literal-stripping guard.
+- Docs closed in the same reconciliation: EXT2 residual-risk framing, `ai-and-ocr-cost-strategy.md`,
+  `CURRENT-STATE.md`, `PLANNED-BACKLOG.md`, `OPERATOR-ACTIONS.md`. Record
+  `responses/done/EXT2a-schedule-line-definition.response.md`. The EXT arc (EXT1→EXT1b→EXT2→EXT2a)
+  is now fully closed — no open residue.
+
 ## 2026-09-03 — the Chesterbrook lease was READ; EXT2a ground-truthed and prompt drafted
 
 - Scott uploaded the actual lease; OCR'd and read in-session. Exhibit B defines the split in its own

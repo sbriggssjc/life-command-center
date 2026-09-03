@@ -191,7 +191,7 @@ OCR on savings is arguing from a number that does not support it.**
      neither arithmetic nor a label. The model chose a **different LINE** for the same field and
      **both lines were verbatim** (doc 255 base-plus-equipment vs the total; doc 299 two schedule
      periods; a DBA vs the registered entity). `responses/done/EXT1b-floor-measurement.response.md`.
-   - ✅ **EXT2 (2026-09-03, BUILT + floor re-run VERIFIED — 7/8 source agreement; residue = EXT2a schedule-blend double count + one spot-check):** Scott's decision is that **each
+   - ✅ **EXT2 (2026-09-03, BUILT + floor re-run VERIFIED — 7/8 source agreement):** Scott's decision is that **each
      lease defines these terms itself**, so the extractor quotes the lease's own definition
      (`defined_term` / `definition_as_stated`, separately-stated components as their own
      `additional_rent` rows, Rent Commencement as its own date, every named Tenant party) and code
@@ -200,6 +200,15 @@ OCR on savings is arguing from a number that does not support it.**
      `year1_total_rent` a SECOND field, never blended in; and **`credit_entity` = the guarantor only
      where the lease carries an express guaranty, else the tenant** — a parent merely NAMED can never
      become the credit. Record: `responses/done/EXT2-lease-defines-rent-and-tenant.response.md` (#2078, `f83c2d99`).
+   - ✅ **EXT2a (2026-09-03, SHIPPED, PR #2098):** closed EXT2's one named residual risk — a schedule
+     PERIOD's own quote can carry a base/additional split (*"Base rent of $7,445 … plus $1,019 …
+     equipment. Total … $8,464"*) that the old code trusted as a blended total, double-counting
+     equipment when `resolveYear1TotalRent` re-added it. `baseFromPeriodQuote` now reads the period's
+     own labelled base and emits the `plus` components as period-scoped `additional_rent` (deduped);
+     a `schedule_composition_unknown` guard nulls the total rather than guessing when a schedule
+     figure's makeup can't be determined. Ground-truthed against the real Chesterbrook lease Scott
+     supplied. 255 now resolves 89,340 base / 101,568 total / `schedule_period_1` (was 101,568/113,796).
+     Record: `responses/done/EXT2a-schedule-line-definition.response.md`.
    Stand an OCR endpoint on the GaryBuilt box
    (Surya / PaddleOCR / ocrmypdf-Tesseract, all already named in the design) behind the **existing**
    tunnel + CF Access, and inject `deps.freeOcr` at the two server call sites. **The seam already
