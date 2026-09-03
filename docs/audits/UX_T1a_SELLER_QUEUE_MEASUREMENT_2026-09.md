@@ -431,8 +431,13 @@ into the surface the operator is meant to trust:
 1. **G3 for dia** needs `leases` (3,823 live leases / 1,940 properties) mirrored into
    `lcc_property_attributes`. Until then a dia asset can only ever read `term_unknown`, and a view
    claiming to implement §0b.1 would silently exclude the whole dia swimlane.
-2. **G4's debt arm** — the strongest D, 192 loans maturing inside 24 months — has no LCC table and no
-   producer behind the `loan_maturity` slot that already exists on the home page. Its death and divorce
+2. **G4's debt arm** — the strongest D, 192 loans maturing inside 24 months — ~~has no LCC table and no
+   producer behind the `loan_maturity` slot that already exists on the home page.~~
+   ⚠️ **SUPERSEDED 2026-09-03 (UX-T1a-gates, re-verified by PR5d): `lcc_loan_maturity` holds 568 rows
+   carrying exactly these 192, and `v_lcc_bd_worklist` emits 172 owner-attributed `loan_maturity` rows.**
+   The maturity half of G4 is closed. What remains open is DISTRESS (watchlist / delinquency / DSCR),
+   which reads 0 across all 285 gov CMBS loans because its only capture arm has never fired
+   (`PR5d_COSTAR_CMBS_LOAN_ARM_2026-09-03.md`). Its death and divorce
    arms are only reachable through new lexical rules, one of which **measured 42% false-positive** (§5c)
    and the other of which is ungraded. Encoding those as a `reason_to_sell` column would ship exactly the
    class of gate this repo has refused four times (P189 25%, P198 7%, A3, P196).
