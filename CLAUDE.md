@@ -3454,6 +3454,10 @@ Writeup: `docs/audits/N15d_N15e_PRODUCER_VERIFY_AND_HELD_RECOMPUTE_2026-08-27.md
 
 ## PR5c-entities-b-dupes — `domain` was scoping the IDENTITY key (2026-09-02)
 
+> ⚠️ **This fixed ONE of the two identity tiers.** The EMAIL tier carries the identical
+> `&domain=eq.` filter — deliberately kept, measured at 27% precision. See **PR5c-entities-c** below
+> before "finishing the job".
+
 `ensureEntityLink`'s canonical_name tier — the primary dedup key, the one N15c gave a
 single writer — carried a hard **`&domain=eq.<domain>`** filter. `entities.domain` is a
 PROVENANCE TAG that legitimately carries `lcc` and `cre` beside `dia`/`gov`, so a party
@@ -3508,6 +3512,66 @@ RED; reverting the filter turns 6 red). Review surface
   corroboration for a cross-domain identity claim, and the bucket visibly contains orgs
   misfiled as people (`Ace Hardware`, `Sperry Van Ness`). Attaching them would be the
   destructive guard. Named on the view, not swept.
+
+## PR5c-entities-c — the fix landed on ONE of two tiers, and the sibling must NOT be "fixed" (2026-09-03)
+
+The six predicates a brief named for the Salesforce duplicate mints are **all refuted**: across the
+11 same-email pairs the older row is a **live `person`, same workspace, byte-identical email**
+(one differs only in CASE, which `ilike` matches anyway) — no NULL email, no wrong `entity_type`,
+no `%`/`_`/`+`/whitespace, no tombstone. **The named lookup would have found it**, and
+`findEntityForUpsert` never ran for these rows at all. The real mechanism was
+`cross_domain_canonical_miss` on **9 of 11** (the other 2 are 0.14 s races), fixed by `d5b0ac8` and
+**live at `9158055`**. Writeup:
+`docs/audits/PR5c_entities_c_EMAIL_TIER_DOMAIN_SCOPE_2026-09-03.md`.
+
+- **⚠️ THE HAZARD TRAVELS WITH THE TECHNIQUE (P189), ONE ROUND LATER, IN THE SAME FUNCTION.**
+  `ensureEntityLink` has two identity tiers. PR5c-entities-b-dupes removed the `&domain=eq.` filter
+  from the canonical_name tier and its own guard scoped the other out — *"the email tier is a
+  separate query ... unchanged by this fix."* **`entity-link.js:1168` carries the identical
+  filter**, and it is the fallback that exists precisely to catch what the canonical tier misses.
+  Both tiers were blind at once, which is why the nine cross-domain pairs had no backstop. **When a
+  hazard is documented for one lookup, grep every sibling lookup in the same function.**
+- **⚠️ AND THE OBVIOUS FOLLOW-UP IS THE DESTRUCTIVE ONE — 27% PRECISION, REFUSED.** The email tier
+  is blind to **55** live pairs sharing a non-generic email with different canonical names (so the
+  canonical tier cannot catch them either) and different domains. Read on **named rows**: **15 are
+  the same person** under a name variant (Andy/Andrew Nathan, Nicholas/Nick Borrelli, Vince/Vincent
+  Curran, Ravi/Ravindra G. Gangavaram…); **40 are not** — two different **real** brokers on one
+  mailbox (**Phillip Kelly / Toby Scrivner** @northmarq.com; Jack Minter / Creighton Stark; David
+  Gellner / Matthew Dodson), firms filed as persons ("Marcus & Millichap", "Kidder Mathews",
+  "Global Net Lease"), and P131 document row labels ("Income & Expenses", "Per SF", "First Vice
+  President"). That is the band **P189 (25%) and P198 (7%) already measured and rejected**.
+  **An attach is worse than a duplicate**: a duplicate is merged later by a reversible, snapshotted
+  `lcc_merge_entity`; a wrong attach folds two people into one row at write time, silently.
+- **⚠️ THE TWO TIERS ARE NOT SYMMETRIC, WHICH IS WHY THE SAME FIX DOES NOT TRANSFER.** The
+  canonical tier matches on NAME, so it can require EMAIL to agree cross-domain — that is exactly
+  what `d5b0ac8` did. The email tier matches on EMAIL, so the symmetric corroboration would be a
+  NAME test, **banned for identity** everywhere here. A structural person-shape gate on the
+  resolved row was considered and does not fix the core case (Jack Minter and Creighton Stark are
+  both plausible real people on one mailbox). **Copying a fix between two tiers requires checking
+  what each one keys on.**
+- **The filter therefore STAYS, and the guard says so with the reason attached.**
+  `test/pr5c-entities-c-email-tier-domain-scope.test.mjs` (6 tests, **8/8 mutations RED**) goes red
+  on its removal — the PR1b `consideration` precedent: *a test that fails when someone "guards it
+  for consistency"*. Comment-stripping is load-bearing AND population-controlled: the subject and
+  the guard both quote `&domain=eq.` in prose, so a raw-source grep finds it present over a
+  complete revert (A5c / N18).
+- **Surface: `v_lcc_entity_email_tier_blind_pairs`** (migration `20261012120000`) — the 55,
+  read-only, **no `auto_mergeable` column** (P198: `lcc_apply_fuzzy_merges()` loops on that flag).
+  A measured blindness must EMIT, not vanish (I4 / B6a), or the 27% is a claim that rots.
+  `lcc_is_generic_inbox_localpart()` mirrors the JS Set and is **pinned token-for-token** by the
+  guard (the P195 precedent). ⚠️ It excludes **0** pairs here — inert on this population, not
+  protective.
+- **⚠️ READ THE RATE, AND READ WHETHER IT HAS BEEN EXERCISED.** Baseline: **326 SF-Contact creates
+  / 13 landed on an existing live key (3.99%) / 11 probable duplicates (3.37%)**. The brief's
+  "14 / 4.3%" does not reproduce — **re-derive, never quote**. And the post-deploy rate is **not yet
+  measurable**: **zero `salesforce/Contact` identities have been minted since the fix landed**
+  (newest 2026-09-02 16:01, fix 22:30), though the code path itself has run via CoStar. *Deployed is
+  not exercised* — the N15c lesson. Expect ~0.6% residual from the races, never 0.
+- **Filed, not built:** the 2 races need the `(workspace_id, canonical_name)` unique constraint
+  (blocked on N15e's operator decision, 6,608 violating groups); the email tier takes the **oldest**
+  email match without checking it is person-shaped, so an inbound real person can attach to a P131
+  row label that predates them (**live within a domain today**); and the 15 genuine pairs are a
+  human merge decision. **No merges were performed.**
 
 ## N18 — a column compared to ITSELF returns a plausible, wrong number (2026-08-27)
 
