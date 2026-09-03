@@ -18,6 +18,29 @@
 
 ## 2026-09-03 — EXT2a SHIPPED (PR #2098): the schedule-blend double count is fixed
 
+**SALE1 SHIPPED (PR #2102, branch `claude/sale1-price-propagation-bwq4pz`) — verified live 2026-09-03.**
+All four reproduce: **31 rows flipped** by the eligibility migration (`sale1-eligibility-20261009`
+marker), excluded now 1,781, **`nominal` still in comps = 0**, review view **165 rows**
+(`ledger_disagreement` 132 / `deed_says_undisclosed` 33). Two independent defects were found where
+one was assumed — the `upsertDomainSales` re-match PATCH overwriting a non-null `sold_price`, and
+the dia `sale_notes_raw` stamp that gov already gates on `isMostRecentSale`. Both are fixed forward;
+**nothing was reset, which is correct.**
+⚠️ **I did the read CC flagged as its honest gap, and the 132 must NOT be treated as 132 defects.**
+Splitting `ledger_disagreement`: **45 match one of the property's own listing prices** (the Hillsboro
+shape — the listing bleeding into a deed row) and **41 match a sibling sale on the same property**
+(overlapping with those); the ratio distribution is otherwise unremarkable — **1** row is a clean
+12× artifact (`$64,583.57` vs `$775,000` = the monthly figure), 8 sit within 2% (a tolerance
+question, not a defect), and the rest are modest revisions consistent with a later, better source
+correcting a bad master import. **87 of the 132 are still in comps, 83 with a live cap rate.**
+**The prioritised set is the 45 listing-matches, not the 132** — that is the shape with a proven
+mechanism. The remainder needs a named-row read before anyone resets a price.
+⚠️ **Also open:** the eligibility gate shipped as the BROADER 4-signal set (nominal + foreclosure +
+disclaimer + REO = 31 flipped) rather than the 28/20 nominal+disclaimer slice; CC read all 3 REO
+rows first, which is the right bar, but the scope difference is deliberate and should be stated
+rather than discovered. And **gov's own price-conflict rate is unmeasured** — the guard is shared,
+the measurement is not.
+
+
 **SALE1 checkpoint verified (Cowork, 2026-09-03).** CC's central claim reproduces exactly:
 `cap_rate_history` shows sale 8091 (2009) first recorded at **$1,233,000** on 2026-04-17
 (`dia_master_sales`) with the listing at **$1,593,750** the same day — the sale row now carries the
