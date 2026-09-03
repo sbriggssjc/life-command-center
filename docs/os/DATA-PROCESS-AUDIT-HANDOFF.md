@@ -64,6 +64,13 @@ and the Dialysis test suite had never executed a test in the repo's history — 
 - **Entity identity (2026-09-02/03, PR5c-entities-b-dupes + -c)** — `entities.domain` was scoping the
   canonical_name identity tier (9 of 11 duplicates, fixed `d5b0ac8`); the email tier keeps the filter on
   purpose (27% precision without it). Canonical page: **`docs/architecture/entity-identity-and-dedup.md`**.
+- **SALE1 + ADDR1 (2026-09-03)** — two defects in the SAME producer (`sidebar-pipeline.js` /
+  the CoStar scanner), both shipped and verified: a re-match PATCH silently overwrote a non-null
+  `sold_price` with a later capture's figure (Hillsboro's 2009 deed moved from $1,233,000 to the
+  current LISTING price), and dia stamped `sale_notes_raw` on every sale where gov already gated it
+  to `isMostRecentSale`; and the Contacts tab's broker-office address won the property street because
+  `FOREIGN_PARTY_HEADER_RE` lacked four section headers. **Follow-ups: SALE1a (read the 45, not the
+  132), SALE1b (gov unmeasured), ADDR1a (2 open rows from a DIFFERENT capture surface).**
 - **PR2** — the sidebar writer dropped the parcel stats it was handed; the lot parser read acres as
   sq ft (43,560×). dia backfilled (767/734/714/232); gov writer fixed, backfill Scott's call.
 
@@ -148,7 +155,15 @@ that fires `gov_classify_agency()`; do not read it as broken.
    Record: `docs/audits/ENTC_JUNK80_AND_P195_UNMERGE_2026-09-03.md`.
    ⚠️ **`SEC1` moved a step**: all three definer *unmerge* functions are now `service_role` only;
    the other 88 anon-executable definer functions are untouched.
-3. **`CONTACT1`** — ⚠️ **`PR5c-enforce` and `PR10` are BOTH BLOCKED and the reason is measurable:
+3. **`SALE1a`** — hand-read the **45** `ledger_disagreement` rows whose price equals one of the
+   property's own listing prices (the proven mechanism), NOT all 132: 1 of the 132 is a clean 12×
+   unit artifact, 8 sit within 2%, and the balance look like a later source correcting a bad master
+   import. **87 of 132 are still in comps, 83 with a live cap rate.** Decide null-vs-reset per row —
+   `cap_rate_history` records what was FIRST RECORDED, never what is true, so a reset needs deed
+   corroboration. Then **`SALE1b`** (gov's price-conflict rate is unmeasured; the guard is shared,
+   the measurement is not) and **`ADDR1a`** (2 open bleed rows, both `buyer`-role — a different
+   capture surface from the one the header regex fixed).
+4. **`CONTACT1`** — ⚠️ **`PR5c-enforce` and `PR10` are BOTH BLOCKED and the reason is measurable:
    neither `entities.email`/`phone` ladder has governed anything.** Ladder A
    (`field_provenance`) holds **4 rows, all `phone`/`domain_owner_contact`, from one manual tick —
    `email` has never been recorded once**; Ladder B (`metadata.field_sources`) exists on **exactly 1
@@ -159,7 +174,7 @@ that fires `gov_classify_agency()`; do not read it as broken.
    ~12/day is at 0. **Prompt drafted: `CONTACT1-both-entities-ladders-govern-nothing.md`** — it
    subsumes PR5c-enforce and PR10 and asks for the numeric unblock condition so the next session
    does not re-derive this.
-4. **`DE3`/`DE4`** (DE4's input is settled: FY2026's 73.66% Medicare is the fallback bucket),
+5. **`DE3`/`DE4`** (DE4's input is settled: FY2026's 73.66% Medicare is the fallback bucket),
    **`B6e-clinic-metadata`**, **`D2`–`D5`**, **`PR10`** (one source, two ladders), **`SEC1`**
    (91 of 195 SECURITY DEFINER functions anon-executable — filed by PR8, needs its own pass).
 
