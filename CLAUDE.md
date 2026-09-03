@@ -749,6 +749,24 @@ fallback where the quote is silent. Guard `test/ext1b-as-stated-authority.test.m
   aggregate, and say which reading the prediction rests on.** Second caveat, structural: fixing a
   both-null row makes it DECIDED, so **the denominator moves** and the new rate is not directly
   comparable to the old one without reading the counts.
+- **EXT2 (2026-09-03) — WHEN THE RESIDUE IS TWO VERBATIM LINES FROM ONE LEASE, THE ANSWER IS A DEFINITION,
+  AND SCOTT'S DEFINITION IS "THE LEASE DEFINES IT."** Base rent is whatever the lease labels base/minimum/
+  fixed rent (`defined_term` + `definition_as_stated` quoted; separately-stated equipment/additional rent as
+  its own `additional_rent` row, NEVER summed — `year1_total_rent` is a second field); year 1 is the schedule
+  period at **Rent Commencement** (its own quoted date), with `year1_rent_source` recording which rule fired;
+  **the tenant is the counterparty legal entity, and that entity IS the credit** absent an express guaranty
+  clause in the lease — `credit_entity` = guarantor only with `guaranty_as_stated`, else the tenant, and a
+  `parent_mentioned` is structurally unable to become the credit (a parent is not liable for a subsidiary
+  without express authorization; the credit may be a subsidiary of unknown size, and the code says so).
+  - **⚠️ A PROMPT'S OWN RULES SATISFY A GREP FOR ITS SCHEMA KEYS.** `assert.match(prompt, /"additional_rent"/)`
+    stayed green with the field deleted from the JSON contract, because the rules paragraph names the key
+    while explaining it. Comment-stripping cannot help — the prose IS the deliverable. Anchor on the
+    **schema line** (`\n\s*"additional_rent": \[`) or a `": string` type token; three assertions were
+    found this way by the mutation pass, not by reading them. Guard
+    `test/ext2-lease-defines-rent-and-tenant.test.mjs` (32 tests, 28/28 RED).
+  - **A COUNT ASSERTION ON A WIRING IS SUPERSEDED BY THE NEXT CORRECT CHANGE.** EXT1b's guard asserted
+    *exactly 2* `reconcileQuotedDateWithQuote(resolveQuotedDate(` sites; `rent_commencement` is a third
+    quoted date, so a correct change turned it red. It asserts per NAMED date now (the P197 shape).
 - **A genuine OCR miss must stay an honest null.** Doc 425's dates came through tesseract as
   `"1st day of A ec | , 2000"`; the model correctly returned `formula`/null and DocAI read both.
   **That is the signal the bake-off exists for** — an "improvement" that turns it into a date is a
@@ -841,7 +859,7 @@ plumbing.** The priority queue is **seller prospecting** — $2.5M–$25M, newer
 sell, an owner not yet reached. An SF link is a marker, never evidence we are prospecting someone;
 the truth is who we have *actively* and *ever* touched, across the whole ownership chain. Every tab
 answers one question exactly. **Full catalog + queue: `docs/architecture/app-ux-review-2026-09-02.md`,
-backlog §P16.** → belongs in the canon (UX0).
+backlog §P16.** ✅ **In the canon since 1.7.0 (2026-09-03): `docs/os/canon/blocks/operator-doctrine.md` + Global invariant 8** — the canon is the source now; this paragraph is the pointer.
 
 ### Producer/Consumer (Consumption Layer)
 

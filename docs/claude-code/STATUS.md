@@ -16,6 +16,30 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-03 — UX0 DONE: operator doctrine is canon 1.7.0
+
+- `canon/blocks/operator-doctrine.md` + Global invariant 8 (minimum effective dose · seller-first queue
+  $2.5M–$25M / newer lease / reason to sell / untouched owner · buyers pursued by showing deals · truth
+  over signal · one tab one question). Rendered: 5 bundles, copilot managed region rewritten (7,472 /
+  20,000 chars), parity 0 drift. 👤 External pastes owed (`OPERATOR-ACTIONS.md` UX0-paste).
+- Next: C4a's concrete ordering questions (posed to Scott in chat) → UX-T1a home/priority re-cut prompt.
+
+## 2026-09-03 — EXT2 SHIPPED (#2078); the extractor's three definition questions are now the lease's to answer
+
+- EXT2 merged (`f83c2d99`; 32 guards, 28/28 mutations RED). `year1_rent_source` / `year1_total_rent`
+  / `credit_entity` + `credit_entity_basis` ride the tenant object; `parent_mentioned` cannot be
+  promoted, guarded. ⚠️ Named residual: schedule outranks the base-rent quote, so a BLENDED period-1
+  schedule figure would win — doc 255's `year1_rent_source` on the re-run is the row to read.
+- 👤 **Floor re-run owed** (workstation; command + jq on `OPERATOR-ACTIONS.md` §2). Success = both
+  sides agree on the SOURCE, not the rate.
+- ⚠️ Deploy: live `/version` reads `cbac828a`, which is **not in this clone's history** (local HEAD
+  `10b86f1b` = #2078). Either a later PR (OWN-T0e?) landed after this reconciliation's fetch, or the
+  clone is behind — `git merge-base --is-ancestor f83c2d99 <deployed>` after the next pull settles
+  whether EXT2 is running. Not asserted either way.
+- Cleanup: `responses/EXT2 desktop rsesponse.docx` was a copy of the PROMPT (not a response) —
+  delete it locally (the sandbox cannot; it is untracked, so nothing to commit). Prompt + response → `done/`. CURRENT-STATE's AI/OCR row rewritten as a summary that
+  points at the canonical page instead of restating it.
+
 ## 2026-09-03 — EXT2 DECIDED: the lease defines it; prompt drafted. OWN-T0e sent to CC.
 
 - Scott's answer to all three EXT2 questions is the same shape: **there is no house rule — each
