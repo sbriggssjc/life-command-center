@@ -5,6 +5,21 @@
 > **Measured 2026-09-03 against LCC Opps `xengecqvemvfknjvbvrq`, gov `scknotsqkcheojiaewwh`, dia `zqzrriwuavgrquhisnoa`.**
 > **NOTHING WAS WRITTEN. No migration, no view, no JS.** Part B is deliberately **not** built — §8 says why,
 > and which two decisions are Scott's.
+>
+> 🔴 **SUPERSEDED IN PART, 2026-09-03 by UX-T1a-gates** — both coverage gates are now closed
+> (`docs/claude-code/responses/UX-T1a-gates.response.md`). **Two claims below are CORRECTED there
+> and must not be quoted from this page:**
+> 1. **§5a / §7d — "`loan_maturity` has no producer" is TRUE of `v_lcc_bd_worklist` and FALSE of
+>    the handler.** `api/operations.js::assembleBdWorklist` has always fanned out to the domains'
+>    `v_loan_maturity_watch` views, both live (gov 178 rows / dia 72). The Today tile was not blind
+>    to debt. What was missing is that the fan-out emits `entity_id: null` — the signal could not
+>    be attributed to an owner, which is the real blocker for an owner-keyed queue.
+> 2. **§4a — the dia ceiling is 1,747 properties, not 1,940.** That 1,940 counts **1,986 SUPERSEDED
+>    leases**; a superseded lease has been replaced and is not the lease in effect.
+>
+> Live state after UX-T1a-gates: dia `lease_expiration` in the mirror **0 → 1,747**;
+> `v_lcc_bd_worklist.loan_maturity` **0 → 172** (109 owners); priority queue human surface
+> **1,635 → 694**. **Re-derive every number on this page rather than quoting it.**
 
 # UX-T1a Part A — the seller-first queue, measured gate by gate
 
@@ -134,6 +149,14 @@ and DaVita's 15-year standard — is **structurally uncomputable for dia from th
 
 **It is a mirror gap, not absent data**, and that distinction is load-bearing. Tracing to source:
 
+> 🔴 **CLOSED 2026-09-03 (UX-T1a-gates).** dia's `v_property_attributes_portfolio` — the mirror's
+> source — never carried lease columns at all, while gov's always did; the break was the SOURCE
+> VIEW, not the tick and not the apply function. Now mirrored: **1,747** properties, not the 1,940
+> below (that figure counts 1,986 **superseded** leases). ⚠️ The §4b sub-counts also move once
+> superseded rows are excluded: within-first-3-years **134** (not 71), ≥12 yrs remaining **30**
+> (not 33). `initial_term_years` p50 **14.9** over live-lease properties confirms Scott's 15 years.
+
+
 - dia `properties.lease_commencement` — 710 of 11,802 (6%); `wavg_lease_expiration` and
   `wavg_firm_term_expiration` are **NULL on all 11,802**. The columns exist and are empty.
 - dia **`leases`** is where the data lives: 12,832 rows, 9,027 with an expiry, **3,823 future-dated
@@ -210,6 +233,15 @@ Coverage of the four D's over the 6,480-owner universe:
 ### 🚨 5a. THE DEBT SIGNAL EXISTS, IS SIZED, AND IS INVISIBLE TO LCC — TWICE OVER
 
 **LCC Opps holds no `loans`, `lenders`, `cmbs_loans` or maturity table of any kind.** At source:
+
+> 🔴 **CLOSED 2026-09-03 (UX-T1a-gates), AND THE FRAMING BELOW IS CORRECTED.** `lcc_loan_maturity`
+> now mirrors both domains (568 rows) and `v_lcc_bd_worklist` emits **172** `loan_maturity` rows /
+> 109 owners / 122 properties. ⚠️ **But "these were never implemented" is wrong about the
+> HANDLER** — `assembleBdWorklist` has always read the domains' `v_loan_maturity_watch` (gov 178 /
+> dia 72). The claim is true only of the VIEW. The real gap was owner attribution: the fan-out
+> emits `entity_id: null`. ⚠️ Also: 192 *loans* is **172 rows / 109 owners / 122 properties** —
+> say which grain.
+
 
 | domain | loan rows | with maturity | **maturing ≤24 mo** | properties |
 |---|---:|---:|---:|---:|
@@ -369,6 +401,11 @@ Observed state of `touchpoint_cadence` (2,307 rows):
 
 ### 7d. Today — the home BD tile serves 100% plumbing
 
+> 🔴 **CORRECTED 2026-09-03 (UX-T1a-gates): the renderer reads the HANDLER, not the view, and the
+> handler already produced `loan_maturity` from the domains' `v_loan_maturity_watch`. The tile was
+> not 100% plumbing.** The view's two arms are as described; the third BD-meaningful signal was
+> reaching the tile without an owner attached.
+
 `renderTodayBdActions` reads `/api/operations?action=bd_worklist&limit=5` → `v_lcc_bd_worklist`, which
 emits only `ownership_chain` (3,534 — applied automatically by A2/cron 244) and `contact_writeback`
 (1,646 — labelled "Push to CRM", which C1 established already has an automated consumer,
@@ -413,9 +450,9 @@ into the surface the operator is meant to trust:
 
 | id | what | why it is first |
 |---|---|---|
-| **UX-T1a-mirror-dia-lease** | mirror dia `leases` → `lcc_property_attributes` | unblocks G3 for a whole swimlane; without it the queue is gov-only |
-| **UX-T1a-debt** | produce `loan_maturity` into `v_lcc_bd_worklist` from the 192 maturing loans | highest-value D; the surface slot already exists |
-| **UX-T1a-queue** | `v_lcc_seller_prospect_queue` (variant F) | the deliverable, once the two above make its gates honest |
+| ~~**UX-T1a-mirror-dia-lease**~~ ✅ **SHIPPED 2026-09-03** | mirror dia `leases` → `lcc_property_attributes` | 0 → 1,747 properties; dia `term_unknown` 2,127 → 1,252 |
+| ~~**UX-T1a-debt**~~ ✅ **SHIPPED 2026-09-03** | produce `loan_maturity` into `v_lcc_bd_worklist` | 0 → 172 rows / 109 owners, owner-attributed (the domain fan-out was not) |
+| **UX-T1a-queue** | `v_lcc_seller_prospect_queue` (variant F) | **UNBLOCKED** — both gates are honest as of 2026-09-03 |
 | **UX-T1a-today** | Significant / Important / Urgent split | depends on the queue |
 | **UX-T1a-cadence** | 6-month spacing + role steady state | needs `current_touch` fixed first |
 | **UX-T1a-touchcount** | `current_touch` max 8,198 | a cadence position nobody can read |
