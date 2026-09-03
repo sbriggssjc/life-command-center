@@ -111,9 +111,8 @@ probe is not a negative result: pg_net may take minutes to persist the row, so r
 govern bookkeeping columns at all?) · PR5b (`om_extraction` unregistered where it competes) ·
 ~~PR5c-entities~~ ✅ (wired 09-02) · PR5c-enforce (all 10 `entities` contact rungs are
 `record_only`, so nothing is protected yet) · ~~PR5c-entities-b~~ ✅ (wired 09-02) ·
-**PR5c-entities-b-dupes** (NEW: 14 of 329 SF creates landed on a `canonical_name` an older LIVE
-entity already held; 8 share the older row's EMAIL, which the bridge's own email dedup should have
-caught — mechanism not established, a within-batch race explains at most 2) · PR5c-signal · PR5c-avail-field ·
+~~PR5c-entities-b-dupes~~ ✅ (09-02, `d5b0ac8` — `entities.domain` was scoping the identity key; see
+`entity-identity-and-dedup.md`, which owns duplicate-mint from here) · PR5c-signal · PR5c-avail-field ·
 PR5c-deploy (Scott) · PR5d (`costar_cmbs_loan`: 121 rungs, 0 rows ever) · PR5e (`gov_ownership_chain`
 dead constant) · PR7a (the live orphan column) · PR7b (prune 15 inert rungs — NOT neutral) · PR9
 (`manual_verify`@20 — Scott) · PR10 (one source, two ladders) · PR11 (model-leg quarantine) · PR12a

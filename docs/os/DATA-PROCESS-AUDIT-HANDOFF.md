@@ -61,6 +61,9 @@ and the Dialysis test suite had never executed a test in the repo's history — 
   — `lcc_merge_field` always inserts, so zero rows = the call never completed (PR5c); the two
   `entities` contact writers now consult the ladder — recording only, every rung is `record_only`
   (PR5c-entities).
+- **Entity identity (2026-09-02/03, PR5c-entities-b-dupes + -c)** — `entities.domain` was scoping the
+  canonical_name identity tier (9 of 11 duplicates, fixed `d5b0ac8`); the email tier keeps the filter on
+  purpose (27% precision without it). Canonical page: **`docs/architecture/entity-identity-and-dedup.md`**.
 - **PR2** — the sidebar writer dropped the parcel stats it was handed; the lot parser read acres as
   sq ft (43,560×). dia backfilled (767/734/714/232); gov writer fixed, backfill Scott's call.
 
@@ -110,7 +113,8 @@ that fires `gov_classify_agency()`; do not read it as broken.
 | verify-next | the honest reading today | what proves it |
 |---|---|---|
 | ~~Railway redeploy~~ | ✅ **CONFIRMED 22:08 UTC — live `/version` = `886cdf86` = `main` HEAD.** Read via `net.http_get('https://tranquil-delight-production-633f.up.railway.app/version')` from LCC Opps, then `net._http_response` ~15 s later (the sandbox has no Railway egress; the bare host without `-633f` 404s). | done |
-| PR5c-entities-b (SF bridge CREATE path) | `source='salesforce'` on `entities` = 0, deployed minutes ago | ~12 rows/day; read tomorrow |
+| PR5c-entities-b (SF bridge CREATE path) | `source='salesforce'` on `entities` = 0 — **0 SF-Contact mints since 2026-09-02** (the lane is quiet, not broken) | first mint → rows; ~12/day when the lane runs |
+| PR5c-entities-b-dupes rate | baseline 3.37% (11/326); **not yet measurable post-fix** — 0 mints since `d5b0ac8` | the §6 query in `PR5c_entities_c_…md` over the next 30 days; expect ~0.6% (races) |
 | PR2 producer | 0 `costar_sidebar` parcel rows since 2026-08-31 — nobody has captured a dia page since; the code is live | 👤 one sidebar capture on a dia property page → a NEW parcel row carrying `building_sf` |
 | PR5c callers | `field_provenance` on the six internal tables = 0, correctly | a row on `public.lcc_cre_property_documents` after the next CRE folder-feed registration, post-deploy |
 | PR5c-entities | `target_table='entities'` = 0 for `domain_owner_contact` — neither writer has a cron; `SF_CONTACT_WRITEBACK` is `off` | 👤 one `owner-contact-propagate` tick → `0 → N` split by source/decision |
@@ -125,13 +129,14 @@ that fires `gov_classify_agency()`; do not read it as broken.
    person names, 7 are the Colliers family. **`cbre; smyth & colliers; patel` is minted as one
    company.** Start with **`BR1-confirm`** — 12 brokerage-evidenced orgs ready for a one-decision
    human confirm.
-2. **`PR5c-entities-b-dupes`** — the Salesforce bridge minted a DUPLICATE entity on **14 of 329
-   creates (4.3%)** in 30 days, ~9× N15c's 0.48% bulk-sync rate; 8 of 14 share the older row's
-   EMAIL, which `findEntityForUpsert`'s `email=ilike` lookup should have caught. Mechanism NOT
-   established (same workspace; only 2 within 5 min, so a race covers ≤2). Outranks
-   `PR5c-enforce`: a 4.3% duplicate rate on the lane minting ~330 entities/month is already costing
-   something. ⚠️ 6 of the 14 read as one person who CHANGED FIRMS — a name-only sweep is destructive.
-   **Prompt drafted: `docs/claude-code/prompts/PR5c-entities-b-dupes-sf-bridge-duplicate-mint.md`.**
+2. **`PR5c-entities-c-review`** — 15 genuine same-person pairs on
+   `v_lcc_entity_email_tier_blind_pairs` (Andy/Andrew Nathan, Nick/Nicholas Borrelli, …) need a
+   human merge one row at a time via `lcc_merge_entity` (reversible). Cheap and real. Then
+   **`PR5c-entities-c-oldest`** — the email tier attaches an inbound person to the OLDEST row on a
+   mailbox even when that row is a P131 label (`Income & Expenses` predates the real broker on
+   `alex.sharrin@am.jll.com`) — a behaviour change to R39 Unit 1 nobody has graded; measure the
+   population before proposing a gate (the person-shape gate was measured NOT to fix the hard case).
+   **Prompt drafted (both halves): `docs/claude-code/prompts/PR5c-entities-c-review-and-oldest.md`.**
 3. **`PR5d`** — `costar_cmbs_loan`: 121 rungs, the ladder's largest source, for a capture arm with
    0 rows on either domain (`loans.data_source`). Is the CoStar CMBS tab ever captured, or is the
    arm unreachable? One grep of the extension + one count.
@@ -141,6 +146,7 @@ that fires `gov_classify_agency()`; do not read it as broken.
 
 ### 👤 Waiting on Scott
 
+`N15e` (make `(workspace_id, canonical_name)` UNIQUE? 6,608 violating groups; blocks the last 2 duplicate-mint races) ·
 `PR9` (should a human-confirmed clinic↔property link outrank `auto_link_*`, or stay recorded-only @20?) ·
 `PR2-gov` (run the gov parcel backfill; the `98248e18` redeploy is confirmed) · `B6e-ci-required-check` (Dialysis branch protection — until flipped the unmasked suite gates nothing) ·
 `BR1-confirm` (12 brokerages) · `B6d-sam` (re-issue `SAM_API_KEY`, 401) · `PR1d` (`REGRID_API_KEY` —

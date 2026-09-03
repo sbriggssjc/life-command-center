@@ -220,6 +220,39 @@ with UX-T2). **UX13a** deferred to user onboarding. EXT1b sent to CC.
 - Full suite **5,102 pass / 0 fail / 6 skipped**. Record:
   `responses/EXT1-lease-rent-basis-quoted-dates.response.md`.
 
+## 2026-09-03 — PR5c-entities-b-dupes (#2076, `d5b0ac8`) + PR5c-entities-c (#2079, `cbac828a`): the duplicate-mint mechanism was `entities.domain` scoping the IDENTITY key — and the sibling tier must NOT get the same fix. Entity-identity topic consolidated.
+
+**Verified live 07:40 UTC:** `/version` = `cbac828a` = `main` (both PRs running); drift **0**;
+`v_lcc_entity_email_tier_blind_pairs` **55**; `v_lcc_entity_duplicate_mint_review` **691** (90-day,
+incl. the 553-pair `older_row_has_no_email` bucket — deliberately unswept); **0** SF-Contact mints
+since the fix, so the post-fix rate is **not yet measurable** (baseline 3.37%).
+
+- **The prompt named the wrong module, and a run ledger settled it in one query.** `bridge_runs` =
+  **zero** Salesforce bridge runs in the incident window; `findEntityForUpsert` never executed. The
+  writers were the `lcc-sf-contact-resolve` tick (cron 165, 10 of 13 mints within seconds of :00/:30)
+  and the CoStar sidebar — both through `ensureEntityLink`, whose canonical_name tier carried
+  `&domain=eq.<domain>`. **All six predicates the prompt listed are refuted** (older row live, person,
+  same workspace, byte-identical email). 9 of 11 = `cross_domain_canonical_miss`; 2 = 0.14 s races.
+- 🚨 **A shallow clone reports the graft boundary as the "add"** — `git log -S` dated the lookup to
+  2026-09-02 and it was published as a refutation before `git fetch --unshallow` showed 2026-05-09;
+  and `git show <sha>^:file | grep -c` over a nonexistent parent printed a confirming `0`. **Never let
+  an error render as a zero** — the file's own doctrine, committed by its author.
+- **The obvious follow-up (drop the filter on the EMAIL tier too) was measured at 27% precision and
+  REFUSED**: 40 of 55 cross-domain same-email pairs are two real brokers on one mailbox (Phillip
+  Kelly / Toby Scrivner @northmarq), firms filed as persons, or P131 row labels. **An attach is worse
+  than a duplicate** — the guard goes RED if someone "fixes it for consistency."
+- Honest rate: 326 creates / 13 on an existing live key (3.99%) / **11 probable duplicates (3.37%)**
+  — the brief's 14 / 4.3% does not reproduce. Expect ~0.6% residual until the
+  `(workspace_id, canonical_name)` unique constraint (N15e, 👤 6,608 groups).
+- **Filed:** PR5c-entities-c-race · -oldest (email tier attaches to the OLDEST row, row-label or not —
+  live within a domain) · -review (15 genuine pairs → human merge, one at a time).
+
+**Consolidation (this turn):** `docs/architecture/entity-identity-and-dedup.md` is the canonical page
+— model, banned comparators, dated live state, arc index (P189 → P195 → N15c/d/e → dupes → entities-c),
+open ids — with the five `CLAUDE.md` blocks (P195, N15c, N15d/e, dupes, entities-c; **357 lines**)
+moved **verbatim** and an eight-bullet invariant list left in place. The dupes work had no audit doc;
+the page is now its record. Ladder page §4 and handoff updated; prompt + response filed to `done/`.
+
 ## 2026-09-02 — PR5c-entities-b SHIPPED (#2072, `886cdf86`) and ✅ THE RAILWAY REDEPLOY IS CONFIRMED: live `/version` = `886cdf86` = `main` HEAD. Every JS half of the provenance arc is running. New finding outranks the arc: the SF bridge mints a duplicate on 4.3% of creates.
 
 **Verified live 22:08 UTC:** `/version` read from the DB —
