@@ -6531,9 +6531,12 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     const loStr = lo.toISOString().split('T')[0];
     const hiStr = hi.toISOString().split('T')[0];
 
+    // SALE1 (2026-09-03): cap_rate_notes rides along on both domains so the
+    // price-disagreement guard below (matched-row branch) can flag a
+    // clobber attempt without a second lookup.
     const lookupSelect = domain === 'government'
-      ? 'sale_id,sale_date,sold_price,firm_term_years_at_sale,firm_term_locked'
-      : 'sale_id,sale_date,sold_price,stated_cap_rate,calculated_cap_rate,cap_rate_confidence';
+      ? 'sale_id,sale_date,sold_price,firm_term_years_at_sale,firm_term_locked,cap_rate_notes'
+      : 'sale_id,sale_date,sold_price,stated_cap_rate,calculated_cap_rate,cap_rate_confidence,cap_rate_notes';
 
     let lookup = { ok: false, data: [] };
 
@@ -6871,11 +6874,20 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
             : (saleBleed.overCeiling
               ? `[oversized-sale-review] sold_price ${soldPrice} exceeds the $${SALE_PRICE_BLEED_CEILING.dialysis.toLocaleString()} dia ceiling; flagged for human review (price retained)`
               : null),
-          saleNotesRaw ? `--- Sale Notes ---\n${saleNotesRaw}` : null,
+          // SALE1 (2026-09-03): saleNotesRaw is a PAGE-LEVEL field (one
+          // marketing blurb per property capture) — it describes whichever
+          // sale CoStar is currently displaying, not every historical deed
+          // row in the loop. Writing it unconditionally stamped the CURRENT
+          // listing's narrative onto 2009/2024 deed entries verbatim
+          // (dia property 35612). Gov already gated this to the most-recent
+          // sale only (line ~6887); dia now matches.
+          (isMostRecentSale && saleNotesRaw) ? `--- Sale Notes ---\n${saleNotesRaw}` : null,
         ].filter(Boolean).join('; ') || null,
-        sale_notes_raw: saleNotesRaw,
-        sale_notes_extracted: Object.keys(saleNotesForRow).length > 0
-          ? saleNotesForRow : null,
+        ...(isMostRecentSale ? {
+          sale_notes_raw: saleNotesRaw,
+          sale_notes_extracted: Object.keys(saleNotesForRow).length > 0
+            ? saleNotesForRow : null,
+        } : {}),
       } : {}),
       // Gov audit-retention parity (2026-06-20): retain the raw narrative +
       // structured extract on the most-recent sale only (the notes describe the
@@ -7073,6 +7085,38 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
           ? Number(existing.stated_cap_rate) : null;
         if (newStated == null || existingStated === Number(newStated)) {
           delete patchData.stated_cap_rate;
+        }
+      }
+
+      // SALE1 (2026-09-03): never let a re-match silently overwrite an
+      // already-recorded sold_price with a DIFFERENT one. The lookup above
+      // only proves "same sale" within a ±5%/±14d (or ±$1,000/±60d) window —
+      // it does not prove the incoming price is more correct than what's
+      // already there, and a later capture is not automatically the truth
+      // (CoStar's own deed popup can show "Not Disclosed" on a re-scrape of
+      // a row that was previously priced, or show the CURRENT listing's
+      // price bled onto a historical deed entry — both observed live on
+      // dia property 35612). Filling a BLANK is always fine; overwriting a
+      // NON-NULL price that disagrees by more than 1% is not — surface it
+      // on cap_rate_notes instead of clobbering it. Same tolerance as the
+      // Stage-3 "close enough to be the same observation" dedup collapse.
+      if (existing.sold_price != null && patchData.sold_price != null) {
+        const existingPrice = Number(existing.sold_price);
+        const incomingPrice = Number(patchData.sold_price);
+        if (Number.isFinite(existingPrice) && existingPrice > 0
+            && Number.isFinite(incomingPrice)
+            && Math.abs(incomingPrice - existingPrice) / existingPrice > 0.01) {
+          console.warn(`[upsertDomainSales] sold_price disagreement on sale_id=${existing.sale_id} property=${propertyId} date=${datePart}: recorded=${existingPrice} incoming=${incomingPrice} — keeping recorded value, flagging for review`);
+          patchData = { ...patchData };
+          delete patchData.sold_price;
+          if (domain === 'dialysis') delete patchData.sold_price_psf;
+          const existingNotes = existing.cap_rate_notes || '';
+          if (!existingNotes.includes('[price-disagreement')) {
+            const flag = `[price-disagreement ${new Date().toISOString().split('T')[0]}] recapture proposed $${incomingPrice.toLocaleString()} vs recorded $${existingPrice.toLocaleString()} — kept recorded value, needs review`;
+            patchData.cap_rate_notes = [existingNotes, flag].filter(Boolean).join(' | ');
+          } else {
+            delete patchData.cap_rate_notes;
+          }
         }
       }
 
