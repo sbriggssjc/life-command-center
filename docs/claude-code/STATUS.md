@@ -18,6 +18,25 @@
 
 ## 2026-09-03 — EXT2a SHIPPED (PR #2098): the schedule-blend double count is fixed
 
+**SALE1 checkpoint verified (Cowork, 2026-09-03).** CC's central claim reproduces exactly:
+`cap_rate_history` shows sale 8091 (2009) first recorded at **$1,233,000** on 2026-04-17
+(`dia_master_sales`) with the listing at **$1,593,750** the same day — the sale row now carries the
+LISTING's figure. **Two independent defects, confirmed:** (a) `upsertDomainSales`' re-match PATCH
+overwrites a non-null `sold_price` with a later capture's figure (34 rows / $106.8M in the
+single-source slice; **24 live comps computing a cap rate off it**); (b) the dia branch stamps
+`sale_notes_raw` on EVERY sale in the per-sale loop while **gov gates the same write to
+`isMostRecentSale`** — and gov's own comment states the rule ("the notes describe the
+displayed/most-recent deal"). ⚠️ **Counts moved:** nominal is **38 / 28 in comps / 20 with a cap
+rate** today, not the 33/28/23 of the first pass. ⚠️ **The path is LIVE** — the listing trigger fired
+at 17:16:53 during Scott's capture. **Reordered the build: the writer guard FIRST** (captures are
+ongoing; everything else is cleanup behind an open tap), then the one-line notes gate, then the
+comp-eligibility migration, then the review view, then the 46 two-source groups. ⚠️ **Do not reset
+8091 to $1,233,000 on the ledger alone** — `cap_rate_history` records first-RECORDED, not true, and
+a "Nominal Transfer" price may be meaningless; prefer NULL + non-comp unless the deed corroborates
+(the rule CC already applied to 8090's "Not Disclosed"). The 235 "matches earliest" rows are genuine
+repeats — an A2b comp-COUNT question, not a price defect; note it so nobody re-opens them.
+
+
 - `baseFromPeriodQuote` reads a schedule period's own labelled base/additional split (ground-truthed
   against the real Chesterbrook lease); components merge into `additional_rent` deduped
   `(kind,amount)`; `resolveYear1TotalRent` gained a `schedule_composition_unknown` guard (null total
