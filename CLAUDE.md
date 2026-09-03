@@ -861,6 +861,45 @@ the truth is who we have *actively* and *ever* touched, across the whole ownersh
 answers one question exactly. **Full catalog + queue: `docs/architecture/app-ux-review-2026-09-02.md`,
 backlog §P16.** ✅ **In the canon since 1.7.0 (2026-09-03): `docs/os/canon/blocks/operator-doctrine.md` + Global invariant 8; QUANTIFIED in 1.8.0 the same day** (newer lease relative to the swimlane's standard term · reason to sell = death / debt / divorce / value creation · $2.5M–$25M per property sale · not-reached = no touch by anyone · 7 touches / 6 months then ≈1/quarter · Today = Significant / Important / Urgent; source `app-ux-review-2026-09-02.md` §0b) — the canon is the source now; this paragraph is the pointer.
 
+### ⚠️ A BAND NAMED FOR THE DOCTRINE CAN SELECT THE OPPOSITE POPULATION — MEASURE THE OVERLAP (UX-T1a, 2026-09-03)
+
+Scott quantified the seller queue (canon 1.8.0) and the existing `v_priority_queue` was measured against
+it: **of 259 in-band newer-lease assets, 27 appear in the queue and 232 do not — 89.6% disjoint.** P1
+`lease_expiry_24mo`, P2 `firm_term_ending_24mo` and P3 `ten_year_window` all select assets **late** in
+term; the doctrine's sweet spot is the **first 2–3 years**. Every band was individually reasonable and
+the queue as a whole ranked the wrong end of the lease. **The doctrine's queue is therefore a NEW view,
+not a re-rank** — and the number that decides that is the overlap, which nobody had computed. Audit:
+`docs/audits/UX_T1a_SELLER_QUEUE_MEASUREMENT_2026-09.md`; canonical page
+`docs/architecture/bd-ranking-and-priority-queue.md`.
+
+- **⚠️ VALIDATE A DERIVED VALUE AGAINST SOMETHING IT WAS NOT DERIVED FROM.** Checking the value ladder
+  against `facts.sale_price` read gov **p75 = exactly 1.000** — because gov derives `noi = price × cap`
+  (§12), so `noi / cap` divided by `price` is a tautology on 280 rows. Exclude own-`cap_rate` rows first.
+- **⚠️ `sale_price` IS NOT PER-PROPERTY VALUE ON gov.** Ratio p50 runs **0.949** where one property
+  carries the price, **0.164** where 5+ share it — portfolio trades attributed per property. "Individual
+  property sale price" reads like the right column and is the wrong one.
+- **⚠️ "REACHED" HAS A FALSE FLOOR AND A FALSE CEILING.** Owner-entity-only touches = 19 (touches land on
+  the PERSON — C11/P188); any-link touches = 1,024 (imports machine-written asset events:
+  `rca_deed_record`, `intake_om`, `copilot_action`). Person links + human categories = **34**. The
+  binding constraint is missing LINKS (847 of 6,480 owners have a linked person), not missing touches.
+- **⚠️ THE DEATH/DIVORCE ARMS MEASURED 42% FALSE-POSITIVE ON FIRST CONTACT** — 111 of 265 matched on
+  the phrase "REAL ESTATE"; `UIRC` and `Gardner-Tanenbaum` read as individuals (C13c). Written by an
+  author who had read the warning. Sized, never a write; `reason_to_sell` is restricted to the RECORDED
+  `developer` signal plus an explicit `reason_to_sell_unmeasured` state until debt (Unit 2 of
+  UX-T1a-gates) lands.
+- **⚠️ A LABEL IN THE RENDERER IS NOT A LANE.** `renderTodayBdActions` labels `loan_maturity`,
+  `suspected_sale` and `owner_source_conflict`; `v_lcc_bd_worklist` has **never** emitted any of them
+  (positive-controlled). The Today BD tile serves **100% automation/plumbing** — both of its lanes already
+  have automated consumers. The strongest reason-to-sell (192 loans maturing ≤24 mo at source) has no LCC
+  table at all.
+- **Quote both the CONFIGURED and the REALISED cadence.** `PROSPECTING_SEQUENCE` sums to 67 days for 7
+  touches (2.7× the doctrine's 6 months) while the realised median gap is 28 days; tier is inert (41 A /
+  2 C), role is not an input, and `current_touch` reads max **8,198** on a 7-step sequence — cadence
+  position is unreadable until UX-T1a-touchcount.
+- **Say which grain you quote** — rows ≠ assets ≠ owners (756 properties carry >1 current owner; one
+  sponsor↔SPE pair appears twice in a 23-row set), and `v_lcc_entity_roles` is multi-label so a join
+  fans out.
+
 ### Producer/Consumer (Consumption Layer)
 
 LCC produces work (research tasks, cadences, decisions, queue rows, inbox items) at ingestion scale and
