@@ -598,6 +598,90 @@ test('approved operating identity aliases bind a CMS sublocation to its parent b
   );
 });
 
+test('approved operating identity aliases bind an exact CoStar record inside a building range', () => {
+  const operatingAlias = {
+    status: 'approved',
+    reason_code: 'legal_entity_operating_identity_same_site',
+    cms_facility_name: '436 Synthetic Hills LLC',
+    operating_names: ['436 Synthetic Hills Surgery Center'],
+    address_token: '428 444 N BEDFORD DR|TESTVILLE|CA|90210',
+    costar_property_id: '251984',
+    parcel_number: '4343-022-029',
+    authorized_by: 'research_owner',
+    authorized_at: '2026-09-03T12:00:00Z',
+    evidence_citations: [
+      { source: 'official_operator', url: 'https://operator.example/436-surgery-center' },
+      { source: 'official_operator', url: 'https://facility.example/about-436' },
+    ],
+  };
+  const target = {
+    candidate_fingerprint: sha('f'),
+    address_token: '436 N BEDFORD|TESTVILLE|CA|90210',
+    cms_identity: {
+      facility_name: '436 Synthetic Hills LLC',
+      address: '436 N Bedford, Suite 103',
+      city: 'Testville', state: 'CA', zip: '90210',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['436 Synthetic Hills LLC'],
+      approved_operating_identity_aliases: [operatingAlias],
+    },
+  };
+  const context = {
+    source: 'costar',
+    costar_property_id: '251984',
+    parcel_number: '4343-022-029',
+    page_url: 'https://example.costar.com/property/251984',
+    address: '428-444 N Bedford Dr', city: 'Testville', state: 'CA', zip: '90210',
+    square_footage: '75,400',
+    tenant_name: 'Unrelated Primary Tenant',
+    tenants: [{ name: '436 Synthetic Hills Surgery Center' }],
+  };
+
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.identity_match.mode, 'approved_operating_identity_range_containment');
+  assert.equal(built.identity_match.frozen_street_number, 436);
+  assert.equal(built.identity_match.captured_range_start, 428);
+  assert.equal(built.identity_match.captured_range_end, 444);
+  assert.equal(built.identity_match.captured_operating_name, '436 SYNTHETIC HILLS SURGERY CENTER');
+  assert.equal(built.identity_match.costar_property_id, '251984');
+  assert.equal(built.identity_match.parcel_number, '4343-022-029');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  const blockedContexts = [
+    { ...context, address: '428-434 N Bedford Dr' },
+    { ...context, address: '428-444 N Camden Dr' },
+    { ...context, zip: '90211' },
+    { ...context, tenants: [{ name: 'Unrelated Surgery Center' }] },
+    { ...context, costar_property_id: '251985' },
+    { ...context, parcel_number: '4343-022-030' },
+    { ...context, source: 'rca' },
+  ];
+  for (const blocked of blockedContexts) {
+    assert.throws(() => buildAscStructuredCapture(target, blocked), /does not match/);
+  }
+
+  for (const evidenceCitations of [
+    [operatingAlias.evidence_citations[0]],
+    [
+      operatingAlias.evidence_citations[0],
+      { source: 'official_operator', url: 'https://operator.example/second-page' },
+    ],
+  ]) {
+    assert.throws(() => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: {
+        ...target.cms_evidence,
+        approved_operating_identity_aliases: [{
+          ...operatingAlias,
+          evidence_citations: evidenceCitations,
+        }],
+      },
+    }, context), /does not match/);
+  }
+});
+
 test('approved same-parcel conflicts preserve service and mailing addresses with exact tenant corroboration', () => {
   const conflict = {
     status: 'approved',
