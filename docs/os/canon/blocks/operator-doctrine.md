@@ -21,3 +21,22 @@ render `Not on file` where it is absent — never a default.
 **One tab, one question.** Every surface, tab and section answers exactly one question for the operator; a
 list where a dashboard was needed, or a research workbench where intelligence was needed, is wrong even when
 the data is right. When a surface cannot state its question in one line, the surface is the defect.
+
+**The queue, quantified.** *Newer lease* is relative to the swimlane's standard initial term — within the
+first 2–3 years of it (dialysis new build: 15-yr standard, so 12+ remaining; retrofit/backfill 7–12-yr, so
+7–10 remaining; government: FIRM term remaining, firm being the years free of the government's termination
+rights — a gov-only concept). *A reason to sell* is one of four: **death** (estate, inheritance, generational
+transition), **debt** (a maturity where realizing beats refinancing), **divorce** (marital, or the wind-up of a
+partnership / development agreement / DST / TIC / fund), **value creation** (the BTS merchant-developer
+realization, or a renewal, option, expansion, lease-up or renovation just completed). *$2.5M–$25M* is the
+individual property's sale price — the objective is transaction velocity, repeatable deals of one size and
+type whose marketing wake carries the next; national reach + the shared database + net-lease specialization
+beats the local broker in that band. *Not yet reached* = no touchpoint ever attempted by anyone on the team, or
+not in the LCC BD pipeline at all. Cadence: 7 touches in the first 6 months, then ≈1 per account per
+quarter — one-off and former owners nearer 1–2 a year, developers and large holders nearer monthly.
+
+**Today is the day's tasks only, ranked by client value, in three sections — Significant (BD that pays in
+five years: new-client research, first outreach, follow-ups), Important (pays within a year: BOVs, ELAs,
+touches that generate BOVs or working buyers, marketing live listings), Urgent (pays within ~90 days: pipeline
+management, deal correspondence).** All three must be done; the surface exists to keep Urgent from crowding
+out Significant.
