@@ -199,7 +199,7 @@ OCR on savings is arguing from a number that does not support it.**
      Option period, else the base rent) with **`year1_rent_source`** recording which;
      `year1_total_rent` a SECOND field, never blended in; and **`credit_entity` = the guarantor only
      where the lease carries an express guaranty, else the tenant** — a parent merely NAMED can never
-     become the credit. Record: `responses/EXT2-lease-defines-rent-and-tenant.response.md`.
+     become the credit. Record: `responses/done/EXT2-lease-defines-rent-and-tenant.response.md` (#2078, `f83c2d99`).
    Stand an OCR endpoint on the GaryBuilt box
    (Surya / PaddleOCR / ocrmypdf-Tesseract, all already named in the design) behind the **existing**
    tunnel + CF Access, and inject `deps.freeOcr` at the two server call sites. **The seam already

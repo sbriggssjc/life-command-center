@@ -1,6 +1,6 @@
 # Canon Index & Invariants
 
-**CANON_VERSION: 1.6.0** — 2026-08-28. (1.6.0: new block `deliverable-presentation` — branded output is
+**CANON_VERSION: 1.7.0** — 2026-09-03. (1.7.0: new block `operator-doctrine` + Global invariant 8 — the human sees only the minimum effective dose; the priority queue is SELLER prospecting; buyers are pursued by showing them deals; truth over signal. 1.6.0: new block `deliverable-presentation` — branded output is
 styled by an element's ROLE, never its content; full spec in `../BRANDED-DELIVERABLE-PRESENTATION-STANDARD.md`.
 1.5.0: Global invariant 6 states WHO we prospect — the ultimate
 individual in control; agents of the LLC/SPE are prospectable, prior listing/procuring brokers are not,
@@ -22,6 +22,10 @@ run `../SURFACE-SYNC-PROTOCOL.md`.
    decision**. Agents of the LLC/SPE yes; prior listing/procuring brokers no; public entities never.
    Detail in `blocks/logging-and-touchpoints.md`.
 7. **System-of-record.** Gov/Dia read via LCC proxy only; canonical writes through audited paths.
+8. **Minimum effective dose.** A human is asked only for the step only a human can take (send · call · spend
+   · reach a source code cannot · a judgement no rule can make); everything else propels itself. The queue
+   is SELLER prospecting ($2.5M–$25M, newer lease, a reason to sell, an owner not yet reached); buyers are
+   pursued by showing them deals. Detail in `blocks/operator-doctrine.md`.
 
 ## Handler modules (the topic canon)
 | Module | Covers |
@@ -36,6 +40,7 @@ run `../SURFACE-SYNC-PROTOCOL.md`.
 | `deliverable-presentation.md` | How branded output LOOKS — Excel/Word/PDF/OM/email layout, geometry, number formats, source conventions. Full spec: `../BRANDED-DELIVERABLE-PRESENTATION-STANDARD.md` |
 | `intake-triage.md` | Staged intake triage + classification taxonomy |
 | `personal.md` | Personal-life domains and how they bind to the same OS |
+| `operator-doctrine.md` | What earns a human, what the priority queue is for, truth over signal, one tab one question. Source: `../../architecture/app-ux-review-2026-09-02.md` §0 |
 
 ## Enforcement (blocks · render · parity)
 The rules above are **rendered** to every surface, not re-typed. The enforced, portable rule for each topic is
@@ -59,6 +64,17 @@ Canon: v<X.Y.Z>
 ```
 
 ## Changelog
+- **1.7.0** (2026-09-03) — **New block `operator-doctrine.md` + Global invariant 8**, in Scott's words from
+  the 2026-09-02 app walk-through (41 screenshots, one rule stated five ways): **the human sees only the
+  minimum effective dose** — a card is earned only by a step only a human can take (send the email, make the
+  call, spend money, reach a source code cannot, a judgement no rule can make) and the system propels itself
+  until it cannot; **the priority queue is SELLER prospecting** ($2.5M–$25M, newer lease, a reason to sell,
+  an owner not yet reached) and **buyers are pursued by SHOWING them deals** (an SF link is plumbing, never
+  human work); **truth over signal** (a link is a marker; who we have actively/ever touched is the evidence);
+  **one tab, one question**. It governs every surface's recommendations, not only the app: a surface that
+  hands Scott a linking chore or a buyer-contact push is violating it. Catalog + queue:
+  `../../architecture/app-ux-review-2026-09-02.md`; enforcement in the app is the UX-T1→T4 arc
+  (`PLANNED-BACKLOG.md` §P16). Previously carried as a doctrine paragraph in `CLAUDE.md`.
 - **1.6.0** (2026-08-28) — **New block `deliverable-presentation.md`: branded output is styled by an
   element's ROLE, never by its content.** Row heights, column widths, banding rectangles, footnote spans,
   number formats and label vocabulary come from named registries shared across every tab and every format,

@@ -31,8 +31,8 @@ rather than re-deriving it:
    ownership chain from original developer to current owner should show who we are *actively*
    prospecting and who we have *ever* prospected.
 
-→ Canon: this belongs in `docs/os/canon/blocks/` with a `CANON_VERSION` bump (**UX0** below); until
-then `CLAUDE.md` carries it as a doctrine.
+→ ✅ **In the canon: v1.7.0 (2026-09-03), `docs/os/canon/blocks/operator-doctrine.md` + Global invariant 8**,
+rendered to all five surfaces (UX0 done; the external pastes are on `OPERATOR-ACTIONS.md`).
 
 ## 1. The catalog
 
