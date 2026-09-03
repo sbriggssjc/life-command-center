@@ -339,11 +339,24 @@ function capturedRangeContainsFrozenNumber(frozenAddressToken, capturedAddressTo
   const frozenNumber = Number(frozenStreet[1]);
   const rangeStart = Number(capturedStreet[1]);
   const rangeEnd = Number(capturedStreet[2]);
+  const streetTypes = new Set(['ST', 'AVE', 'BLVD', 'RD', 'DR', 'LN', 'CIR', 'HWY']);
+  const frozenStreetTokens = frozenStreet[2].split(' ');
+  const capturedStreetTokens = capturedStreet[3].split(' ');
+  let addedStreetType = null;
+  if (!streetTypes.has(frozenStreetTokens.at(-1))
+    && streetTypes.has(capturedStreetTokens.at(-1))) {
+    addedStreetType = capturedStreetTokens.pop();
+  }
   if (rangeStart >= rangeEnd
-    || frozenStreet[2] !== capturedStreet[3]
+    || frozenStreetTokens.join(' ') !== capturedStreetTokens.join(' ')
     || frozenNumber < rangeStart
     || frozenNumber > rangeEnd) return null;
-  return { frozen_number: frozenNumber, range_start: rangeStart, range_end: rangeEnd };
+  return {
+    frozen_number: frozenNumber,
+    range_start: rangeStart,
+    range_end: rangeEnd,
+    added_street_type: addedStreetType,
+  };
 }
 
 function approvedParentAddressAlias(target, capturedAddressToken) {
@@ -371,10 +384,18 @@ function approvedOperatingIdentityAlias(target, context, capturedAddressToken) {
   const facilityName = normalizeTenantIdentityName(target.cms_identity?.facility_name);
   const capturedNames = new Set(contextTenantNames(context));
   for (const alias of aliases) {
+    const pinnedCostarPropertyId = clean(alias?.costar_property_id);
+    const pinnedParcelNumber = normalizeParcelNumber(alias?.parcel_number);
     if (alias?.status !== 'approved'
       || alias?.reason_code !== 'legal_entity_operating_identity_same_site'
       || alias?.address_token !== capturedAddressToken
       || normalizeTenantIdentityName(alias?.cms_facility_name) !== facilityName
+      || (pinnedCostarPropertyId && (
+        clean(context.source).toLowerCase() !== 'costar'
+        || clean(context.costar_property_id) !== pinnedCostarPropertyId
+      ))
+      || (pinnedParcelNumber
+        && normalizeParcelNumber(context.parcel_number) !== pinnedParcelNumber)
       || !clean(alias?.authorized_by)
       || !/^\d{4}-\d{2}-\d{2}T/.test(clean(alias?.authorized_at))) continue;
     const operatingNames = (Array.isArray(alias.operating_names) ? alias.operating_names : [])
@@ -541,6 +562,7 @@ export function buildAscStructuredCapture(target, context = {}) {
       && (exactTenantCorroboration || sameParcelAddressConflictSourceRecordPinned);
     const rangeContainment = capturedRangeContainsFrozenNumber(frozenComparisonToken, addressToken);
     const rangeContainmentMatch = rangeContainment && corroboration;
+    const operatingIdentityRangeMatch = rangeContainment && operatingIdentityAlias;
     const controlledFacilityAlias = controlledAscFacilityAlias(target, context);
     const ownerEnrollmentCorroboration = ownerEnrollmentOrganizationCorroboration(target, context);
     const multiSignalRangeMatch = rangeContainment
@@ -561,7 +583,7 @@ export function buildAscStructuredCapture(target, context = {}) {
     const compoundStreetSplitMatch = compoundStreetSplit && facilityCorroboration;
     if (!parentBuildingMatch && !aliasMatch && !operatingIdentityAliasMatch
       && !sameParcelAddressConflictMatch
-      && !rangeContainmentMatch && !multiSignalRangeMatch
+      && !rangeContainmentMatch && !operatingIdentityRangeMatch && !multiSignalRangeMatch
       && !municipalityAliasMatch && !directionalStreetTypeMatch
       && !compoundStreetSplitMatch) {
       throw new Error('Captured page does not match the active frozen ASC candidate');
@@ -587,6 +609,20 @@ export function buildAscStructuredCapture(target, context = {}) {
       captured_operating_name: operatingIdentityAlias.matched_operating_name,
       cms_sublocation_preserved: clean(cmsIdentity.address),
       captured_building_address: clean(context.address),
+      second_review_required: true,
+    } : operatingIdentityRangeMatch ? {
+      mode: 'approved_operating_identity_range_containment',
+      alias_reason_code: operatingIdentityAlias.reason_code,
+      frozen_street_number: rangeContainment.frozen_number,
+      captured_range_start: rangeContainment.range_start,
+      captured_range_end: rangeContainment.range_end,
+      captured_street_type_extension: rangeContainment.added_street_type,
+      cms_facility_name_preserved: clean(cmsIdentity.facility_name),
+      captured_operating_name: operatingIdentityAlias.matched_operating_name,
+      cms_address_preserved: clean(cmsIdentity.address),
+      captured_building_address: clean(context.address),
+      costar_property_id: clean(context.costar_property_id) || null,
+      parcel_number: clean(context.parcel_number) || null,
       second_review_required: true,
     } : multiSignalRangeMatch ? {
       mode: 'controlled_multisignal_range_identity',
