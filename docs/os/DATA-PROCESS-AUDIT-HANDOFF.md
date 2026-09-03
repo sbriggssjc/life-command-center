@@ -144,6 +144,8 @@ that fires `gov_classify_agency()`; do not read it as broken.
 3. **`PR5d`** — `costar_cmbs_loan`: 121 rungs, the ladder's largest source, for a capture arm with
    0 rows on either domain (`loans.data_source`). Is the CoStar CMBS tab ever captured, or is the
    arm unreachable? One grep of the extension + one count.
+   **Prompt drafted: `docs/claude-code/prompts/PR5d-costar-cmbs-loan-arm.md`** (also reconciles
+   UX-T1a's "loan maturity has no LCC table" claim against the `loans` tables).
 4. **`DE3`/`DE4`** (DE4's input is settled: FY2026's 73.66% Medicare is the fallback bucket),
    **`B6e-clinic-metadata`**, **`D2`–`D5`**, **`PR10`** (one source, two ladders), **`SEC1`**
    (91 of 195 SECURITY DEFINER functions anon-executable — filed by PR8, needs its own pass).

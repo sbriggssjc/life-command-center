@@ -18,6 +18,13 @@
 
 ## 2026-09-03 — UX-T1a Part A MEASURED (#2084): the queue is 89.6% disjoint from the doctrine; Part B held; UX-T1a-gates prompt drafted
 
+**ENTC verify (Cowork, post-merge):** every number reproduces live — junk80 view **80**
+(41/27/6/4/2 split exact), plan 15, blind pairs 55, drift 0, `lcc_p195_unmerge` anon EXECUTE
+**false**. ✅ **And the Railway redeploy already carries the merge** (`/version` = `5b3b1227`,
+09:27 UTC) — so the JS half (mint gate, un-stamp keying, junk80-seed handler) is LIVE and
+**junk80-apply is unblocked**; CC's "can't run before the deploy" caveat is superseded.
+
+
 - Funnel 8,858 → 3,529 → 259 → 31 → 23. G3 (newer lease) cuts 93% and G4 (reason to sell) 88% — both
   COVERAGE gaps: dia has no lease dates in the mirror (3,823 live leases at source), and debt (192
   maturities ≤24 mo) has no LCC table while Today already renders a `loan_maturity` label nothing fills.
