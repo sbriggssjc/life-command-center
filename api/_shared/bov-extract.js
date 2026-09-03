@@ -158,14 +158,44 @@ function leasePrompt(leaseText) {
     'into "as_stated". NEVER pick a day, a month, or a year to fill a date the',
     'lease does not state.',
     '',
+    'BASE RENT IS WHATEVER THE LEASE DEFINES AS ITS BASE RENT — there is no house',
+    'rule. Copy the lease\'s OWN label into "defined_term" ("Base Rent", "Minimum',
+    'Rent", "Fixed Rent", "Minimum Annual Rent") and the sentence that defines it,',
+    'verbatim, into "definition_as_stated". Any rent the lease states SEPARATELY —',
+    'equipment rent, additional rent, CAM, taxes, insurance, percentage rent — is a',
+    'row of "additional_rent" with its own quote. DO NOT ADD IT INTO "base_rent",',
+    'and DO NOT SUM anything.',
+    '',
+    'YEAR 1 is the rent schedule period in force at Rent Commencement. Quote',
+    '"rent_commencement" as its own date (it is frequently NOT the lease',
+    'commencement); quote any free-rent / abated period verbatim into "abatement"',
+    'and do NOT net it out of the rent.',
+    '',
+    'THE TENANT is the legal entity the lease defines as Tenant/Lessee — the party',
+    'that signs and is the counterparty to Landlord. Put it in',
+    '"tenant_legal_entity" exactly as written, entity suffix included. A trade name',
+    'goes in "tenant_dba"; every ADDITIONAL named Tenant/Lessee goes in',
+    '"co_tenants". Fill "guarantor" and "guaranty_as_stated" ONLY when the lease',
+    'itself contains an express guaranty, and quote that clause. A parent or',
+    'affiliate merely NAMED in the lease without guaranteeing it goes in',
+    '"parent_mentioned" — it is NOT the tenant and NOT the guarantor.',
+    '',
     '{',
     '  "tenant_name": string|null,',
+    '  "tenant_legal_entity": string|null,',
+    '  "tenant_dba": string|null,',
+    '  "co_tenants": [ string ],',
     '  "guarantor": string|null,',
+    '  "guaranty_as_stated": string|null,',
+    '  "parent_mentioned": string|null,',
     '  "suite": string|null,',
     '  "leased_sf": number|null,',
     '  "lease_type": "NNN"|"NN"|"MG"|"Gross"|null,',
-    '  "base_rent": { "amount": number|null, "basis": "monthly"|"annual"|"per_sf_annual"|"per_sf_monthly"|null, "as_stated": string|null },',
+    '  "base_rent": { "amount": number|null, "basis": "monthly"|"annual"|"per_sf_annual"|"per_sf_monthly"|null, "as_stated": string|null, "defined_term": string|null, "definition_as_stated": string|null },',
+    '  "additional_rent": [ { "label": string, "amount": number|null, "basis": "monthly"|"annual"|"per_sf_annual"|"per_sf_monthly"|null, "as_stated": string, "kind": "equipment"|"cam"|"tax"|"insurance"|"percentage"|"other"|null } ],',
+    '  "abatement": { "as_stated": string|null },',
     '  "escalation_pct": number|null,',
+    '  "rent_commencement": { "date": "YYYY-MM-DD"|null, "as_stated": string|null, "precision": "day"|"month"|"year"|"formula"|null },',
     '  "lease_commencement": { "date": "YYYY-MM-DD"|null, "as_stated": string|null, "precision": "day"|"month"|"year"|"formula"|null },',
     '  "lease_expiration": { "date": "YYYY-MM-DD"|null, "as_stated": string|null, "precision": "day"|"month"|"year"|"formula"|null },',
     '  "lease_term": { "as_stated": string|null, "years": number|null, "months": number|null },',
@@ -301,8 +331,15 @@ export function normalizeBaseRent(v) {
   const rawBasis = typeof v.basis === 'string' ? v.basis.trim().toLowerCase() : null;
   const basis = rawBasis && RENT_BASES.has(rawBasis) ? rawBasis : null;
   const asStated = v.as_stated == null || v.as_stated === '' ? null : String(v.as_stated);
+  // EXT2 — the lease's OWN label for this figure, and the sentence defining it.
+  // Carried, never interpreted: "Base Rent" and "Minimum Annual Rent" are the same
+  // slot in different leases, and which components a lease folds into it is a fact
+  // about that lease, not a house rule.
+  const definedTerm = v.defined_term == null || v.defined_term === '' ? null : String(v.defined_term);
+  const definitionAsStated = v.definition_as_stated == null || v.definition_as_stated === ''
+    ? null : String(v.definition_as_stated);
   if (amount == null && !asStated) return null;
-  return { amount, basis, as_stated: asStated };
+  return { amount, basis, as_stated: asStated, defined_term: definedTerm, definition_as_stated: definitionAsStated };
 }
 
 /**
@@ -662,6 +699,267 @@ export function reconcileQuotedDateWithQuote(detail) {
 }
 
 // ---------------------------------------------------------------------------
+// EXT2 — the LEASE defines base rent, year 1 and the tenant; code applies it
+//
+// EXT1 stopped the model computing; EXT1b made the verbatim quote outrank the
+// model's label. The floor re-run's residue was neither: it was the model
+// choosing a DIFFERENT LINE for the same field, and both lines were verbatim.
+//
+//   doc 255  one side quoted "$8,464.00 per month" (the TOTAL), the other
+//            "$7,445 per month plus $1,019 per month for equipment" (base plus a
+//            separately-stated equipment rent). Both are on the page.
+//   doc 299  "$7,725.33" vs "$7,373.17 per month" — two periods of one schedule,
+//            each quoted as year 1.
+//   doc 425/431  a DBA vs the registered entity; an individual plus two entities
+//            all named as Tenant.
+//
+// Scott's decision (2026-09-03) is that there is NO house rule to apply: **each
+// lease defines these terms itself.** So the extractor quotes the lease's own
+// definition (the `defined_term` / `definition_as_stated` beside the rent, the
+// separately-stated components as their own rows, Rent Commencement as its own
+// date, every named Tenant party) and the functions below apply THAT definition:
+//
+//   * base rent is whatever the lease calls base rent — separately-stated
+//     equipment / additional rent is never summed into it, and rides as its own
+//     `year1_total_rent` so a BOV can show both figures rather than one blended
+//     one nobody can trace;
+//   * year 1 is the schedule period in force at Rent Commencement (else the first
+//     CONTRACTED period, else the single quoted base rent) — and
+//     `year1_rent_source` says which. ⚠️ THE SCHEDULE OUTRANKS A `base_rent`
+//     QUOTE, deliberately: the schedule is the lease's own statement of what is
+//     payable when, and a lone "base rent" figure may be any period of it (doc
+//     299 quoted period 2). The residual risk that carries is a lease whose
+//     schedule states the BLENDED figure while `base_rent` quotes the base alone
+//     — read `year1_rent_source` on such a row rather than assuming;
+//   * the tenant is the legal entity that is counterparty to the Landlord. That
+//     is the CREDIT absent an express guaranty: a parent NAMED in the lease is
+//     not liable, so it is carried as `parent_mentioned` and can never become
+//     `credit_entity`.
+//
+// Every function here is pure and records which half spoke, exactly as EXT1b's do.
+// ---------------------------------------------------------------------------
+
+/** Additional-rent kinds the model may report. Anything else is treated as unstated. */
+const ADDITIONAL_RENT_KINDS = new Set(['equipment', 'cam', 'tax', 'insurance', 'percentage', 'other']);
+
+/**
+ * Kinds that belong in the year-1 TOTAL rent. Pass-throughs a landlord bills and
+ * collects (CAM / tax / insurance) and percentage rent are NOT added: the first
+ * are reimbursements, not rent to the fee owner, and percentage rent is
+ * contingent. Equipment and a lease's own catch-all "additional rent" ARE.
+ */
+const TOTAL_RENT_KINDS = new Set(['equipment', 'other']);
+
+/**
+ * Normalize the model's `additional_rent` rows. Each is reconciled against its own
+ * quote by the SAME EXT1b path as base rent — the mislabelling defect appears row
+ * by row here too — and annualized by the SAME annualizer. Rows carrying neither a
+ * figure nor a quote are dropped; a row that cannot be annualized is KEPT with a
+ * null `annual_rent`, because "the lease states an equipment rent we cannot
+ * convert" is a fact a reader needs, not a row to disappear.
+ */
+export function normalizeAdditionalRent(list, leasedSf) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const row of list) {
+    if (!row || typeof row !== 'object') continue;
+    const baseRent = reconcileBaseRentWithQuote(normalizeBaseRent(row));
+    if (!baseRent) continue;
+    const rawKind = typeof row.kind === 'string' ? row.kind.trim().toLowerCase() : null;
+    const kind = rawKind && ADDITIONAL_RENT_KINDS.has(rawKind) ? rawKind : null;
+    const { year1_rent: annual, rent_basis_unresolved } = annualizeRent(baseRent, leasedSf);
+    out.push({
+      label: row.label == null || row.label === '' ? '' : String(row.label),
+      kind,
+      amount: baseRent.amount,
+      basis: baseRent.basis,
+      as_stated: baseRent.as_stated,
+      annual_rent: annual,
+      rent_basis_unresolved,
+      basis_source: baseRent.basis_source ?? null,
+      amount_source: baseRent.amount_source ?? null,
+    });
+  }
+  return out;
+}
+
+/** ISO-string date containment; an open end (no end_date) is treated as open-ended. */
+function periodContains(period, iso) {
+  if (!iso) return false;
+  const start = period.start_date || '';
+  const end = period.end_date || '';
+  if (!start) return false;
+  if (iso < start) return false;
+  return !end || iso <= end;
+}
+
+/**
+ * Which figure is YEAR-1 RENT, and where it came from.
+ *
+ * The order is the lease's own: the schedule period in force at Rent Commencement,
+ * else the first CONTRACTED period, else the single quoted base rent, else a
+ * pre-EXT1 record's bare number. An OPTION period is never year 1 — it is rent for
+ * a term nobody has exercised.
+ *
+ * ⚠️ A chosen period with no usable figure falls through to the base rent rather
+ * than nulling the field: a schedule row the annualizer could not convert is a
+ * reason to prefer the other quote, not a reason to report no rent at all. The
+ * source key says which happened every time.
+ *
+ * @returns {{year1_rent:number|null, year1_rent_source:string|null}}
+ */
+export function resolveYear1Rent({ baseRent, rentSchedule, rentCommencement, leasedSf, modelYear1 } = {}) {
+  const fromBase = baseRent
+    ? annualizeRent(baseRent, leasedSf).year1_rent
+    : null;
+  const fallback = () => {
+    if (fromBase != null) return { year1_rent: fromBase, year1_rent_source: 'base_rent' };
+    if (baseRent) return { year1_rent: null, year1_rent_source: null };
+    const legacy = numOrNull(modelYear1);
+    return legacy == null
+      ? { year1_rent: null, year1_rent_source: null }
+      : { year1_rent: legacy, year1_rent_source: 'model_year1_rent' };
+  };
+
+  const periods = Array.isArray(rentSchedule)
+    ? rentSchedule.filter((p) => p && p.status !== 'Option')
+    : [];
+  if (!periods.length) return fallback();
+
+  const commencedOn = rentCommencement && rentCommencement.date ? rentCommencement.date : null;
+  const atCommencement = commencedOn ? periods.find((p) => periodContains(p, commencedOn)) : null;
+  if (atCommencement && atCommencement.annual_rent != null) {
+    return { year1_rent: atCommencement.annual_rent, year1_rent_source: 'schedule_at_rent_commencement' };
+  }
+  const first = periods[0];
+  if (first && first.annual_rent != null) {
+    return { year1_rent: first.annual_rent, year1_rent_source: 'schedule_period_1' };
+  }
+  return fallback();
+}
+
+/**
+ * Year-1 rent PLUS the separately-stated components — a SECOND field, never
+ * written into `year1_rent`.
+ *
+ * ⚠️ The null is always explained. `no_additional_rent_stated` (the lease states
+ * one rent) and `unresolved_component:<label>` (it states two and we cannot
+ * convert one) are different facts, and a bare null wearing both would be exactly
+ * the P180 unknown-is-not-a-value failure this repo keeps paying for.
+ *
+ * @returns {{year1_total_rent:number|null, year1_total_rent_note:string|null}}
+ */
+export function resolveYear1TotalRent(year1Rent, additionalRent) {
+  const components = (Array.isArray(additionalRent) ? additionalRent : [])
+    .filter((c) => c && TOTAL_RENT_KINDS.has(c.kind));
+  if (!components.length) {
+    return { year1_total_rent: null, year1_total_rent_note: 'no_additional_rent_stated' };
+  }
+  if (year1Rent == null) {
+    return { year1_total_rent: null, year1_total_rent_note: 'year1_rent_unresolved' };
+  }
+  const unresolved = components.filter((c) => c.annual_rent == null);
+  if (unresolved.length) {
+    const labels = unresolved.map((c) => c.label || c.kind || 'component').join('|');
+    return { year1_total_rent: null, year1_total_rent_note: `unresolved_component:${labels}` };
+  }
+  const total = components.reduce((sum, c) => sum + c.annual_rent, year1Rent);
+  return { year1_total_rent: toCents(total), year1_total_rent_note: null };
+}
+
+/**
+ * Split a trade name off a legal entity when the NAME ITSELF states the marker.
+ * "Acme Health Services, LLC d/b/a Riverside Dialysis" is one string carrying two
+ * facts, and which one is "the tenant" is the whole doc-425 disagreement. The
+ * marker set is small and closed — nothing is inferred from the shape of a name.
+ */
+export function splitDbaFromName(name) {
+  const s = name == null ? '' : String(name).trim();
+  if (!s) return { legal: null, dba: null };
+  const m = /\s+(?:d\/b\/a|d\.b\.a\.?|dba|doing\s+business\s+as)\s+/i.exec(s);
+  if (!m) return { legal: s, dba: null };
+  const legal = s.slice(0, m.index).replace(/[\s,]+$/, '').trim();
+  const dba = s.slice(m.index + m[0].length).trim();
+  if (!legal) return { legal: s, dba: null };
+  return { legal, dba: dba || null };
+}
+
+/**
+ * Free rent / abated period, VERBATIM. It is never netted out of the rent — an
+ * abatement is a fact about the first months of a term, not a smaller rent, and
+ * blending it is the doc-255 defect in a different costume. A model that returns
+ * a bare string instead of the object shape is accepted (the same robustness
+ * `normalizeBaseRent` has), because losing the quote is the only real failure.
+ */
+export function normalizeAbatement(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'string') {
+    const s = v.trim();
+    return s ? { as_stated: s } : null;
+  }
+  if (typeof v !== 'object') return null;
+  const stated = v.as_stated == null || v.as_stated === '' ? null : String(v.as_stated).trim();
+  return stated ? { as_stated: stated } : null;
+}
+
+function cleanString(v) {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s ? s : null;
+}
+
+/**
+ * WHO IS THE TENANT, AND WHOSE CREDIT IS IT.
+ *
+ * Scott's underwriting rule, applied verbatim: the tenant is the legal entity that
+ * is counterparty to the Landlord, and THAT is the credit in the three-legs
+ * analysis unless the lease itself contains an express guaranty. A parent named in
+ * the lease is not liable for a subsidiary's obligations without express
+ * authorization, so `parent_mentioned` is carried for a reader and is structurally
+ * unable to become `credit_entity` — the credit may well be a subsidiary of
+ * unknown size, and saying so is the honest answer.
+ *
+ * ⚠️ A guarantor NAME with no guaranty CLAUSE does not move the credit. The model
+ * naming one is a claim; the quoted clause is the evidence, and only the evidence
+ * changes the basis.
+ */
+export function resolveCreditEntity(parsed = {}) {
+  const declared = cleanString(parsed.tenant_legal_entity) || cleanString(parsed.tenant_name);
+  const split = splitDbaFromName(declared);
+  const tenantLegalEntity = split.legal;
+  const tenantDba = cleanString(parsed.tenant_dba) || split.dba;
+
+  const seen = new Set([String(tenantLegalEntity || '').toLowerCase()]);
+  const coTenants = [];
+  const declaredCoTenants = Array.isArray(parsed.co_tenants)
+    ? parsed.co_tenants
+    : (typeof parsed.co_tenants === 'string' ? [parsed.co_tenants] : []);
+  for (const c of declaredCoTenants) {
+    const name = cleanString(c);
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    coTenants.push(name);
+  }
+
+  const guarantor = cleanString(parsed.guarantor);
+  const guarantyAsStated = cleanString(parsed.guaranty_as_stated);
+  const express = !!(guarantor && guarantyAsStated);
+
+  return {
+    tenant_legal_entity: tenantLegalEntity,
+    tenant_dba: tenantDba,
+    co_tenants: coTenants,
+    guarantor,
+    guaranty_as_stated: guarantyAsStated,
+    parent_mentioned: cleanString(parsed.parent_mentioned),
+    credit_entity: express ? guarantor : tenantLegalEntity,
+    credit_entity_basis: express ? 'express_guaranty' : (tenantLegalEntity ? 'tenant_is_counterparty' : null),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Per-lease → tenant
 // ---------------------------------------------------------------------------
 
@@ -698,8 +996,7 @@ export async function extractTenantFromLease(leaseRow, deps = {}) {
   // thing on offer and rides through unchanged.
   // EXT1b — the verbatim quote is the authority over the model's own labels.
   const baseRent = reconcileBaseRentWithQuote(normalizeBaseRent(parsed.base_rent));
-  const { year1_rent: annualized, rent_basis_unresolved } = annualizeRent(baseRent, sf);
-  const year1Rent = baseRent ? annualized : numOrNull(parsed.year1_rent);
+  const { rent_basis_unresolved } = annualizeRent(baseRent, sf);
 
   // EXT1 — dates. Quoted, never defaulted; an expiration is derived only from a
   // stated commencement DAY plus a stated term, and says so when it is.
@@ -715,9 +1012,23 @@ export async function extractTenantFromLease(leaseRow, deps = {}) {
     }
   }
 
+  // EXT2 — Rent Commencement is its own quoted date (routinely NOT the lease
+  // commencement), and it is what selects the year-1 period of the schedule.
+  const rentCommencement = reconcileQuotedDateWithQuote(resolveQuotedDate(parsed.rent_commencement));
+  const rentSchedule = Array.isArray(parsed.rent_schedule)
+    ? parsed.rent_schedule.map((p) => cleanRentPeriod(p, sf)).filter(Boolean)
+    : null;
+  const additionalRent = normalizeAdditionalRent(parsed.additional_rent, sf);
+  const { year1_rent: year1Rent, year1_rent_source: year1RentSource } = resolveYear1Rent({
+    baseRent, rentSchedule, rentCommencement, leasedSf: sf, modelYear1: parsed.year1_rent,
+  });
+  const { year1_total_rent: year1TotalRent, year1_total_rent_note: year1TotalRentNote } =
+    resolveYear1TotalRent(year1Rent, additionalRent);
+  const credit = resolveCreditEntity(parsed);
+
   const tenant = {
-    name: parsed.tenant_name || '',
-    guarantor: parsed.guarantor || '',
+    name: credit.tenant_legal_entity || '',
+    guarantor: credit.guarantor || '',
     suite: parsed.suite || '',
     sf,
     lease_type: parsed.lease_type || 'NNN',
@@ -725,17 +1036,36 @@ export async function extractTenantFromLease(leaseRow, deps = {}) {
     escalation_pct: numOrNull(parsed.escalation_pct),
     lease_commencement: commencement.date || '',
     lease_expiration: expiration.date || '',
-    rent_schedule: Array.isArray(parsed.rent_schedule)
-      ? parsed.rent_schedule.map((p) => cleanRentPeriod(p, sf)).filter(Boolean)
-      : null,
+    rent_schedule: rentSchedule,
     abstract: Object.keys(abstract).length ? abstract : null,
     clause_refs: Object.keys(clauseRefs).length ? clauseRefs : null,
     // Derivation evidence, beside the six consumer keys — never instead of them.
     base_rent: baseRent,
+    // ⚠️ This flag is about the QUOTED BASE RENT, not about `year1_rent`: a
+    // schedule can state a year-1 figure over a base-rent quote we could not
+    // convert. `year1_rent_source` is what says where the number came from.
     rent_basis_unresolved: baseRent ? rent_basis_unresolved : false,
+    year1_rent_source: year1RentSource,
+    // EXT2 — the separately-stated components, and the TOTAL as its own field.
+    // Never folded into `year1_rent`: doc 255 states $7,445 base plus $1,019
+    // equipment, and blending them is what made two verbatim quotes disagree.
+    additional_rent: additionalRent.length ? additionalRent : null,
+    year1_total_rent: year1TotalRent,
+    year1_total_rent_note: year1TotalRentNote,
+    abatement: normalizeAbatement(parsed.abatement),
+    rent_commencement_detail: rentCommencement,
     lease_commencement_detail: commencement,
     lease_expiration_detail: expiration,
     lease_term: leaseTerm,
+    // EXT2 — who the tenant is and whose credit it is. `parent_mentioned` is
+    // carried for a reader and can never become `credit_entity`.
+    tenant_legal_entity: credit.tenant_legal_entity,
+    tenant_dba: credit.tenant_dba,
+    co_tenants: credit.co_tenants.length ? credit.co_tenants : null,
+    guaranty_as_stated: credit.guaranty_as_stated,
+    parent_mentioned: credit.parent_mentioned,
+    credit_entity: credit.credit_entity,
+    credit_entity_basis: credit.credit_entity_basis,
   };
   return { ok: true, tenant, document_id: leaseRow.document_id, model: resp.data?.model || null };
 }
