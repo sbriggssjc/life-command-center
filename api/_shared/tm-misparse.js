@@ -165,11 +165,31 @@ export function planContactMinting(contacts, opts = {}) {
   const suspectEmails = new Set();
   for (const [em, n] of emailCounts) if (n > threshold) suspectEmails.add(em);
 
+  // ENTC (2026-09-03) — the ENTITY mint guard was weaker than the one on the
+  // domain `contacts` write. `upsertSidebarContacts` drops a candidate whose name
+  // trips isJunkContactName; `unpackContacts` never did, so a firm/section-label/
+  // narrative name carrying a real mailbox minted a PERSON entity that the
+  // ensureEntityLink email tier then resolves inbound people onto (the junk80
+  // population). The filter is INJECTED, not imported: this module is pure and
+  // sidebar-pipeline imports it, so importing back would be circular — and a
+  // second copy of the regex here is the normaliser drift this repo keeps paying
+  // for. It is deliberately PERSON-ONLY: isJunkContactName rejects firm suffixes,
+  // so running it on an organization candidate would block every legitimate
+  // company mint.
+  const personJunkName = typeof opts.personJunkName === 'function' ? opts.personJunkName : null;
+
   const mint = [];
   const review = [];
   for (const c of list) {
     if (!c || !c.name) continue;
     const em = c.email ? String(c.email).toLowerCase().trim() : '';
+    if (personJunkName) {
+      const junk = personJunkName(c);
+      if (junk) {
+        review.push({ contact: c, reason: 'person_junk_name', signal: typeof junk === 'string' ? junk : 'junk_contact_name', evidence: String(c.name).slice(0, 200) });
+        continue;
+      }
+    }
     const misparse = tmMisparseReason(c.name);
     if (misparse) {
       review.push({ contact: c, reason: 'misparse_name', signal: misparse.signal, evidence: misparse.evidence, match: misparse.match });

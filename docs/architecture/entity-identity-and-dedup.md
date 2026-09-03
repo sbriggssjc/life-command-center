@@ -37,9 +37,13 @@ read **3,007** (2026-09-03; 3,006 on 2026-08-28 — re-derive, never quote).
 `confirm_sql` per row on `v_lcc_entities_c_review_merge_plan`, Scott's call, row by row.
 
 **Junk-named person rows holding a real mailbox (PR5c-entities-c-oldest, 2026-09-03): 80** — 30
-carry a Salesforce identity, 37 are alone on their mailbox, and **0 are in `junk_entity_review`
-(281 rows) or carry `metadata.junk_name_flagged` (706 live)**. That is the live landmine the email
-tier resolves onto; sizing the sweep is **PR5c-entities-c-junk80**.
+carry a Salesforce identity and **0 are in `junk_entity_review` (281 rows)**. That is the live
+landmine the email tier resolves onto. ✅ **Censused ENTC 2026-09-03 —
+`v_lcc_entities_c_junk80` — and the 80 are NOT one class:** 41 `sweep_candidate` · 27
+`hold_salesforce_identity` · **6 `hold_email_corroborated`** (the row IS that mailbox's person) ·
+4 `hold_inbound_reference` · 2 `hold_name_repairable`. ⚠️ Two corrections to the numbers above:
+**11 of the 80 DO carry `metadata.junk_name_flagged`**, and **"37 alone on their mailbox" is
+domain-scoped — by email address it is 31** (the view emits both). §5b.
 
 ## 3. The arc — one line each
 
@@ -55,17 +59,20 @@ tier resolves onto; sizing the sweep is **PR5c-entities-c-junk80**.
 | PR5c-entities-c | 09-03 | the EMAIL tier keeps the filter — 27% precision without it; blind-pair view; guard goes red on removal (#2079) | `PR5c_entities_c_EMAIL_TIER_DOMAIN_SCOPE_2026-09-03.md` |
 | PR5c-entities-c-review | 09-03 | the 15 as a plan Scott confirms row by row; the P195 winner rule degenerates here; **`lcc_p195_unmerge` strands duplicate edges** | `PR5c_entities_c_review_oldest_2026-09-03.md` |
 | PR5c-entities-c-oldest | 09-03 | sized and the gate REFUSED — every guard catches 12 of 26 junk-oldest rows, reaches 22 of 193 groups, and cannot help the 37 alone on their mailbox | same |
+| ENTC | 09-03 | the junk80 census (**not one class** — 6 rows ARE their mailbox); the entity mint gated with the guard the `contacts` write already used; **`lcc_p195_unmerge` FIXED, not retired — 66 open merges have no P196 ledger row** | `ENTC_JUNK80_AND_P195_UNMERGE_2026-09-03.md` |
 
 **Open (backlog ids):** N15e (👤 unique key — 6,608 groups) · N15f (`[MERGED]` PATCH bypasses the
 trigger) · N15g (dead `canonical_name` argument in the asset mint) · N16 (retire r9's unattached
 mints) · N20 (gov address-punctuation duplicate properties) · N21 (`sync.js`/`domains.js` POST
 without looking up by key) · N3h (9 $0 duplicates on three firms; Gardner Tanenbaum's history split)
 · PR5c-entities-c-race (needs N15e)
-· ~~PR5c-entities-c-oldest~~ **MEASURED AND THE GATE REFUSED 2026-09-03** — superseded by
-**PR5c-entities-c-junk80** (retire the 80 junk-named person rows holding a real mailbox; 0 are in
-the junk lane that exists) · **PR5c-entities-c-review — 👤 the 15-pair plan is BUILT, nothing
-merged, Scott confirms row by row** · **PR5c-entities-c-p195-unmerge** (`lcc_p195_unmerge` strands
-byte-identical edges on the winner and reports `restored` — use `lcc_unmerge_entity`).
+· ~~PR5c-entities-c-oldest~~ **MEASURED AND THE GATE REFUSED 2026-09-03**
+· ~~PR5c-entities-c-junk80~~ **CENSUSED + PRODUCER GATED (ENTC 2026-09-03)** — the seeder is
+dry-run and 👤 **nobody has applied it** (`junk80-apply`); the JS mint gate reaches 47.5% and the
+residue needs `lcc_p131_is_document_row_label` reachable from JS without a second regex copy
+(`junk80-gate-p131`) · **PR5c-entities-c-review — 👤 the 15-pair plan is BUILT, nothing merged,
+Scott confirms row by row** · ~~PR5c-entities-c-p195-unmerge~~ **FIXED (ENTC 2026-09-03)**, and
+`test/p195-merge-gate.test.mjs` now slices a superseded body (`p195-unmerge-callers`).
 
 ## 4. Lessons carried verbatim from `CLAUDE.md` (moved 2026-09-03, unedited)
 
@@ -450,7 +457,11 @@ verdicts, so the 40 non-merges are a recorded DECISION). Migration `202610131200
   `Frank D. Johnson`, and `Steve Karlson` over `Steven Karlson`. **A rule calibrated on owners is
   not wrong here, it is SILENT** — the plan names the deciding tier and hands Scott an explicit
   `(loser, winner)` to swap.
-- **🚨 `lcc_p195_unmerge` STRANDS ROWS AND REPORTS `restored` — USE `lcc_unmerge_entity`.** Round trip
+- **🚨 `lcc_p195_unmerge` STRANDED ROWS AND REPORTED `restored` — ✅ FIXED ENTC 2026-09-03 (P196's
+  shape + a want-vs-have `note`; round trip 24/24, 0 lost, 0 stranded, `restored` 17 → 19). ⚠️ The
+  "retire it, it is redundant" verdict below was REFUSED on a measurement: 66 open
+  `lcc_p195_merge_log` rows have NO `lcc_entity_merge_log` row, so `lcc_unmerge_entity` cannot
+  reverse any of them — retiring it would have made 66 live merges irreversible.** Round trip
   on the Harrison pair, rolled back: the P195 wrapper restored 17 rows and left **two byte-identical
   `brokers` edges on the winner**, because `trg_lcc_entity_rel_resolve_survivor` (BEFORE INSERT)
   SKIPS a duplicate of an edge the now-live loser already holds, so the row never reaches
@@ -488,3 +499,67 @@ verdicts, so the 40 non-merges are a recorded DECISION). Migration `202610131200
 - **Two nuances the brief did not state.** The `.find` runs over the oldest **10** rows only (one
   group holds 24, outside the window entirely), and **`if (domain)` means an inbound with no domain
   searches the whole workspace** — the tier is not always same-domain.
+
+## ENTC — junk80 censused (and it is not one class), `lcc_p195_unmerge` fixed not retired (2026-09-03)
+
+Full record: `docs/audits/ENTC_JUNK80_AND_P195_UNMERGE_2026-09-03.md`. Migrations
+`20261014120000` (p195 fix) + `20261015120000` (census). Guard
+`test/entc-junk80-and-p195-unmerge.test.mjs` — 13 tests, **19/19 mutations RED**.
+**Nothing was retired, renamed, merged or swept; the seeder is dry-run and unapplied.**
+
+- **⚠️ BEFORE RETIRING A SUPERSEDED FUNCTION, CHECK THE POPULATION IT STILL OWNS — NOT THE DATE
+  THE SUCCESSOR SHIPPED.** `lcc_p195_unmerge` was filed as redundant since P196 taught
+  `lcc_merge_entity` to self-snapshot. Live: **66 open `lcc_p195_merge_log` rows, ZERO with a
+  `lcc_entity_merge_log` row** — they ran hours before P196 landed, so `lcc_unmerge_entity`
+  answers `no_open_merge_log_row` for all of them. Both ledgers start 2026-08-27, which is exactly
+  why "redundant now" reads true and is false. **Retiring it would have made 66 live merges
+  irreversible.** Fixed instead: P196's UPDATE-survivors + INSERT-only-deleted shape on both
+  `entity_relationships` and `external_identities`, plus want-vs-have residue in a new `note`.
+  Round trip on the Harrison pair, rolled back: **24/24, 0 lost, 0 stranded, `restored` 17 → 19,
+  `note='restored'`** (before: 2 `brokers` edges left on the winner while reporting `restored=17`).
+- **⚠️ A GUARD-DEFINED POPULATION IS NOT A CLASS — READ IT.** The 80 split
+  41 `sweep_candidate` / 27 `hold_salesforce_identity` / **6 `hold_email_corroborated`** /
+  4 `hold_inbound_reference` / 2 `hold_name_repairable`. The six that matter carry a ≥4-character
+  name token **inside their own mailbox localpart** (`Eyal (Al) Elkayam`/`eyal@`, `Hunt`/`hunt@`,
+  `Jackson`/`kjackson@`, `Lew (Doug) Hodge`/`louhodges5901@`) — **the row IS that mailbox's person
+  and clearing its email is the harm, not the fix.** The detector fires on 6 of 80, not 0 and not
+  80, and all six read correct on named rows. Two more are a real person behind a CoStar
+  `Seller Contacts…` prefix — `stripContactLabelPrefix` already exists, so they are a **rename**,
+  not a retire. Only `sweep_candidate` proposes an action; every hold seeds `uncertain` at
+  confidence 0 so a confirm can never be a default.
+- **⚠️ TWO WRITERS ON ONE CAPTURE HAD TWO DEFINITIONS OF "JUNK", AND THE WEAKER ONE MINTED THE
+  ENTITY.** `upsertSidebarContacts` (the domain `contacts` table) has always dropped a candidate
+  failing `isJunkContactName`; `unpackContacts` (the **entity** mint, via `ensureEntityLink`)
+  applied only the TrafficMetrix street/label + fan-out detector. So a firm name, a section label
+  or a CoStar verification sentence carrying a real mailbox minted a **person entity** — exactly
+  what the email tier then resolves inbound people onto. `planContactMinting` now takes an
+  **injected** `personJunkName` filter (injected, not imported: `sidebar-pipeline` imports
+  `tm-misparse`, so importing back is circular and a second regex copy is normaliser drift), and
+  the gate is **PERSON-ONLY** — `isJunkContactName` rejects firm suffixes by design, so running it
+  on an organization candidate would block every legitimate company mint. Suppressed candidates go
+  to the existing review path, never dropped.
+  **Measured reach: 38 of the 80 names (47.5%), and 0 of the 6 corroborated real people.** The
+  residue (`Taxes`, `Condo`, `Public`, `Canada`, `Government`, `User`) is caught only by
+  `lcc_p131_is_document_row_label`, a SQL guard with no JS twin — so the gate halves the inflow
+  rather than stopping it, and that is stated rather than papered over (`junk80-gate-p131`).
+- **⚠️ THE REMEDY WAS UNREACHABLE FOR THE NEW HEURISTIC, AND THE TEMPTING FIX WAS A LIE.**
+  `unstampMisparseMember` — clear `entities.email`, detach the conflated `external_identities`,
+  snapshot both into `junk_review_batch` first, **touch no relationships** — is precisely what this
+  class needs. It fired only for `review.heuristic === TM_MISPARSE_HEURISTIC`, so a junk80 row
+  under its own heuristic would soft-retire **without** clearing the mailbox. Labelling these rows
+  `tm_misparse` to reach that branch would have put a false fact in the ledger (they are vendor
+  party-slot and P131 row labels). The gate is keyed on the **class** now —
+  `EMAIL_CONFLATION_HEURISTICS`, i.e. *this row holds someone else's mailbox*, which is what the
+  remedy is actually about.
+- **⚠️ THE BRIEF'S TWO VERIFICATION TARGETS ARE IN TENSION AND THE PROTECTIVE ONE WINS.** Simulated
+  confirm of the 41 `dismiss` rows: junk-oldest contested mailboxes **14 → 3**, but rows alone on
+  their mailbox only **37 → 29**, because 23 of the 37 carry a Salesforce identity and the brief
+  itself sends those to review. Driving `alone` to ~0 requires bulk-retiring the population the
+  same brief protects. 35 mailboxes freed, 49 identities detached, **0 relationships touched**.
+  ⚠️ The prior audit's **26** junk-oldest mailboxes was a HUMAN read; the guard-measurable figure
+  on the same population is **14** — do not read 14 → 3 as 26 → 3.
+- **The definer unmerge surface was narrowed in the same change.** `lcc_p195_unmerge`,
+  `lcc_unmerge_entity` and `lcc_a2a_unmerge` were all reachable by `anon`/`authenticated` with
+  **zero PostgREST callers** (censused across `api/`, `scripts/`, `test/`). Now `service_role`
+  only — revoking from **both** `public` and the explicit Supabase default-privilege grants, and
+  **asserted with `has_function_privilege()`** rather than read off the REVOKE.

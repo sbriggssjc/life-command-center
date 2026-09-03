@@ -3273,21 +3273,63 @@ this person"* — ranked `hub_email > hub_entity_id > sf_campaign > entity_captu
   carries **no `auto_mergeable` column** (P198 — `lcc_apply_fuzzy_merges()` loops on that flag).
   Merge candidates found by domain/email co-proposal graded at **25% / 7% / 27%** precision three
   separate times — a review lane, never a rule.
-  - 🚨 **REVERSE WITH `lcc_unmerge_entity`, NEVER `lcc_p195_unmerge` (2026-09-03).** The P195
-    wrapper reports `restored` while **stranding byte-identical edges on the winner**: three
-    identical `(from, to, 'brokers')` edges are all snapshotted, and P196's own
+  - ✅ **`lcc_p195_unmerge` IS FIXED (ENTC, 2026-09-03) — and the recommendation to RETIRE it was
+    refused on a measurement.** It reported `restored` while **stranding byte-identical edges on
+    the winner**: three identical `(from, to, 'brokers')` edges are all snapshotted, and P196's own
     `trg_lcc_entity_rel_resolve_survivor` (BEFORE INSERT) skips the 2nd and 3rd as duplicates so
     they never reach `ON CONFLICT (id) DO UPDATE` — **P196's exact finding in the one reversal path
-    that never got P196's fix.** Measured on one live pair, rolled back: **26 rows before / 26
-    after**, `restored=17`, 2 edges left behind; the P196 path on the same pair is 0/0/0. **The row
-    COUNT is identical in both runs — only an identity-keyed fingerprint exposes it**, so a
-    count-based verification of any unmerge is worthless. Backlog `PR5c-entities-c-p195-unmerge`.
+    that never got P196's fix.** It now uses P196's shape (UPDATE the survivors, INSERT only what
+    was deleted) and reports want-vs-have residue in a new `note` column. Round trip on the same
+    pair, rolled back: **24/24, 0 lost, 0 stranded, `restored` 17 → 19.**
+    - ⚠️ **RETIRING IT WOULD HAVE MADE 66 LIVE MERGES IRREVERSIBLE.** `lcc_p195_merge_log` holds
+      **66 open merges and ZERO of them have a `lcc_entity_merge_log` row** — they ran hours before
+      P196 taught `lcc_merge_entity` to self-snapshot, so `lcc_unmerge_entity` answers
+      `no_open_merge_log_row` for every one. Both ledgers start on 2026-08-27, which is exactly why
+      "it is redundant now" reads true and is false. **Before retiring a superseded function, check
+      the population it still owns — not the date the successor shipped.**
+    - **The row COUNT is identical in both runs — only an identity-keyed fingerprint exposes it**,
+      so a count-based verification of any unmerge is worthless.
+    - All three definer unmerge functions (`lcc_p195_unmerge`, `lcc_unmerge_entity`,
+      `lcc_a2a_unmerge`) were **narrowed to `service_role`** in the same change (0 PostgREST
+      callers, censused), revoking from **both** `public` and the explicit `anon`/`authenticated`
+      grants and asserting with `has_function_privilege()`.
+      Writeup: `docs/audits/ENTC_JUNK80_AND_P195_UNMERGE_2026-09-03.md`.
 - **`entities.domain` is a PROVENANCE tag (`dia`/`gov`/`lcc`/`cre`), not an identity scope.**
   `ensureEntityLink`'s canonical_name tier carried `&domain=eq.` and minted duplicates on 9 of 11
   same-email pairs (fixed `d5b0ac8`). **The email tier keeps the same filter ON PURPOSE** — read on
   named rows, 40 of 55 cross-domain same-email pairs are two real brokers on one mailbox, firms filed
   as persons, or P131 row labels; **an attach is worse than a duplicate** (a duplicate merges
   reversibly later; a wrong attach folds two people at write time). Guard goes RED if it is removed.
+  - ✅ **THE 80 JUNK ROWS ARE CENSUSED AND THE PRODUCER IS GATED (ENTC, 2026-09-03) —
+    `v_lcc_entities_c_junk80`.** ⚠️ **They are NOT one class and a blanket sweep clears a real
+    person's mailbox**: 41 `sweep_candidate` · 27 `hold_salesforce_identity` · **6
+    `hold_email_corroborated`** (a ≥4-char name token sits inside the mailbox's own localpart —
+    `Eyal (Al) Elkayam`/`eyal@`, `Hunt`/`hunt@`, `Jackson`/`kjackson@` — the row IS that mailbox's
+    person) · 4 `hold_inbound_reference` · 2 `hold_name_repairable` (a real person behind a CoStar
+    `Seller Contacts…` prefix — `rename`, not retire). Only `sweep_candidate` proposes `dismiss`;
+    every hold seeds `uncertain` at confidence 0. Path is the EXISTING `junk_entity_review` lane,
+    whose confirm effect (`unstampMisparseMember`) clears the email + identities, is reversible via
+    `junk_review_batch`, and **never touches relationships** — so the 480-edge vendor rows keep
+    their deal history. **⚠️ The un-stamp was keyed on `heuristic === TM_MISPARSE_HEURISTIC`, so a
+    junk80 dismiss would have soft-retired WITHOUT clearing the mailbox**; it is keyed on the CLASS
+    now (`EMAIL_CONFLATION_HEURISTICS`) rather than relabelling these rows `tm_misparse`, which
+    would have been a lie in the ledger.
+    - ⚠️ **THE ENTITY MINT HAD A WEAKER GUARD THAN THE WRITE BESIDE IT.** `upsertSidebarContacts`
+      always dropped a candidate failing `isJunkContactName`; `unpackContacts` (the ENTITY mint)
+      applied only the TrafficMetrix detector, so a firm name / section label / verification
+      sentence carrying a real mailbox minted a **person entity**. `planContactMinting` now takes an
+      **injected** `personJunkName` filter (injected, not imported — sidebar-pipeline imports
+      tm-misparse, so importing back is circular and a second regex copy is normaliser drift), and
+      it is **PERSON-ONLY**: `isJunkContactName` rejects firm suffixes, so running it on an
+      organization candidate would block every legitimate company mint. **Measured reach: 38 of the
+      80 names (47.5%), and 0 of the 6 corroborated real people** — the residue needs
+      `lcc_p131_is_document_row_label`, which has no JS twin.
+    - ⚠️ **Two corrections to the prior audit: 11 of the 80 DO carry `metadata.junk_name_flagged`
+      (not 0), and "37 alone on their mailbox" is domain-scoped — by email address it is 31.** The
+      view emits both counts.
+    - ⚠️ **The brief's two verification targets are in tension and the protective one wins:** the
+      simulated sweep takes junk-oldest contested mailboxes **14 → 3** but `alone` only **37 → 29**,
+      because 23 of the 37 carry a Salesforce identity and go to review by design.
   - ⚠️ **AND THE OLDEST-ROW-WINS GATE WAS MEASURED AND REFUSED (2026-09-03).** The email tier takes
     the oldest match without checking it is person-shaped, so an inbound real person can attach to a
     P131 document row label. Over the 193 same-domain mailboxes holding ≥2 live person entities,

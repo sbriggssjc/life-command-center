@@ -223,6 +223,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'ollama-clean-assist-tick':   return handleOllamaCleanAssistTick(req, res);
     case 'junk-prescreen-tick':        return handleJunkPrescreenTick(req, res);
     case 'tm-misparse-seed':           return handleTmMisparseSeed(req, res);
+    case 'junk80-seed':                return handleJunk80Seed(req, res);
     case 'naming-hygiene-tick':        return handleNamingHygieneTick(req, res);
     case 'dup-pair-tick':              return handleDupPairTick(req, res);
     case 'link-propagation-tick':      return handleLinkPropagationTick(req, res);
@@ -2632,6 +2633,86 @@ async function closeJunkScanBatch(scanBatchId, status, summary) {
 // ("Richard Ehmer", "James Devincenti") are excluded (their names don't trip the
 // detector). Idempotent: on_conflict=subject_ref merges, so re-runs add nothing.
 // Dry-run by default; ?apply=1 (or body.apply) writes.
+// ENTC (2026-09-03) — PR5c-entities-c-junk80.
+//
+// A live PERSON entity holding a real mailbox under a guard-failing name is what
+// the ensureEntityLink email tier resolves an inbound person onto. This seeds
+// those rows into the EXISTING junk_entity_review lane rather than sweeping them:
+// the lane already carries the human verdict, the reversible junk_review_batch
+// ledger, and (via unstampMisparseMember) the exact remedy these rows need —
+// clear entities.email + detach the conflated external_identities, leaving the
+// entity and ALL its relationships intact, so the 480-edge vendor rows keep their
+// deal history. Nothing here retires anything; the verdict does.
+//
+// ⚠️ The 80 are NOT one class and the view says so: hold_email_corroborated (the
+// row IS the mailbox's person), hold_name_repairable (a real person behind a
+// CoStar section-label prefix), hold_salesforce_identity and hold_inbound_reference
+// all seed as `uncertain`, so a confirm can never be a default on them. Only
+// `sweep_candidate` proposes `dismiss`.
+//
+// GET  /api/admin?action=junk80-seed            -> dry run (default)
+// POST /api/admin?action=junk80-seed&apply=true -> seed the lane
+const JUNK80_HEURISTIC = 'junk80_email_holder';
+// Heuristics whose confirmed `dismiss` must ALSO un-stamp the conflated mailbox
+// + identities before the soft-retire. Add a heuristic here only when its rows
+// genuinely hold someone else's contact details.
+const EMAIL_CONFLATION_HEURISTICS = new Set([TM_MISPARSE_HEURISTIC, JUNK80_HEURISTIC]);
+
+async function handleJunk80Seed(req, res) {
+  const apply = String(req.query.apply || '') === 'true' && req.method === 'POST';
+  const sourceRunId = 'junk80_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+
+  const vr = await opsQuery('GET', 'v_lcc_entities_c_junk80?select=id,name,email,disposition,'
+    + 'proposed_verdict,guards_fired,n_edges,n_salesforce_ids,n_cadences,already_in_review_lane,'
+    + 'n_live_persons_on_mailbox,n_live_persons_on_mailbox_domain_scoped&order=n_edges.desc&limit=500');
+  if (!vr.ok) return res.status(502).json({ error: 'junk80_view_query_failed', detail: vr.data });
+  const rows = Array.isArray(vr.data) ? vr.data : [];
+
+  const summary = {
+    apply, source_run_id: sourceRunId, population: rows.length,
+    by_disposition: {}, by_proposed_verdict: {},
+    already_in_lane: 0, seeded: 0, errors: [], sample: [],
+    // the projection the sweep is verified on, computed BEFORE anything is written
+    projection: {
+      mailboxes_cleared_if_all_dismiss_confirmed:
+        new Set(rows.filter(r => r.proposed_verdict === 'dismiss').map(r => String(r.email || '').toLowerCase())).size,
+      alone_on_mailbox_domain_scoped: rows.filter(r => r.n_live_persons_on_mailbox_domain_scoped === 1).length,
+      alone_on_mailbox_domain_scoped_after:
+        rows.filter(r => r.n_live_persons_on_mailbox_domain_scoped === 1 && r.proposed_verdict !== 'dismiss').length,
+      relationships_touched: 0,
+    },
+  };
+  for (const r of rows) {
+    summary.by_disposition[r.disposition] = (summary.by_disposition[r.disposition] || 0) + 1;
+    summary.by_proposed_verdict[r.proposed_verdict] = (summary.by_proposed_verdict[r.proposed_verdict] || 0) + 1;
+    if (r.already_in_review_lane) { summary.already_in_lane += 1; continue; }
+    if (summary.sample.length < 25) {
+      summary.sample.push({ id: r.id, name: r.name, email: r.email,
+        disposition: r.disposition, proposed_verdict: r.proposed_verdict, guards: r.guards_fired });
+    }
+    if (!apply) continue;
+    const body = {
+      subject_ref: junkSubjectRef('lcc', 'entities', r.id), domain: 'lcc', table_name: 'entities',
+      pk_value: String(r.id), entity_name: r.name == null ? '' : String(r.name),
+      heuristic: JUNK80_HEURISTIC, proposed_verdict: r.proposed_verdict,
+      // an `uncertain` hold is NOT a confident proposal and must not sort like one
+      confidence: r.proposed_verdict === 'dismiss' ? 1 : 0,
+      evidence_quote: String(r.name || '').slice(0, 200),
+      reason: 'Live person entity holding a real mailbox (' + r.email + ') under a name that fails '
+        + (Array.isArray(r.guards_fired) ? r.guards_fired.join('+') : 'the name guards')
+        + ' — the ensureEntityLink email tier resolves inbound people onto it. Disposition: '
+        + r.disposition + '.',
+      model_provider: 'none', model_name: null, source_run_id: sourceRunId, scan_batch_id: null,
+      status: 'proposed',
+    };
+    const ur = await opsQuery('POST', 'junk_entity_review?on_conflict=subject_ref', body,
+      { headers: { Prefer: 'return=minimal,resolution=merge-duplicates' } });
+    if (ur.ok) summary.seeded += 1;
+    else summary.errors.push({ id: r.id, detail: ur.data });
+  }
+  return res.status(200).json({ ok: true, ...summary });
+}
+
 async function handleTmMisparseSeed(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
   const user = await authenticate(req, res);
@@ -9568,8 +9649,13 @@ async function handleDecisionVerdict(req, res) {
       // soft-retire cleanly. Reversible via junk_review_batch. A genuine remaining
       // child (relationship/portfolio/cadence/opp) still routes to a conflict card.
       let tmUnstamp = null;
+      // ENTC (2026-09-03): the un-stamp is not a TrafficMetrix fact — it is the
+      // remedy for "this row holds someone else's mailbox/identity", which is
+      // exactly what a junk80 row is too. Keyed on the CLASS, not on the one
+      // heuristic that happened to need it first; labelling junk80 rows
+      // `tm_misparse` to reach this branch would have been a lie in the ledger.
       if (humanAction === 'confirm' && review.proposed_verdict === 'dismiss'
-          && review.heuristic === TM_MISPARSE_HEURISTIC && target.domain === 'lcc') {
+          && EMAIL_CONFLATION_HEURISTICS.has(review.heuristic) && target.domain === 'lcc') {
         tmUnstamp = await unstampMisparseMember(review.pk_value, review.source_run_id, user.id);
       }
       // FK guard only matters when a confirm could retire. Compute lazily (AFTER

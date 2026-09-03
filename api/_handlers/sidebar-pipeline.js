@@ -2048,8 +2048,9 @@ async function routeMisparseContactsToReview(reviewItems, ctx) {
   if (!workspaceId) return 0;
   try {
     const fanout = reviewItems.find((r) => r.reason === 'email_fanout');
-    const title = 'Suspect contacts blocked (' + reviewItems.length + ') — '
-      + (reasons.includes('misparse_name') ? 'street/label misparse' : 'one-email fan-out');
+    const label = reasons.includes('person_junk_name') ? 'junk person name'
+      : (reasons.includes('misparse_name') ? 'street/label misparse' : 'one-email fan-out');
+    const title = 'Suspect contacts blocked (' + reviewItems.length + ') — ' + label;
     const bodyLines = [
       'Captured from ' + (source || 'costar') + ' on ' + new Date(extractedAt || Date.now()).toLocaleDateString() + '.',
       'These candidate contacts were NOT minted — they look like a TrafficMetrix-style'
@@ -2103,7 +2104,15 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
   // a candidate whose NAME trips the street/label detector, OR whose email is part
   // of a suspect one-email fan-out (> threshold parsed contacts sharing it), is
   // routed to review (recoverable) rather than minted as a phantom person.
-  const mintPlan = planContactMinting(contacts);
+  // ENTC (2026-09-03) — person-only junk-name gate at the ENTITY mint. The domain
+  // `contacts` write has always dropped these (upsertSidebarContacts); the entity
+  // mint did not, which is how 80 live person entities came to hold a real broker's
+  // mailbox under a name like "View Less" / "Debt Service" / a CoStar verification
+  // sentence. Routed to REVIEW (recoverable), never dropped silently.
+  const mintPlan = planContactMinting(contacts, {
+    personJunkName: (c) => (contactEntityType(c) === 'person' && isJunkContactName(c.name)
+      ? 'junk_contact_name' : null),
+  });
   if (mintPlan.review.length) {
     await routeMisparseContactsToReview(mintPlan.review, {
       propertyEntityId, workspaceId, userId, domain, source, extractedAt,

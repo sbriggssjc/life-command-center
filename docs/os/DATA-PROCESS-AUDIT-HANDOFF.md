@@ -129,17 +129,18 @@ that fires `gov_classify_agency()`; do not read it as broken.
    person names, 7 are the Colliers family. **`cbre; smyth & colliers; patel` is minted as one
    company.** Start with **`BR1-confirm`** — 12 brokerage-evidenced orgs ready for a one-decision
    human confirm.
-2. **`PR5c-entities-c-junk80`** — retire the 80 live junk-named person entities holding real
-   emails (vendor party-slot labels; 0 in `junk_entity_review`, 0 flagged — invisible to both
-   existing junk lanes). The oldest-row GATE is refused on measurement (reach 22/193, accuracy
-   12/26); the sweep is the real fix, and its open question is which retirement path (the
-   TM-misparse machinery is for a different class). ⚠️ 30 carry an SF identity; 37 are alone on
-   their mailbox.
-   **`PR5c-entities-c-p195-unmerge`** — `lcc_p195_unmerge` strands byte-identical edges while
-   reporting `restored` (P196's trigger skips them before `ON CONFLICT`); either route it through
-   `lcc_unmerge_entity` or fix the re-insert to UPDATE surviving rows. Small, sharp, proven by a
-   fingerprint round trip.
-   **Prompt drafted (both): `docs/claude-code/prompts/ENTC-junk80-and-p195-unmerge.md`.**
+2. ~~**`PR5c-entities-c-junk80`** / **`PR5c-entities-c-p195-unmerge`**~~ — ✅ **BOTH CLOSED
+   2026-09-03 (ENTC).** The 80 are censused (`v_lcc_entities_c_junk80`) and are **not one class**:
+   41 sweep candidates, 39 holds — including **6 rows that ARE their own mailbox's person**, which
+   a blanket sweep would have de-emailed. The producer is gated (the ENTITY mint had a weaker
+   guard than the `contacts` write beside it; 47.5% reach, 0 false positives). `lcc_p195_unmerge`
+   is **FIXED, not retired** — 66 open merges have no P196 ledger row, so retiring it would have
+   made them irreversible. 👤 **`junk80-apply` is Scott's** (seed the review lane; dry run first).
+   Residue: `junk80-gate-p131` (the JS gate needs the P131 row-label vocabulary without a second
+   regex copy), `p195-unmerge-callers` (`test/p195-merge-gate.test.mjs` slices a superseded body).
+   Record: `docs/audits/ENTC_JUNK80_AND_P195_UNMERGE_2026-09-03.md`.
+   ⚠️ **`SEC1` moved a step**: all three definer *unmerge* functions are now `service_role` only;
+   the other 88 anon-executable definer functions are untouched.
 3. **`PR5d`** — `costar_cmbs_loan`: 121 rungs, the ladder's largest source, for a capture arm with
    0 rows on either domain (`loans.data_source`). Is the CoStar CMBS tab ever captured, or is the
    arm unreachable? One grep of the extension + one count.
