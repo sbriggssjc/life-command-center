@@ -88,7 +88,15 @@ has written: `lcc_owner_contact_propagate_log`'s newest row is **2026-08-15**, 1
 table itself is busy — **8,775 `field_provenance` rows in the last 24 h, newest 21:30 UTC** — so the
 zero is scoped to `entities` and means *those two workers have not run*, not *the wiring is absent*.
 **Assert on the population that passed through the window, never on the count alone.** The lane that
-does run daily is the Salesforce bridge, wired by PR5c-entities-b. **Measured 22:08 UTC, minutes after its deploy:** `source='salesforce'` on `entities` = 0 with 3 SF
+~~does run daily is the Salesforce bridge, wired by PR5c-entities-b.~~ 🚨 **FALSE — corrected
+2026-09-03 (CONTACT1). The Salesforce bridge does NOT run at all:** `insertEntity` is reached only
+from `handleSalesforceContactUpsert` and `enrichment_jobs` holds **0** rows of type
+`salesforce.contact.upsert`, ever. The daily traffic is `salesforce-sync.js::writeEntitySalesforceLink`
+(195/30d, cron 165) and `sf-list-import.js` → `ensureEntityLink` (142/14d) — **neither calls either
+ladder** (→ CONTACT1a). ⚠️ **`provenance_write_failed = 0` was recorded here as reassurance and is
+the tell: a path that never runs cannot fail.** Prove execution from a RUN LEDGER before
+instrumenting a writer, and trace real traffic by a per-writer stamp
+(`external_identities.metadata->>'synced_via'`), never by the file that looks like the writer. **Measured 22:08 UTC, minutes after its deploy:** `source='salesforce'` on `entities` = 0 with 3 SF
 contacts minted in the prior 24 h — read it again tomorrow (~12 rows/day predicted), never today.
 
 **Deploy state:** migrations for PR8/PR5/PR12/PR5c all applied live. ✅ **Railway CONFIRMED
@@ -117,12 +125,12 @@ probe is not a negative result: pg_net may take minutes to persist the row, so r
 | PR5c | 09-02 | 33 zero-row internal rungs = five callers sending an invalid `target_database` (23514, 100%) | `PR5c_INTERNAL_RUNG_VERDICTS_2026-09-02.md` |
 | PR5c-entities | 09-02 | the 13 `entities` rungs had no caller; the two contact writers now consult the ladder — **recording only, because every rung is `record_only`** | `PR5c_entities_LADDER_WIRED_2026-09-02.md` |
 | PR5d | 09-03 | `costar_cmbs_loan`'s 121 rungs: the scanner, the writer and the host match all exist — **the CoStar loan sub-page has never been captured**, and 27 dia rungs are additionally behind an opt-in flag that is false on 11,803 of 11,803 | `PR5d_COSTAR_CMBS_LOAN_ARM_2026-09-03.md` |
-| PR5c-entities-b | 09-02 | the Salesforce bridge CREATE path — the lane that actually runs (329 entity creates / 30 d) — records `email`/`phone` provenance; **records, never gates** | this page §3 + `PR5c_entities_LADDER_WIRED_2026-09-02.md` §5 |
+| PR5c-entities-b | 09-02 | the Salesforce bridge CREATE path — the lane that actually runs (329 entity creates / 30 d) — records `email`/`phone` provenance; **records, never gates** | this page §3 + `PR5c_entities_LADDER_WIRED_2026-09-02.md` §5  🚨 **SUPERSEDED 09-03 (CONTACT1): that path has NEVER RUN** — 0 `salesforce.contact.upsert` jobs ever; the traffic belongs to `salesforce-sync.js` + `sf-list-import.js`, which call neither ladder. |
 
 **Open (backlog ids):** PR1d (`REGRID_API_KEY`, Scott) · PR5a (29 field-grain gaps — should a ladder
 govern bookkeeping columns at all?) · PR5b (`om_extraction` unregistered where it competes) ·
 ~~PR5c-entities~~ ✅ (wired 09-02) · PR5c-enforce (all 10 `entities` contact rungs are
-`record_only`, so nothing is protected yet) · ~~PR5c-entities-b~~ ✅ (wired 09-02) ·
+`record_only`, so nothing is protected yet) · ~~PR5c-entities-b~~ ⚠️ (wired 09-02 to a path that has never run — CONTACT1a) ·
 ~~PR5c-entities-b-dupes~~ ✅ (09-02, `d5b0ac8` — `entities.domain` was scoping the identity key; see
 `entity-identity-and-dedup.md`, which owns duplicate-mint from here) · PR5c-signal · PR5c-avail-field ·
 PR5c-deploy (Scott) · ~~PR5d~~ ✅ (09-03, verdicted `page_never_captured` 94 / `page_never_captured_flag_off` 27; follow-ups **PR5d-a** gov capture, **PR5d-b** the dia `track_cmbs_snapshots` opt-in) · PR5e (`gov_ownership_chain`

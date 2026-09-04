@@ -64,6 +64,8 @@ and the Dialysis test suite had never executed a test in the repo's history — 
 - **Entity identity (2026-09-02/03, PR5c-entities-b-dupes + -c)** — `entities.domain` was scoping the
   canonical_name identity tier (9 of 11 duplicates, fixed `d5b0ac8`); the email tier keeps the filter on
   purpose (27% precision without it). Canonical page: **`docs/architecture/entity-identity-and-dedup.md`**.
+- **CONTACT1 (2026-09-03)** — both `entities` ladders are empty because the wiring landed on dead code;
+  PR10 answered, PR5c-enforce given a numeric unblock condition, `CONTACT1a` filed for the scope call.
 - **SALE1 + ADDR1 (2026-09-03)** — two defects in the SAME producer (`sidebar-pipeline.js` /
   the CoStar scanner), both shipped and verified: a re-match PATCH silently overwrote a non-null
   `sold_price` with a later capture's figure (Hillsboro's 2009 deed moved from $1,233,000 to the
@@ -162,18 +164,17 @@ that fires `gov_classify_agency()`; do not read it as broken.
    `cap_rate_history` records what was FIRST RECORDED, never what is true, so a reset needs deed
    corroboration. Then **`SALE1b`** (gov's price-conflict rate is unmeasured; the guard is shared,
    the measurement is not) and **`ADDR1a`** (2 open bleed rows, both `buyer`-role — a different
-   capture surface from the one the header regex fixed).
-4. **`CONTACT1`** — ⚠️ **`PR5c-enforce` and `PR10` are BOTH BLOCKED and the reason is measurable:
-   neither `entities.email`/`phone` ladder has governed anything.** Ladder A
-   (`field_provenance`) holds **4 rows, all `phone`/`domain_owner_contact`, from one manual tick —
-   `email` has never been recorded once**; Ladder B (`metadata.field_sources`) exists on **exactly 1
-   entity fleetwide**. So "flip to `warn` then `strict` once the ledger has history" has no history.
-   The real question is why nothing runs: `contact-writeback.js` is gated `SF_CONTACT_WRITEBACK`
-   (**off**, `off_since` NULL — nobody recorded why), `owner-contact-propagate` **has no cron**
-   (11 contact jobs are active and none is this writer), and the SF bridge CREATE path predicted
-   ~12/day is at 0. **Prompt drafted: `CONTACT1-both-entities-ladders-govern-nothing.md`** — it
-   subsumes PR5c-enforce and PR10 and asks for the numeric unblock condition so the next session
-   does not re-derive this.
+   capture surface from the one the header regex fixed). **Prompt drafted (SALE1a + SALE1b together):
+   `SALE1a-read-the-45-and-measure-gov.md`.**
+4. **`CONTACT1a`** — ⚠️ **CONTACT1 answered the question and found a bigger one: `PR5c-entities-b`
+   instrumented `insertEntity`, which is reached only from `handleSalesforceContactUpsert`, and
+   `enrichment_jobs` holds ZERO `salesforce.contact.upsert` rows ever.** The provenance block is live,
+   correct and exercising no traffic; the real writers (`salesforce-sync.js` 195/30d via cron 165,
+   `sf-list-import.js`→`ensureEntityLink` 142/14d) call neither ladder. **The decision to make is
+   SCOPE:** instrument `ensureEntityLink` centrally (one owner, but it is the live person-entity mint
+   path used far beyond Salesforce) vs. the two Salesforce callers only. Also decide the fate of the
+   now-dead provenance block. **PR10 is answered (`field_provenance` owns it) and PR5c-enforce has a
+   numeric unblock condition (>~50 rows / ≥2 sources) — both are moot until this lands.**
 5. **`DE3`/`DE4`** (DE4's input is settled: FY2026's 73.66% Medicare is the fallback bucket),
    **`B6e-clinic-metadata`**, **`D2`–`D5`**, **`PR10`** (one source, two ladders), **`SEC1`**
    (91 of 195 SECURITY DEFINER functions anon-executable — filed by PR8, needs its own pass).
