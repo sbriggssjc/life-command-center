@@ -117,18 +117,55 @@ probe is not a negative result: pg_net may take minutes to persist the row, so r
 | PR5c | 09-02 | 33 zero-row internal rungs = five callers sending an invalid `target_database` (23514, 100%) | `PR5c_INTERNAL_RUNG_VERDICTS_2026-09-02.md` |
 | PR5c-entities | 09-02 | the 13 `entities` rungs had no caller; the two contact writers now consult the ladder — **recording only, because every rung is `record_only`** | `PR5c_entities_LADDER_WIRED_2026-09-02.md` |
 | PR5d | 09-03 | `costar_cmbs_loan`'s 121 rungs: the scanner, the writer and the host match all exist — **the CoStar loan sub-page has never been captured**, and 27 dia rungs are additionally behind an opt-in flag that is false on 11,803 of 11,803 | `PR5d_COSTAR_CMBS_LOAN_ARM_2026-09-03.md` |
-| PR5c-entities-b | 09-02 | the Salesforce bridge CREATE path — the lane that actually runs (329 entity creates / 30 d) — records `email`/`phone` provenance; **records, never gates** | this page §3 + `PR5c_entities_LADDER_WIRED_2026-09-02.md` §5 |
+| PR5c-entities-b | 09-02 | the Salesforce bridge CREATE path — instrumented, but wired onto a `job_type` (`salesforce.contact.upsert`/`salesforce.account.upsert`) that has **zero producers anywhere in this repo** — ⚠️ **misattributed as "the lane that actually runs"; CONTACT1 (09-03) found it has run ZERO TIMES, ever.** Left in place as harmless dead code, superseded as the live writer by CONTACT1a below. | this page §3 + `PR5c_entities_LADDER_WIRED_2026-09-02.md` §5 |
+| CONTACT1 | 09-03 | diagnosis: both `entities.email`/`phone` ladders (field_provenance AND `metadata.field_sources`) had governed almost nothing — `field_provenance` on `entities` held 4 rows total (`phone`/`domain_owner_contact`, one manual tick), `email` **zero, ever**. Root cause: PR5c-entities-b's writer (`bridge-handlers-salesforce.js::insertEntity`) is dead code (see the corrected PR5c-entities-b row) — the real writer had never been found. | `docs/claude-code/prompts/CONTACT1-both-entities-ladders-govern-nothing.md` |
+| CONTACT1a | 09-04 | census of `ensureEntityLink()`'s 30+ live call sites found ONE choke point: the CREATE payload (`ensureEntityLink` never PATCHes `email`/`phone` onto an EXISTING entity — a "fill" only ever happens at mint time). Wired `recordFieldWrites` there, audit-only (no `shouldWriteField` gate — a create has no prior value to protect, same reasoning as the dead PR5c-entities-b block). Covers every current and future caller — CoStar sidebar contact/owner mints, `sf-list-import.js`, and the ~8 other callers that ever pass email/phone — with no per-caller change. | this page §3 + the CONTACT1a section below |
 
 **Open (backlog ids):** PR1d (`REGRID_API_KEY`, Scott) · PR5a (29 field-grain gaps — should a ladder
 govern bookkeeping columns at all?) · PR5b (`om_extraction` unregistered where it competes) ·
 ~~PR5c-entities~~ ✅ (wired 09-02) · PR5c-enforce (all 10 `entities` contact rungs are
-`record_only`, so nothing is protected yet) · ~~PR5c-entities-b~~ ✅ (wired 09-02) ·
-~~PR5c-entities-b-dupes~~ ✅ (09-02, `d5b0ac8` — `entities.domain` was scoping the identity key; see
+`record_only`, so nothing is protected yet — **still blocked**: CONTACT1a gives the ledger its
+first real, ongoing feed, but it needs to run and accrue history before there is anything to grade)
+· ~~PR5c-entities-b~~ ⚠️ corrected 09-03 — wired to a dead job_type, never ran; superseded by
+CONTACT1a · ~~PR5c-entities-b-dupes~~ ✅ (09-02, `d5b0ac8` — `entities.domain` was scoping the identity key; see
 `entity-identity-and-dedup.md`, which owns duplicate-mint from here) · PR5c-signal · PR5c-avail-field ·
 PR5c-deploy (Scott) · ~~PR5d~~ ✅ (09-03, verdicted `page_never_captured` 94 / `page_never_captured_flag_off` 27; follow-ups **PR5d-a** gov capture, **PR5d-b** the dia `track_cmbs_snapshots` opt-in) · PR5e (`gov_ownership_chain`
 dead constant) · PR7a (the live orphan column) · PR7b (prune 15 inert rungs — NOT neutral) · PR9
-(`manual_verify`@20 — Scott) · PR10 (one source, two ladders) · PR11 (model-leg quarantine) · PR12a
-(the 67 residual) · PR12b (flush watermark skips an errored event).
+(`manual_verify`@20 — Scott) · ~~PR10~~ answered by CONTACT1/CONTACT1a: `field_provenance` is the
+fleet-wide ledger and is now the one that actually gets written by the live writer; `metadata.field_sources`
+remains `planContactFieldPromotion`'s private read-back cache and is untouched by this change · PR11
+(model-leg quarantine) · PR12a (the 67 residual) · PR12b (flush watermark skips an errored event).
+
+### CONTACT1a — the writer census, in full (2026-09-04)
+
+An AST walk (acorn, not grep — the PR5c-entities lesson: grep found 24 of 41 `entities` writer
+sites, an AST walk found 41) of every `ensureEntityLink(...)` call site in `api/` found **48 call
+sites across 34 files**. Of those, **9 ever pass a non-null `email`/`phone`** (checked per-site,
+including resolving `seedFields` passed as a bare identifier back to its assignment — a purely
+static "does the object literal have the key" check would have missed all of them):
+
+| file : line | how email/phone reaches the call |
+|---|---|
+| `api/_handlers/sidebar-pipeline.js:2140` (`unpackContacts`) | `contactSeedFields()` — CoStar sidebar contact/owner capture, the largest live producer |
+| `api/_shared/sf-list-import.js:298` | `seedFields.email`/`.phone` set from the campaign-member row |
+| `api/_shared/institution-registry.js:86` | `row.contact_email`/`row.contact_phone` from `v_institution_contact_attachable` |
+| `api/_handlers/contact-acquisition.js:322`, `:434` | `contact.Email` from a Salesforce Account's contact list |
+| `api/sync.js:3151`, `:3181` | `match.gov.email`/`.phone`, `match.dia.email`/`.phone` — the cross-domain contact matcher |
+| `api/intake.js:1637`, `:1706` | OM/lease-extraction party contacts |
+| `api/operations.js:1133` (`bridgeUpdateEntity`) | caller-supplied `req.body.fields` — an open API surface, could carry either at runtime |
+| `api/operations.js:544` → `api/_shared/research-loop.js:125` (`bridgeCompleteResearch`) | caller-supplied `req.body.entity_fields` — same shape |
+
+The other 39 call sites never pass email/phone (buyer/seller/tenant/lender/guarantor/developer
+mints, asset anchors, Salesforce Account links, naming-hygiene fills — all name-only or
+address-only seeds). **All 48 now flow through the one wired choke point** — nothing needed
+per-caller wiring. Guard: `test/contact1a-entity-link-provenance.test.mjs` (behavioural, invokes
+`ensureEntityLink` with a stubbed `fetch`; mutation-verified RED when the `recordFieldWrites` call
+is disabled).
+
+**Not done here, deliberately:** no `enforce_mode` flip (PR5c-enforce stays blocked — CONTACT1a
+gives the ladder its first real, ongoing feed but the history has to accrue before there's
+anything to grade); `SF_CONTACT_WRITEBACK` untouched; `metadata.field_sources`/
+`planContactFieldPromotion` untouched; no backfill of past writes.
 
 ## 5. Lessons carried verbatim from `CLAUDE.md` (moved 2026-09-02, unedited)
 
