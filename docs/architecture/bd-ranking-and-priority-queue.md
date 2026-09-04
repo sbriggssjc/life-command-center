@@ -110,7 +110,7 @@
 > Surface: `GET /api/operations?action=today_sections`; pure classification in
 > `api/_shared/today-sections.js`; the Significant "See all →" now lands on a real page
 > (`pageSellerProspectQueue`, chips + pagination reusing UX-T1a-queue's own API). Record:
-> [`UX-T1a-today.response.md`](../claude-code/responses/UX-T1a-today.response.md); guard
+> [`UX-T1a-today.response.md`](../claude-code/responses/done/UX-T1a-today.response.md); guard
 > `test/uxt1a-today.test.mjs` (12 tests).
 >
 > **Open and Scott's: C4a** (the pitch/bucket). **C4b** (`user_owner`) is resolved as inert —
