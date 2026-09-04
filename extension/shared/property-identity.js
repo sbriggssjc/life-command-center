@@ -81,10 +81,42 @@
     };
   }
 
+  function mergeFreshTenantRoster(context, fresh, activeUrl) {
+    const baseIntegrity = contextIntegrity(context, activeUrl);
+    const contextKey = propertyIdentityKey(context && context.page_url);
+    const freshKey = propertyIdentityKey(fresh && fresh.page_url);
+    const activeKey = propertyIdentityKey(activeUrl);
+    const tenants = Array.isArray(fresh && fresh.tenants)
+      ? fresh.tenants.filter((tenant) => tenant && typeof tenant.name === 'string' && tenant.name.trim())
+      : [];
+    const reasons = [...baseIntegrity.reasons];
+    if (!freshKey) reasons.push('missing_fresh_tenant_property_identity');
+    if (contextKey && freshKey && contextKey !== freshKey) reasons.push('fresh_tenant_identity_mismatch');
+    if (activeKey && freshKey && activeKey !== freshKey) reasons.push('fresh_tenant_active_tab_mismatch');
+    if (!fresh || fresh.source_property_key !== freshKey) reasons.push('fresh_tenant_declared_identity_mismatch');
+    if (!fresh || fresh.tenant_provenance_key !== freshKey) reasons.push('fresh_tenant_provenance_mismatch');
+    if (tenants.length === 0) reasons.push('fresh_tenant_roster_empty');
+    const uniqueReasons = [...new Set(reasons)];
+    if (uniqueReasons.length > 0) return { ok: false, reasons: uniqueReasons, context };
+    return {
+      ok: true,
+      reasons: [],
+      context: {
+        ...context,
+        tenants,
+        _source_field_provenance: {
+          ...(context && context._source_field_provenance || {}),
+          tenants: freshKey,
+        },
+      },
+    };
+  }
+
   root.LccPropertyIdentity = Object.freeze({
     propertyIdentityKey,
     costarPropertyId,
     provenancePropertyKeys,
     contextIntegrity,
+    mergeFreshTenantRoster,
   });
 })(globalThis);

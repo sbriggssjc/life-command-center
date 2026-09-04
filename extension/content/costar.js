@@ -84,7 +84,21 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   // background worker now asks this content script to fetch first; we return the
   // bytes as base64 (chrome.runtime binary transfer is flaky, base64 is safe).
   chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
-    if (!msg || msg.type !== 'FETCH_DOC_BYTES') return undefined;
+    if (!msg) return undefined;
+    if (msg.type === 'GET_FRESH_ASC_TENANT_CONTEXT') {
+      const pageUrl = window.location.href;
+      const sourcePropertyKey = window.LccPropertyIdentity?.propertyIdentityKey(pageUrl) || null;
+      const tenants = extractTenants(getPageLines());
+      respond({
+        ok: true,
+        page_url: pageUrl,
+        source_property_key: sourcePropertyKey,
+        tenant_provenance_key: sourcePropertyKey,
+        tenants,
+      });
+      return false;
+    }
+    if (msg.type !== 'FETCH_DOC_BYTES') return undefined;
     (async () => {
       try {
         const url = msg.url;
