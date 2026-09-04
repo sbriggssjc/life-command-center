@@ -66,6 +66,8 @@ and the Dialysis test suite had never executed a test in the repo's history — 
   purpose (27% precision without it). Canonical page: **`docs/architecture/entity-identity-and-dedup.md`**.
 - **CONTACT1 (2026-09-03)** — both `entities` ladders are empty because the wiring landed on dead code;
   PR10 answered, PR5c-enforce given a numeric unblock condition, `CONTACT1a` filed for the scope call.
+- **SALE1a/SALE1b (2026-09-04)** — 29 propagated prices NULLED (none reset: zero deed corroboration);
+  `ledger_disagreement` 129 → 100; gov measured and **NOT clean** (127 rows). Follow-ups SALE1c / SALE1c-gov.
 - **SALE1 + ADDR1 (2026-09-03)** — two defects in the SAME producer (`sidebar-pipeline.js` /
   the CoStar scanner), both shipped and verified: a re-match PATCH silently overwrote a non-null
   `sold_price` with a later capture's figure (Hillsboro's 2009 deed moved from $1,233,000 to the
@@ -157,15 +159,14 @@ that fires `gov_classify_agency()`; do not read it as broken.
    Record: `docs/audits/ENTC_JUNK80_AND_P195_UNMERGE_2026-09-03.md`.
    ⚠️ **`SEC1` moved a step**: all three definer *unmerge* functions are now `service_role` only;
    the other 88 anon-executable definer functions are untouched.
-3. **`SALE1a`** — hand-read the **45** `ledger_disagreement` rows whose price equals one of the
-   property's own listing prices (the proven mechanism), NOT all 132: 1 of the 132 is a clean 12×
-   unit artifact, 8 sit within 2%, and the balance look like a later source correcting a bad master
-   import. **87 of 132 are still in comps, 83 with a live cap rate.** Decide null-vs-reset per row —
-   `cap_rate_history` records what was FIRST RECORDED, never what is true, so a reset needs deed
-   corroboration. Then **`SALE1b`** (gov's price-conflict rate is unmeasured; the guard is shared,
-   the measurement is not) and **`ADDR1a`** (2 open bleed rows, both `buyer`-role — a different
-   capture surface from the one the header regex fixed). **Prompt drafted (SALE1a + SALE1b together):
-   `SALE1a-read-the-45-and-measure-gov.md`.**
+3. **`ADDR1a`** — both open bleed rows are now identified and they need DIFFERENT actions (the
+   37491-vs-50990 split): **37503 is a phantom duplicate of 38953** (`2312-2330 S Dixon Rd, Kokomo IN`
+   — identical 10,603 SF / Fresenius / timestamp; the real street already exists) → merge;
+   **37783 has no twin** → quarantine like 50990. ⚠️ **Confirm the literal CoStar header text first** —
+   both came from a `buyer`-role block and the regex matches `recorded buyer`/`true buyer`, so a bare
+   `Buyer` header is a still-open path. Then **`SALE1c`** (8 `linked_same_listing` + the 902/903 dedup
+   pair — two human reads SALE1a correctly refused) and **`SALE1c-gov`** (gov measured NOT clean:
+   127 rows, only 4 listing-matched; gov's conventions need grading before dia's rules transfer).
 4. **`CONTACT1a`** — ⚠️ **CONTACT1 answered the question and found a bigger one: `PR5c-entities-b`
    instrumented `insertEntity`, which is reached only from `handleSalesforceContactUpsert`, and
    `enrichment_jobs` holds ZERO `salesforce.contact.upsert` rows ever.** The provenance block is live,
