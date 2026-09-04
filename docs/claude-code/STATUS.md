@@ -69,6 +69,38 @@ Docs: `docs/architecture/field-provenance-ladder.md` §4 (new CONTACT1/CONTACT1a
 correction to the PR5c-entities-b row, which had been misattributed as "the lane that actually
 runs"); `docs/os/PLANNED-BACKLOG.md` (PR5c-entities-b corrected, CONTACT1/CONTACT1a rows added,
 PR5c-enforce's blocker note updated, PR10 marked answered).
+## 2026-09-04 — SALE1c/SALE1c-gov/ADDR1b: 7 of the 8 "undecidable" rows resolved by splitting the ledger on EVENT TYPE, the dedup pair was never a collision, and my claim about gov's producer mix was WRONG.
+
+**Verified live.** dia: 7 rows tagged `sale1c-null-2026-09-04`, all 7 nulled, `calculated_cap_rate`
+NULL on all 7, sale 7972 correctly untouched; 902 and 903 **both `duplicate_superseded`**;
+`v_dia_sale1_price_review` **133 → 125**, `ledger_disagreement` **100 → 92**. gov: bleed view **0**,
+property 9893's address NULL.
+
+- 🚨 **The 8 were not undecidable — the ledger has an `event_type` and nobody had split on it.**
+  SALE1a compared the current price to the *earliest observation of any type*; CC compared
+  `event_type='sale'` against `event_type='listing'` separately. **7 of 8 carry a distinctly-dated
+  SALE event at a different price**, while the current value matches the linked listing's ask —
+  which is the bleed signature, not a full-ask close. **Reading the same ledger at a finer grain
+  answered a question filed as unanswerable.**
+- **Sale 7972 was correctly left alone** — two independently-sourced records AGREE with the current
+  price against three same-batch listing echoes. The one genuine full-ask-shaped row.
+- ⚠️ **The 902/903 "unique-index collision" never existed** — the index covers LIVE rows only. The
+  prompt (mine) framed it as a constraint to work around; the truth is 902 is a mis-dated copy of a
+  real 2021 sale and 903 a phantom bridge row with no evidence. **Both moved to
+  `duplicate_superseded` — the duplication fixed, not dodged.** The blocker I described was an
+  artifact of not reading the index definition.
+- 🚨 **My gov claim was WRONG and is corrected: gov's dominant producer is CoStar (sidebar+export)
+  at 72% — the SAME family as dia, not "a different dominant producer (GSA/deed feeds)" as I
+  recorded on 09-04.** I inferred that from the small listing-match share (4 of 127) without
+  measuring the producer mix. Re-measured: **98 rows, not 127** — only **2** show listing bleed,
+  **~18%** an A2b repeat-conveyance signature, **~80% unclassified** wider/messier revisions.
+  **Same producer family, different failure distribution.** Classified, **no gov row written**.
+- **ADDR1b: gov has NO reversible property merge** — confirmed live (`gov_merge_property_reversible`
+  does not exist; `gov_merge_property` is a **hard delete with no snapshot**). So 9893 was
+  **quarantined**, not merged, and the missing machinery is filed as **ADDR1b-merge**. ⚠️ **This is
+  a real asymmetry between the domains worth knowing before any gov dedup work** — dia's
+  `dia_merge_property_reversible` walks every FK and snapshots; gov's namesake destroys.
+
 ## 2026-09-04 — ADDR1a CLOSED: dia review view at 0, and the header question answered by reading the CODE PATH rather than widening a regex on a guess.
 
 ⚠️ **Filing correction (Cowork, this turn): `CONTACT1a` was moved to `prompts/done/` by

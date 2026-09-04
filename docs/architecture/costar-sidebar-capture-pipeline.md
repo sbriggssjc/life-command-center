@@ -90,8 +90,15 @@ it should have left alone.
 dia `costar_sidebar` parcel rows **933**, gov **1,527** (both backfilled; forward writer proven on
 dia 09-03 via APN `08H-61-0665`) · `loans.costar_loan_id` **0 of 2,219** on both domains (PR5d).
 
-**Open:** `SALE1c` (8 `linked_same_listing` + the 902/903 dedup pair) · `SALE1c-gov` (127 rows,
-measured not graded) · `ADDR1b` (gov's 1 row; ⚠️ gov shipped the review view with **no repair half**
-— check for a `dia_merge_property_reversible` equivalent first) · `PR5d-a`/`PR5d-b` (the CMBS loan
+⚠️ **Corrected 2026-09-04:** an earlier note here said gov's sale spine has "a different dominant
+producer (GSA/deed feeds)". **It does not — gov is 72% CoStar (sidebar+export), the same family as
+dia**; that was inferred from gov's small listing-match share without measuring the producer mix.
+The failure DISTRIBUTION differs (gov: 2 of 98 listing-bleed, ~18% A2b repeat-conveyance, ~80%
+unclassified), not the producer.
+⚠️ **gov cannot merge safely:** `gov_merge_property_reversible` does not exist and `gov_merge_property`
+is a **hard delete with no snapshot** — so gov's only safe ADDR/dedup disposition today is
+quarantine (ADDR1b-merge).
+
+**Open:** ~~`SALE1c`~~ ✅ · `SALE1c-gov` (98 rows classified, ~80% unclassified residue) · **`ADDR1b-merge`** (port dia's reversible merge to gov) · `PR5d-a`/`PR5d-b` (the CMBS loan
 arm — 👤 Scott has Loan-tab access; a screenshot of a CMBS-financed property is the next input) ·
 `PR11` (the model-leg quarantine) · `ADDR1a` residue: none.
