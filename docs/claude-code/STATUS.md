@@ -69,6 +69,7 @@ Docs: `docs/architecture/field-provenance-ladder.md` §4 (new CONTACT1/CONTACT1a
 correction to the PR5c-entities-b row, which had been misattributed as "the lane that actually
 runs"); `docs/os/PLANNED-BACKLOG.md` (PR5c-entities-b corrected, CONTACT1/CONTACT1a rows added,
 PR5c-enforce's blocker note updated, PR10 marked answered).
+
 ## 2026-09-03 — CONTACT1: entities.email/phone ladders are empty because the wired writer is dead code (diagnosis only, no code shipped)
 
 Both authority ladders on `entities.email/phone` (`field_provenance`@10-rungs and

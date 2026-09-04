@@ -101,7 +101,9 @@ AST census of `ensureEntityLink()`'s 30+ callers, is `ensureEntityLink`'s own CR
 ONE place it ever writes `email`/`phone` (it never PATCHes them onto an existing entity). **CONTACT1a
 (2026-09-04) wired that site instead** — covers all 9 of 48 call sites that ever pass email/phone
 (CoStar sidebar contact mint, `sf-list-import.js`, and 7 others), audit-only, no `enforce_mode`
-change. ✅ Railway `/version` = `886cdf86` (22:08 UTC) — pre-CONTACT1a; re-check after this merges.
+change. CONTACT1a merged to `main` 2026-09-04 (PR #2114); Railway `/version` at last check
+(`886cdf86`, 22:08 UTC 09-02) predates it — confirm the redeploy landed before quoting live traffic
+off the new writer.
 → **`docs/architecture/field-provenance-ladder.md`** (canonical); backlog PR1d (`REGRID_API_KEY`), PR5a–e, PR5c-entities/-signal/-deploy, PR7a–b, PR9 (Scott), PR11, PR12a–b.
 
 ### Comms → context
