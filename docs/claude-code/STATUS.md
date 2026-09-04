@@ -69,6 +69,36 @@ Docs: `docs/architecture/field-provenance-ladder.md` §4 (new CONTACT1/CONTACT1a
 correction to the PR5c-entities-b row, which had been misattributed as "the lane that actually
 runs"); `docs/os/PLANNED-BACKLOG.md` (PR5c-entities-b corrected, CONTACT1/CONTACT1a rows added,
 PR5c-enforce's blocker note updated, PR10 marked answered).
+## 2026-09-04 — CONTACT1a SHIPPED: the ladder is wired to `ensureEntityLink`'s CREATE path — the choke point, not the 30+ callers. Deploy current; 0 new rows and that is the EXPECTED reading.
+
+**Verified live:** `api/_shared/entity-link.js` calls `recordFieldWrites` after the entity INSERT
+(commit `4805a761`); guard `test/contact1a-entity-link-provenance.test.mjs` exists and is
+behavioural. **Live `/version` = `f1fe43e5`, which contains `4805a761` — the code is running.**
+
+**`field_provenance` on `entities` is still 4 rows (`phone`/`domain_owner_contact`, newest 09-03
+17:01) and that is CORRECT, not a stall.** Only **2** entities carrying an email/phone were created
+today — `Jeff Lichner` 08:17 UTC and `Michael Papazis` 06:30 UTC — and **both predate the code
+(12:04 UTC)** by hours. ⚠️ **This is the CONTACT1 lesson applied in the safe direction: the zero is
+*quiet*, not *unreachable*, and we can say which because the population is nameable and the writer
+sits on a path with 30+ live callers.** The next SF-Contact or sidebar create records.
+
+**Three design decisions worth carrying, all in the code's own comments:**
+- **`shouldWriteField` is deliberately NOT called pre-write** — this is the CREATE path, so there is
+  no prior value to protect; only `recordFieldWrites` runs, AFTER the INSERT.
+- **A null field is deliberately NOT recorded** — "a null here would assert *the source says this
+  contact has no email*, which the payload never claimed." Absence stays absence.
+- **`confidence: 1.0` is a claim about what the source SAID, not that it is right** — trust lives in
+  the rung's priority, not the confidence. That distinction is easy to get backwards.
+
+**Residual gaps, named rather than implied:**
+- **CREATE path only.** An UPDATE of `email`/`phone` on an existing entity still records nothing.
+- **`salesforce-sync.js` and `sf-list-import.js` were NOT instrumented directly** (0 `recordFieldWrites`
+  in either) — they are covered only insofar as they mint through `ensureEntityLink`. CONTACT1
+  traced `writeEntitySalesforceLink` as writing 195 of 336 links in 30 days; whether those are
+  creates-through-the-choke-point or updates is the open question.
+- **PR5c-enforce is still blocked** — 4 rows, 1 source, all `write`, against a condition of
+  **~50 rows across ≥2 sources**. Re-check in 7 days.
+
 ## 2026-09-04 — SALE1c/SALE1c-gov/ADDR1b: 7 of the 8 "undecidable" rows resolved by splitting the ledger on EVENT TYPE, the dedup pair was never a collision, and my claim about gov's producer mix was WRONG.
 
 **Verified live.** dia: 7 rows tagged `sale1c-null-2026-09-04`, all 7 nulled, `calculated_cap_rate`

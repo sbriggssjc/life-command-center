@@ -48,6 +48,14 @@
   that is false on 11,803 of 11,803 properties, so capturing the page would still write nothing
   there. Two blockers, two verdicts.
 
+- **The `entities` contact ladder is wired at ONE choke point (CONTACT1a, 2026-09-04):**
+  `ensureEntityLink`'s CREATE path calls `recordFieldWrites` after the INSERT — not the 30+ callers,
+  which would be the normaliser-drift class. **`shouldWriteField` is deliberately NOT called there**
+  (a create has no prior value to protect); **a null field is not recorded** (that would assert the
+  source denied an email); and **`confidence: 1.0` means "what the source SAID", not "the source is
+  right"** — trust lives in the rung's priority, and getting that backwards inflates every
+  downstream judgement. ⚠️ **CREATE only: an UPDATE of `email`/`phone` still records nothing**
+  (CONTACT1b), and `salesforce-sync.js` / `sf-list-import.js` carry no direct instrumentation.
 - **Two ladders exist.** The property-OWNER authority ladder (`manual` > `domain_true_owner` >
   `rel_purchase` > `sf_seller` > `rel_owns`) is scored by `lcc_reconcile_property_owner` into
   `lcc_property_owner_evidence` and writes NO `field_provenance`. Seven "never-written" sources are
@@ -80,7 +88,8 @@ registrations in the window**. The CRE folder feed is **human-driven and bursty:
 waste. **State the elapsed window AND the population that passed through it** — "no registration
 yet" and "the fix did not work" are the same 0 and opposite facts. `entity_relationships` stays 0
 regardless (`unreached_and_broken`) · `agency_classifier` own-name rows **0** (no-population zero — no gov
-write has fired since PR8).
+write has fired since PR8). **`entities` provenance 4 rows / 1 source** — CONTACT1a is live
+(`f1fe43e5`) but no create has exercised it yet; PR5c-enforce needs ~50 rows across ≥2 sources.
 
 **⚠️ `field_provenance` on `entities` is STILL 0 on a fully-deployed build, and that is not a deploy
 signal (PR5c-entities-b, 2026-09-02).** Both PR5c-entities writers are wired and live, and neither

@@ -70,6 +70,9 @@ and the Dialysis test suite had never executed a test in the repo's history — 
   `docs/architecture/costar-sidebar-capture-pipeline.md`** (PR2 · SALE1 · SALE1a · ADDR1 · ADDR1a in
   one arc table, the guards, the live state, and the transferable lessons). Read it before touching
   `extension/content/costar.js` or `sidebar-pipeline.js`.
+- **CONTACT1a (2026-09-04)** — the `entities` contact ladder is wired at `ensureEntityLink`'s CREATE
+  choke point and deployed; 0 rows so far is *quiet*, not *unreachable* (the 2 creates today predate
+  the code). Residual: UPDATE path → CONTACT1b.
 - **SALE1c / ADDR1b (2026-09-04)** — 7 of 8 "undecidable" rows resolved by splitting the ledger on
   `event_type`; the 902/903 index collision never existed (the index covers LIVE rows); gov quarantined
   because it cannot merge safely.
@@ -172,18 +175,15 @@ that fires `gov_classify_agency()`; do not read it as broken.
    HARD DELETE with no snapshot** (confirmed live 2026-09-04). dia's `dia_merge_property_reversible`
    walks every FK and snapshots — proven twice this week, and 37503's merge brought home **7 leases**
    a delete would have destroyed. **Port dia's shape to gov before any gov dedup, phantom repair or
-   ADDR-class work**; until then gov's only safe disposition is quarantine. Then **`SALE1c-gov`**
+   ADDR-class work**; until then gov's only safe disposition is quarantine. **Prompt drafted: `ADDR1b-merge-port-reversible-property-merge-to-gov.md`.** Then **`SALE1c-gov`**
    (98 rows classified; ~80% is unclassified wider revisions needing a named-row read — and note
    gov's producer is **72% CoStar, the same family as dia**, correcting an earlier claim here).
-4. **`CONTACT1a`** — ⚠️ **CONTACT1 answered the question and found a bigger one: `PR5c-entities-b`
-   instrumented `insertEntity`, which is reached only from `handleSalesforceContactUpsert`, and
-   `enrichment_jobs` holds ZERO `salesforce.contact.upsert` rows ever.** The provenance block is live,
-   correct and exercising no traffic; the real writers (`salesforce-sync.js` 195/30d via cron 165,
-   `sf-list-import.js`→`ensureEntityLink` 142/14d) call neither ladder. **The decision to make is
-   SCOPE:** instrument `ensureEntityLink` centrally (one owner, but it is the live person-entity mint
-   path used far beyond Salesforce) vs. the two Salesforce callers only. Also decide the fate of the
-   now-dead provenance block. **PR10 is answered (`field_provenance` owns it) and PR5c-enforce has a
-   numeric unblock condition (>~50 rows / ≥2 sources) — both are moot until this lands.**
+4. **`CONTACT1b`** — CONTACT1a shipped the CREATE path; **the UPDATE path still records nothing**,
+   and `salesforce-sync.js`/`sf-list-import.js` carry 0 direct `recordFieldWrites`. **Measure first:
+   of `writeEntitySalesforceLink`'s 195 links in 30 days, how many are creates through the choke
+   point vs updates?** If most are updates the ladder still sees nothing and PR5c-enforce stays
+   blocked regardless. ⚠️ An UPDATE is where `shouldWriteField` genuinely matters — there IS a prior
+   value to protect, unlike the CREATE path CONTACT1a correctly left ungated.
 5. **`DE3`/`DE4`** (DE4's input is settled: FY2026's 73.66% Medicare is the fallback bucket),
    **`B6e-clinic-metadata`**, **`D2`–`D5`**, **`PR10`** (one source, two ladders), **`SEC1`**
    (91 of 195 SECURITY DEFINER functions anon-executable — filed by PR8, needs its own pass).
