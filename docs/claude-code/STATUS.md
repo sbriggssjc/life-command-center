@@ -104,7 +104,10 @@ property 9893's address NULL.
 ## 2026-09-04 — ADDR1a CLOSED: dia review view at 0, and the header question answered by reading the CODE PATH rather than widening a regex on a guess.
 
 ⚠️ **Filing correction (Cowork, this turn): `CONTACT1a` was moved to `prompts/done/` by
-`a4bd2e63` without having been run** — that commit reconciled the CONTACT1 *response* and filed the
+`a4bd2e63` without having been run** (superseded a few hours later the same day — see the
+2026-09-04 "CONTACT1a SHIPPED" entry above, which landed after this one on the branch history but
+sorts above it in this newest-first log; the code shipped in `4805a76`, and the prompt has been
+re-filed to `done/` accordingly) — that commit reconciled the CONTACT1 *response* and filed the
 follow-up prompt alongside it. **`field_provenance` on `entities` is still 4 rows, one source
 (`domain_owner_contact`), `salesforce` = 0** — i.e. nothing CONTACT1a asks for has happened. Moved
 back to `prompts/`. **`done/` means run, not superseded** — a prompt filed there is invisible to the
