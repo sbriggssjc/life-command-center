@@ -90,7 +90,9 @@ new backlog **CONTACT1a**. Numeric unblock condition for **PR5c-enforce** record
 `enforce_mode` once `field_provenance` for `entities.email/phone` exceeds ~50 rows spanning ≥2
 sources with real write/skip/conflict decisions (today: 4 rows, 1 source, all `write`). No
 `enforce_mode` flip, no `SF_CONTACT_WRITEBACK` enable, no backfill, no code changed. Record:
-`docs/claude-code/responses/CONTACT1-both-entities-ladders-govern-nothing.response.md`.
+`docs/claude-code/responses/done/CONTACT1-both-entities-ladders-govern-nothing.response.md`. (CC's
+own independent reconciliation of this same finding, plus its self-correction of an earlier
+PR5c-entities-b entry, landed in a concurrent PR — see the entry below dated the same day.)
 
 ## 2026-09-03 — UX-T1a-today SHIPPED: Today is Significant / Important / Urgent
 
