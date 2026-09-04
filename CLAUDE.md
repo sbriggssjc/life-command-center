@@ -1148,6 +1148,13 @@ Every cross-table field write to curated tables is observed:
   **newlines** — ~1,101 exposed, mostly `sales_transactions` narrative on NON-rung columns). Plain
   column + BEFORE trigger now; `DROP EXPRESSION` is metadata-only, no rewrite. **Never backfill a
   lost provenance row** — record the loss as a number and a date.
+- ⚠️ **PORTING A FUNCTION CARRIES ITS LOGIC, NOT ITS PRIVILEGES (ADDR1b-merge, 2026-09-04).**
+  gov's destructive property merge was renamed to `gov_merge_property_apply` and the old name made to
+  raise — correct, and the NEW name was left **`anon` and `authenticated` executable**, so the
+  destructive path stayed reachable under a different name while dia's equivalent was already locked.
+  **When you port or rename a function, diff `has_function_privilege()` against the sibling, not just
+  the body** — and revoke from **`public` AND `anon` AND `authenticated`**, because revoking one
+  leaves the others (Supabase grants the roles explicitly at CREATE time).
 - ⚠️ **A ZERO FROM AN INSTRUMENTED PATH: *quiet* vs *unreachable* (CONTACT1, 2026-09-03).**
   PR5c-entities-b instrumented `insertEntity`, reachable only from `handleSalesforceContactUpsert` —
   **0 `salesforce.contact.upsert` jobs ever.** `provenance_write_failed = 0` reads as reassurance and

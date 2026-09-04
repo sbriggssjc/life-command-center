@@ -95,7 +95,10 @@ producer (GSA/deed feeds)". **It does not — gov is 72% CoStar (sidebar+export)
 dia**; that was inferred from gov's small listing-match share without measuring the producer mix.
 The failure DISTRIBUTION differs (gov: 2 of 98 listing-bleed, ~18% A2b repeat-conveyance, ~80%
 unclassified), not the producer.
-⚠️ **gov cannot merge safely:** `gov_merge_property_reversible` does not exist and `gov_merge_property`
+✅ **Corrected 2026-09-04 (ADDR1b-merge): gov CAN now merge safely** — `gov_merge_property_reversible`
++ `gov_unmerge_property` + `gov_property_merge_backup` are live, the FK walk is at call time, the
+round trip is fingerprint-verified, and the destructive `gov_merge_property` raises. The phantom
+class is therefore dispositionable on gov the same way it is on dia. *Was:* ⚠️ **gov cannot merge safely:** `gov_merge_property_reversible` does not exist and `gov_merge_property`
 is a **hard delete with no snapshot** — so gov's only safe ADDR/dedup disposition today is
 quarantine (ADDR1b-merge).
 

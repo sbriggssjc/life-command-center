@@ -16,6 +16,43 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-04 — ADDR1b-merge SHIPPED: gov has a reversible property merge, the destructive one now raises — and I closed a privilege hole the rename opened.
+
+**Verified live on gov:** `gov_merge_property_reversible`, `gov_unmerge_property`,
+`gov_merge_property_apply` and `gov_property_merge_backup` all exist; the old public name
+`gov_merge_property` **raises**; backup table 0 rows (nothing merged for real); property 9893
+untouched. **The port walks `pg_constraint` at call time rather than a hard-coded list**, so gov's
+16 domain-specific tables (`gsa_leases`, `frpp_*`, `cmbs_loans`, `sam_lease_opportunities`, …) are
+covered without a gov list to maintain — the same reason dia's works.
+
+- **FK census: gov 36 edges / 35 tables vs dia 54 / ~40.** `sales_transactions_properties` has a
+  2-column PK and is correctly reported unrecoverable rather than silently skipped.
+- **Every BEFORE/AFTER trigger on every repointed table was checked for the P196 failure mode** (a
+  trigger that silently SKIPS instead of raising). None does — `gov_supersede_prior_active_listing`
+  and `llc_research_queue_auto_skip` both always `RETURN NEW`. **That check was the point of asking.**
+- **Round trip proven on a real pair, rolled back**: 7655 (9 sales, 18 leases, 5 deeds) → 581 →
+  unmerge, compared by **`array_agg` of primary keys per table, not counts** — sales 12/12, leases
+  31/31, deeds 5/5, both property rows present. **0 lost / 0 stranded / 0 changed.**
+
+🚨 **A gap the rename opened, found and closed here (Cowork).** The prompt warned that leaving a
+destructive merge callable beside a safe one is how the wrong one gets used. The redirect blocks the
+OLD name — but the renamed mutator **`gov_merge_property_apply` was `anon` AND `authenticated`
+executable**, i.e. the destructive path stayed reachable under a new name.
+**dia's equivalent is locked** (`dia_merge_property`: anon `false`, auth `false`), so the port
+carried the logic and not the privilege posture. **Revoked from `public`, `anon` AND `authenticated`
+(all three — the documented trap is that revoking one leaves the others), asserted with
+`has_function_privilege`:** `proacl` is now `{postgres=X/postgres, service_role=X/postgres}`,
+anon `false`, auth `false`, service_role `true`.
+⚠️ **Still open and pre-existing on BOTH domains:** `*_merge_property_reversible` and
+`*_unmerge_property` are SECURITY DEFINER and remain `anon`-executable. ENTC narrowed the three
+ENTITY unmerge functions to `service_role` on 2026-09-03 for exactly this reason; the PROPERTY merge
+pair was never given the same treatment. → **SEC1-property**.
+
+**Twin-lane sizing: 399 candidate groups / 953 properties** on a crude exact-normalized-address+state
+grouping, before any geospatial fuzz. ⚠️ **That is not "three rows"** — my prompt said to size it and
+stop precisely because a tiny number would have argued for skipping it; it argues the other way.
+Recommendation recorded, nothing built → **ADDR1c-twin-lane**.
+
 ## 2026-09-04 — CONTACT1a SHIPPED: the LIVE entities.email/phone writer now feeds field_provenance
 
 CONTACT1 (2026-09-03) diagnosed why `entities.email`/`phone`'s ten-rung field_source_priority
