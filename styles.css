@@ -244,6 +244,13 @@ body.compact .nba-subhead { margin: -2px 0 6px; }
 .nba-refresh-btn:hover { color: var(--accent); border-color: var(--accent); }
 .nba-viewall { display: block; width: 100%; margin-top: 10px; padding: 8px 12px; border: 1px solid var(--accent2); background: transparent; color: var(--accent2); border-radius: 8px; cursor: pointer; font-weight: 700; font-size: 12px; text-align: center; }
 .nba-viewall:hover { background: var(--accent2); color: #fff; }
+
+/* Today: Significant / Important / Urgent (UX-T1a-today, 2026-09-03) */
+.today-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.today-section:first-of-type { margin-top: 4px; padding-top: 0; border-top: none; }
+.today-section-head { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--text); margin-bottom: 6px; }
+.today-section-sub { font-size: 11px; font-weight: 400; text-transform: none; letter-spacing: normal; color: var(--text2); }
+.today-section .nba-viewall { margin-top: 6px; padding: 6px 10px; font-size: 11px; }
 .nba-meta { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text2); margin-bottom: 8px; }
 .nba-count strong { color: var(--text1); font-weight: 700; }
 .nba-warn { color: var(--yellow); font-weight: 600; }

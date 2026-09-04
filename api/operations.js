@@ -83,6 +83,7 @@ import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
 import { logManualCallNote } from './_shared/intake-correspondence.js';
 import { resolveDealByQuery, decideCommTagOutcome } from './_shared/deal-resolve.js';
 import { appendActivityEvent } from './_shared/activity-events.js';
+import { assembleTodaySections, TODAY_SECTION_LIMIT } from './_shared/today-sections.js';
 
 // ============================================================================
 // EDGE FUNCTION PROXY — forwards requests to Supabase Edge Functions
@@ -400,11 +401,12 @@ export default withErrorHandler(async function handler(req, res) {
       case 'property_geo': return await getPropertyGeo(req, res, user, workspaceId);
       case 'property_signals': return await getPropertySignals(req, res, user, workspaceId);
       case 'bd_worklist': return await getBdWorklist(req, res, user, workspaceId);
+      case 'today_sections': return await getTodaySections(req, res, user, workspaceId);
       case 'activation_review': return await getActivationReview(req, res, user, workspaceId);
       case 'marketing_listings': return await getMarketingListings(req, res, user, workspaceId);
       case 'marketing_engagement': return await getMarketingEngagement(req, res, user, workspaceId);
       case 'marketing_bd': return await getMarketingBd(req, res, user, workspaceId);
-      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist, property_geo, property_signals, bd_worklist, activation_review, marketing_listings, marketing_engagement, marketing_bd' });
+      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist, property_geo, property_signals, bd_worklist, today_sections, activation_review, marketing_listings, marketing_engagement, marketing_bd' });
     }
   }
 
@@ -1990,6 +1992,85 @@ async function getBdWorklist(req, res, user, workspaceId) {
     type_filter: typeFilter,
     worklist,
   });
+}
+
+// ============================================================================
+// GET ?action=today_sections — UX-T1a-today (2026-09-03)
+//
+// Recuts Today into the canon's three sections (docs/os/canon/blocks/
+// operator-doctrine.md 1.8.0): Significant (new-client research, first
+// outreach, follow-ups — pays in 5yr), Important (BOVs/ELAs/working buyers/
+// marketing live listings — pays within a year), Urgent (pipeline management,
+// deal correspondence — pays in ~90 days). Each section's `count` equals the
+// rows it returns; `total_open` is the full population for the "See all →"
+// link. `named_gaps` lists canon examples with no producer today (P131's rule
+// — a coverage gap is filed, never faked with a heuristic).
+//
+// Sources (measured 2026-09-03, see docs/claude-code/responses/
+// UX-T1a-today.response.md for the full census):
+//   Significant — v_lcc_seller_prospect_queue (UX-T1a-queue), unfiltered: every
+//     row in that view is, by its own gates, an owner not yet reached.
+//   Important   — bd_opportunities open rows (the one real recorded producer
+//     for "a touch that generates a BOV or a working buyer"; no BOV-generation
+//     or marketing-live-listing producer exists — named gap).
+//   Urgent      — action_items open/in_progress rows tied to a deal (deal
+//     correspondence) UNIONED with v_lcc_bd_worklist's contact_writeback +
+//     domain owner_source_conflict(auto_fixable) rows (pipeline hygiene).
+//     loan_maturity and ownership_chain are deliberately excluded (see
+//     today-sections.js header for why).
+// ============================================================================
+async function getTodaySections(req, res, user, workspaceId) {
+  const limit = (() => {
+    const n = Number(req.query.limit);
+    return (Number.isFinite(n) && n > 0 && n <= 25) ? Math.floor(n) : TODAY_SECTION_LIMIT;
+  })();
+
+  const [
+    sellerQR, bdOppR, actionItemsR, lccUrgentR, ocGovR, ocDiaR,
+  ] = await Promise.all([
+    opsQuery('GET', 'v_lcc_seller_prospect_queue?select=*&order=rank_value.desc.nullslast,years_into_term.asc.nullslast&limit=200', null, { countMode: 'exact' }),
+    opsQuery('GET', 'bd_opportunities?select=id,entity_id,type,stage,amount,expected_close_date,opened_at&is_open=eq.true&order=amount.desc.nullslast&limit=200', null, { countMode: 'exact' }),
+    opsQuery('GET', "action_items?select=id,entity_id,action_type,title,priority,due_date,status&status=in.(open,in_progress)&order=due_date.asc.nullslast&limit=200", null, { countMode: 'exact' }),
+    opsQuery('GET', 'v_lcc_bd_worklist?select=signal_type,source_domain,property_id,entity_id,what,who,rank_value,city,state&signal_type=eq.contact_writeback&order=rank_value.desc.nullslast&limit=200', null, { countMode: 'exact' }),
+    domainSelect('gov', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id,recorded_owner_name,latest_deed_grantee,conflict_kind,annual_rent,city,state&order=annual_rent.desc.nullslast&limit=100'),
+    domainSelect('dia', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id,recorded_owner_name,latest_deed_grantee,conflict_kind,annual_rent,city,state&order=annual_rent.desc.nullslast&limit=100'),
+  ]);
+
+  const significantRows = sellerQR.ok ? (sellerQR.data || []) : [];
+  const bdOppRows = bdOppR.ok ? (bdOppR.data || []) : [];
+  const actionItems = actionItemsR.ok ? (actionItemsR.data || []) : [];
+  const lccUrgentRows = lccUrgentR.ok ? (lccUrgentR.data || []) : [];
+
+  // The Urgent bd_worklist half reuses the SAME normalize+dedup+rank pure
+  // function the full worklist uses (assembleBdWorklist) — never a second,
+  // divergent shape for the same signal types.
+  const bdWorklistRows = assembleBdWorklist({
+    lcc: lccUrgentRows,
+    owner_conflict: {
+      gov: ocGovR.ok ? ocGovR.data : [],
+      dia: ocDiaR.ok ? ocDiaR.data : [],
+    },
+  });
+
+  // entity name lookup — bd_opportunities/action_items carry no FK for
+  // PostgREST to embed (P132: never trust an unhinted embed), so resolve
+  // names with one bounded fetch instead of N+1s.
+  const entityIds = [...new Set([
+    ...bdOppRows.map((r) => r.entity_id),
+    ...actionItems.map((r) => r.entity_id),
+  ].filter(Boolean))];
+  const entityById = new Map();
+  if (entityIds.length) {
+    const idsFilter = entityIds.map((id) => encodeURIComponent(id)).join(',');
+    const enR = await opsQuery('GET', `entities?select=id,name&id=in.(${idsFilter})`, null, { countMode: 'none' });
+    if (enR.ok) for (const e of (enR.data || [])) entityById.set(e.id, e.name);
+  }
+
+  const sections = assembleTodaySections({
+    significantRows, bdOppRows, actionItems, bdWorklistRows, entityById,
+  }, { limit });
+
+  return res.status(200).json({ ok: true, ...sections });
 }
 
 // ============================================================================

@@ -16,6 +16,43 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-03 — UX-T1a-today SHIPPED: Today is Significant / Important / Urgent
+
+Recut the Home "Today" panel into the canon's three sections (operator-doctrine.md 1.8.0),
+replacing the unlabelled "Work Your Outreach" + "Top BD Actions" cards. Measured every candidate
+producer named in the prompt before assigning a bucket (never by feel):
+
+- **Significant** (new-client research/first outreach/follow-ups) = the WHOLE
+  `v_lcc_seller_prospect_queue` (520 rows) — every row is, by its own gates, an owner not yet
+  reached, ranked identically to UX-T1a-queue. `touchpoint_cadence.current_touch` confirmed
+  unreadable again (p50 0, max 8,298), so the fallback to the seller queue's `reach_state` (the
+  prompt's own instruction) is what shipped.
+- **Important** (BOVs/ELAs/working buyers/marketing live listings) = `bd_opportunities` open rows
+  (47, the only real recorded producer). **Two named gaps, not fabricated:** no DB row anywhere
+  states "a BOV was generated/due" (`lcc_deal_milestone` has no such key — its 7 keys are
+  loi/psa/escrow/diligence/financing/marketing/close, and `marketing`='next' reads **0** rows
+  today), and no producer exists for "marketing a live listing" as a task
+  (`lcc_listing_events` is a sale-EVENT feed with no marketing-touch column at all).
+- **Urgent** (pipeline management/deal correspondence, ~90 days) = `action_items` open/in_progress
+  rows tied to a deal (58 open — `deal_next_step` 34, `send_info` 8, `reply_overdue` 4,
+  `review_response` 3, `schedule_call` 3, `seller_follow_up` 3, `follow_up` 2, `advance_to_contract`
+  1) UNIONED with `v_lcc_bd_worklist`'s `contact_writeback` (1,568) + domain
+  `owner_source_conflict(auto_fixable)` (gov 0, dia 8) — reusing `assembleBdWorklist`, the SAME pure
+  function the full worklist uses, never a second shape. `loan_maturity` and `ownership_chain` are
+  deliberately excluded, per the prompt's own rule: loan_maturity's ≤24mo window has no ~90-day
+  sub-slice to test against, and ownership_chain is A2's automated apply lane (a cron consumer, not
+  a human task) — both stay reachable via Priority Queue / BD worklist.
+
+Shipped: `api/_shared/today-sections.js` (pure classification, `assembleTodaySections`) +
+`api/operations.js::getTodaySections` (`GET ?action=today_sections`) + the Home widget recut
+(`index.html`/`app.js`: `renderTodaySections` replaces `renderOutreachOnramp`/
+`renderTodayBdActions`) + `pageSellerProspectQueue` — the seller queue's first front-end surface
+(chips + real pagination, reusing `GET /api/seller-prospect-queue` verbatim). Guard
+`test/uxt1a-today.test.mjs` (12 behavioural tests over named-row fixtures per section — P180
+null-vs-0 collapse caught and fixed by the guard itself before shipping). Full suite 5,384 tests,
+5,378 pass / 0 fail / 6 skipped — unchanged failure count, confirming no regression. Record:
+`docs/claude-code/responses/UX-T1a-today.response.md`.
+
 ## 2026-09-03 — EXT2a SHIPPED (PR #2098): the schedule-blend double count is fixed
 
 **SALE1 SHIPPED (PR #2102, branch `claude/sale1-price-propagation-bwq4pz`) — verified live 2026-09-03.**

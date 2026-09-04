@@ -91,6 +91,28 @@
 > `v_loan_maturity_watch` defects (latest-not-soonest, no distress flag) are separate, smaller,
 > unfixed items — they do not reopen either shipped unit.
 >
+> ✅ **UX-T1a-today SHIPPED 2026-09-03 — Today is now Significant / Important / Urgent, and
+> `v_lcc_seller_prospect_queue` has its first front-end consumer.** The three unlabelled Home cards
+> ("Work Your Outreach" / "Top Data Gaps to Close" — kept, it is genuinely data hygiene / "Top BD
+> Actions") are replaced by ONE Today widget in the canon's own three sections. **Significant** =
+> the whole `v_lcc_seller_prospect_queue` (every row is, by its own gates, an owner not yet
+> reached), ranked exactly as UX-T1a-queue ranks it, each card stating its reason-to-sell +
+> reach-state basis. **Important** = `bd_opportunities` open rows (the one real recorded producer
+> for "a touch that generates a BOV or a working buyer"; **no producer exists for "a BOV was
+> generated/due" or "marketing a live listing" — named gaps, not faked**). **Urgent** =
+> `action_items` open/in_progress deal-correspondence rows (`deal_next_step`, `reply_overdue`,
+> `seller_follow_up`, `send_info`, `schedule_call`, `review_response`, `advance_to_contract`) UNIONED
+> with `v_lcc_bd_worklist`'s `contact_writeback` + domain `owner_source_conflict(auto_fixable)` rows
+> — an OVERDUE correspondence item always outranks a merely-valuable worklist row (that IS "keeps
+> Urgent from crowding out Significant" operationally). `loan_maturity` and `ownership_chain` are
+> deliberately excluded from Urgent: loan_maturity's ≤24mo window has no ~90-day sub-slice to test
+> against, and ownership_chain is now A2's automated apply lane (a cron consumer, not a human task).
+> Surface: `GET /api/operations?action=today_sections`; pure classification in
+> `api/_shared/today-sections.js`; the Significant "See all →" now lands on a real page
+> (`pageSellerProspectQueue`, chips + pagination reusing UX-T1a-queue's own API). Record:
+> [`UX-T1a-today.response.md`](../claude-code/responses/UX-T1a-today.response.md); guard
+> `test/uxt1a-today.test.mjs` (12 tests).
+>
 > **Open and Scott's: C4a** (the pitch/bucket). **C4b** (`user_owner`) is resolved as inert —
 > ⚠️ **and "inert" now means *awaiting human confirmation*, not *unproduced*: C13b (2026-09-01)
 > built the arm and its 13-candidate lane. See §5 and `owner-role-classification.md` §7.**
