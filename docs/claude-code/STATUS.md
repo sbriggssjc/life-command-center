@@ -69,6 +69,51 @@ Docs: `docs/architecture/field-provenance-ladder.md` §4 (new CONTACT1/CONTACT1a
 correction to the PR5c-entities-b row, which had been misattributed as "the lane that actually
 runs"); `docs/os/PLANNED-BACKLOG.md` (PR5c-entities-b corrected, CONTACT1/CONTACT1a rows added,
 PR5c-enforce's blocker note updated, PR10 marked answered).
+## 2026-09-04 — SALE1a/SALE1b: 29 propagated prices NULLED (not reset), gov measured and NOT clean, and ADDR1a's two rows are now identified — 37503 has a named twin.
+
+**Verified live:** backup `_sale1a_price_reset_20260904_backup` holds **30** rows; **29** nulled and
+tagged `sale1a-null-2026-09-04`; `ledger_disagreement` **129 → 100**; review total 133.
+
+- **Zero of the 38 had deed corroboration**, so per the reset rule **nothing was reset to the ledger
+  value — 29 were NULLED.** That is the right call: `cap_rate_history` records what was FIRST
+  RECORDED, and with no deed the earliest value has no more evidentiary weight than the current one.
+  A missing comp beats a wrong comp.
+- ⚠️ **The cap-rate handling is more careful than its own summary says, and I misread it first.**
+  The response says "all 19 lost their derived cap rate"; live, **`calculated_cap_rate` is NULL on
+  all 29 (correct)** while **10 retain a `cap_rate_final` — every one `broker_stated` or
+  `source_reported`.** Those are the SOURCE's own stated cap rates, not derived from the price CC
+  nulled, so keeping them is right. **6 of the 10 remain in comps with a stated cap rate and no
+  price** — defensible (usable for cap-rate analysis, not $/SF) but it should be stated, not
+  discovered. **I flagged these as orphans before checking `cap_rate_source`; they are not.**
+- **The population moved 132 → 129 → 38 (from my 45)** between 09-03 and 09-04 — the writer fix
+  stops new corruption, but incidental writes still shift the residual. **Re-derive, never quote.**
+- **8 `linked_same_listing` rows left alone** — the price matches the listing the sale is formally
+  joined to via `listing_sale_id`, so it could be a genuine full-ask close. **1 deferred dedup pair**
+  (902/903) — nulling both would collide on the unique index. Both are human reads → **SALE1c**.
+- **The ~8 within-2% rows are NOT a tolerance defect** — re-measured as 21 rows at 1.0–2.8%, all
+  plausible rounding/late corrections, no unit or magnitude tell. **Leave the >1% threshold alone.**
+  The 12× artifact (sale 562) was inside the 29 and is nulled.
+- **SALE1b — gov is NOT clean:** gov has an equivalent ledger (`cap_rate_history`, `event_type='sale'`,
+  via `trg_gov_auto_cap_rate_on_sale`) and shows **127 `ledger_disagreement` rows**, of which only
+  **4** match a listing ask — a much smaller listing-bleed share than dia, consistent with gov's spine
+  having a different dominant producer (GSA/deed feeds vs dia's CoStar capture). **Measured, not
+  graded, not fixed** → **SALE1c-gov**.
+
+### ADDR1a — both open rows identified, and 37503 has a NAMED TWIN
+
+Neither needs a re-capture. Both were last written **2026-09-01, before the ADDR1 fix (09-03)**, so
+they are historical residue — but they are two DIFFERENT dispositions, which is exactly the 37491 vs
+50990 split again:
+- **37503** `3121 Michelson Dr, Suite 500` / Kokomo IN (IRA Capital's Irvine CA office) is a
+  **phantom duplicate of 38953 `2312-2330 S Dixon Rd, Kokomo, IN`** — identical `building_size`
+  10,603.00, identical operator (Fresenius) and tenant, identical timestamp. **The real street
+  already exists in the table.** → merge via `dia_merge_property_reversible`, as 37491 was.
+- **37783** `4700 Wilshire Blvd` / Oakland CA (CIM Group's LA office), Satellite Healthcare,
+  `building_size` NULL, **no stat twin in Oakland** → likely the **50990 case**: a real property that
+  lost its own street. Quarantine, do not guess, do not merge.
+⚠️ **A re-capture is NOT the fix and may not be safe yet:** both bleeds came from a `buyer`-role
+contact, and `FOREIGN_PARTY_HEADER_RE` matches `recorded buyer` / `true buyer` — **a bare `Buyer`
+header would still slip through.** Confirm the literal header text before re-capturing either.
 
 ## 2026-09-03 — CONTACT1: entities.email/phone ladders are empty because the wired writer is dead code (diagnosis only, no code shipped)
 
