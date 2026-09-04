@@ -69,6 +69,56 @@ Docs: `docs/architecture/field-provenance-ladder.md` §4 (new CONTACT1/CONTACT1a
 correction to the PR5c-entities-b row, which had been misattributed as "the lane that actually
 runs"); `docs/os/PLANNED-BACKLOG.md` (PR5c-entities-b corrected, CONTACT1/CONTACT1a rows added,
 PR5c-enforce's blocker note updated, PR10 marked answered).
+## 2026-09-04 — ADDR1a CLOSED: dia review view at 0, and the header question answered by reading the CODE PATH rather than widening a regex on a guess.
+
+⚠️ **Filing correction (Cowork, this turn): `CONTACT1a` was moved to `prompts/done/` by
+`a4bd2e63` without having been run** — that commit reconciled the CONTACT1 *response* and filed the
+follow-up prompt alongside it. **`field_provenance` on `entities` is still 4 rows, one source
+(`domain_owner_contact`), `salesforce` = 0** — i.e. nothing CONTACT1a asks for has happened. Moved
+back to `prompts/`. **`done/` means run, not superseded** — a prompt filed there is invisible to the
+next session's queue.
+
+**Consolidation this turn:** the CoStar capture producer now has one canonical page,
+`docs/architecture/costar-sidebar-capture-pipeline.md` — PR2 · SALE1 · SALE1a · ADDR1 · ADDR1a as a
+single arc table, the guards (with **which one actually closes each class** — the address class is
+closed by the role-agnostic server-side belt, not the header regex), dated live state, and the
+transferable lessons. Pointers added from `CURRENT-STATE.md`, `public-records-source-lane.md` and
+the handoff. Five arcs that were spread across STATUS, two audits and the backlog now have one door.
+
+
+**Verified live:** `v_dia_contact_office_address_bleed_review` = **0**; 37503 gone (merged);
+37783's address NULL with `address_source='addr1a_quarantined_contact_bleed'`, city/state/zip intact;
+`dia_property_merge_backup` row **585** present. gov mirror holds **1** row.
+
+- **37503 → merged into 38953** (`dia_merge_property_reversible(38953, 37503, 'addr1a_20260904')`).
+  **What came home: 1 sale, 1 listing, 7 leases, 1 deed record, 1 property doc.** The seven leases
+  are the point — this shell had accumulated far more than the sale I could see, and a delete would
+  have taken all of it. Reverse with `select dia_unmerge_property(585);`.
+- **37783 → quarantined, not merged.** CC checked **all 23 Oakland dia properties** by address,
+  operator and building size before concluding there is no twin — the 50990 disposition, reached by
+  looking rather than by absence of evidence. Original street + rationale preserved in `notes`.
+- 🚨 **The header question was answered by reading the CODE PATH, and the answer is "no change
+  needed" — which is the harder call to make.** Both bled contacts carry `role: "true_buyer"`, and
+  `extractContacts()` only ever runs `parseEntityBlock` (the function that extracts an address)
+  under a **True Buyer** header; a bare `Buyer` line is used **solely as a name-reject pattern**
+  (`CONTACT_NAME_REJECT`) and never triggers address capture. `true\s+buyer` was already in
+  `FOREIGN_PARTY_HEADER_RE`. **Both captures predate the fix (2026-04-22 and 2026-05-09 vs the
+  09-03 landing) — pre-fix artifacts, not evidence of a live gap.** The regex was NOT widened.
+  ⚠️ **This is the right restraint:** a header regex that matches too much starts rejecting the
+  subject property's own address block and fails silently in the opposite direction.
+- **The server-side belt is the real closure, and it is stronger than the regex.**
+  `contact-address-bleed-guard.js::findContactOfficeAddressBleed` is **role-agnostic** — it compares
+  any captured contact's address to the property's exact street regardless of the header that
+  labelled it — and is live in `upsertDomainProperty` (`sidebar-pipeline.js:4503`), refusing the
+  write outright. **It would have caught both rows at ingest, and it covers a bare-header variant
+  too.** So the class is closed by construction, not by enumeration of headers.
+- **gov: 1 row — property 9893, `245 Park Ave` in Raton, NM**, bled from J.P. Morgan Asset
+  Management's Manhattan office. Sized and classified, **not repaired** (gov has no repair half) →
+  **ADDR1b**.
+
+**Operator consequence: Contacts/Sale-tab captures are safe again.** The belt refuses the bad street
+at write time on both domains.
+
 ## 2026-09-04 — SALE1a/SALE1b: 29 propagated prices NULLED (not reset), gov measured and NOT clean, and ADDR1a's two rows are now identified — 37503 has a named twin.
 
 **Verified live:** backup `_sale1a_price_reset_20260904_backup` holds **30** rows; **29** nulled and
