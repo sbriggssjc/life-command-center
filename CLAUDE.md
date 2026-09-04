@@ -1148,6 +1148,11 @@ Every cross-table field write to curated tables is observed:
   **newlines** — ~1,101 exposed, mostly `sales_transactions` narrative on NON-rung columns). Plain
   column + BEFORE trigger now; `DROP EXPRESSION` is metadata-only, no rewrite. **Never backfill a
   lost provenance row** — record the loss as a number and a date.
+- ⚠️ **A ZERO FROM AN INSTRUMENTED PATH: *quiet* vs *unreachable* (CONTACT1, 2026-09-03).**
+  PR5c-entities-b instrumented `insertEntity`, reachable only from `handleSalesforceContactUpsert` —
+  **0 `salesforce.contact.upsert` jobs ever.** `provenance_write_failed = 0` reads as reassurance and
+  is the tell: **a path that never runs cannot fail.** Prove execution from a RUN LEDGER before
+  instrumenting, and trace real traffic by a per-writer stamp, not by the file that looks like the writer.
 - **A gate that fails open must leave a trace.** `shouldWriteField` still proceeds on RPC failure
   but records the DB's SQLSTATE, counts `provenance_failed` and opens
   `lcc_health_alerts(provenance_write_failed)`. ⚠️ It cannot see callers that hit the RPC directly
