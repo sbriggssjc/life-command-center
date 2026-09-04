@@ -16,6 +16,59 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-04 — CONTACT1a SHIPPED: the LIVE entities.email/phone writer now feeds field_provenance
+
+CONTACT1 (2026-09-03) diagnosed why `entities.email`/`phone`'s ten-rung field_source_priority
+ladder had governed almost nothing (`email` zero rows ever, `phone` 4) and found the wired writer
+(`bridge-handlers-salesforce.js::insertEntity`, PR5c-entities-b) is dead code — its two callers are
+`enrichment_jobs.job_type`s (`salesforce.contact.upsert`/`.account.upsert`) that nothing in this
+repo ever enqueues. This is that fix, on the LIVE writer.
+
+**Census, not guesswork:** an AST walk (acorn) of every `ensureEntityLink(...)` call site found
+**48 across 34 files**. `ensureEntityLink` never PATCHes `email`/`phone` onto an existing entity
+(`seedFields` is discarded once a prior entity resolves — a fill only ever happens at CREATE), so
+there is exactly ONE choke point: the CREATE payload construction. Of the 48 callers, **9** ever
+pass a non-null email/phone (CoStar sidebar contact mint — the largest producer, `sf-list-import.js`,
+`institution-registry.js`, the cross-domain contact matcher in `api/sync.js`, OM/lease party
+contacts, and two open API surfaces whose `req.body` fields could carry either). All 9 — and any
+future caller — now flow through the one wired site with zero per-caller changes.
+
+Wired `recordFieldWrites` (audit-only, post-INSERT) into `ensureEntityLink`'s CREATE block —
+`shouldWriteField` is deliberately NOT called pre-write, same reasoning as the dead PR5c-entities-b
+block it supersedes: a create has no prior value to protect (`lcc_merge_field`'s "current value"
+comes from `field_provenance`, empty for a row that doesn't exist yet), and all ten
+`entities.email`/`phone` rungs are `enforce_mode='record_only'` anyway. Source is the caller's own
+`sourceSystem`, mapped onto the registry spelling where recognised (`salesforce`,
+`costar`/`costar_sidebar`), else passed through verbatim to `lcc_merge_field`'s UNREGISTERED branch
+(still a real, recorded row — PR5's "unregistered is a different branch, not a low rung").
+
+Guard: `test/contact1a-entity-link-provenance.test.mjs` — 3 behavioural tests invoking
+`ensureEntityLink` through a stubbed `fetch`, asserting (a) one `rpc/lcc_merge_field` POST per
+governed field on a create carrying both, with the exact registry spelling
+(`target_table='entities'`, `target_database='lcc_opps'`); (b) zero merge-field calls on a create
+carrying neither field (never assert a positive fact the source didn't state); (c) a registry
+outage never blocks or reverts the entity create (fail-open, PR12's rule). **Mutation-verified
+RED** when the `recordFieldWrites` call is disabled. Full suite: **5,381 pass / 0 fail / 6
+skipped** — unchanged failure count, no regression.
+
+**Not done, deliberately (per the prompt's scope):** no `enforce_mode` flip — PR5c-enforce stays
+blocked; this gives the ledger its first real ongoing feed, not a graded gate. `SF_CONTACT_WRITEBACK`
+untouched. `metadata.field_sources`/`planContactFieldPromotion` untouched (PR10's "one source, two
+ladders" question is narrowed but not closed — `field_provenance` is now the ladder that actually
+gets fed by live traffic; the metadata cache remains the writer's own private read-back). No
+backfill of past writes — CONTACT1a only records from here forward.
+
+**Caveats, stated plainly:** this session has no live Supabase credentials for
+LCC Opps (`xengecqvemvfknjvbvrq`) — all verification above is against the source and a stubbed
+`fetch`, not a live row count. The next session (or Scott, with live access) should re-measure
+`field_provenance where target_table='entities'` a day or two after this deploys and confirm rows
+are landing under `email`/`phone` with real `source` values (`salesforce`, `costar_sidebar`, and
+whatever the two open-API callers' `sourceSystem` values turn out to be in practice).
+
+Docs: `docs/architecture/field-provenance-ladder.md` §4 (new CONTACT1/CONTACT1a arc rows + a
+correction to the PR5c-entities-b row, which had been misattributed as "the lane that actually
+runs"); `docs/os/PLANNED-BACKLOG.md` (PR5c-entities-b corrected, CONTACT1/CONTACT1a rows added,
+PR5c-enforce's blocker note updated, PR10 marked answered).
 ## 2026-09-03 — CONTACT1: entities.email/phone ladders are empty because the wired writer is dead code (diagnosis only, no code shipped)
 
 Both authority ladders on `entities.email/phone` (`field_provenance`@10-rungs and
