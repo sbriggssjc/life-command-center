@@ -96,6 +96,13 @@ parcel number, those pins are mandatory and exact; a different source, record, o
 Range containment never substitutes for the approved operating tenant, independent official-host citations,
 or second review.
 
+For a CoStar Tenant-tab attachment, the tenant observation used by the restricted ASC matcher is refreshed
+from the top-frame DOM at click time. The fresh roster replaces the cached roster only when its URL,
+declared property key, tenant provenance key, and active-tab identity all resolve to the same CoStar record.
+An empty roster, unavailable scan, or any record/provenance disagreement fails closed. The scalar primary
+tenant may remain a different occupant in a multi-tenant building; an approved operating identity can match
+only an exact name in the freshly observed full roster.
+
 A same-parcel address-conflict alias must also be candidate-scoped. It binds one frozen service-location
 token to one captured property token and one exact parcel identifier, requires an exact captured facility or
 enrollment-organization tenant, and cites both an official facility registry and the licensed property public

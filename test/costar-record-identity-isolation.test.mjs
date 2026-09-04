@@ -55,13 +55,58 @@ test('context integrity accepts one record and rejects active-tab and field mixi
   );
 });
 
+test('fresh ASC tenant roster replaces stale tenant observations only for the same CoStar record', () => {
+  const api = identityApi();
+  const tenantUrl = 'https://product.costar.com/detail/lookup/251984/tenant';
+  const propertyKey = api.propertyIdentityKey(tenantUrl);
+  const context = {
+    page_url: tenantUrl,
+    source_property_key: propertyKey,
+    tenant_name: 'Beverly Hills Plastic Surgery',
+    tenants: [{ name: 'Beverly Hills Plastic Surgery' }],
+    _source_field_provenance: { address: propertyKey, tenants: propertyKey },
+  };
+  const fresh = {
+    page_url: tenantUrl,
+    source_property_key: propertyKey,
+    tenant_provenance_key: propertyKey,
+    tenants: [
+      { name: 'Beverly Hills Plastic Surgery' },
+      { name: '436 Beverly Hills Surgery Center' },
+    ],
+  };
+
+  const merged = api.mergeFreshTenantRoster(context, fresh, tenantUrl);
+  assert.equal(merged.ok, true);
+  assert.deepEqual(
+    [...merged.context.tenants.map((tenant) => tenant.name)],
+    ['Beverly Hills Plastic Surgery', '436 Beverly Hills Surgery Center'],
+  );
+  assert.equal(merged.context.tenant_name, 'Beverly Hills Plastic Surgery');
+
+  const wrongUrl = 'https://product.costar.com/detail/lookup/8355465/tenant';
+  const wrongKey = api.propertyIdentityKey(wrongUrl);
+  const wrongRecord = api.mergeFreshTenantRoster(context, {
+    ...fresh,
+    page_url: wrongUrl,
+    source_property_key: wrongKey,
+    tenant_provenance_key: wrongKey,
+  }, tenantUrl);
+  assert.equal(wrongRecord.ok, false);
+  assert.ok(wrongRecord.reasons.includes('fresh_tenant_identity_mismatch'));
+
+  const empty = api.mergeFreshTenantRoster(context, { ...fresh, tenants: [] }, tenantUrl);
+  assert.equal(empty.ok, false);
+  assert.ok(empty.reasons.includes('fresh_tenant_roster_empty'));
+});
+
 test('all three runtime layers enforce the shared record boundary', () => {
   const manifest = JSON.parse(readFileSync(join(ROOT, 'extension/manifest.json'), 'utf8'));
   const costarScript = manifest.content_scripts.find((entry) =>
     entry.matches.some((match) => match.includes('costar.com'))
   );
   assert.equal(costarScript.js[0], 'shared/property-identity.js');
-  assert.equal(manifest.version, '1.0.47');
+  assert.equal(manifest.version, '1.0.48');
 
   const content = readFileSync(join(ROOT, 'extension/content/costar.js'), 'utf8');
   const background = readFileSync(join(ROOT, 'extension/background.js'), 'utf8');
@@ -72,6 +117,9 @@ test('all three runtime layers enforce the shared record boundary', () => {
   assert.match(background, /senderTabKey !== incomingKey/);
   assert.match(sidepanel, /Capture blocked — CoStar record changed/);
   assert.match(sidepanel, /validateCostarContext\(liveCtx\)/);
+  assert.match(content, /GET_FRESH_ASC_TENANT_CONTEXT/);
+  assert.match(sidepanel, /getFreshAscTenantContext\(liveCtx\)/);
+  assert.match(sidepanel, /mergeFreshTenantRoster\(ctx, fresh, activeUrl\)/);
   assert.match(
     sidepanel,
     /costar_property_id: domain === 'costar'[\s\S]*LccPropertyIdentity\.costarPropertyId\(liveCtx\.page_url\)/,
