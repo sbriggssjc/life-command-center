@@ -102,3 +102,65 @@ quarantine (ADDR1b-merge).
 **Open:** ~~`SALE1c`~~ ✅ · `SALE1c-gov` (98 rows classified, ~80% unclassified residue) · **`ADDR1b-merge`** (port dia's reversible merge to gov) · `PR5d-a`/`PR5d-b` (the CMBS loan
 arm — 👤 Scott has Loan-tab access; a screenshot of a CMBS-financed property is the next input) ·
 `PR11` (the model-leg quarantine) · `ADDR1a` residue: none.
+**Open:** `PR5d-a`/`PR5d-b` (the CMBS loan arm — 👤 Scott has Loan-tab access; a screenshot of a
+CMBS-financed property is the next input) · `PR11` (the model-leg quarantine) · `ADDR1a` residue:
+none · **`ADDR1b-merge`** (gov has no reversible property-merge RPC — only `gov_merge_property`,
+hard-delete, no snapshot — so a future gov phantom-twin can only be quarantined, never merged, until
+this ships).
+
+## 6. SALE1c + SALE1c-gov + ADDR1b — closed 2026-09-04
+
+**dia's 8 `linked_same_listing` rows, read individually against `cap_rate_history` event_type
+('sale' vs 'listing') and sibling/duplicate rows:** 7 of 8 were listing bleed
+(`copied_from_linked_listing`) — each carries a distinctly-dated, distinctly-typed `'sale'`
+ledger event (often with a named buyer/duplicate-superseded sibling row) at a DIFFERENT price than
+the current `sold_price`, which instead matches the linked listing's ask. **Nulled** (490, 575, 623,
+667, 881, 5471, 14538 — batch `sale1c-null-2026-09-04`, backup
+`_sale1c_price_reset_20260904_backup`), `calculated_cap_rate` nulled on all 7; `cap_rate_final` was
+nulled too except where the DB's own cap-rate trigger re-derived it from a `broker_stated`/
+`source_reported` rung (independent of the nulled price — sale 5471 kept `0.0584 broker_stated`,
+matching the SALE1a precedent exactly). **1 of 8 (sale 7972) is genuine** — two independently
+dated/sourced records (`backfilled from ownership_history` + a separate `historical_csv_import` sale
+six months later) agree with the current price against three same-batch listing echoes; left alone.
+⚠️ **This reverses the "leave them alone, ambiguous" read SALE1a shipped with** — the per-row
+`cap_rate_history` event-TYPE split (`'sale'` vs `'listing'`) that SALE1a's cruder "earliest
+observation" method couldn't see is what made 7 of 8 decidable without a deed.
+
+**The 902/903 dedup pair was a duplication defect, not a genuine two-hop same-day flip.** Sale 902
+(2017-07-27, $1,065,000, buyer Fultheim/seller Bhandari) is a mis-dated DUPLICATE of sale 14010
+(2021-01-20, same buyer/seller/price, `master_xlsx_backfill_r72`); sale 903 (buyer Bhandari/seller
+Glaves, same date, null price) is a phantom bridge row stitching 904's buyer to 902's seller — no
+independent evidence either hop happened. Real chain: 904 (Ritchie Development→Jack Glaves,
+2017-07-27, $778,000, already `duplicate_superseded`) then 14010 (Bhandari→Fultheim, 2021-01-20,
+$1,065,000, live). Both 902 and 903 moved to `transaction_state='duplicate_superseded'`
+(batch `sale1c-dedup-2026-09-04`) — the underlying duplication is fixed, not the unique-index
+constraint dodged (there was never a real collision: `ux_sales_transactions_dedup_live` only covers
+`transaction_state='live'`, and 903 was already `needs_review`). `v_dia_sale1_price_review`:
+100 → 92 `ledger_disagreement`.
+
+**SALE1c-gov: re-measured at 98 rows (not 127 — re-derive, never quote), and it is NOT dia's
+shape.** Split by `data_source`: `costar_sidebar` 41 / `costar_export` 30 / `excel_master` 23 /
+`gov_master_backfill_r71` 4. ⚠️ **This corrects the standing claim that gov's spine has "a different
+dominant producer (GSA/deed feeds vs dia's CoStar capture)"** — CoStar (`sidebar`+`export`) is
+**72%** of the population, the SAME dominant producer family as dia. What differs is the DEFECT, not
+the producer: joining `current_price` against every gov listing-price column
+(`asking_price`/`original_price`/`initial_price`/`last_price`, both via `sale_transaction_id` and
+property-wide) finds only **2 of 98** rows where the current price matches a listing figure — the
+listing-bleed mechanism that dominates dia is nearly absent on gov. A secondary A2b-style
+repeat-conveyance signature (current price matches a sibling sale or a differently-dated ledger
+event on the same property) covers **18 of 98 (18%)**. The remaining ~80 rows show no single
+mechanism — average disagreement is 50–98% of the earlier value across every source bucket, wider
+and messier than dia's. **Measured and classified, not fixed** — no gov row was written. gov is
+protected going forward by the same shared `upsertDomainSales` guard SALE1 shipped; its historical
+residue needs a different remedy than dia's null-the-listing-bleed rule, sized separately.
+
+**ADDR1b: gov's one address-bleed row (property 9893, `245 Park Ave`/Raton NM ← J.P. Morgan Asset
+Management's NYC office) is quarantined, not merged.** No twin: the other 3 Raton properties are all
+VA/Whittier St leases with a different agency and lease number; 9893 carries its own real
+`lease_number` (`LNM16668`), agency and a `notes` field naming USPS as the GSA lessor — a genuine
+lease record that lost its street, the dia 50990/37783 shape. `address` nulled, `city`/`state` kept,
+`address_source='contact_office_bleed_quarantined'`, dated note (backup
+`_addr1b_gov_quarantine_20260904_backup`). **No merge was attempted** — gov's only property-merge
+function, `gov_merge_property`, is a hard delete with no snapshot/reversal, so a merge here would
+have been irreversible on a repo whose entire discipline is reversible writes; that gap is filed as
+`ADDR1b-merge`, not worked around. `v_gov_contact_office_address_bleed_review`: 1 → 0.
