@@ -16,6 +16,29 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-03 — CONTACT1: entities.email/phone ladders are empty because the wired writer is dead code (diagnosis only, no code shipped)
+
+Both authority ladders on `entities.email/phone` (`field_provenance`@10-rungs and
+`metadata.field_sources`) are near-empty (4 rows / 1 row) — not because there's no history to
+grade yet, but because **the real writers never consult either one.**
+`bridge-handlers-salesforce.js::handleSalesforceContactUpsert` — the function PR5c-entities-b
+instrumented with provenance recording — **has never run** (`enrichment_jobs` holds zero
+`salesforce.contact.upsert` rows ever); its header's claimed 10,086-lifetime/336-in-30d writer
+population belongs to two DIFFERENT, unrecorded live writers (`salesforce-sync.js` on cron 165,
+and `sf-list-import.js` → `ensureEntityLink` at entity creation), neither of which calls
+`recordFieldWrites`/`shouldWriteField`. `SF_CONTACT_WRITEBACK` is off — correctly, per
+`CLAUDE.md`'s "never writes back to clean SF" doctrine, not a pending rollout.
+`owner-contact-propagate` has no cron (unscheduled, not broken — one manual run today wrote 4
+provenance rows / 4 phones / 31 review tasks).
+
+PR10 answered on evidence: `field_provenance` should own the decision, `metadata.field_sources`
+should retire — but that recommendation is moot until the real writers are repointed. Filed as
+new backlog **CONTACT1a**. Numeric unblock condition for **PR5c-enforce** recorded: grade
+`enforce_mode` once `field_provenance` for `entities.email/phone` exceeds ~50 rows spanning ≥2
+sources with real write/skip/conflict decisions (today: 4 rows, 1 source, all `write`). No
+`enforce_mode` flip, no `SF_CONTACT_WRITEBACK` enable, no backfill, no code changed. Record:
+`docs/claude-code/responses/CONTACT1-both-entities-ladders-govern-nothing.response.md`.
+
 ## 2026-09-03 — UX-T1a-today SHIPPED: Today is Significant / Important / Urgent
 
 Recut the Home "Today" panel into the canon's three sections (operator-doctrine.md 1.8.0),
@@ -51,7 +74,7 @@ Shipped: `api/_shared/today-sections.js` (pure classification, `assembleTodaySec
 `test/uxt1a-today.test.mjs` (12 behavioural tests over named-row fixtures per section — P180
 null-vs-0 collapse caught and fixed by the guard itself before shipping). Full suite 5,384 tests,
 5,378 pass / 0 fail / 6 skipped — unchanged failure count, confirming no regression. Record:
-`docs/claude-code/responses/UX-T1a-today.response.md`.
+`docs/claude-code/responses/done/UX-T1a-today.response.md`.
 
 ## 2026-09-03 — EXT2a SHIPPED (PR #2098): the schedule-blend double count is fixed
 
