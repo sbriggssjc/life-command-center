@@ -69,6 +69,28 @@ Docs: `docs/architecture/field-provenance-ladder.md` §4 (new CONTACT1/CONTACT1a
 correction to the PR5c-entities-b row, which had been misattributed as "the lane that actually
 runs"); `docs/os/PLANNED-BACKLOG.md` (PR5c-entities-b corrected, CONTACT1/CONTACT1a rows added,
 PR5c-enforce's blocker note updated, PR10 marked answered).
+## 2026-09-03 — CONTACT1: entities.email/phone ladders are empty because the wired writer is dead code (diagnosis only, no code shipped)
+
+Both authority ladders on `entities.email/phone` (`field_provenance`@10-rungs and
+`metadata.field_sources`) are near-empty (4 rows / 1 row) — not because there's no history to
+grade yet, but because **the real writers never consult either one.**
+`bridge-handlers-salesforce.js::handleSalesforceContactUpsert` — the function PR5c-entities-b
+instrumented with provenance recording — **has never run** (`enrichment_jobs` holds zero
+`salesforce.contact.upsert` rows ever); its header's claimed 10,086-lifetime/336-in-30d writer
+population belongs to two DIFFERENT, unrecorded live writers (`salesforce-sync.js` on cron 165,
+and `sf-list-import.js` → `ensureEntityLink` at entity creation), neither of which calls
+`recordFieldWrites`/`shouldWriteField`. `SF_CONTACT_WRITEBACK` is off — correctly, per
+`CLAUDE.md`'s "never writes back to clean SF" doctrine, not a pending rollout.
+`owner-contact-propagate` has no cron (unscheduled, not broken — one manual run today wrote 4
+provenance rows / 4 phones / 31 review tasks).
+
+PR10 answered on evidence: `field_provenance` should own the decision, `metadata.field_sources`
+should retire — but that recommendation is moot until the real writers are repointed. Filed as
+new backlog **CONTACT1a**. Numeric unblock condition for **PR5c-enforce** recorded: grade
+`enforce_mode` once `field_provenance` for `entities.email/phone` exceeds ~50 rows spanning ≥2
+sources with real write/skip/conflict decisions (today: 4 rows, 1 source, all `write`). No
+`enforce_mode` flip, no `SF_CONTACT_WRITEBACK` enable, no backfill, no code changed. Record:
+`docs/claude-code/responses/CONTACT1-both-entities-ladders-govern-nothing.response.md`.
 
 ## 2026-09-03 — UX-T1a-today SHIPPED: Today is Significant / Important / Urgent
 
@@ -105,7 +127,7 @@ Shipped: `api/_shared/today-sections.js` (pure classification, `assembleTodaySec
 `test/uxt1a-today.test.mjs` (12 behavioural tests over named-row fixtures per section — P180
 null-vs-0 collapse caught and fixed by the guard itself before shipping). Full suite 5,384 tests,
 5,378 pass / 0 fail / 6 skipped — unchanged failure count, confirming no regression. Record:
-`docs/claude-code/responses/UX-T1a-today.response.md`.
+`docs/claude-code/responses/done/UX-T1a-today.response.md`.
 
 ## 2026-09-03 — EXT2a SHIPPED (PR #2098): the schedule-blend double count is fixed
 
@@ -506,6 +528,48 @@ with UX-T2). **UX13a** deferred to user onboarding. EXT1b sent to CC.
 - Full suite **5,102 pass / 0 fail / 6 skipped**. Record:
   `responses/EXT1-lease-rent-basis-quoted-dates.response.md`.
 
+## 2026-09-03 — CONTACT1: 🚨 PR5c-entities-b INSTRUMENTED A FUNCTION THAT HAS NEVER RUN. The ladder was wired to dead code, and my own STATUS entry asserting otherwise is corrected in place.
+
+**Verified live, every claim reproduces:** `enrichment_jobs` holds **0** rows of type
+`salesforce.contact.upsert` — **ever** — and the only job types that exist at all are
+`outlook.message.extract` and `cre.doc.text`. `field_provenance` on `entities` is still **4 rows**
+(`phone`/`domain_owner_contact`, from one manual tick); `source='salesforce'` is **0**; and
+`provenance_write_failed` alerts are **0 — because the instrumented path never even attempts a write
+to fail.**
+
+**Where the traffic actually is.** Traced through `external_identities.metadata->>'synced_via'` over
+the last 30 days of `salesforce/Contact` mints (337 measured today):
+**195 `salesforce-sync.v1`** → `api/_shared/salesforce-sync.js::writeEntitySalesforceLink`, driven by
+cron 165 (`lcc-sf-contact-resolve`, every 30 min) · **142 null**, not yet traced ·
+**0 `phase1.bridge-handlers-salesforce`.** The entity carrying the email at creation is minted
+separately by `sf-list-import.js` → `ensureEntityLink`, bypassing `insertEntity` entirely. **None of
+`ensureEntityLink`, `salesforce-sync.js` or `sf-list-import.js` calls
+`recordFieldWrites`/`shouldWriteField`** (grepped, zero hits).
+
+**So "both ladders are empty" had the wrong cause.** It is not *no history yet* — it is *the wiring
+landed on unused code while the two live writers remain invisible to both ladders.*
+⚠️ **My PR5c-entities-b STATUS entry is corrected in place above** — it named `insertEntity` as "the
+single owner of the `entities` POST" and predicted ~12 rows/day. Both were wrong, and the
+`0 provenance_write_failed` I recorded as reassuring is actually the tell: **a path that never runs
+cannot fail.**
+
+**Answers to the two questions the prompt asked:**
+- **PR10 — `field_provenance` should own it**, `metadata.field_sources` retires to a private
+  per-writer cache. It is fleet-wide, registered, queryable, and its gate is what
+  `planContactFieldPromotion` reads back next run; the metadata copy is undiscoverable, unregistered,
+  and self-perpetuating when wrong. ⚠️ **Moot until the real writers point at either ladder.**
+- **PR5c-enforce unblock condition, numeric:** grade only once `field_provenance` for
+  `(entities, email|phone)` exceeds **~50 rows across ≥2 distinct sources with real
+  write/skip/conflict decisions**. Today: 4 rows, 1 source, all `write`.
+- **`SF_CONTACT_WRITEBACK` reads as standing doctrine, not a pending rollout** — the handler pushes
+  LCC-resolved contacts OUTBOUND to Salesforce, the direction `CLAUDE.md` forbids ("never writes back
+  to clean SF"); `off_since` NULL means nobody has ever flipped it. **`owner-contact-propagate` has
+  no cron** (confirmed absent; 11 other contact-family jobs exist) — unscheduled, not broken.
+- **`sf-list-import.js`'s CREATE lane is live and quiet, not dead** — 142 mints in 14 days (~10/day).
+
+**Nothing was built, correctly** — the fix touches `ensureEntityLink`, the live person-entity mint
+path used far beyond Salesforce, and CC declined to guess at that scope. → **CONTACT1a**.
+
 ## 2026-09-03 — ADDR1 SHIPPED (#2108, `9bff5289`) and verified live: the mechanism was FOUR missing section headers in one regex, and my "second phantom" reading was WRONG.
 
 **The mechanism, and it explains the asymmetry my prompt asked about.**
@@ -814,7 +878,12 @@ answers **404 `Application not found`**, which reads exactly like a dead deploy;
 `source='salesforce'` on `entities` **0** (deployed minutes ago; 3 SF contacts in the prior 24 h;
 ~12 rows/day predicted — read tomorrow); unranked 29; drift 0; 0 failure alerts.
 
-- **The write site is `insertEntity` (`bridge-handlers-salesforce.js:232`)**, the single owner of
+- 🚨 **SUPERSEDED 2026-09-03 by CONTACT1 — THIS WHOLE BULLET IS WRONG.** `insertEntity` is
+  reached only from `handleSalesforceContactUpsert`, which **has never run**: `enrichment_jobs` holds
+  **0** rows of type `salesforce.contact.upsert`, ever (the only job types that exist are
+  `outlook.message.extract` and `cre.doc.text`). The ~336/30d population is real but belongs to
+  **different, uninstrumented writers**. The provenance recording below was added to dead code.
+  *Was:* **The write site is `insertEntity` (`bridge-handlers-salesforce.js:232`)**, the single owner of
   the `entities` POST — recording placed there so a future third caller inherits it. **Records,
   never gates**: a create has no prior value, and gating would let a registry outage cost a
   Salesforce contact. Rolled-back proof: 2 rows, `write`/`no_prior_provenance`, rung 20 (the
