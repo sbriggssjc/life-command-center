@@ -70,6 +70,9 @@ and the Dialysis test suite had never executed a test in the repo's history — 
   `docs/architecture/costar-sidebar-capture-pipeline.md`** (PR2 · SALE1 · SALE1a · ADDR1 · ADDR1a in
   one arc table, the guards, the live state, and the transferable lessons). Read it before touching
   `extension/content/costar.js` or `sidebar-pipeline.js`.
+- **ADDR1b-merge (2026-09-04)** — gov can now merge a property reversibly (FK walk at call time,
+  round trip fingerprint-verified, destructive name raises). ⚠️ The rename left the mutator
+  anon-executable; closed in Cowork. Residuals: SEC1-property, ADDR1c-twin-lane.
 - **CONTACT1a (2026-09-04)** — the `entities` contact ladder is wired at `ensureEntityLink`'s CREATE
   choke point and deployed; 0 rows so far is *quiet*, not *unreachable* (the 2 creates today predate
   the code). Residual: UPDATE path → CONTACT1b.
@@ -171,13 +174,16 @@ that fires `gov_classify_agency()`; do not read it as broken.
    Record: `docs/audits/ENTC_JUNK80_AND_P195_UNMERGE_2026-09-03.md`.
    ⚠️ **`SEC1` moved a step**: all three definer *unmerge* functions are now `service_role` only;
    the other 88 anon-executable definer functions are untouched.
-3. 🚨 **`ADDR1b-merge`** — **gov has no reversible property merge and `gov_merge_property` is a
-   HARD DELETE with no snapshot** (confirmed live 2026-09-04). dia's `dia_merge_property_reversible`
-   walks every FK and snapshots — proven twice this week, and 37503's merge brought home **7 leases**
-   a delete would have destroyed. **Port dia's shape to gov before any gov dedup, phantom repair or
-   ADDR-class work**; until then gov's only safe disposition is quarantine. **Prompt drafted: `ADDR1b-merge-port-reversible-property-merge-to-gov.md`.** Then **`SALE1c-gov`**
-   (98 rows classified; ~80% is unclassified wider revisions needing a named-row read — and note
-   gov's producer is **72% CoStar, the same family as dia**, correcting an earlier claim here).
+3. 🚨 **`SEC1-property`** — the property merge/unmerge pair is SECURITY DEFINER and
+   **`anon`-executable on BOTH domains** (`dia_merge_property_reversible`, `dia_unmerge_property`,
+   `gov_merge_property_reversible`, `gov_unmerge_property`). ENTC narrowed the three ENTITY unmerge
+   functions to `service_role` on 09-03; the PROPERTY pair never got the same pass. Census PostgREST
+   callers, revoke from **public AND anon AND authenticated**, assert with `has_function_privilege()`.
+   **Prompt drafted: `SEC1-property-narrow-definer-merge-functions.md`** (it also re-measures and
+   BUCKETS the wider SEC1 91-of-195 figure without revoking anything outside the four).
+   Then **`ADDR1c-twin-lane`** — gov twin sizing came back **399 groups / 953 properties**, not small;
+   ADDR1b-merge unblocked it, but **size the PRECISION before building the surface** (co-located ≠
+   twin; gov's version of that risk is two agencies in one federal building).
 4. **`CONTACT1b`** — CONTACT1a shipped the CREATE path; **the UPDATE path still records nothing**,
    and `salesforce-sync.js`/`sf-list-import.js` carry 0 direct `recordFieldWrites`. **Measure first:
    of `writeEntitySalesforceLink`'s 195 links in 30 days, how many are creates through the choke
