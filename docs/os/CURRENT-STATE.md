@@ -69,6 +69,17 @@ precision without it). All merge review views carry no `auto_mergeable`; `lcc_me
 reversible. 👤 N15e: 6,608 groups violate a `(workspace_id, canonical_name)` unique key.
 → **`docs/architecture/entity-identity-and-dedup.md`** (canonical).
 
+### CoStar sidebar capture — the largest producer, and five defect arcs in one place
+The extension → `sidebar-pipeline.js` path writes `properties`, `sales_transactions`,
+`parcel_records`/`tax_records`, `entities`/`contacts`, `loans` and `property_documents` DIRECTLY to
+the domain DBs (it does not go through `stageOmIntake`). ⚠️ **Its defects share a shape: the right
+page, the wrong region of it** — the Contacts tab's broker office winning the property street
+(ADDR1), a traffic table read as contacts (Prompt 89), the parcel stats dropped between capture and
+row (PR2) — plus one overwrite class (SALE1: a re-match PATCH replacing an already-recorded
+`sold_price`). All are guarded now; the address class is closed by a **role-agnostic server-side
+belt**, not by the header regex.
+→ **`docs/architecture/costar-sidebar-capture-pipeline.md`** (canonical).
+
 ### Public records — one real source, and it now carries its stats (PR1 → PR2, 2026-09-02)
 `county_records` @5 is registered on 93 rungs and has **never written a field, by decision** — both
 domains' `public_record_ingest.py` are gpt-4o recall, not a county fetch (PR1; §2a of the lane page).

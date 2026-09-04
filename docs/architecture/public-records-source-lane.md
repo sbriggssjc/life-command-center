@@ -1,5 +1,7 @@
 # Public records as an independent source lane (assessor / parcel / tax / deed)
 
+> **Sibling canonical page (2026-09-04): `costar-sidebar-capture-pipeline.md`** — the PRODUCER (the extension → `sidebar-pipeline.js` path and its five defect arcs: PR2, SALE1, SALE1a, ADDR1, ADDR1a). This page is the public-records SOURCE question; that one is how the capture writes.
+
 > **Sibling canonical page (2026-09-02): `field-provenance-ladder.md`** — the LEDGER (`field_provenance` / `field_source_priority` / `lcc_merge_field` semantics, PR5/PR5c/PR8/PR12 in full). This page is the public-records SOURCE lane; the §2 PR blocks stay here as the dated record.
 
 > **START HERE for anything about assessor, parcel, tax or deed data as a SOURCE** — what it

@@ -66,6 +66,12 @@ and the Dialysis test suite had never executed a test in the repo's history — 
   purpose (27% precision without it). Canonical page: **`docs/architecture/entity-identity-and-dedup.md`**.
 - **CONTACT1 (2026-09-03)** — both `entities` ladders are empty because the wiring landed on dead code;
   PR10 answered, PR5c-enforce given a numeric unblock condition, `CONTACT1a` filed for the scope call.
+- 📍 **The CoStar capture producer now has ONE canonical page —
+  `docs/architecture/costar-sidebar-capture-pipeline.md`** (PR2 · SALE1 · SALE1a · ADDR1 · ADDR1a in
+  one arc table, the guards, the live state, and the transferable lessons). Read it before touching
+  `extension/content/costar.js` or `sidebar-pipeline.js`.
+- **ADDR1a (2026-09-04)** — dia address-bleed review view at **0**; the bare-`Buyer` worry refuted by
+  the code path (regex correctly NOT widened); the real closure is the role-agnostic server-side belt.
 - **SALE1a/SALE1b (2026-09-04)** — 29 propagated prices NULLED (none reset: zero deed corroboration);
   `ledger_disagreement` 129 → 100; gov measured and **NOT clean** (127 rows). Follow-ups SALE1c / SALE1c-gov.
 - **SALE1 + ADDR1 (2026-09-03)** — two defects in the SAME producer (`sidebar-pipeline.js` /
@@ -159,14 +165,13 @@ that fires `gov_classify_agency()`; do not read it as broken.
    Record: `docs/audits/ENTC_JUNK80_AND_P195_UNMERGE_2026-09-03.md`.
    ⚠️ **`SEC1` moved a step**: all three definer *unmerge* functions are now `service_role` only;
    the other 88 anon-executable definer functions are untouched.
-3. **`ADDR1a`** — both open bleed rows are now identified and they need DIFFERENT actions (the
-   37491-vs-50990 split): **37503 is a phantom duplicate of 38953** (`2312-2330 S Dixon Rd, Kokomo IN`
-   — identical 10,603 SF / Fresenius / timestamp; the real street already exists) → merge;
-   **37783 has no twin** → quarantine like 50990. ⚠️ **Confirm the literal CoStar header text first** —
-   both came from a `buyer`-role block and the regex matches `recorded buyer`/`true buyer`, so a bare
-   `Buyer` header is a still-open path. Then **`SALE1c`** (8 `linked_same_listing` + the 902/903 dedup
-   pair — two human reads SALE1a correctly refused) and **`SALE1c-gov`** (gov measured NOT clean:
-   127 rows, only 4 listing-matched; gov's conventions need grading before dia's rules transfer).
+3. **`SALE1c`** (8 `linked_same_listing` rows + the 902/903 dedup pair — two human reads SALE1a
+   correctly refused) and **`SALE1c-gov`** (gov measured NOT clean: 127 `ledger_disagreement` rows,
+   only 4 listing-matched; gov's conventions need grading before dia's rules transfer). Also
+   **`ADDR1b`** — gov's single bleed row (9893, `245 Park Ave`/Raton NM ← J.P. Morgan's Manhattan
+   office); ⚠️ gov shipped the review view with **no repair half**, so check for a
+   `dia_merge_property_reversible` equivalent before planning the disposition.
+   **Prompt drafted (all three together): `SALE1c-two-human-reads-and-gov-grading.md`.**
 4. **`CONTACT1a`** — ⚠️ **CONTACT1 answered the question and found a bigger one: `PR5c-entities-b`
    instrumented `insertEntity`, which is reached only from `handleSalesforceContactUpsert`, and
    `enrichment_jobs` holds ZERO `salesforce.contact.upsert` rows ever.** The provenance block is live,
