@@ -244,6 +244,33 @@ async function validateCostarContext(ctx) {
   return window.LccPropertyIdentity.contextIntegrity(ctx, activeUrl);
 }
 
+async function getFreshAscTenantContext(ctx) {
+  const activeUrl = await getActiveTabUrl();
+  if (!/\/tenant(?:[/?#]|$)/i.test(activeUrl || '')) {
+    return { ok: true, context: ctx };
+  }
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tabId = tabs?.[0]?.id;
+    if (tabId == null) return { ok: false, reasons: ['missing_active_costar_tab'] };
+    const fresh = await new Promise((resolve) => {
+      chrome.tabs.sendMessage(
+        tabId,
+        { type: 'GET_FRESH_ASC_TENANT_CONTEXT' },
+        { frameId: 0 },
+        (response) => {
+          if (chrome.runtime.lastError) resolve(null);
+          else resolve(response || null);
+        },
+      );
+    });
+    if (!fresh?.ok) return { ok: false, reasons: ['fresh_tenant_scan_unavailable'] };
+    return window.LccPropertyIdentity.mergeFreshTenantRoster(ctx, fresh, activeUrl);
+  } catch {
+    return { ok: false, reasons: ['fresh_tenant_scan_failed'] };
+  }
+}
+
 // ── Restricted ASC frozen-50 research target ───────────────────────────────
 // This is a separate evidence-only path. It never calls Save Property, the
 // dia/gov propagator, Salesforce writeback, opportunity creation, or outreach.
@@ -340,7 +367,16 @@ async function wireAscResearchAction(ctx, actions) {
     // but without carrying the subject address/state. Do not let that partial
     // context replace the complete page context that produced this card.
     const sessionCtx = await getPageContext();
-    const liveCtx = sessionCtx?.address && sessionCtx?.state ? sessionCtx : ctx;
+    let liveCtx = sessionCtx?.address && sessionCtx?.state ? sessionCtx : ctx;
+    const refreshed = await getFreshAscTenantContext(liveCtx);
+    if (!refreshed.ok) {
+      button.disabled = true;
+      button.textContent = 'Capture blocked — refresh tenants';
+      button.className = 'btn btn-sm btn-danger';
+      detail.textContent = `Fresh CoStar tenant validation failed: ${refreshed.reasons.join(', ')}. Keep the Tenant tab open and retry.`;
+      return;
+    }
+    liveCtx = refreshed.context;
     const integrity = await validateCostarContext(liveCtx);
     if (!integrity.ok) {
       button.disabled = true;
