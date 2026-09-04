@@ -94,8 +94,14 @@ into a bare catch (PR5c, fixed via `provenanceTargetDatabase()`; the edge-functi
 own deploy). **`lcc_merge_field` always inserts a row, so zero rows = the call never completed.**
 The two `entities` contact writers consult the ladder since PR5c-entities — **recording only**: all ten
 `email`/`phone` rungs are `record_only`, and a ladder over an empty ledger cannot protect a value it has
-never seen. Nothing is scheduled to exercise the two propagate/writeback writers; the Salesforce bridge
-CREATE path (the daily one, ~12 rows/day) records since #2072. ✅ Railway `/version` = `886cdf86` (22:08 UTC).
+never seen. Nothing is scheduled to exercise the two propagate/writeback writers. ⚠️ **The "Salesforce
+bridge CREATE path records since #2072" claim above was WRONG — CONTACT1 (2026-09-03) found that
+handler is dead code (its `job_type`s are never enqueued anywhere).** The real writer, found by an
+AST census of `ensureEntityLink()`'s 30+ callers, is `ensureEntityLink`'s own CREATE payload — the
+ONE place it ever writes `email`/`phone` (it never PATCHes them onto an existing entity). **CONTACT1a
+(2026-09-04) wired that site instead** — covers all 9 of 48 call sites that ever pass email/phone
+(CoStar sidebar contact mint, `sf-list-import.js`, and 7 others), audit-only, no `enforce_mode`
+change. ✅ Railway `/version` = `886cdf86` (22:08 UTC) — pre-CONTACT1a; re-check after this merges.
 → **`docs/architecture/field-provenance-ladder.md`** (canonical); backlog PR1d (`REGRID_API_KEY`), PR5a–e, PR5c-entities/-signal/-deploy, PR7a–b, PR9 (Scott), PR11, PR12a–b.
 
 ### Comms → context

@@ -1,5 +1,59 @@
 import { opsQuery, pgFilterVal, insertEntityRelationship } from './ops-db.js';
 import { syncSalesforceForEntity } from './salesforce-sync.js';
+import { recordFieldWrites, provenanceTargetDatabase } from './field-priority-guard.js';
+
+// ============================================================================
+// CONTACT1a (2026-09-04) — repoint the LIVE entities.email/phone writer at
+// field_provenance.
+//
+// CONTACT1 measured that `entities.email`/`phone` carry a ten-rung
+// field_source_priority ladder (manual_edit/manual_resolution@1 →
+// salesforce@20 → domain_owner_contact@55 → costar_sidebar@60, all
+// enforce_mode='record_only') that had governed almost nothing: `email` had
+// NEVER been recorded once, `phone` exactly 4 times (one manual tick).
+// `bridge-handlers-salesforce.js::insertEntity` WAS instrumented under
+// PR5c-entities-b — and it is dead code. `salesforce.contact.upsert` /
+// `salesforce.account.upsert` are handler entries in `api/bridges.js`'
+// `HANDLERS` map with ZERO producers anywhere in this repo that ever enqueue
+// that `job_type` into `enrichment_jobs` (grepped; the only hits are the
+// module's own header comment and the map itself). It has run zero times.
+//
+// The REAL writer is `ensureEntityLink()` below — an AST census of its 30+
+// live call sites found exactly ONE place `entities.email`/`phone` are ever
+// written: the CREATE payload a few hundred lines down. `ensureEntityLink`
+// never PATCHes email/phone onto an EXISTING entity (seedFields is discarded
+// once `resolvedEntity` resolves to a pre-existing row — a "fill" only
+// happens at mint time), so wiring this ONE site covers every caller that
+// ever passes an email/phone, present and future, with no per-caller change.
+//
+// Same audit-only shape as the dead PR5c-entities-b block it replaces as the
+// live implementation, and for the SAME structural reason: a CREATE has no
+// prior value to protect (lcc_merge_field's "current value" comes from
+// field_provenance, which is empty for a row that doesn't exist yet — gating
+// on it would be theatre), and both rungs are `record_only` today anyway (a
+// `skip` still allows the write). So `recordFieldWrites` runs AFTER the
+// INSERT; `shouldWriteField` is deliberately NOT called pre-write here.
+// Flipping `enforce_mode` is backlog PR5c-enforce, NOT this change.
+// ============================================================================
+const CONTACT1A_TARGET_DB = provenanceTargetDatabase('lcc_opps');
+const CONTACT1A_TARGET_TABLE = 'entities';
+const CONTACT1A_FIELDS = ['email', 'phone'];
+
+// The registry's spelling must match byte-for-byte or lcc_merge_field takes
+// the UNREGISTERED branch (still records a row — PR5 — just without a rung).
+// Map the handful of source-system spellings this codebase actually uses for
+// email/phone-bearing calls onto the registered rung names; anything else
+// rides through verbatim so the write is still recorded (unregistered, never
+// silently dropped — PR5's "unregistered is a different branch, not a low
+// rung"). This is deliberately NOT `canonicalIdentitySystem()` — that
+// function canonicalizes DOMAIN-DB spellings (dia/gov), a different
+// vocabulary from `field_source_priority.source`.
+function contact1aProvenanceSource(sourceSystem) {
+  const s = String(sourceSystem == null ? '' : sourceSystem).trim().toLowerCase();
+  if (s === 'salesforce') return 'salesforce';
+  if (s === 'costar' || s === 'costar_sidebar') return 'costar_sidebar';
+  return sourceSystem || 'unspecified';
+}
 
 /**
  * N15c — THE token rule for entity name identity.
@@ -1235,6 +1289,36 @@ export async function ensureEntityLink({
     }
     resolvedEntity = Array.isArray(created.data) ? created.data[0] : created.data;
     createdEntity = true;
+
+    // CONTACT1a — record the ladder-governed fields THIS create established
+    // (see the block comment at the top of this file). Only fields carrying a
+    // real value are recorded: a null here would assert "the source says this
+    // contact has no email", which the payload never claimed.
+    const contact1aFields = {};
+    for (const f of CONTACT1A_FIELDS) {
+      const v = createPayload[f];
+      if (v != null && String(v).trim() !== '') contact1aFields[f] = v;
+    }
+    if (Object.keys(contact1aFields).length) {
+      try {
+        await recordFieldWrites({
+          targetDb:    CONTACT1A_TARGET_DB,
+          targetTable: CONTACT1A_TARGET_TABLE,
+          recordPk:    resolvedEntity.id,
+          source:      contact1aProvenanceSource(sourceSystem),
+          workspaceId,
+          // Copied verbatim out of the caller's seed payload — no match or
+          // inference step, so there is nothing to be less than certain
+          // about. NOT a claim the source is right (that's the rung's
+          // priority) — a claim about what the source SAID.
+          confidence:  1.0,
+          fields:      contact1aFields,
+        });
+      } catch (err) {
+        // Belt and braces: recordFieldWrites already swallows per-field failures.
+        console.warn('[ensureEntityLink] CONTACT1a provenance record failed (entity written):', err?.message);
+      }
+    }
   }
 
   // If we matched an EXISTING entity that still carries the synthetic
