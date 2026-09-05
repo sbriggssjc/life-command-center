@@ -142,13 +142,23 @@ test('structured CoStar tenant grids retain a secondary ASC tenant without colum
   ])], []);
 });
 
+test('numeric-leading healthcare facility tenants remain distinct from street addresses and numeric junk', () => {
+  const api = identityApi();
+  assert.equal(api.isNumericHealthcareTenantName('436 Beverly Hills Surgery Center'), true);
+  assert.equal(api.isNumericHealthcareTenantName('1200 West Endoscopy Center'), true);
+  assert.equal(api.isNumericHealthcareTenantName('436 N Bedford Dr'), false);
+  assert.equal(api.isNumericHealthcareTenantName('428-444 N Bedford Dr'), false);
+  assert.equal(api.isNumericHealthcareTenantName('436 Beverly Hills'), false);
+  assert.equal(api.isNumericHealthcareTenantName('12345'), false);
+});
+
 test('all three runtime layers enforce the shared record boundary', () => {
   const manifest = JSON.parse(readFileSync(join(ROOT, 'extension/manifest.json'), 'utf8'));
   const costarScript = manifest.content_scripts.find((entry) =>
     entry.matches.some((match) => match.includes('costar.com'))
   );
   assert.equal(costarScript.js[0], 'shared/property-identity.js');
-  assert.equal(manifest.version, '1.0.51');
+  assert.equal(manifest.version, '1.0.52');
 
   const content = readFileSync(join(ROOT, 'extension/content/costar.js'), 'utf8');
   const background = readFileSync(join(ROOT, 'extension/background.js'), 'utf8');
