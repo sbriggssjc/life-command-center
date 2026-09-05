@@ -217,7 +217,14 @@ that fires `gov_classify_agency()`; do not read it as broken.
    - Then `GOVDUP1-c` (154 orphaned `pending_updates`), `-d` (`verdict_hint` is a synonym for
      `address_match`), `-e` (94 live `.0` zips), `-guard` (3 mutations, not 9).
 
-   Then **`SEC1-wider`** — 63 mutating-like
+   ✅ **`SEC1-unit2` Units 1 + 3 SHIPPED 2026-09-05 — gov anon+mutating 5 → 1**, dia dedupe ported
+   and proven, both new definer triggers locked (the guard's 2nd consecutive unit). ⚠️
+   **`gov_apply_om_confirmed_noi` already had `REVOKE ALL FROM PUBLIC` and was still anon** — the
+   two-grant footgun, live. 👤 🚨 **`SEC1-unit2-MERGE` IS THE TOP OPERATOR ITEM: the changes are
+   applied LIVE and the branch is NOT on `main`** (`origin/claude/sec1-unit2-anon-gov-triage-…`);
+   a rebuild from `main` restores the anon grants. **`SEC1-unit2-lock`** carries the 62, deliberately
+   left un-revoked until their deployed callers are enumerated — correct restraint, not unfinished
+   work. Then **`SEC1-wider`** — 63 mutating-like
    anon-executable definer functions on LCC Opps need itemizing before anything is revoked, and
    `compute_feed_freshness` is deliberately anon on both domains.
 3b. ✅ **`GOVDUP1-a` SHIPPED 2026-09-05 (PR #2138).** 🚨 **The producer was DEPLOYED BUT NEVER

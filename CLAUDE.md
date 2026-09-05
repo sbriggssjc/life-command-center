@@ -488,6 +488,10 @@ one alone is a no-op:
 | `PUBLIC` | Postgres, on every new FUNCTION | `revoke … from public` |
 | explicit `anon` + `authenticated` | Supabase's `ALTER DEFAULT PRIVILEGES` | `revoke … from anon, authenticated` |
 
+- ⚠️ **A migration carrying `REVOKE ALL FROM PUBLIC` is NOT evidence the function is closed** —
+  measured live 2026-09-05 on `gov_apply_om_confirmed_noi`, which had exactly that on file and was
+  **still `anon`-executable**, because Supabase's explicit role grants are a separate grant. The
+  author believed it was closed. **Read `has_function_privilege()`, never the migration.**
 - **Revoke from all three, then ASSERT with `has_function_privilege()` / `has_table_privilege()`.**
   **Never read a privilege off the GRANT or REVOKE you just wrote** — that is the one rule covering
   both halves, and it was paid for twice: B6d revoked the roles and left PUBLIC
@@ -619,6 +623,13 @@ genuinely has no insert path.**
 - **This is "running but not merged" — the inverse of the doctrine stated all over this file — and
   it is the SECOND instance.** P194 was the same shape on the client side (the extension's
   hard-coded Vercel URLs). **Neither is visible to a repo grep, a test, a guard or a reviewer.**
+- 🚨 **AND IT RECURRED ON OUR OWN WORK THE NEXT DAY, IN THE WORSE DIRECTION (SEC1-unit2,
+  2026-09-05).** The gov privilege lockdown was **applied live and left on an unmerged branch**, so
+  `main` did not describe the database and **a rebuild would have silently restored the anon
+  grants** — with nothing erroring, because the live DB was correct and only the repo was wrong.
+  **A live-applied change is not shipped until the migration is on `main`; confirm with
+  `git ls-tree -r origin/main`, not with the fact that the SQL ran.** Knowing the lesson did not
+  prevent it — the same 24 hours it was written down.
 - **When a producer cannot be found in source, enumerate the DEPLOYED artifacts before concluding
   it does not exist**: `list_edge_functions` on all three projects (compare `version` against what
   the repo last deployed), `cron.job` command text, Power Automate flows, and the Chrome extension.
@@ -626,6 +637,13 @@ genuinely has no insert path.**
   `uq_sf_property_staging_dedup (sf_property_id, source_system, import_batch)` looks like identity
   and **can never collide**, because `import_batch` changes every crawl. **Read the existing key
   before replacing it** — the fix was a `BEFORE INSERT` pre-link on `sf_property_id` alone.
+- ⚠️ **BEFORE ASSERTING A PRODUCER IS FIXED BY AN *ABSENCE*, PROVE THE PRODUCER RAN (2026-09-06).**
+  The confirmation specified for this fix was *"new `_new_property` rows staying flat"* — it read
+  **0**, and it proved nothing, because the newest row predated the fix by **ten days**. An absence
+  over a dormant producer is indistinguishable from a fix. **The zero only became evidence once the
+  producer's own arrival rate was measured** (`sf_property_staging`: 3 rows in 24h, 23 in 7d, 109 in
+  30d — the crawl is live and minted nothing). Same shape as `already_annotated` reading like
+  throughput, one level up; it applies to every "the count stayed flat" check.
 - ✅ **Fixed and proven behaviourally**, and the pre-link **prefers a LIVE row over an archived one**
   when both exist — falling back to an archived row only when every candidate is archived, which
   beats re-minting.
