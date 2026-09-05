@@ -58,7 +58,64 @@ section — and is not repeated here.
   guard's ALLOWLIST with this exact reason so nobody "completes" the sweep by locking
   them down.
 
+---
+
+# ✅ THE LIVE CENSUS THIS DOC ASKED FOR — measured from Cowork, 2026-09-05
+
+Everything above was written without DB access and correctly flagged itself as unverified. The
+three-project census follows. **Re-measure before quoting; these are dated.**
+
+| project | `SECURITY DEFINER` fns | anon-executable | …and mutating | …and dynamic SQL |
+|---|---:|---:|---:|---:|
+| **LCC Opps** `xengecqvemvfknjvbvrq` | 196 | **89** | **62** | **1** |
+| **dia** `zqzrriwuavgrquhisnoa` | 79 | 13 | **9** | 0 |
+| **gov** `scknotsqkcheojiaewwh` | 54 | 9 | **7** | 0 |
+
+**Spot-checks the doc asked for, all confirming what it recorded:** the four MERGE1 fold helpers
+are locked on both domains (`anon` false, `authenticated` false, `service_role` true,
+`proacl = {postgres=X,service_role=X}`); `gov_merge_property_apply` is locked; the three ENTC
+unmerge functions are locked. `compute_feed_freshness` remains anon on both domains **by design**.
+
+## 🚨 The finding: the property-merge family is only HALF locked
+
+SEC1-property locked `{dia,gov}_merge_property_reversible` + `*_unmerge_property`; MERGE1-sec locked
+the four fold helpers. **The same capability is still anon-executable under other names:**
+
+| function | domain | signature | note |
+|---|---|---|---|
+| **`dia_consolidate_property_reviewed`** | dia | `(p_keep_id, p_drop_id, p_batch, p_dry_run, p_reason)` | **keep/drop property merge — the exact capability SEC1-property locked**, reachable by anon under a different name |
+| `dia_reverse_property_consolidation` | dia | `(p_drop_id, p_batch)` | the paired reversal |
+| `dia_merge_twins` | dia | `(p_dry_run, p_mode, p_batch, p_max_miles, p_auto_miles)` | batch twin merge |
+| `p31_property_consolidation_apply` | **dia + gov** | `(p_dry_run, p_batch_tag)` | batch consolidation |
+| `p31_same_event_sales_apply` | **dia + gov** | `(p_dry_run, p_batch_tag)` | batch sales dedup |
+| `gov_truncate_sam_public_staging` | gov | — | a TRUNCATE, anon-callable |
+
+⚠️ **This is the ADDR1b lesson at the level of the AUDIT rather than the function.** ADDR1b recorded
+*"porting a function carries its logic, not its privileges"*; SEC1-property then enumerated **by
+name** and locked what it named. **A capability census would have caught these; a name census could
+not.** Before declaring any privilege sweep complete, ask *what else can do this same thing?* rather
+than *did I lock the functions on my list?*
+
+Mitigating, and it must be said: most of these default to `p_dry_run` and several are reversal or
+review paths. **None is a reason to leave them anon** — an anon caller passes `false`.
+
+## ⚠️ Correction to the filing prompt: `lcc_apply_cleared_tombstones` is NOT the MERGE1 shape
+
+The SEC1 prompt called it *"the one function that is anon + mutating + dynamic SQL — the MERGE1
+shape"* and told the next unit to start there. **Read live, that is wrong in the important half.**
+Its dynamic SQL is built over a **hard-coded `VALUES` map of column names**, not a caller-supplied
+table — so an anon caller cannot point it at an arbitrary table, which was the whole reason the
+MERGE1 helpers were severe. It also defaults to **`p_dry_run => true`**.
+
+It still mutates mirror columns across dia/gov `properties` when called with `false`, so it stays on
+the list — but **at the severity of the family above, not ahead of it.** *A shape matched by a
+`pg_get_functiondef` regex is a hypothesis; read the function before ranking it.*
+
 ## What this doc is NOT
+
+> ✅ **The gap this section describes was closed the same day — see "THE LIVE CENSUS THIS DOC
+> ASKED FOR" above.** The text below is kept because naming the gap precisely is what made it
+> cheap to close.
 
 It is not a census of every SECURITY DEFINER function in either live database (LCC
 Opps / dia / gov) — that needs Supabase credentials and a proper query against

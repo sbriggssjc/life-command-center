@@ -468,41 +468,80 @@ Full writeup: `docs/audits/B6d_FEED_EXPECTATION_GRADING_2026-08-29.md`.
   the measured distribution beside the configured bound, so this is re-gradeable rather than a
   one-shot that rots (Class 8). ⚠️ `compute_feed_cadence` is SECURITY DEFINER over registry-derived
   dynamic SQL — **service_role only**, never anon (the vector B6a closed on its sibling).
-- **⚠️ AND THE FIRST ATTEMPT AT THAT NARROWING WAS A NO-OP: `REVOKE ... FROM anon, authenticated`
-  DOES NOT REMOVE THE **PUBLIC** GRANT.** Postgres grants EXECUTE on a newly created FUNCTION to
-  PUBLIC by default, so both roles still reached the definer function through PUBLIC — measured
-  live *after* the "fix" shipped: `proacl = {=X/postgres, …}` (the leading `=X` IS PUBLIC) and
-  `has_function_privilege('anon', oid, 'EXECUTE') = TRUE` on gov and dia. A **VIEW** gets no default
-  PUBLIC grant, which is why the view half of the same migration WAS effective and the function half
-  was not. **Assert a privilege with `has_function_privilege()` / `has_table_privilege()`, never by
-  reading the GRANT or REVOKE you just wrote** — the claim was checkable in one query, and four
-  artifacts (migration comment, audit doc, backlog row, guard) repeated it unverified until a review
-  bot caught it. ⚠️ **Do not generalise to "revoke PUBLIC from every definer function"**:
-  `compute_feed_freshness` keeps an explicit `anon` grant BY DESIGN (the LCC cross-DB pull reads
-  `v_feed_freshness` as anon), and revoking it would silently blind the freshness monitor.
-- **⚠️ AND THE COMPLEMENTARY HALF BIT OCR2 LIVE (2026-09-02): `REVOKE ... FROM public` DOES NOT
-  REMOVE THE **EXPLICIT** `anon`/`authenticated` GRANTS EITHER.** Supabase ships
-  `ALTER DEFAULT PRIVILEGES` granting EXECUTE on new functions to both roles, so at CREATE time they
-  hold *explicit* grants, not PUBLIC ones. Measured immediately after applying
-  `<dom>_merge_document_extracted_data`: `proacl = {postgres=X/postgres,anon=X/postgres,
-  authenticated=X/postgres,service_role=X/postgres}` and
-  `has_function_privilege('anon', oid, 'EXECUTE') = TRUE` — i.e. revoking PUBLIC alone was a **no-op
-  for the two roles that matter**, the exact mirror of the trap above. **Revoke BOTH
-  (`from public, anon, authenticated`), then ASSERT with `has_function_privilege()`.** The one rule
-  that covers both halves: *never read a privilege off the GRANT or REVOKE you just wrote.*
+- **⚠️ AND THE FIRST ATTEMPT AT THAT NARROWING WAS A NO-OP** — `REVOKE … FROM anon, authenticated`
+  left the **PUBLIC** grant standing, so both roles still reached `compute_feed_cadence` after the
+  "fix" shipped, and four artifacts repeated the claim unverified until a review bot caught it.
+  📍 **The mechanism (and OCR2's mirror-image half) is stated ONCE, in
+  *"A PRIVILEGE SWEEP THAT ENUMERATES BY NAME…"* below — do not restate it here.** The B6d-specific
+  fact worth keeping in place: **`compute_feed_freshness` keeps its explicit `anon` grant BY
+  DESIGN** (the LCC cross-DB pull reads `v_feed_freshness` as anon), so *"revoke PUBLIC from every
+  definer function"* is exactly the over-generalisation to avoid — it would silently blind the
+  freshness monitor.
+
+### 🔐 SECURITY DEFINER PRIVILEGES — the canonical statement (consolidated 2026-09-05; B6d, OCR2, ADDR1b and SEC1 all point here)
+
+**A newly created function is anon-executable through TWO independent grants**, and removing either
+one alone is a no-op:
+
+| grant | who adds it | removed by |
+|---|---|---|
+| `PUBLIC` | Postgres, on every new FUNCTION | `revoke … from public` |
+| explicit `anon` + `authenticated` | Supabase's `ALTER DEFAULT PRIVILEGES` | `revoke … from anon, authenticated` |
+
+- **Revoke from all three, then ASSERT with `has_function_privilege()` / `has_table_privilege()`.**
+  **Never read a privilege off the GRANT or REVOKE you just wrote** — that is the one rule covering
+  both halves, and it was paid for twice: B6d revoked the roles and left PUBLIC
+  (`proacl = {=X/postgres, …}` — **the leading `=X` IS PUBLIC**), OCR2 revoked PUBLIC and left the
+  explicit role grants (`proacl = {postgres=X,anon=X,authenticated=X,service_role=X}`).
+- **A VIEW gets no default PUBLIC grant** — which is why B6d's view half was effective and its
+  function half was not, on the same migration.
+- **Do NOT generalise to "revoke PUBLIC from every definer function."** `compute_feed_freshness`
+  keeps an explicit `anon` grant **by design** on both domains; revoking it silently blinds the
+  freshness monitor.
+- **Prove the constraint is safe by finding a SIBLING already living under it** on the same code
+  path (SEC1-property), not from a doc — `supabase-keys.js` documents a fallback to a historically
+  anon key, so "it is server-mediated" is not evidence.
+- **When you port or rename a function, diff `has_function_privilege()` against the sibling, not
+  just the body** (ADDR1b: the rename landed without re-applying the revoke).
+- ✅ **Enforced since 2026-09-05 by `test/sql-definer-privilege-stanza.test.mjs`** — see the
+  SEC1-definer-default note at the end of the next section.
+
+**Instances, in order:** B6d `compute_feed_cadence` (2026-08-29) → OCR2
+`<dom>_merge_document_extracted_data` (09-02) → ADDR1b `gov_merge_property_apply` (09-04) →
+MERGE1's four fold helpers (09-05, shipped by the same PR that fixed a data-loss defect).
+
+### ⚠️ A PRIVILEGE SWEEP THAT ENUMERATES BY NAME CANNOT FIND THE SIBLING THAT DOES THE SAME THING (SEC1-merge-family, 2026-09-05)
+
+SEC1-property locked `{dia,gov}_merge_property_reversible` and `*_unmerge_property`; MERGE1-sec
+locked the four fold helpers. Both were correct and both were **complete only with respect to the
+list they started from.** Measured across all three projects afterwards:
+**`dia_consolidate_property_reviewed(p_keep_id, p_drop_id, …)` is a keep/drop property merge —
+exactly the capability that was locked — and it is anon-executable**, along with
+`dia_reverse_property_consolidation`, `dia_merge_twins`, and `p31_property_consolidation_apply` /
+`p31_same_event_sales_apply` on **both** domains.
+
+- **This is ADDR1b's rule (*porting a function carries its logic, not its privileges*) applied one
+  level up — to the AUDIT rather than the function.** A **name** census structurally cannot see a
+  sibling that does the same thing under a different name. **Before declaring a privilege sweep
+  complete, ask "what else can do this?", never "did I finish my list?"**
+- **A `p_dry_run` default is not a mitigation** — an anon caller passes `false`.
+- ⚠️ **And a shape matched by a regex over `pg_get_functiondef` is a hypothesis, not a ranking.**
+  `lcc_apply_cleared_tombstones` was filed as "anon + mutating + dynamic SQL — the MERGE1 shape" and
+  told to lead the triage; read live, its dynamic SQL is over a **hard-coded `VALUES` map of column
+  names**, not a caller-supplied table, so it lacks the property that made MERGE1's helpers severe.
+  **Read the function before ordering the work by a regex's output.**
+- ✅ **The guard that stops NEW instances shipped** — `test/sql-definer-privilege-stanza.test.mjs`
+  (SEC1-definer-default): any migration creating a `SECURITY DEFINER` function must carry a
+  `revoke … from public, anon, authenticated` **and** a `has_function_privilege()` assertion in the
+  same file; 219 pre-existing offenders are allowlisted by path with a stale-entry test, and it is
+  positive-controlled in both directions (the pre-fix MERGE1 shape is flagged; the real MERGE1-sec
+  fix is recognised). ⚠️ **Its literal-blanking is scoped to definer DETECTION only** — the
+  production revokes are built with `execute format(...)` and live inside string literals, so
+  blanking literals for the stanza check would blind the guard to every real fix in the repo.
+  **OCR1c's strip-comments-then-blank-literals rule is PER-ASSERTION; where the deliverable IS a
+  constructed string, blanking is the bug.**
 
 ### ⚠️ A COLLISION HANDLER THAT *DELETES* MAKES THE SURROUNDING REVERSIBILITY A LIE (GOVDUP1-b, 2026-09-05)
-
-✅ **FIXED 2026-09-05 (MERGE1)** — both `dia_merge_property` and `gov_merge_property_apply` now
-consult a per-table `{dia,gov}_merge_child_policy` on `unique_violation` (`re_derivable` /
-`fold_fill_blanks` / `resolve_status`, defaulting an unclassified table to `fold_fill_blanks`
-rather than a blind delete). All four measured dia collision tables and all three measured gov
-collision tables are classified; verified live via rolled-back positive controls on both domains
-(fold fills the keep row's blanks from the drop row, never loses either side). **Read this section
-below for the mechanism — it is accurate history — but the defect it describes is closed.**
-`docs/audits/MERGE1_PROPERTY_MERGE_COLLISION_FOLD.md`; guard `test/merge1-fold-on-collision.test.mjs`
-(8/8 pass). The 205 historical dia losses are NOT backfilled — they are gone, recorded as a number
-and a date. `gov_property_merge_backup` remains 0 rows; this migration merged nothing on either domain.
 
 ✅ **FIXED 2026-09-05 (MERGE1)** — both `dia_merge_property` and `gov_merge_property_apply` now
 consult a per-table `{dia,gov}_merge_child_policy` on `unique_violation` (`re_derivable` /

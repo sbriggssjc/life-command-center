@@ -16,6 +16,71 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-05 — SEC1-definer-default SHIPPED (the guard exists now) · live census supplied · 🚨 the property-merge family is only HALF locked
+
+**PR #2133.** `test/sql-definer-privilege-stanza.test.mjs`, **13/13 pass**, full suite 4,976 pass /
+0 fail. It scans every `.sql` under `supabase/migrations/**` for a `SECURITY DEFINER` function and
+requires, **in the same file**, a `revoke … from public, anon, authenticated` **and** a
+`has_function_privilege(` assertion. **220 definer-creating migrations, 219 on a path-keyed
+allowlist** (verified: 219 entries, 219 unique, 219 resolve on disk) with a stale-entry test that
+fails if an entry's file is gone, no longer creates a definer function, or now *has* the stanza —
+so the list cannot rot into a lie.
+
+✅ **It is positive-controlled in BOTH directions, which is stronger than the mutation pass I asked
+for and did not get:** one test asserts the **pre-fix MERGE1 shape is flagged**, another asserts the
+**real MERGE1-sec follow-up migrations satisfy the stanza** — so it is known to fire *and* known to
+recognise a genuine fix. It also pins `revoke from public+anon` alone (missing `authenticated`) as
+**not** satisfying the stanza — the B6d/OCR2 mechanism encoded as a test rather than prose.
+`compute_feed_freshness` / `compute_feed_cadence` are named exemptions with the reason in the file.
+
+⚠️ **My sizing in the filing prompt was wrong, and CC's is right: 220 / 219, not 236 / 154.** My
+grep asked whether a `revoke` appeared **anywhere in the file** — so a migration revoking on a
+*table* scored as compliant for a *function* stanza it does not have. Scoped properly the repo reads
+**233 of 236 lacking**; CC's 220 is lower still because its detector is quote- and comment-aware and
+excludes `SECURITY DEFINER` occurring inside comments or string literals. **A grep for "is the fix
+present" that does not check what the fix is attached to will always report the reassuring
+number** — the same class this very prompt warned CC about, committed in the prompt itself.
+
+✅ **CC caught a real bug mid-build and the refinement is worth keeping.** The repo's standing rule
+is *strip comments, then blank string literals* (OCR1c). Applied naively here it broke twice: English
+prose inside a SQL string literal desynced quote-tracking, and — the subtle half — **blanking
+literals for the STANZA check would blind the guard to every real fix in this repo, because the
+production revokes are built with `execute format(...)` and therefore live inside string literals.**
+Resolved with a quote/comment-aware state machine, with literal-blanking scoped to *definer
+detection only*. **The OCR1c rule is not "blank literals everywhere" — it is per-assertion, and
+where the deliverable IS a constructed string, blanking is the bug.**
+
+### The live census the triage doc asked for — supplied from Cowork
+
+CC had no Supabase access and said so plainly. Measured:
+
+| project | definer fns | anon-executable | …mutating | …dynamic SQL |
+|---|---:|---:|---:|---:|
+| LCC Opps | 196 | **89** | **62** | 1 |
+| dia | 79 | 13 | **9** | 0 |
+| gov | 54 | 9 | **7** | 0 |
+
+All prior lockdowns spot-checked and holding: the four MERGE1 fold helpers, `gov_merge_property_apply`,
+and the three ENTC unmerge functions are `service_role`-only; `compute_feed_freshness` stays anon by
+design.
+
+🚨 **The finding: SEC1-property locked the merge functions it NAMED, and the same capability is still
+anon-executable under other names.** `dia_consolidate_property_reviewed(p_keep_id, p_drop_id, …)` is
+a keep/drop property merge — **exactly what SEC1-property locked** — plus
+`dia_reverse_property_consolidation`, `dia_merge_twins`, `p31_property_consolidation_apply` and
+`p31_same_event_sales_apply` (**both domains**), and `gov_truncate_sam_public_staging`.
+⚠️ **This is the ADDR1b lesson one level up: it applies to the AUDIT, not just the function.**
+*"Porting a function carries its logic, not its privileges"* — and enumerating **by name** cannot
+find a sibling that does the same thing under a different one. **Before calling a privilege sweep
+complete, ask what else can do this, not whether the list was finished.** → **SEC1-merge-family**.
+
+⚠️ **Correction to my own prompt:** I called `lcc_apply_cleared_tombstones` *"the MERGE1 shape"* and
+told the next unit to start there. Read live, its dynamic SQL is over a **hard-coded `VALUES` map of
+column names**, not a caller-supplied table, and it defaults to `p_dry_run => true`. It still mutates
+mirror columns when called with `false`, so it stays on the list — but **below** the merge family.
+*A shape matched by a regex over `pg_get_functiondef` is a hypothesis; read the function before
+ranking it.*
+
 ## 2026-09-05 — MERGE1 SHIPPED (fold-on-collision, both domains) · and its own migration shipped 4 ANON-EXECUTABLE destructive definer functions, found and fixed the same day
 
 **Verified live (PR #2130, commit `344d360e`).** `{dia,gov}_merge_child_policy` seeded from the

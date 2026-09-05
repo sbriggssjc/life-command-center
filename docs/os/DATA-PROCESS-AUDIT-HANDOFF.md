@@ -186,6 +186,14 @@ that fires `gov_classify_agency()`; do not read it as broken.
      own migration shipped four anon-executable destructive definer helpers; fixed same-day and
      filed as `SEC1-definer-default`, which now leads the SEC1 work** because the rule has been
      re-learned four times in a week and nothing enforces it. Residue: `MERGE1-resolve-status`.
+     ✅ **`SEC1-definer-default` SHIPPED too (PR #2133)** — `test/sql-definer-privilege-stanza.test.mjs`,
+     13/13, 219 pre-existing migrations allowlisted by path with a stale-entry test, positive-controlled
+     in **both** directions. **New instances of the class are now caught at test time.**
+     🚨 **The live census it could not run (no Supabase in that sandbox) is now in the audit doc, and it
+     found the sweep is only HALF done: `dia_consolidate_property_reviewed(p_keep_id, p_drop_id, …)` is
+     the same keep/drop merge SEC1-property locked, still anon-executable**, with
+     `dia_reverse_property_consolidation`, `dia_merge_twins`, `p31_property_consolidation_apply` and
+     `p31_same_event_sales_apply` (both domains) beside it. → **`SEC1-merge-family` is the next unit.**
      Original filing: (was `GOVDUP1-b`, widened) gov: `gov_merge_property_apply`'s generic
      `WHEN unique_violation` arm **DELETEs** while the wrapper snapshots child *ids*, and
      `investment_scores` is UNIQUE on `property_id` **alone** — so **397 of 397 lane groups
