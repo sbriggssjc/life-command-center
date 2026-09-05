@@ -89,6 +89,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       const pageUrl = window.location.href;
       const sourcePropertyKey = window.LccPropertyIdentity?.propertyIdentityKey(pageUrl) || null;
       const tenants = extractTenants(getPageLines());
+      mergeTenants(tenants, extractStructuredTenantGrid());
       respond({
         ok: true,
         page_url: pageUrl,
@@ -3000,6 +3001,21 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       return true;
     });
     return cleaned;
+  }
+
+  function extractStructuredTenantGrid() {
+    const tenants = [];
+    const containers = document.querySelectorAll('table, [role="table"], [role="grid"]');
+    for (const container of containers) {
+      const rowElements = Array.from(container.querySelectorAll('tr, [role="row"]'))
+        .filter((row) => row.closest('table, [role="table"], [role="grid"]') === container);
+      const rows = rowElements.map((row) => Array.from(row.querySelectorAll(
+        ':scope > th, :scope > td, :scope > [role="columnheader"], :scope > [role="gridcell"], :scope > [role="cell"]',
+      )).map((cell) => cell.textContent?.trim() || ''));
+      const parsed = window.LccPropertyIdentity?.tenantRosterFromGridRows(rows) || [];
+      mergeTenants(tenants, parsed);
+    }
+    return tenants;
   }
 
   function parseTenantSection(lines, startIdx, tenants) {
