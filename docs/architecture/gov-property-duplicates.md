@@ -98,6 +98,180 @@ is one UPDATE keyed on the batch tag (commented in the migration).
 > instead of opening the payload. **A child row written in the same second as its parent, 1:1, is a
 > co-writer, not a downstream consumer** — read it before classifying it. Follow-up: **GOVDUP1-a**.
 
+> ## ✅ GOVDUP1-a (2026-09-05) — THE WRITER IS NAMED, AND IT IS A DEPLOYED EDGE FUNCTION THIS REPO DOES NOT CONTAIN
+>
+> **`intake-salesforce`, deployed version 23 (`PAYLOAD_VERSION "sf-2026-05-v8"`), on the
+> *Dialysis_DB* project `zqzrriwuavgrquhisnoa`** — not on gov, not on LCC Opps.
+> Path: `handleCrawlComplete` / `handleLinkAll` → `linkProbe(autoCreate = true)` →
+> **`autoCreateProperty()`** (a bare `POST` to gov `/rest/v1/properties`) →
+> **`logPendingUpdate()`** (the `_new_property` advisory, verbatim reason string and all).
+>
+> **Why three investigations missed it, and it is not the reason anyone assumed.** The
+> committed source in this repo — `supabase/functions/intake-salesforce/index.ts`,
+> `PAYLOAD_VERSION "sf-2026-05-v1"` — **contains no auto-create path at all**: zero
+> occurrences of `autoCreateProperty`, zero of `auto_create`, and a header stating that it
+> "never writes a domain table — promotion is the sf-promotion-worker's job." That sentence
+> is **true of the file and false of the deployment.** GOVDUP1 read the file, correctly
+> concluded *"it has no INSERT path into `gov.properties`"*, and was reasoning about a
+> different program. **P194 exactly** — the deployed artifact is the writer and the repo is
+> not a record of it. The `data_source`-keyed hunt was a second, independent miss; but even a
+> perfect `data_source` search would have failed, because the producer sets **no**
+> `data_source` (`buildPropertyInsert` sends address/city/state/zip/year_built/rba/agency/
+> county and nothing else), so R17's `gov_stamp_data_source_guard()` labels it
+> `unknown_writer` — and any row a later writer touches wears *that* writer's label instead
+> (which is why 39064 reads `costar_sidebar`).
+>
+> **The tell that found it, for next time: the batch id.** `sf_property_staging.import_batch`
+> reads `crawl_2026-09-05T17:39:46.**3560121**Z` — **seven** fractional digits. Node's
+> `toISOString()` emits three; seven is .NET/Power Automate `utcNow()`. That put the transport
+> at a PA flow and the receiver at an edge function, which is where it was.
+>
+> ### The defect: the existing dedupe key guarantees a fresh mint every hour
+>
+> ```
+> uq_sf_property_staging_dedup = (sf_property_id, source_system, import_batch)
+> ```
+>
+> `import_batch` changes on **every hourly crawl**, so the staging upsert can never collide
+> across runs. Each hour the same Salesforce property lands as a NEW staging row with
+> `linked_property_id NULL`; `linkProbe` selects exactly on `linked_property_id=is.null`; the
+> address probe fails (the address is what varies); `autoCreateProperty` mints another gov
+> property. **The brief's line "a `staging_id`-keyed dedupe is what it already has and is
+> precisely the defect" is confirmed at the index level.**
+>
+> ### The fix (migration `20260905130000_gov_govdup1a_sf_property_identity_dedupe.sql`)
+>
+> A dedupe keyed on **`sf_property_id`**, held in the DATABASE, evaluated **BEFORE INSERT on
+> `sf_property_staging`** — strictly ahead of the mint. `gov_sf_property_identity`
+> (`sf_property_id` PK → canonical `property_id`, backfilled to **125 rows** from the 808
+> advisories, preferring a live property then the earliest mint) is consulted by
+> `trg_gov_sf_staging_identity_dedupe`, which pre-fills `linked_property_id` so the row fails
+> the writer's own selection. Two recorders keep the map current
+> (`sf_property_staging.linked_property_id`, and the `_new_property` advisory as a
+> belt-and-braces path for when the staging PATCH fails — the deployed code counts that as
+> `patch_failed` and carries on).
+>
+> **Why not the brief's preferred option 1 (a unique index on the identity).** It was
+> measured and is **unavailable**: `gov.properties` carries **no SF identity column** (the
+> only `sf`-matching columns are `sf_leased`, `gross_rent_psf`, `noi_psf`, `in_sfha`), and the
+> auto-create INSERT sends nothing that identifies Salesforce. *A unique index on a column no
+> writer populates is inert.* Populating it means changing the writer — a drifted deployment
+> whose source is not in this repo, so deploying `main` over it would **delete** the
+> auto-create feature and every other unmerged v2→v8 change. **Why the DB and not the
+> caller:** P177 — a trigger also covers the PA flow, a SQL writer and the next producer, and
+> cannot be bypassed. That property is the whole point here, given the writer was invisible to
+> every repo grep for four months.
+>
+> **Positive-controlled in both directions, rolled back, 0 residue:** a *known*
+> `sf_property_id` arriving in a fresh crawl batch is pre-linked to property 39201 with
+> `match_method='sf_identity_dedupe'`; a *never-seen* `sf_property_id` is left `NULL` and is
+> still free to mint once (a dedupe that blocked first mints would be a worse defect);
+> `properties` count 20,495 → 20,495.
+>
+> ### Sizing, re-measured 2026-09-05
+>
+> | | briefed | measured |
+> |---|---:|---:|
+> | `_new_property` advisories | 808 | **808** ✅ |
+> | distinct `sf_property_id` | 125 | **125** ✅ |
+> | still `pending` | 220 | **220** ✅ |
+> | created in last 30 days / newest | 15 / 2026-08-26 | **15 / 2026-08-26** ✅ |
+> | SF properties fanned out → rows | 53 → 736 | **53 → 736** ✅ |
+> | of those, still LIVE | 8 | **6** ⚠️ |
+>
+> ⚠️ **The live count is 6, not 8** — reported as measured. Everything else reproduces exactly.
+>
+> ### Unit 3 — the live rows, dispositioned PER ROW (`20260905140000`)
+>
+> **"Retire them the GOVDUP1 way" is wrong for four of the six.** Reading them first is the
+> whole of this unit:
+>
+> | pid | address | data_source | other LIVE row at same address | disposition |
+> |---|---|---|---|---|
+> | 36822 | 17925 SE Division St, Portland OR | `unknown_writer` | **11316** (`costar_sidebar`) | **retire** |
+> | 36823 | 12819 Country Pl Dr, Country Club MO | `unknown_writer` | **8216** (`excel_master`, curated) | **retire** |
+> | 39128 | 700 Technology Dr, South Charleston WV | `unknown_writer` | **39064** (the pair) | **retire** |
+> | 39064 | 700 technology dr, Charleston WV | `costar_sidebar` | 39128 | **keep** (survivor) |
+> | 22102 | 50 Commerce Way, East Aurora NY | `gov_master_backfill_r71_anchored` | **none** | **no action** |
+> | 18945 | 41810 N Venture Dr B, Phoenix AZ | `gov_master_backfill_r71_anchored` | **none** | **no action** |
+>
+> **22102 and 18945 are not this producer's mints.** They were created 2026-05-17 12:28/12:29,
+> ~20 minutes *before* the oldest advisory (12:48); they carry the *anchored* label the June
+> cleanup deliberately kept; and every one of their ~120 same-address siblings already reads
+> `junk_backfill_archived_2026-06-09`. **They are the sole live gov row at their address** —
+> archiving them would delete the only record of the property and silently reverse a decision
+> somebody already made. Their advisory was logged against an already-linked property, not a
+> fresh insert. *This is why the brief said "read them first."*
+>
+> **39064/39128 is RETIRED, not merged — a deliberate deviation from the brief.** MERGE1 did
+> make the merge safe, but measured, the pair carries **0 leases, 0 sales, 0 documents, 0
+> financials and exactly one `investment_scores` row each** — and `investment_scores` is
+> classified `re_derivable` by `gov_merge_child_policy`, so a merge would **delete** the drop
+> row's score and repoint nothing else. A merge buys nothing over a status flip here, while
+> `gov_merge_property_apply` is a hard-DELETE whose reversal is a partial restore. A status
+> flip is strictly more reversible for identical effect. 39064 survives: earlier (08-24 vs
+> 08-25) and carrying a second system's provenance stamp.
+>
+> ### GOVDUP1-c — the 154 orphaned advisories, and what could re-activate a retired property
+>
+> **Resolved: 157** (`status='auto_resolved'`, `resolved_by='govdup1a:archived_parent_20260905'`,
+> `resolution_notes` naming the retire batch that archived each parent) — the 154 from
+> GOVDUP1's husk retire plus this unit's 3. Nothing deleted; reversal is one UPDATE keyed on
+> `resolved_by`.
+>
+> **The reason nothing ever cleared them, and it is the standing auto-retire question (P182).**
+> `expire_orphan_pending_updates()` resolved a `properties` advisory only
+> `where not exists (select 1 from properties where property_id::text = pu.record_id)` — i.e.
+> only when the property row is **gone**. GOVDUP1's retire **archived** the parent; the row
+> still exists, so the sweep could never fire. *What event sets this state false, and does
+> anything ever fire it?* Now something does: a fourth arm resolves an advisory whose parent
+> exists and is `archived`, reported separately as `properties_archived_parent` (never folded
+> into the existing count). **Measured before widening: the archived-parent population is 154
+> rows and 100 % `field_name='_new_property'` — no other lane is swept in.**
+>
+> **Can a `pending_update` re-activate an archived gov property? No — established
+> structurally, not assumed.** Only five gov functions reference `pending_updates`. The only
+> one that touches `properties` is **`gov_create_property_from_pending`**, and it is scoped
+> `where table_name='sales_transactions' and field_name='property_id' and status='pending'` —
+> it **cannot** select a `_new_property` row on either predicate. It **INSERTs** a new property
+> (`status` defaulting to `'active'`); it contains **no UPDATE of `properties.status`
+> whatsoever**, so it cannot un-archive anything. The other three are sale/GSA link resolvers.
+> The retired husks stay retired.
+>
+> ### Verify on
+>
+> - **`select count(*) from v_gov_sf_property_fanout where gov_rows_live > 1` = 0** (was 1).
+>   Read `gov_rows_live`, **never** `gov_rows_minted` — the 808 historical mints are history,
+>   not a backlog.
+> - **`count(*) from pending_updates where field_name='_new_property' and created_at > <today>`
+>   staying flat.** That is the producer being fixed, and it is the only number that proves it.
+>   ⚠️ It is also the one thing this unit **cannot yet show**: the fix shipped 2026-09-05 and
+>   the next crawl fires hourly at :39. First real confirmation is the next 24 h of that count.
+> - Lane, predicted then reconciled **exactly**: `exact` **130 → 127** groups / **263 → 257**
+>   properties (the three retires, each a 2-member `exact` group); `punctuation_only`
+>   **unchanged at 267 / 534** — the control.
+> - Advisories against an archived parent: **154 → 0**.
+> - Guard `test/govdup1a-sf-property-dedupe.test.mjs`: **12 tests, 12/12 mutations RED, 0
+>   survivors** (a real mutation pass, not spot checks — contrast GOVDUP1's own note below).
+>   Two guard defects were found *by that pass, not by reading*: a bare `/staging_id/` matched
+>   the dedupe function's **own name** (`gov_sf_staging_identity_dedupe` contains "staging_id"),
+>   and an `insert into public.gov_property_dup_retire_log` prefix match survived renaming the
+>   table to `..._DISABLED`.
+>
+> ### Still open
+>
+> - **The repo↔deployment drift itself is not closed.** This unit added a prominent header
+>   warning to `supabase/functions/intake-salesforce/index.ts` (guarded, so it cannot silently
+>   rot) but did **not** sync the ~400 lines of drifted TypeScript, which cannot be tested
+>   here and would be an unreviewed change to a live ingest path. Filed as **GOVDUP1-a-drift**.
+> - **`sf_comp_staging` / `sf_listing_staging` / `sf_deal_staging` are unexamined** for the
+>   same fan-out shape. `linkProbe`'s `autoCreate` is gated `objectKey === 'property'`, so
+>   they cannot auto-create *properties* — but their own dedupe keys carry `import_batch`
+>   identically. Filed as **GOVDUP1-a-siblings**.
+> - **dia is unexamined.** The same deployed function serves the `dia` vertical with its own
+>   `autoCreateProperty` branch (writing `pending_updates` with `status='needs_match'`). The
+>   hazard travels with the technique. Filed as **GOVDUP1-a-dia**.
+
 **Producer: NOT FOUND, and here is what was ruled out.** The husks all insert with `data_source`
 NULL/blank, which is caught downstream by `trg_gov_zz_stamp_data_source` (`gov_stamp_data_source_guard()`,
 R17, 2026-06-09) and re-labelled `unknown_writer` — the guard fires, but it only tells you the
