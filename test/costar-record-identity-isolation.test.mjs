@@ -148,7 +148,7 @@ test('all three runtime layers enforce the shared record boundary', () => {
     entry.matches.some((match) => match.includes('costar.com'))
   );
   assert.equal(costarScript.js[0], 'shared/property-identity.js');
-  assert.equal(manifest.version, '1.0.50');
+  assert.equal(manifest.version, '1.0.51');
 
   const content = readFileSync(join(ROOT, 'extension/content/costar.js'), 'utf8');
   const background = readFileSync(join(ROOT, 'extension/background.js'), 'utf8');
@@ -167,6 +167,7 @@ test('all three runtime layers enforce the shared record boundary', () => {
   assert.match(sidepanel, /mergeFreshTenantRoster\(ctx, fresh, activeUrl\)/);
   assert.match(sidepanel, /freshTenantFrameTarget\(ctx, tabId\)/);
   assert.match(sidepanel, /frameId: target\.frameId/);
+  assert.match(sidepanel, /formatAscIdentityDiagnostics\(capture\.data\?\.identity_diagnostics\)/);
   assert.match(
     sidepanel,
     /costar_property_id: domain === 'costar'[\s\S]*LccPropertyIdentity\.costarPropertyId\(liveCtx\.page_url\)/,

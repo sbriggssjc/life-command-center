@@ -6,6 +6,7 @@ import {
   ASC_RESEARCH_SAMPLE_SIZE,
   assertAscResearchImport,
   buildAscStructuredCapture,
+  diagnoseAscIdentityMatch,
   normalizeAscAddressToken,
 } from '../api/_shared/asc-research-lane.js';
 
@@ -609,6 +610,7 @@ test('approved operating identity aliases bind an exact CoStar record inside a b
     parcel_number: '4343-022-029',
     authorized_by: 'research_owner',
     authorized_at: '2026-09-03T12:00:00Z',
+    second_review_required: true,
     evidence_citations: [
       { source: 'official_operator', url: 'https://operator.example/436-surgery-center' },
       { source: 'official_operator', url: 'https://facility.example/about-436' },
@@ -648,6 +650,26 @@ test('approved operating identity aliases bind an exact CoStar record inside a b
   assert.equal(built.identity_match.costar_property_id, '251984');
   assert.equal(built.identity_match.parcel_number, '4343-022-029');
   assert.equal(built.identity_match.second_review_required, true);
+
+  const diagnostics = diagnoseAscIdentityMatch(target, context);
+  assert.equal(diagnostics.tenant_count, 2);
+  assert.deepEqual(diagnostics.checks, {
+    approved_alias_found: true,
+    captured_address_matches_alias: true,
+    frozen_number_inside_captured_range: true,
+    costar_source: true,
+    costar_property_id_matches: true,
+    parcel_number_matches: true,
+    approved_operating_tenant_observed: true,
+    two_independent_official_hosts: true,
+    authorization_metadata_present: true,
+    second_review_required: true,
+  });
+  assert.equal(
+    diagnoseAscIdentityMatch(target, { ...context, tenants: [{ name: 'Unrelated Surgery Center' }] })
+      .checks.approved_operating_tenant_observed,
+    false,
+  );
 
   const blockedContexts = [
     { ...context, address: '428-434 N Bedford Dr' },
