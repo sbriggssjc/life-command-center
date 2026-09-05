@@ -2,6 +2,37 @@
 // intake-salesforce — Salesforce object intake for the SF -> LCC bridge
 // Life Command Center
 //
+// 🚨 THIS FILE IS **NOT** WHAT RUNS. DO NOT REASON ABOUT THE PIPELINE FROM IT
+//    WITHOUT CHECKING THE DEPLOYED VERSION FIRST (GOVDUP1-a, 2026-09-05).
+//
+//    Committed here:  PAYLOAD_VERSION "sf-2026-05-v1"
+//    Deployed:        version 23, PAYLOAD_VERSION "sf-2026-05-v8", on the
+//                     **Dialysis_DB** project (zqzrriwuavgrquhisnoa) — not on
+//                     LCC Opps, and not on gov.
+//
+//    The deployed v8 carries an entire feature this file does not: an
+//    auto-create path. `linkProbe(autoCreate=true)` -> `autoCreateProperty()`
+//    POSTs a NEW row into the domain `properties` table when the address probe
+//    finds no match, then `logPendingUpdate()` writes the '_new_property'
+//    advisory. It also adds ?action=link-all, ?action=backfill-pending-updates,
+//    a `scope`/`auto_create`/`limit` query surface on crawl-complete, silent-
+//    failure auditing, and a three-state routeVertical() that can return null.
+//    NONE of that is in this file. The sentence below — "it never writes a
+//    domain table" — is true of THIS source and false of the deployment.
+//
+//    That gap minted 808 gov properties from 125 Salesforce properties (53 of
+//    them fanning out into 736 rows) and survived three cleanups, because each
+//    investigation read this file, correctly concluded "no INSERT path into
+//    gov.properties", and was reasoning about a different program. The dedupe
+//    that stops it is DB-side and writer-agnostic for exactly that reason:
+//    supabase/migrations/government/20260905130000_gov_govdup1a_sf_property_identity_dedupe.sql
+//    Canonical: docs/architecture/gov-property-duplicates.md §GOVDUP1-a.
+//
+//    Before editing or redeploying this file, diff it against the deployed
+//    source (Supabase MCP `get_edge_function`, project zqzrriwuavgrquhisnoa,
+//    slug intake-salesforce). Deploying this file AS-IS would delete the
+//    auto-create path and every other v2..v8 change.
+//
 // The front door Power Automate's "SF -> LCC: Object Sync" flow POSTs to.
 // Transport (Power Automate) -> brain (this function): validate, dedup, route
 // per vertical, stage. It never writes a domain table — promotion is the
