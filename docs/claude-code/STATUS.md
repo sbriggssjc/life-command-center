@@ -18,6 +18,92 @@
 
 ## 2026-09-05 — SEC1-property SHIPPED (all 4 locked, migrations committed on both domains) · 🚨 the CMBS Loan-tab capture produced NOTHING — the arm is confirmed unreachable, not merely uncaptured · GOVDUP1 drafted, and it REPLACES the planned ADDR1c-twin-lane.
 
+### GOVDUP1 SHIPPED — and the verification found the producer CC could not, plus a merge that cannot be reversed
+
+**Verified live 2026-09-05:** 154 husks archived (`status='archived'`, never deleted) and logged
+row-by-row in `gov_property_dup_retire_log` (154 rows, reversible by batch tag) ·
+`v_gov_property_duplicate_review` **397 groups / 797 properties** = exact **130 / 263** +
+punctuation_only **267 / 534** · `gov_property_merge_backup` **0 — nothing merged anywhere** ·
+three zip states kept genuinely distinct (`zip_agrees` **138** / `zip_differs` **24** /
+`zip_not_comparable` **235**). All as reported. LCC PR #2127, government-lease PR #397.
+
+**CC's own mid-unit self-correction was right and my prompt was wrong:** I wrote that the 154 husks
+were pure (0 owners/leases/sales/documents) having checked four tables. Each husk carries **1
+`investment_scores` row and 1 `pending_updates` row** — and `investment_scores` has **no declared
+FK**, so enumerating FKs would not have found it either. ⚠️ **This is P160's lesson recurring:
+declared FKs are not references; match on the column NAME as well.**
+
+🚨 **CORRECTION 1 — the producer IS identified, and it names itself in the child row CC discovered.**
+CC recorded "producer NOT FOUND" after correctly ruling out the SF promotion worker, the CoStar
+sidebar and `auto_apply_property_links.py`. But all 154 `pending_updates` rows read
+`field_name='_new_property'`, `reason='Salesforce auto-created property — verify accuracy and check
+for duplicates'`, and carry **one shared `sf_property_id = a068W00000FbBqwQAF`** with `sf_zip='5701'`
+and `sf_state=null` — the husk's exact values, with a different `staging_id` each time. **A
+Salesforce auto-create path mints one gov property per staging row and does not dedupe on
+`sf_property_id`.**
+
+- **Class-wide: 808 gov properties from 125 distinct SF properties.** 53 SF properties fanned out
+  into **736** rows; **8 still live**, newest **2026-08-25** — 11 days before this unit ran.
+- **It was already cleaned once, in June** (`junk_backfill_archived_2026-06-09` archived the
+  2026-05-17 batch) **and recurred.** P176 exactly, and GOVDUP1 just repeated the one-shot.
+- ⚠️ **Why the search missed it: the hunt was keyed on `data_source`, and this producer wears more
+  than one label.** Property 39064 (`700 technology dr`, Charleston WV, **`costar_sidebar`**, 08-24)
+  and 39128 (`700 Technology Dr`, South Charleston WV, **`unknown_writer`**, 08-25) are the same SF
+  property minted twice a day apart under two different sources — **and that pair is in the review
+  lane right now.** So Unit 1's husks and Unit 2's duplicate pairs are **two symptoms of one
+  producer**. The invariant is `field_name='_new_property'` + `sf_property_id`, never `data_source`.
+- **The durable rule: a child row written 1:1 with its parent is a CO-WRITER, not a downstream
+  consumer.** CC found the rows and classified them without opening the payload. → **GOVDUP1-a**.
+
+🚨 **CORRECTION 2 — no pair in this lane round-trips cleanly, and it is provable from the indexes.**
+CC's Unit 3 probe found `investment_scores` 1, `property_embeddings` 1, `property_financials` 14
+rows destroyed on one pair, and concluded *"a pair with disjoint child rows may round-trip
+cleanly."* Measured across all 397 groups against the actual unique constraints:
+
+| table | unique constraint | groups colliding (of 397) | rows destroyed |
+|---|---|---:|---:|
+| `investment_scores` | UNIQUE **on `property_id` alone** | **397 — every group** | 400 |
+| `property_embeddings` | PK **on `property_id`** | 334 | 336 |
+| `property_financials` | UNIQUE `(property_id, fiscal_year)` | 316 | 585 |
+
+Merging the lane as it stands destroys **~1,321 child rows permanently**. ⚠️ **A collision handler
+that DELETEs makes the surrounding reversibility a lie** — the wrapper snapshots child *ids*, while
+`gov_merge_property_apply`'s `WHEN unique_violation` arm runs `DELETE`, so the id in the backup
+points at nothing. `gov_unmerge_property` is *honest* about it (`_lost` per table plus a `note`) and
+honesty is not sufficiency. **This is P196 one layer down** — there `lcc_merge_entity`'s pivot DELETE
+destroyed content instead of folding it; here the same shape sits in the generic handler serving
+*every* gov child table. **The fix is to FOLD on collision, and it blocks any batch merge.**
+→ **GOVDUP1-b**.
+
+**Three smaller residues:** `verdict_hint` is a pure synonym for `address_match` (267/267 `merge`,
+130/130 `review` — it reads no other signal, and says `merge` on 10 groups whose zips disagree) →
+**GOVDUP1-d** · 154 `pending_updates` still `pending` against archived properties, nothing clears
+them → **GOVDUP1-c** · **94 LIVE properties carry a `.0`-suffixed zip** (`95492.0`), the same
+numeric-coercion fingerprint as `'5701'`, one of them inside this lane → **GOVDUP1-e**. Guard is
+9/9 pass with **3 assertions spot-mutated, not 9** → **GOVDUP1-guard**.
+
+Canonical page: `docs/architecture/gov-property-duplicates.md` (both corrections recorded in place).
+
+🚨 **AND CORRECTION 2 IS LIVE ON dia, WHERE IT HAS ALREADY RUN 205 TIMES.** Checking whether the fix
+should be ported found `dia_property_merge_backup` holds **585 merges, 206 with a collision, 205 of
+those on a CASCADE table** — and **`dc_twin_verdict`, the human-verdict Decision Center twin lane,
+collides on 90 of 116 (78%)**. An operator confirming a twin destroys a child row four times in five
+while the surface tells them the merge is reversible.
+
+- ⚠️ **The two domains lose the row by different routes, so a grep for one finds nothing on the
+  other.** gov `DELETE`s explicitly and records `*_deleted_on_collision`; **dia records
+  `<tbl>.<col>_error`, moves on, and the row dies to `ON DELETE CASCADE`** when the property is
+  deleted afterwards (`confdeltype='c'` on `cap_rate_history`, `property_metadata_backfill_queue`
+  and one `property_embeddings` FK). **Keying on gov's vocabulary undercounted dia at 76** before
+  re-keying on `%\_error` gave 206 — my own measurement, caught in the same session.
+- ✅ **The one merge I directed came out fine, and saying so precisely matters.**
+  `addr1a_20260904` (37503 → 38953) collided only on **`pending_updates`, a queue row** — all 7
+  leases, the deed record, the listing and the document repointed correctly. **"205 merges lost
+  data" overstates that row and understates a `cap_rate_history` loss**, so the census must split
+  substantive from queue/derived.
+- Filed as **MERGE1** (prompt written), which supersedes GOVDUP1-b and puts **dia first because it
+  is live**. Fix = FOLD per table with a stated re-derivable / substantive / queue policy.
+
 ### GOVDUP1 — sizing the gov "twin lane" refuted the plan to port dia's
 
 Measured before drafting, and **three of the plan's premises are wrong**:

@@ -66,6 +66,38 @@ Batch tag `govdup1_classA_husk_retire_20260905`, logged row-by-row in
 `gov_property_dup_retire_log` (property_id, prior_status, reason, batch_tag, created_at). Reversal
 is one UPDATE keyed on the batch tag (commented in the migration).
 
+> 🚨 **SUPERSEDED 2026-09-05 (Cowork verification): THE PRODUCER *IS* FOUND, and it names itself in
+> the very child row this unit discovered.** All 154 `pending_updates` rows carry
+> `field_name='_new_property'`, `reason=`**`'Salesforce auto-created property — verify accuracy and
+> check for duplicates'`**, and a `source_context` holding **one shared
+> `sf_property_id = a068W00000FbBqwQAF`** ("GSA-Anchored Multi-Tenant Office - Rutland - Vermont"),
+> `sf_zip = '5701'`, `sf_state = null` — the husk's exact field values, with a *different*
+> `staging_id` on each row. **A Salesforce auto-create path mints a gov property per staging row and
+> does not dedupe on `sf_property_id`.**
+>
+> **Class-wide: 808 gov properties minted from 125 distinct Salesforce properties.** 53 of those SF
+> properties fanned out into **736** gov rows; 728 are now archived (the 2026-05-17 batch by
+> `junk_backfill_archived_2026-06-09`, plus this unit's 154), **8 are still live**, newest
+> **2026-08-25** — so the producer fired 11 days before this unit ran. **This exact defect was
+> already cleaned once, in June, and recurred** (P176: *a one-shot repair of a recurring producer is
+> a chore you repeat silently forever* — and GOVDUP1 just repeated it).
+>
+> ⚠️ **Why the search missed it: the hunt was keyed on `data_source`, and this producer does not
+> wear one label.** Property 39064 (`700 technology dr`, Charleston WV, `costar_sidebar`, 08-24) and
+> 39128 (`700 Technology Dr`, South Charleston WV, `unknown_writer`, 08-25) are **the same
+> Salesforce property minted twice, one day apart, under two different `data_source` values** — and
+> that pair **is sitting in this lane's review view right now**. The invariant is
+> `pending_updates.field_name='_new_property'` + `source_context->>'sf_property_id'`, never
+> `data_source`. **This also means Unit 1's husks and Unit 2's duplicate pairs are two symptoms of
+> ONE producer**, and property 36823 ("Country Club" MO), which this unit flagged as "a second
+> candidate husk-mechanism instance," is confirmed as exactly that (`mints = 2`).
+>
+> **The reasoning below was correct about every path it ruled out** — it eliminated the promotion
+> worker, the sidebar and `auto_apply_property_links.py` on sound structural grounds. The miss was
+> reading the `_new_property` rows as *"a downstream matcher proposed something against them"*
+> instead of opening the payload. **A child row written in the same second as its parent, 1:1, is a
+> co-writer, not a downstream consumer** — read it before classifying it. Follow-up: **GOVDUP1-a**.
+
 **Producer: NOT FOUND, and here is what was ruled out.** The husks all insert with `data_source`
 NULL/blank, which is caught downstream by `trg_gov_zz_stamp_data_source` (`gov_stamp_data_source_guard()`,
 R17, 2026-06-09) and re-labelled `unknown_writer` — the guard fires, but it only tells you the
@@ -204,6 +236,32 @@ strength of "the merge is reversible" without first checking whether the specifi
 rows collide** — a pair with disjoint child rows (no `investment_scores`/`property_financials`
 overlap) may round-trip cleanly; this pair did not.
 
+> 🚨 **SUPERSEDED 2026-09-05 (Cowork verification): NO PAIR IN THIS LANE ROUND-TRIPS CLEANLY, AND
+> THAT IS PROVABLE FROM THE INDEXES RATHER THAN PAIR BY PAIR.**
+>
+> | table | unique constraint | groups that collide (of 397) | rows destroyed |
+> |---|---|---:|---:|
+> | `investment_scores` | UNIQUE **on `property_id` alone** | **397 — every group** | 400 |
+> | `property_embeddings` | PK **on `property_id`** | 334 | 336 |
+> | `property_financials` | UNIQUE `(property_id, fiscal_year)` | 316 | 585 |
+>
+> Because `investment_scores` is unique on `property_id` by itself, **any pair where both members
+> carry a score collides by construction** — and a scoring pass has run over the whole population.
+> Merging the lane as it stands destroys **~1,321 child rows, unrecoverably.** So the bound is not
+> *"check each pair first"*; it is **"the merge function must be fixed before any pair is merged."**
+>
+> **⚠️ The durable rule: a collision handler that DELETEs makes the surrounding reversibility a
+> lie.** `gov_merge_property_reversible` snapshots child **ids**; `gov_merge_property_apply`'s
+> `WHEN unique_violation` arm runs `DELETE FROM %s WHERE %I = $1` — so the row is gone and the id in
+> the backup points at nothing. The wrapper is honest (it reports `_lost` per table and says so in
+> its `note`), and honesty is not sufficiency: **the fix is to FOLD on collision — fill-blanks from
+> the drop row into the keep row, then delete — not to document the loss better.** Follow-up:
+> **GOVDUP1-b**, and it blocks any batch merge.
+>
+> This is the P196 finding one layer down. There, `lcc_merge_entity`'s pivot DELETE *destroyed
+> content instead of folding it* and the fix was to fold; here the same shape sits in gov's property
+> merge, in the generic `unique_violation` handler that serves **every** child table at once.
+
 **Nothing was left behind by this probe** — the whole thing ran inside one transaction that ended in
 `ROLLBACK`. Confirmed: `gov_property_merge_backup` reads **0 rows** live, and the 154 archived
 husks are untouched by anything in Unit 3.
@@ -220,6 +278,26 @@ husks are untouched by anything in Unit 3.
   `gov_property_dup_retire_log` under batch `govdup1_classA_husk_retire_20260905`.
 - Guard `test/govdup1-property-duplicate-review.test.mjs`: 9/9 pass, 9/9 spot-checked mutations RED
   (address_match inversion, placeholder-ILIKE substitution, zip 4-digit floor removal).
+  ⚠️ **"Spot-checked" is not a full mutation pass** — three assertions were mutated, not nine.
+  Filed as **GOVDUP1-guard** rather than restated as N/N.
+
+### ⚠️ Three residues found by the Cowork verification, none blocking
+
+1. **`verdict_hint` is a synonym for `address_match`, not a judgement.** Measured: every one of the
+   267 `punctuation_only` groups reads `merge` and every one of the 130 `exact` groups reads
+   `review` — it consults neither zip, agency, nor attachment count. It is therefore inert as
+   guidance *and actively misleading on 10 groups where the zips disagree and it still says
+   `merge`* (`1400 Colonial Blvd` Fort Myers 33907 vs 33903; `2795 Alta Mesa Blvd` Fort Worth 76133
+   vs Springtown-Reno 76108 — ~30 miles apart). **A hint that restates a column already on the row
+   adds nothing and overrides the signal it should be tempering.** → **GOVDUP1-d**.
+2. **154 orphaned `pending_updates` rows.** All 154 are still `status='pending'` against
+   now-archived properties, and nothing clears them — the retire flipped the parent and left the
+   queue row. P176/P182: *ask what event sets this state false, and whether anything ever fires it.*
+   → **GOVDUP1-c**.
+3. **94 LIVE properties carry a `.0`-suffixed `zip_code`** (`95492.0`), the same
+   spreadsheet-read-as-a-number fingerprint as the husk's `'5701'`. One is inside this lane
+   (`5770 Sky Lane Blvd`, Windsor CA). The numeric-coercion defect is broader than the husks and is
+   unfiled elsewhere. → **GOVDUP1-e**.
 
 ## Out of scope (deliberately)
 
