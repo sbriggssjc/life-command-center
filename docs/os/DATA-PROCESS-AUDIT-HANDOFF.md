@@ -70,6 +70,9 @@ and the Dialysis test suite had never executed a test in the repo's history — 
   `docs/architecture/costar-sidebar-capture-pipeline.md`** (PR2 · SALE1 · SALE1a · ADDR1 · ADDR1a in
   one arc table, the guards, the live state, and the transferable lessons). Read it before touching
   `extension/content/costar.js` or `sidebar-pipeline.js`.
+- **SEC1-property (2026-09-05)** — all four property merge/unmerge functions locked to `service_role`
+  on both domains, migrations committed; the break-risk disproved by a sibling already living under
+  the constraint. SEC1 re-measured + bucketed (89/13/9), nothing else revoked.
 - **ADDR1b-merge (2026-09-04)** — gov can now merge a property reversibly (FK walk at call time,
   round trip fingerprint-verified, destructive name raises). ⚠️ The rename left the mutator
   anon-executable; closed in Cowork. Residuals: SEC1-property, ADDR1c-twin-lane.
@@ -174,16 +177,13 @@ that fires `gov_classify_agency()`; do not read it as broken.
    Record: `docs/audits/ENTC_JUNK80_AND_P195_UNMERGE_2026-09-03.md`.
    ⚠️ **`SEC1` moved a step**: all three definer *unmerge* functions are now `service_role` only;
    the other 88 anon-executable definer functions are untouched.
-3. 🚨 **`SEC1-property`** — the property merge/unmerge pair is SECURITY DEFINER and
-   **`anon`-executable on BOTH domains** (`dia_merge_property_reversible`, `dia_unmerge_property`,
-   `gov_merge_property_reversible`, `gov_unmerge_property`). ENTC narrowed the three ENTITY unmerge
-   functions to `service_role` on 09-03; the PROPERTY pair never got the same pass. Census PostgREST
-   callers, revoke from **public AND anon AND authenticated**, assert with `has_function_privilege()`.
-   **Prompt drafted: `SEC1-property-narrow-definer-merge-functions.md`** (it also re-measures and
-   BUCKETS the wider SEC1 91-of-195 figure without revoking anything outside the four).
-   Then **`ADDR1c-twin-lane`** — gov twin sizing came back **399 groups / 953 properties**, not small;
-   ADDR1b-merge unblocked it, but **size the PRECISION before building the surface** (co-located ≠
-   twin; gov's version of that risk is two agencies in one federal building).
+3. **`ADDR1c-twin-lane`** — gov twin sizing came back **399 groups / 953 properties**, not small;
+   ADDR1b-merge and SEC1-property both shipped, so the machinery and its privileges are ready.
+   ⚠️ **Size the PRECISION before building the surface** — co-located ≠ twin (dia's lane exists
+   because a Fresenius and a DaVita share a plaza; gov's version is two agencies in one federal
+   building). Human-verdict only, never auto-merge. Then **`SEC1-wider`** — 63 mutating-like
+   anon-executable definer functions on LCC Opps need itemizing before anything is revoked, and
+   `compute_feed_freshness` is deliberately anon on both domains.
 4. **`CONTACT1b`** — CONTACT1a shipped the CREATE path; **the UPDATE path still records nothing**,
    and `salesforce-sync.js`/`sf-list-import.js` carry 0 direct `recordFieldWrites`. **Measure first:
    of `writeEntitySalesforceLink`'s 195 links in 30 days, how many are creates through the choke

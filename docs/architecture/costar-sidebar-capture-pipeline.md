@@ -89,6 +89,12 @@ it should have left alone.
 `deed_says_undisclosed` 33) · gov `ledger_disagreement` **127**, only 4 listing-matched ·
 dia `costar_sidebar` parcel rows **933**, gov **1,527** (both backfilled; forward writer proven on
 dia 09-03 via APN `08H-61-0665`) · `loans.costar_loan_id` **0 of 2,219** on both domains (PR5d).
+🚨 **Corrected 2026-09-05 (PR5d-c): the Loan tab HAS now been captured and still wrote nothing.**
+PR5d concluded case (c) — *the scanner is live and correct, the page has simply never been captured.*
+Scott captured property 3302 and its Loan page on 09-04/05: **0 `loans` rows updated in 24h**, the
+property row untouched, and **7 staged extractions in 30h with not one loan-shaped key.** So it is
+case **(a) the scanner does not fire there, or (b) the payload is dropped before the writer** — not
+a coverage gap. Next input is a screenshot + confirmation the sidebar shows a capture on that tab.
 
 ⚠️ **Corrected 2026-09-04:** an earlier note here said gov's sale spine has "a different dominant
 producer (GSA/deed feeds)". **It does not — gov is 72% CoStar (sidebar+export), the same family as
