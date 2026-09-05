@@ -272,6 +272,19 @@ async function getFreshAscTenantContext(ctx) {
   }
 }
 
+function formatAscIdentityDiagnostics(diagnostics) {
+  if (!diagnostics?.checks) return null;
+  const failed = Object.entries(diagnostics.checks)
+    .filter(([, passed]) => passed !== true)
+    .map(([name]) => name);
+  return [
+    `Identity checks failed: ${failed.length ? failed.join(', ') : 'none reported'}.`,
+    `Roster: ${Number(diagnostics.tenant_count) || 0}; source: ${diagnostics.source || 'missing'};`,
+    `CoStar ID: ${diagnostics.costar_property_id || 'missing'}; parcel: ${diagnostics.parcel_number || 'missing'};`,
+    `token: ${diagnostics.captured_address_token || 'missing'}.`,
+  ].join(' ');
+}
+
 // ── Restricted ASC frozen-50 research target ───────────────────────────────
 // This is a separate evidence-only path. It never calls Save Property, the
 // dia/gov propagator, Salesforce writeback, opportunity creation, or outreach.
@@ -412,9 +425,11 @@ async function wireAscResearchAction(ctx, actions) {
       button.disabled = false;
       button.textContent = 'Capture blocked — retry';
       button.className = 'btn btn-sm btn-danger';
-      detail.textContent = toErrorMessage(
+      const errorText = toErrorMessage(
         capture.data?.detail || capture.data?.error || capture.error
       ) || 'Capture failed';
+      const diagnostics = formatAscIdentityDiagnostics(capture.data?.identity_diagnostics);
+      detail.textContent = diagnostics ? `${errorText}. ${diagnostics}` : errorText;
     }
   });
 }

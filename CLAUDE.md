@@ -637,6 +637,13 @@ genuinely has no insert path.**
   `uq_sf_property_staging_dedup (sf_property_id, source_system, import_batch)` looks like identity
   and **can never collide**, because `import_batch` changes every crawl. **Read the existing key
   before replacing it** — the fix was a `BEFORE INSERT` pre-link on `sf_property_id` alone.
+- ⚠️ **BEFORE ASSERTING A PRODUCER IS FIXED BY AN *ABSENCE*, PROVE THE PRODUCER RAN (2026-09-06).**
+  The confirmation specified for this fix was *"new `_new_property` rows staying flat"* — it read
+  **0**, and it proved nothing, because the newest row predated the fix by **ten days**. An absence
+  over a dormant producer is indistinguishable from a fix. **The zero only became evidence once the
+  producer's own arrival rate was measured** (`sf_property_staging`: 3 rows in 24h, 23 in 7d, 109 in
+  30d — the crawl is live and minted nothing). Same shape as `already_annotated` reading like
+  throughput, one level up; it applies to every "the count stayed flat" check.
 - ✅ **Fixed and proven behaviourally**, and the pre-link **prefers a LIVE row over an archived one**
   when both exist — falling back to an archived row only when every candidate is archived, which
   beats re-minting.

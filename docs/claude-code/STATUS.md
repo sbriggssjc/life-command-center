@@ -16,6 +16,35 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-06 — SEC1-unit2 MERGED (#2141) · GOVDUP1-a confirmed · and the verification I wrote could not have proved it
+
+✅ **`SEC1-unit2-MERGE` CLOSED.** PR #2141 merged; `git ls-tree -r origin/main` now shows
+`gov_sec1_unit2_lock_sharp_functions.sql`, `dia_sec1_unit2_govdup1a_sf_identity_dedupe.sql` and
+`gov_govdup1a_sf_property_identity_dedupe.sql`. **The repo describes the database again** — a
+rebuild from `main` reproduces the lockdown instead of silently restoring the anon grants.
+
+### ⚠️ GOVDUP1-a is confirmed — and the check I specified could not have proved it
+
+I asked for *"`_new_property` rows created after the fix staying flat."* Result: **0 new
+advisories.** But **the newest advisory is 2026-08-26, ten days BEFORE the fix** — so that zero
+cannot distinguish *the dedupe is working* from *the producer was already quiet*. **It is the
+quiet-vs-unreachable trap, inside a verification I wrote**, and it would have read as a clean pass.
+
+**What makes the zero mean something is the producer's own arrival rate, which my check never asked
+for:** `sf_property_staging` took **3 rows in the last 24h (newest 2026-09-05 18:39), 23 in 7 days,
+109 in 30** — **the crawl is live, it processed rows, and it minted nothing.** All three linked
+cleanly.
+
+⚠️ **Still unproven in production: the dedupe ARM has zero hits.** `match_method='sf_identity_dedupe'`
+is 0 of 3 — all three linked by the normal address path, and the new arm only fires when an
+`sf_property_id` already has a linked property *and* address matching fails. The rolled-back probes
+(gov `linked_property_id=36283`, dia `22008`, both `sf_identity_dedupe`) remain the only proof of
+the arm, and they are good ones.
+
+**Durable rule: before asserting a producer is fixed by an ABSENCE, prove the producer RAN.** An
+absence over a dormant producer is not evidence — the same shape as `already_annotated` reading like
+throughput, one level up. It belongs in every "the count stayed flat" verification this repo writes.
+
 ## 2026-09-05 — SEC1-unit2: gov anon+mutating 5 → 1 · dia dedupe ported · Unit 2 DECLINED with a reason · 🚨 and the branch is NOT on `main`
 
 🚨 **READ THIS FIRST: the privilege changes are APPLIED LIVE and the migrations are NOT MERGED.**

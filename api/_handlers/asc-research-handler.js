@@ -1,6 +1,6 @@
 import { authenticate, requireRole } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
-import { buildAscImportRpcBody, buildAscStructuredCapture, normalizeAscAddressToken } from '../_shared/asc-research-lane.js';
+import { buildAscImportRpcBody, buildAscStructuredCapture, diagnoseAscIdentityMatch, normalizeAscAddressToken } from '../_shared/asc-research-lane.js';
 
 function workspaceFor(req, user) {
   return req.headers['x-lcc-workspace'] || user.memberships?.[0]?.workspace_id || process.env.LCC_DEFAULT_WORKSPACE_ID;
@@ -95,7 +95,14 @@ export async function handleAscResearchCapture(req, res) {
   if (!storedTarget) return fail(res, 404, 'frozen_target_not_found');
   let built;
   try { built = buildAscStructuredCapture(storedTarget, context || {}); }
-  catch (error) { return fail(res, 409, 'capture_blocked', error.message); }
+  catch (error) {
+    return res.status(409).json({
+      ok: false,
+      error: 'capture_blocked',
+      detail: error.message,
+      identity_diagnostics: diagnoseAscIdentityMatch(storedTarget, context || {}),
+    });
+  }
   const reconciliation = {
     ...await readOnlyReconciliation(context || {}, auth.workspaceId),
     asc_identity_match: built.identity_match,
