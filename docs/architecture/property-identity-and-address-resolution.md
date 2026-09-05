@@ -106,6 +106,11 @@ An empty roster, unavailable scan, or any record/provenance disagreement fails c
 tenant may remain a different occupant in a multi-tenant building; an approved operating identity can match
 only an exact name in the freshly observed full roster.
 
+The click-time roster reads genuine Tenant-grid rows structurally (Tenant, Industry, and SF Occupied columns)
+and merges them with the legacy flattened-text parser. This prevents interleaved store-type, floor, employee,
+and date cells from replacing or dropping a secondary tenant. Tables without the exact tenant-grid header
+shape are ignored.
+
 A same-parcel address-conflict alias must also be candidate-scoped. It binds one frozen service-location
 token to one captured property token and one exact parcel identifier, requires an exact captured facility or
 enrollment-organization tenant, and cites both an official facility registry and the licensed property public
