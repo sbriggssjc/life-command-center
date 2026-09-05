@@ -16,6 +16,43 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-05 — SEC1-merge-family Unit 1 SHIPPED: the 7 functions a name-only sweep missed are locked
+
+**PR #2136, verified live.** `anon` false / `authenticated` false / `service_role` true /
+`proacl = {postgres=X,service_role=X}` on all seven — dia `dia_consolidate_property_reviewed`,
+`dia_reverse_property_consolidation`, `dia_merge_twins`, `p31_property_consolidation_apply`,
+`p31_same_event_sales_apply`; gov `p31_property_consolidation_apply`, `p31_same_event_sales_apply`.
+Each asserted in-migration with `has_function_privilege()`, and each behaviourally re-probed as
+`service_role` **after** the revoke, so the live `domainQuery` caller path is proven unaffected
+rather than assumed.
+
+**The census moved by exactly the predicted amount** — the check that a revoke hit its intended
+population and nothing else:
+
+| project | definer | anon (was) | anon + mutating (was) |
+|---|---:|---:|---:|
+| LCC Opps | 196 | 89 (89) | **62** (62) — untouched, Unit 2 |
+| dia | 79 | **8** (13) | **4** (9) |
+| gov | 54 | **7** (9) | **5** (7) |
+
+⚠️ **A triage axis worth adding, and it cuts both ways.** PostgREST does not expose functions
+returning `trigger`, and Postgres does not check `EXECUTE` when a trigger fires — so an anon grant
+on one is **not a reachable path**. **gov's 5 is really 4** (`gov_pse_propagate_to_sale` is
+B6c-dup's trigger function). But **LCC Opps' 62 is really 62 — 0 of them return `trigger`.** I
+expected this to shrink the big number; it does not. Recorded as a hypothesis tested and refuted so
+the next reader does not spend the query.
+
+**The residue is NOT one class**, and the sharpest two are on gov: 🚨
+**`gov_apply_om_confirmed_noi(p_property_id, p_noi, …)` lets anon write an NOI onto any gov
+property** — a curated-value write — and 🚨 **`gov_truncate_sam_public_staging()` takes no arguments
+and TRUNCATEs.** Against those, four `*_check_*` monitors are **the `compute_feed_freshness` shape**
+and may be deliberately anon for a cross-DB pull; **each needs checking, and a deliberate anon grant
+there is a result, not a gap.**
+
+**Units 2 and 3 were honestly deferred, not glossed** — CC recorded the 62 as needing per-function
+reads it did not have room to do, and refused the blanket revoke the prompt refused. That is the
+right call. → **SEC1-unit2**.
+
 ## 2026-09-05 — SEC1-definer-default SHIPPED (the guard exists now) · live census supplied · 🚨 the property-merge family is only HALF locked
 
 **PR #2133.** `test/sql-definer-privilege-stanza.test.mjs`, **13/13 pass**, full suite 4,976 pass /
@@ -360,6 +397,12 @@ Recommendation recorded, nothing built → ~~**ADDR1c-twin-lane**~~ **superseded
 GOVDUP1** — reading the rows refuted the ported-lane premise; see below.
 
 ## 2026-09-04 — CONTACT1a SHIPPED: the LIVE entities.email/phone writer now feeds field_provenance
+
+> 📍 **CONTACT1a has TWO entries in this file and they are not duplicates — read both.** This one
+> carries the diagnosis and what shipped; **the later "CONTACT1a SHIPPED: the ladder is wired to
+> `ensureEntityLink`'s CREATE path"** entry below carries the **live verification** (deploy
+> confirmed via `/version`, and why **0 new rows is the EXPECTED reading**, not a stall). Neither
+> supersedes the other.
 
 CONTACT1 (2026-09-03) diagnosed why `entities.email`/`phone`'s ten-rung field_source_priority
 ladder had governed almost nothing (`email` zero rows ever, `phone` 4) and found the wired writer
