@@ -7,6 +7,11 @@
 > SOURCE question), `field-provenance-ladder.md` (which source wins on a column),
 > `entity-identity-and-dedup.md` (the party rows this producer mints),
 > `broker-and-firm-identity.md`, `om_intake_pipeline.md` (the OTHER intake channel).
+> ⚠️ **gov's property-address duplicates are NOT this producer.** `docs/architecture/gov-property-duplicates.md`
+> (GOVDUP1) traced the largest single duplicate class (the 154-row `unknown_writer` husk fan-out) to
+> a `data_source IS NULL` insert path this pipeline does not use — this pipeline always stamps a
+> real `data_source` (`costar_sidebar`) — and could not locate the actual writer in any accessible
+> repo; see that page's Unit 1 for what was ruled out.
 
 ## 1. What it is
 
