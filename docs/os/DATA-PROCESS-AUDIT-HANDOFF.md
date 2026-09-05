@@ -220,6 +220,17 @@ that fires `gov_classify_agency()`; do not read it as broken.
    Then **`SEC1-wider`** — 63 mutating-like
    anon-executable definer functions on LCC Opps need itemizing before anything is revoked, and
    `compute_feed_freshness` is deliberately anon on both domains.
+3b. ✅ **`GOVDUP1-a` SHIPPED 2026-09-05 (PR #2138).** 🚨 **The producer was DEPLOYED BUT NEVER
+   COMMITTED** — `intake-salesforce` edge fn on **Dialysis_DB, v23 ACTIVE** against a v1-era file in
+   the repo whose header falsely says it "never writes a domain table". **"Running but not merged",
+   2nd instance after P194 — a producer ahead of the repo is invisible to every code search; when a
+   producer cannot be found in source, enumerate the DEPLOYED artifacts (`list_edge_functions`,
+   `cron.job` command text, PA flows, the extension) before concluding it does not exist.** Dedupe
+   shipped and proven rolled-back (prefers a live row over an archived one); advisories pending
+   220 → 63; live duplicate properties 6 → 3. ✅ **The SEC1 guard worked on its first real
+   opportunity** — both new definer trigger fns shipped locked. Residue: **`GOVDUP1-a-confirm`**
+   (24h, the only real proof), `-drift`, `-siblings`, `-dia`.
+
 4. **`CONTACT1b`** — CONTACT1a shipped the CREATE path; **the UPDATE path still records nothing**,
    and `salesforce-sync.js`/`sf-list-import.js` carry 0 direct `recordFieldWrites`. **Measure first:
    of `writeEntitySalesforceLink`'s 195 links in 30 days, how many are creates through the choke

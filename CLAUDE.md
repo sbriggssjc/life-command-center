@@ -608,6 +608,28 @@ merged today.
   row and understates a `cap_rate_history` loss.** Substantive / re-derivable / queue are three
   policies, and the fold must state which applies per table rather than infer it from the name.
 
+### 🚨 A PRODUCER WHOSE DEPLOYED CODE IS AHEAD OF THE REPO IS INVISIBLE TO EVERY CODE SEARCH (GOVDUP1-a, 2026-09-05)
+
+The gov SF fan-out producer is **`intake-salesforce`, a Supabase edge function on Dialysis_DB,
+deployed `version 23` while the committed source is v1-era — ~400 lines of drift.** Its
+`handleCrawlComplete → linkProbe(autoCreate=true) → autoCreateProperty()` path POSTs straight into
+`gov.properties`. **GOVDUP1's "producer NOT FOUND" was not sloppy: it read the committed file, which
+genuinely has no insert path.**
+
+- **This is "running but not merged" — the inverse of the doctrine stated all over this file — and
+  it is the SECOND instance.** P194 was the same shape on the client side (the extension's
+  hard-coded Vercel URLs). **Neither is visible to a repo grep, a test, a guard or a reviewer.**
+- **When a producer cannot be found in source, enumerate the DEPLOYED artifacts before concluding
+  it does not exist**: `list_edge_functions` on all three projects (compare `version` against what
+  the repo last deployed), `cron.job` command text, Power Automate flows, and the Chrome extension.
+- ⚠️ **A dedupe key containing a per-run value is not a dedupe key.**
+  `uq_sf_property_staging_dedup (sf_property_id, source_system, import_batch)` looks like identity
+  and **can never collide**, because `import_batch` changes every crawl. **Read the existing key
+  before replacing it** — the fix was a `BEFORE INSERT` pre-link on `sf_property_id` alone.
+- ✅ **Fixed and proven behaviourally**, and the pre-link **prefers a LIVE row over an archived one**
+  when both exist — falling back to an archived row only when every candidate is archived, which
+  beats re-minting.
+
 ### ⚠️ A CHILD ROW WRITTEN 1:1 WITH ITS PARENT IS A CO-WRITER, NOT A DOWNSTREAM CONSUMER (GOVDUP1-a, 2026-09-05)
 
 A gov producer minted **154 empty copies of one address** and was written up as *"producer NOT
