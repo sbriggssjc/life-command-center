@@ -112,11 +112,26 @@
     };
   }
 
+  function freshTenantFrameTarget(context, activeTabId) {
+    if (!Number.isInteger(activeTabId) || activeTabId < 0) {
+      return { ok: false, reasons: ['missing_active_costar_tab'] };
+    }
+    if (context?._source_tab_id != null && context._source_tab_id !== activeTabId) {
+      return { ok: false, reasons: ['fresh_tenant_tab_identity_mismatch'] };
+    }
+    const frameId = Number.isInteger(context?._tenant_source_frame_id)
+      && context._tenant_source_frame_id >= 0
+      ? context._tenant_source_frame_id
+      : 0;
+    return { ok: true, tabId: activeTabId, frameId };
+  }
+
   root.LccPropertyIdentity = Object.freeze({
     propertyIdentityKey,
     costarPropertyId,
     provenancePropertyKeys,
     contextIntegrity,
     mergeFreshTenantRoster,
+    freshTenantFrameTarget,
   });
 })(globalThis);

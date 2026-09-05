@@ -252,12 +252,13 @@ async function getFreshAscTenantContext(ctx) {
   try {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const tabId = tabs?.[0]?.id;
-    if (tabId == null) return { ok: false, reasons: ['missing_active_costar_tab'] };
+    const target = window.LccPropertyIdentity.freshTenantFrameTarget(ctx, tabId);
+    if (!target.ok) return target;
     const fresh = await new Promise((resolve) => {
       chrome.tabs.sendMessage(
-        tabId,
+        target.tabId,
         { type: 'GET_FRESH_ASC_TENANT_CONTEXT' },
-        { frameId: 0 },
+        { frameId: target.frameId },
         (response) => {
           if (chrome.runtime.lastError) resolve(null);
           else resolve(response || null);
