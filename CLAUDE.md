@@ -1148,6 +1148,13 @@ Every cross-table field write to curated tables is observed:
   **newlines** — ~1,101 exposed, mostly `sales_transactions` narrative on NON-rung columns). Plain
   column + BEFORE trigger now; `DROP EXPRESSION` is metadata-only, no rewrite. **Never backfill a
   lost provenance row** — record the loss as a number and a date.
+- ⚠️ **TO PROVE A CONSTRAINT IS SAFE, FIND A SIBLING ALREADY LIVING UNDER IT (SEC1-property, 2026-09-05).**
+  Before revoking `anon` from the property merge/unmerge pair, the doc said the Decision Center lane
+  is server-mediated — but `supabase-keys.js` documents a **fallback to the historically-anon
+  `DIA_SUPABASE_KEY`**, so the doc was not evidence. The proof used instead: **the same lane already
+  calls `dia_merge_property`/`gov_merge_property` through the identical `domainQuery` path, and those
+  were already locked to `service_role`** — a live, working caller of an already-constrained sibling
+  proves the path resolves to `service_role`. **Prefer a working sibling over a documented claim.**
 - ⚠️ **PORTING A FUNCTION CARRIES ITS LOGIC, NOT ITS PRIVILEGES (ADDR1b-merge, 2026-09-04).**
   gov's destructive property merge was renamed to `gov_merge_property_apply` and the old name made to
   raise — correct, and the NEW name was left **`anon` and `authenticated` executable**, so the

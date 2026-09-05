@@ -16,6 +16,55 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-05 — SEC1-property SHIPPED (all 4 locked, migrations committed on both domains) · and 🚨 the CMBS Loan-tab capture produced NOTHING — the arm is confirmed unreachable, not merely uncaptured.
+
+### SEC1-property — verified live, both domains
+
+`dia_merge_property_reversible`, `dia_unmerge_property`, `gov_merge_property_reversible`,
+`gov_unmerge_property` — **all four now `anon` false / `authenticated` false / `service_role` true**,
+`proacl = {postgres=X/postgres, service_role=X/postgres}`, matching the already-locked precedents.
+`gov_merge_property_apply` (locked in Cowork 09-04) confirmed still locked. Asserted with
+`has_function_privilege`, never by reading the REVOKE. **Migrations committed on BOTH domains**
+(`20261015120000_{dia,gov}_sec1_property_merge_definer_lockdown.sql`) — a privilege applied only live
+is invisible to the repo.
+
+- ⚠️ **The safety check was DONE rather than trusted, and the doc would have been the wrong source.**
+  The prompt flagged that revoking `anon` could break the `property_twin` Decision Center lane if it
+  calls the RPC from the client. `supabase-keys.js` documents a **fallback to the historically-anon
+  `DIA_SUPABASE_KEY`** when the service key is unset — so "it's server-mediated" was not safe to
+  assume. **The proof used was behavioural:** the same decision lane already calls
+  `dia_merge_property`/`gov_merge_property` through the identical `domainQuery` path, and **those two
+  were already locked to service_role** — a live, working lane calling an already-locked function
+  proves `domainQuery` resolves to `service_role` in production. **That is the right shape of proof:
+  a sibling that already works under the constraint you are about to impose.**
+- **Caller census:** `dia_merge_property_reversible` has one live caller (the property_twin lane) plus
+  an operator CLI; `dia_unmerge_property` only the CLI; **both gov functions have zero callers
+  anywhere** (shipped same-day by ADDR1b-merge, not yet wired).
+- **SEC1 re-measured and BUCKETED, nothing else revoked:** LCC Opps **89** anon-executable definer
+  functions (63 mutating-like / 26 read-only-like) — 89 not the filed 91, reconciling with ENTC's 3
+  already fixed; dia **13** (9/4); gov **9** (6/3). `compute_feed_freshness` is anon-executable on
+  both domains and was **correctly left alone** — `CLAUDE.md` records that grant as deliberate, and
+  revoking it would silently blind the freshness monitor. Named next candidates on dia:
+  `dia_merge_twins`, `p31_property_consolidation_apply`, `dia_consolidate_property_reviewed`,
+  `dia_reverse_property_consolidation`.
+
+### 🚨 The CMBS capture wrote nothing — and that upgrades PR5d's verdict
+
+Scott captured property **3302 (2100 2nd St SW, Washington DC)** and its **Loan page**. Measured:
+- `loans` rows updated in 24h on gov: **0**. Every loan on 3302 still dates to **2026-07-15**.
+- **`properties.updated_at` for 3302 is 2026-09-01** — the capture did not touch the property row either.
+- **7 `staged_intake_extractions` in 30 hours and NOT ONE carries a loan-shaped key** (`loan*`,
+  `cmbs*`, `servic*`, `dscr`, `watchlist`, `maturit*`).
+- The only gov entities written in the window (02:05 UTC — Coast Guard, Laszlo Tauber & Associates)
+  carry **NULL metadata**, i.e. they are from a sync, not a sidebar capture.
+
+⚠️ **PR5d concluded the arm was case (c) — "the scanner is live and correct; the page has simply never
+been captured."** The page has now been captured and **still nothing reached the server**. That moves
+it to case **(a) or (b): either `parseCmbsLoanDetail` does not fire on the page Scott is on, or the
+payload is dropped before the writer.** The distinguishing evidence is on Scott's side — 👤 **a
+screenshot of the Loan tab, and confirmation the extension sidebar shows a capture happening there.**
+→ **PR5d-c**, which supersedes PR5d-a's framing.
+
 ## 2026-09-04 — ADDR1b-merge SHIPPED: gov has a reversible property merge, the destructive one now raises — and I closed a privilege hole the rename opened.
 
 **Verified live on gov:** `gov_merge_property_reversible`, `gov_unmerge_property`,
