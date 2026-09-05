@@ -122,15 +122,84 @@ NULL (fold); `property_embeddings` collapsed to one row.
 Both runs executed inside `BEGIN; ... ROLLBACK;` — **no data was mutated on either live database**
 by this verification.
 
+## ⚠️ A bug caught mid-build, worth keeping: the fold looked up the keep row by the wrong column
+
+The first cut of `_{dia,gov}_merge_fold_one_row` located the keep-side row with
+`pk_col = keep_id`. That is only correct when the table's primary key **is** the FK column — true
+for `property_embeddings` (`PK(property_id)`), and **false** for `cap_rate_history` (`PK id`,
+FK `property_id`), `property_metadata_backfill_queue` (`PK queue_id`) and `pending_updates`
+(`PK id`). On those three it would have found no keep row and folded nothing, **silently** — the
+migration would have applied clean and the fold would have been a no-op on exactly the substantive
+tables it exists for. Caught and fixed before either domain's migration was applied.
+
+**Same family as the C10 / UX-T1a-gates class:** a column that is *usually* the right one,
+generalised from a table where it happens to be. **A surrogate PK and a foreign key are different
+columns even when one row carries both** — and the failure mode is a silent no-op, not an error.
+
 ## Guard
 
-`test/merge1-fold-on-collision.test.mjs` (8 tests, all pass) — reads both migrations' source
+`test/merge1-fold-on-collision.test.mjs` (8 tests, all pass — ⚠️ **no mutation pass was run or
+reported**, so treat these as shape assertions of unmeasured strength; → **MERGE1-guard-mutations**,
+alongside GOVDUP1's) — reads both migrations' source
 (comments stripped), asserts: every measured-colliding table carries a policy row on both domains;
 the properties-FK loop in each merge function routes `unique_violation` through the fold
 dispatcher (and gov's old `_deleted_on_collision` shape is gone); the fold engine `COALESCE`s
 keep-before-drop and never overwrites; an unclassified table defaults to `fold_fill_blanks`, never
 a blind delete; `re_derivable` deletes directly while `fold_fill_blanks` and the `resolve_status`
 fallback both route through the single one-row folder (not a second copy).
+
+## 🚨 MERGE1-sec — the four new fold helpers shipped ANON-EXECUTABLE (found + fixed 2026-09-05, Cowork)
+
+**Both `_{dia,gov}_merge_fold_one_row` and `{dia,gov}_merge_fold_table` were created SECURITY
+DEFINER and were reachable by `anon` and `authenticated` on both databases.** Measured immediately
+after this migration applied:
+
+```
+proacl = {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+has_function_privilege('anon', oid, 'EXECUTE') = TRUE     -- all four
+```
+
+These are **destructive and take a TABLE NAME as a parameter** — `*_merge_fold_table` runs dynamic
+`UPDATE`/`DELETE` against whatever table the caller names — so this was a strictly worse hole than
+the one **SEC1-property closed on `*_merge_property_reversible` three days earlier.** The callers
+(`dia_merge_property`, `gov_merge_property_apply`) were already locked; **the helpers they gained
+were not.**
+
+- **The durable rule, already in `CLAUDE.md` and paid for again here: a new SECURITY DEFINER
+  function is anon-executable BY DEFAULT.** Postgres grants EXECUTE to `PUBLIC` on any new function,
+  and Supabase's `ALTER DEFAULT PRIVILEGES` additionally grants it to `anon` and `authenticated`
+  **explicitly** — so `REVOKE ... FROM public` alone is a no-op for exactly the two roles that
+  matter. Revoke from **all three**, then **assert with `has_function_privilege()`**, never by
+  reading the REVOKE you just wrote.
+- **This is the third instance of the class in one week** (B6d `compute_feed_cadence`, OCR2
+  `<dom>_merge_document_extracted_data`, ADDR1b `gov_merge_property_apply`) and the first where the
+  *same PR* that fixed a data-loss defect opened a privilege one. **A migration that CREATEs a
+  definer function needs a privilege stanza in the same file**, not a follow-up.
+
+**Fixed live on both domains + committed** as
+`supabase/migrations/{dialysis,government}/20260905130000_*_merge1_fold_function_privileges.sql`,
+each carrying a positive-controlled assertion block that fails loudly if either role can still
+reach either function **and** if `service_role` cannot (which would break the merge path silently).
+After: `proacl = {postgres=X/postgres,service_role=X/postgres}`, anon/auth **false**, service_role
+**true**, all four.
+
+## Verification of the lockdown — behavioural, on both domains (2026-09-05, Cowork)
+
+Reading the ACL is not proof the caller still works (SEC1-property's lesson). Both merge paths were
+re-run **after** the revoke, inside `BEGIN … ROLLBACK`, on synthetic pairs:
+
+| domain | policy exercised | result |
+|---|---|---|
+| dia | `property_embeddings` → `re_derivable` | merge ran; **1 row remains on the keep side**; ledger `{"policy":"re_derivable","discarded_re_derivable":1,"folded":0}` |
+| gov | `property_financials` → `fold_fill_blanks` | merge ran; **1 row remains**, and the keep row's NULL `noi` was **filled from the drop row (987654.32)** — the value the old code destroyed |
+
+Both stamped `merge_function_version = {dia,gov}_merge1_fold_on_collision_2026_09_05`. ✅ **The new
+`rewired` ledger reports `folded` / `repointed` / `resolved_in_place` / `discarded_re_derivable`
+separately per table** — so a deliberate discard and a loss no longer read the same, which was the
+substantive complaint against the old `_error` / `_deleted_on_collision` shapes.
+
+Post-probe state confirmed clean: `gov_property_merge_backup` **0**, `MERGE1SEC%` probe rows **0**
+on both domains, `v_gov_property_duplicate_review` still **397**.
 
 ## Out of scope (per the filing ticket)
 
