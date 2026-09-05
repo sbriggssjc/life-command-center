@@ -23,6 +23,35 @@
 `gov_govdup1a_sf_property_identity_dedupe.sql`. **The repo describes the database again** — a
 rebuild from `main` reproduces the lockdown instead of silently restoring the anon grants.
 
+### CONTACT1b drafted — and CONTACT1a is working better than last recorded
+
+✅ **The CONTACT1a CREATE wiring is producing rows.** `field_provenance` on `entities` holds
+**5 `email` + 5 `phone`, source `costar_sidebar`, newest 2026-09-05** — the 2026-09-04 entry
+recording "0 rows so far, quiet not unreachable" is now superseded: it is writing.
+
+⚠️ **The CONTACT1b premise in the handoff was wrong and was refuted before drafting.** It said to
+measure whether `writeEntitySalesforceLink`'s links are creates or updates; **that function does not
+touch `email`/`phone` at all** (`salesforce-sync.js:59-116` writes `external_identities` and merges
+`metadata.salesforce` — no scalar column). *A named mechanism in a brief is a hypothesis.*
+
+**What the measurement actually found — a census: 14 sites write those columns, 4 consult the
+ladder, 10 do not.** Churn over 30 days on live contact-bearing entities: **587 touched / 417
+created / 170 updated-but-not-created**, so **~29% of movement is UPDATES** — the case where a prior
+value exists. Against that, the ladder has ~10 rows: **it sees ~1.7% of the churn.**
+
+🎯 **The sharpest asymmetry is inside ONE producer:** the CoStar sidebar's CREATE path is
+instrumented (`entity-link.js:1282`) and its own UPDATE for the very same contact
+(`sidebar-pipeline.js:2278`) is not — so a second capture of an existing entity fills email/phone
+with no provenance row. That is why the ledger shows `costar_sidebar` and almost nothing else.
+
+⚠️ **Two design traps the prompt makes the unit settle rather than assume:** two ladder idioms are
+already in use (`recordFieldWrites`, post-write audit vs `filterByFieldPriority`, pre-write gate),
+**and under `record_only` — which is all ten `entities` rungs — the gate does not gate**; plus
+`lcc_merge_field` compares against `field_provenance`, **not the live column**, so it cannot protect
+a curated value it has never seen (**11,594 stored emails against ~10 provenance rows**). Wiring the
+gate buys **recording, not protection**, and describing it otherwise is the exact mis-statement
+already recorded against PR5c-entities.
+
 ### ⚠️ GOVDUP1-a is confirmed — and the check I specified could not have proved it
 
 I asked for *"`_new_property` rows created after the fix staying flat."* Result: **0 new
