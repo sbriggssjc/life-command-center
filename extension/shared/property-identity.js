@@ -152,6 +152,12 @@
     return tenants;
   }
 
+  function isNumericHealthcareTenantName(value) {
+    const name = String(value || '').trim();
+    if (name.length < 6 || name.length > 120) return false;
+    return /^\d{2,5}\s+[A-Za-z][A-Za-z0-9&'.(), -]*\b(?:surgery|surgical|endoscopy|medical|imaging|diagnostic)\s+cent(?:er|re)$/i.test(name);
+  }
+
   root.LccPropertyIdentity = Object.freeze({
     propertyIdentityKey,
     costarPropertyId,
@@ -160,5 +166,6 @@
     mergeFreshTenantRoster,
     freshTenantFrameTarget,
     tenantRosterFromGridRows,
+    isNumericHealthcareTenantName,
   });
 })(globalThis);

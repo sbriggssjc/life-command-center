@@ -3135,8 +3135,9 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       //       that mark sentence prose.
       const wordCount = line.trim().split(/\s+/).length;
       const SENTENCE_VERB_RE = /\s+(has|have|is|are|was|were|will|been|calls\s+for|indicates|signed|executed|installed|located|limited\s+to|priced\s+at|ensures?|provides?|offers?|features?|includes?|presents?)\s+/i;
-      if (line.length > 2 && line.length < 80 && /^[A-Z]/.test(line) &&
-          !/^\d/.test(line) && !/@/.test(line) && !/^https?:/i.test(line) &&
+      const numericHealthcareTenant = window.LccPropertyIdentity?.isNumericHealthcareTenantName(line) === true;
+      if (line.length > 2 && line.length < 80 && (/^[A-Z]/.test(line) || numericHealthcareTenant) &&
+          (!/^\d/.test(line) || numericHealthcareTenant) && !/@/.test(line) && !/^https?:/i.test(line) &&
           !TENANT_SECTION_REJECT.test(line) &&
           !TENANT_STORE_TYPE_REJECT.test(line) &&
           !TENANT_STREET_JUNK.test(line) &&
