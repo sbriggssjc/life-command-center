@@ -481,6 +481,56 @@ export function assertAscResearchImport({ release_id, selection_fingerprint, can
   });
 }
 
+export function diagnoseAscIdentityMatch(target = {}, context = {}) {
+  const capturedAddressToken = normalizeAscAddressToken(context);
+  const frozenAddressToken = normalizeAscAddressToken(target.cms_identity || {}) || clean(target.address_token);
+  const aliases = Array.isArray(target.cms_evidence?.approved_operating_identity_aliases)
+    ? target.cms_evidence.approved_operating_identity_aliases
+    : [];
+  const facilityName = normalizeTenantIdentityName(target.cms_identity?.facility_name);
+  const alias = aliases.find((item) => item?.status === 'approved'
+    && item?.reason_code === 'legal_entity_operating_identity_same_site'
+    && normalizeTenantIdentityName(item?.cms_facility_name) === facilityName) || null;
+  const capturedNames = new Set(contextTenantNames(context));
+  const operatingNames = (Array.isArray(alias?.operating_names) ? alias.operating_names : [])
+    .map(normalizeTenantIdentityName).filter(Boolean);
+  const officialHosts = new Set();
+  for (const citation of Array.isArray(alias?.evidence_citations) ? alias.evidence_citations : []) {
+    if (clean(citation?.source).toLowerCase() !== 'official_operator') continue;
+    try {
+      const url = new URL(clean(citation?.url));
+      if (url.protocol === 'https:') officialHosts.add(url.hostname.toLowerCase());
+    } catch {
+      // Diagnostics report invalid evidence as a failed boolean only.
+    }
+  }
+  const range = capturedAddressToken
+    ? capturedRangeContainsFrozenNumber(frozenAddressToken, capturedAddressToken)
+    : null;
+  return {
+    captured_address_token: capturedAddressToken,
+    source: clean(context.source || context.domain).toLowerCase().replace(/-/g, '_'),
+    costar_property_id: clean(context.costar_property_id) || null,
+    parcel_number: clean(context.parcel_number) || null,
+    tenant_count: contextTenantNames(context).length,
+    checks: {
+      approved_alias_found: Boolean(alias),
+      captured_address_matches_alias: Boolean(alias && alias.address_token === capturedAddressToken),
+      frozen_number_inside_captured_range: Boolean(range),
+      costar_source: clean(context.source || context.domain).toLowerCase() === 'costar',
+      costar_property_id_matches: Boolean(alias
+        && clean(alias.costar_property_id) === clean(context.costar_property_id)),
+      parcel_number_matches: Boolean(alias
+        && normalizeParcelNumber(alias.parcel_number) === normalizeParcelNumber(context.parcel_number)),
+      approved_operating_tenant_observed: operatingNames.some((name) => capturedNames.has(name)),
+      two_independent_official_hosts: officialHosts.size >= 2,
+      authorization_metadata_present: Boolean(alias && clean(alias.authorized_by)
+        && /^\d{4}-\d{2}-\d{2}T/.test(clean(alias.authorized_at))),
+      second_review_required: alias?.second_review_required === true,
+    },
+  };
+}
+
 export function buildAscStructuredCapture(target, context = {}) {
   if (!target || !SHA256_RE.test(clean(target.candidate_fingerprint).toLowerCase())) {
     throw new Error('A frozen ASC candidate target is required');

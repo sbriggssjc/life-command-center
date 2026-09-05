@@ -111,6 +111,11 @@ and merges them with the legacy flattened-text parser. This prevents interleaved
 and date cells from replacing or dropping a secondary tenant. Tables without the exact tenant-grid header
 shape are ignored.
 
+When the final restricted capture gate blocks, the API returns bounded identity diagnostics: the normalized
+captured token, source, source-record and parcel values, roster count, and boolean results for each governed
+predicate. It never returns credentials, evidence URLs, raw licensed payloads, or unrelated candidate data.
+The sidebar displays these diagnostics so a failed component can be corrected without weakening the matcher.
+
 A same-parcel address-conflict alias must also be candidate-scoped. It binds one frozen service-location
 token to one captured property token and one exact parcel identifier, requires an exact captured facility or
 enrollment-organization tenant, and cites both an official facility registry and the licensed property public
