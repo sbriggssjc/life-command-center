@@ -258,6 +258,13 @@ overlap) may round-trip cleanly; this pair did not.
 > the drop row into the keep row, then delete — not to document the loss better.** Follow-up:
 > **GOVDUP1-b**, and it blocks any batch merge.
 >
+> ✅ **CLOSED 2026-09-05 by MERGE1** (PR #2130): `gov_merge_property_apply` now routes
+> `unique_violation` through `gov_merge_fold_table` and a per-table `gov_merge_child_policy`
+> (`investment_scores`/`property_embeddings` = `re_derivable`, `property_financials` =
+> `fold_fill_blanks`). Verified by a rolled-back positive control — the keep row's NULL `noi` was
+> filled from the drop row. **This lane is now safe to merge**, subject to the human verdict it was
+> always gated on. `docs/audits/MERGE1_PROPERTY_MERGE_COLLISION_FOLD.md`.
+>
 > This is the P196 finding one layer down. There, `lcc_merge_entity`'s pivot DELETE *destroyed
 > content instead of folding it* and the fix was to fold; here the same shape sits in gov's property
 > merge, in the generic `unique_violation` handler that serves **every** child table at once.

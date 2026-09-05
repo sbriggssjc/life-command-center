@@ -504,6 +504,17 @@ below for the mechanism — it is accurate history — but the defect it describ
 (8/8 pass). The 205 historical dia losses are NOT backfilled — they are gone, recorded as a number
 and a date. `gov_property_merge_backup` remains 0 rows; this migration merged nothing on either domain.
 
+✅ **FIXED 2026-09-05 (MERGE1)** — both `dia_merge_property` and `gov_merge_property_apply` now
+consult a per-table `{dia,gov}_merge_child_policy` on `unique_violation` (`re_derivable` /
+`fold_fill_blanks` / `resolve_status`, defaulting an unclassified table to `fold_fill_blanks`
+rather than a blind delete). All four measured dia collision tables and all three measured gov
+collision tables are classified; verified live via rolled-back positive controls on both domains
+(fold fills the keep row's blanks from the drop row, never loses either side). **Read this section
+below for the mechanism — it is accurate history — but the defect it describes is closed.**
+`docs/audits/MERGE1_PROPERTY_MERGE_COLLISION_FOLD.md`; guard `test/merge1-fold-on-collision.test.mjs`
+(8/8 pass). The 205 historical dia losses are NOT backfilled — they are gone, recorded as a number
+and a date. `gov_property_merge_backup` remains 0 rows; this migration merged nothing on either domain.
+
 `gov_merge_property_reversible` snapshots the dropped property row and its child **ids** into
 `gov_property_merge_backup`, then calls `gov_merge_property_apply`, whose generic
 `WHEN unique_violation` arm runs `DELETE FROM %s WHERE %I = $1`. **The row is gone and the id in the
