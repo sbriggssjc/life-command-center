@@ -181,7 +181,12 @@ that fires `gov_classify_agency()`; do not read it as broken.
    properties**, 154 husks archived reversibly, **0 merges**. Canonical page:
    `docs/architecture/gov-property-duplicates.md`. **Two conclusions were corrected by verification
    and both make the picture worse**, so the follow-ups are ordered by that:
-   - 🚨 **`MERGE1` FIRST** (was `GOVDUP1-b`, widened). gov: `gov_merge_property_apply`'s generic
+   - ✅ **`MERGE1` SHIPPED 2026-09-05 (PR #2130)** — fold-on-collision live on both domains, proven
+     by rolled-back positive controls (gov's fold filled a NULL `noi` from the drop row). 🚨 **Its
+     own migration shipped four anon-executable destructive definer helpers; fixed same-day and
+     filed as `SEC1-definer-default`, which now leads the SEC1 work** because the rule has been
+     re-learned four times in a week and nothing enforces it. Residue: `MERGE1-resolve-status`.
+     Original filing: (was `GOVDUP1-b`, widened) gov: `gov_merge_property_apply`'s generic
      `WHEN unique_violation` arm **DELETEs** while the wrapper snapshots child *ids*, and
      `investment_scores` is UNIQUE on `property_id` **alone** — so **397 of 397 lane groups
      collide**, ~1,321 rows, **no pair round-trips cleanly**. 🚨 **The same class is LIVE on dia and
