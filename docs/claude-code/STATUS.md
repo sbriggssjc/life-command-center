@@ -16,7 +16,61 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
-## 2026-09-05 — SEC1-property SHIPPED (all 4 locked, migrations committed on both domains) · and 🚨 the CMBS Loan-tab capture produced NOTHING — the arm is confirmed unreachable, not merely uncaptured.
+## 2026-09-05 — SEC1-property SHIPPED (all 4 locked, migrations committed on both domains) · 🚨 the CMBS Loan-tab capture produced NOTHING — the arm is confirmed unreachable, not merely uncaptured · GOVDUP1 drafted, and it REPLACES the planned ADDR1c-twin-lane.
+
+### GOVDUP1 — sizing the gov "twin lane" refuted the plan to port dia's
+
+Measured before drafting, and **three of the plan's premises are wrong**:
+
+1. **The producer is a spreadsheet, not a capture.** `excel_master` — 9,633 gov properties, all
+   created **2026-03-05, one run**. This is not an ADDR1/CoStar-sidebar continuation and must not be
+   filed under that arc.
+2. **`co-located ≠ twin` is dia's risk, not gov's.** dia's lane exists because a Fresenius and a
+   DaVita share a plaza. gov's analogue — two agencies in one federal building — is what a merge
+   **fixes**: `1120 E 80th St, MN` carries `MN/WI SERVICE CENTER` on one row and `DHS` on the other,
+   and those belong as two leases on one property. **122 of 128 exact-key pairs have BOTH members
+   carrying real attachments**, so the operation is consolidation, never deletion of an empty shadow.
+3. 🚨 **gov `properties` has NO `merged_into_property_id`.** `gov_merge_property_apply` **hard-DELETEs**
+   the dropped row; reversibility is entirely `gov_property_merge_backup`, and it snapshots child
+   **ids**, not child **rows** — so children the apply dedup-deleted on `unique_violation` are gone.
+   ✅ `gov_unmerge_property` is **already honest** about this (it reports `<table>.<col>_lost` per
+   table plus an explicit note) — that is the P196/ENTC lesson already applied; do not "improve" it
+   away.
+
+⚠️ **Two measurement traps, both caught before publishing:**
+
+- **The key decides the population and I nearly reported a false retraction.** Re-measuring on the
+  exact-string key gave **132 groups / 419 properties** and I was one sentence from writing that my
+  earlier **399 / 953** "did not reproduce." It reproduces exactly on the punctuation-stripped key.
+  The 267-group difference is `1000 Terminal Dr` / `1000 Terminal Dr.`, `100 NE Loop 410` /
+  `100 N.e. Loop 410` — **same city, same state, punctuation only, and the cleanest duplicates in the
+  whole set.** *Never report a duplicate count without the key; when a re-measurement disagrees,
+  check the key before concluding either is wrong.*
+- **`lpad('',5,'0')` is `'00000'`, not NULL.** Sizing zip agreement, an empty `zip_code` normalized to
+  a present-and-disagreeing zip: **46 agree / 82 differ / 0 missing**, plausible and wrong. Corrected
+  by requiring ≥4 digits before padding: **42 / 15 / 71**. Same family as PR1a's retracted roundness
+  statistic, which measured zeros.
+
+**Population, and it is three classes not one:** 399 groups / 953 live properties (normalized key) =
+**A** one group of **154 empty husks** (`1085 Route 4 E` Rutland, `data_source='unknown_writer'`,
+`state` NULL, zip `'5701'` = VT 05701 leading-zero-stripped, **0 owners / 0 leases / 0 sales /
+0 documents**) → a producer defect and a bulk retire, *not* a merge question · **B** 267
+punctuation-only groups · **C** 132 exact-string groups, **106 of which differ in city**.
+
+⚠️ **Do not gate on city-string similarity.** The city difference takes three shapes and only one is
+a spelling variant: abbreviation (`St Louis`/`Saint Louis`), county-qualified form
+(`Lexington-Fayette`/`Lexington`, `New York-Kings`/`Brooklyn`), and **genuinely different
+municipality names for one location** (`Essington`/`Lester` PA — both `DELAWARE VALLEY FIELD OFFICE`;
+`Sweet Water`/`Miami` FL; `Greece`/`Rochester` NY). A similarity test rejects the third shape, which
+is real duplicates.
+
+🚨 **One group must never merge and the lane must exclude it by construction:** address
+`international airport`, TX — Brownsville 78521 vs Corpus Christi 78406. **Two different airports
+sharing a placeholder string.**
+
+Prompt: `docs/claude-code/prompts/GOVDUP1-gov-property-duplicate-consolidation.md`. **Nothing merges
+in that unit** — gov's hard-delete-with-partial-restore is a strictly higher bar than dia's soft
+tombstone, so the round trip is proven on this population *before* any batch (P195).
 
 ### SEC1-property — verified live, both domains
 
@@ -100,7 +154,8 @@ pair was never given the same treatment. → **SEC1-property**.
 **Twin-lane sizing: 399 candidate groups / 953 properties** on a crude exact-normalized-address+state
 grouping, before any geospatial fuzz. ⚠️ **That is not "three rows"** — my prompt said to size it and
 stop precisely because a tiny number would have argued for skipping it; it argues the other way.
-Recommendation recorded, nothing built → **ADDR1c-twin-lane**.
+Recommendation recorded, nothing built → ~~**ADDR1c-twin-lane**~~ **superseded 2026-09-05 by
+GOVDUP1** — reading the rows refuted the ported-lane premise; see below.
 
 ## 2026-09-04 — CONTACT1a SHIPPED: the LIVE entities.email/phone writer now feeds field_provenance
 

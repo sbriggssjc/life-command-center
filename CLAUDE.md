@@ -491,6 +491,29 @@ Full writeup: `docs/audits/B6d_FEED_EXPECTATION_GRADING_2026-08-29.md`.
   (`from public, anon, authenticated`), then ASSERT with `has_function_privilege()`.** The one rule
   that covers both halves: *never read a privilege off the GRANT or REVOKE you just wrote.*
 
+### ⚠️ A DUPLICATE COUNT IS A PROPERTY OF THE KEY — CHECK THE KEY BEFORE CALLING A RE-MEASUREMENT A RETRACTION (GOVDUP1, 2026-09-05)
+
+Sizing gov's property duplicates, an earlier figure of **399 groups / 953 properties** was
+re-measured as **132 / 419** and was one sentence from being published as *"my earlier number does
+not reproduce."* **It reproduces exactly** — the two used different keys:
+`regexp_replace(lower(address),'[^a-z0-9]','','g')` vs `lower(trim(address))`. The 267-group
+difference is `1000 Terminal Dr` / `1000 Terminal Dr.` and `100 NE Loop 410` / `100 N.e. Loop 410`,
+**same city, same state, punctuation only** — i.e. the *cleanest* duplicates in the population, and
+the stricter key cannot see one of them.
+
+- **Never report a duplicate/dedup population without the key that produced it**, and when two
+  honest measurements disagree, **diff the keys before adjudicating the numbers** (the B5 lesson —
+  *find the measurement independent of the disputed key* — arriving one layer earlier).
+- **A self-correction is a claim like any other and must be verified before it is written.** The
+  retraction here would have been more damaging than the original imprecision, because it would have
+  argued for the *narrower* population and silently dropped 534 properties.
+- ⚠️ **And in the same sizing: `lpad('',5,'0')` is `'00000'`, not NULL.** An empty `zip_code`
+  normalized into a *present and disagreeing* zip, giving **46 agree / 82 differ / 0 missing** —
+  plausible, and wrong. Requiring ≥4 digits before padding gives **42 / 15 / 71**. Same family as
+  PR1a's retracted roundness statistic (which measured zeros) and P157/P182: *a comparator
+  structurally unable to express the question returns a plausible number instead of an error.*
+  **Keep `missing` a third state, never folded into `differs`** (P180).
+
 ### ⚠️ RE-MEASURE A DATED BLOCKER BEFORE QUOTING IT (2026-08-20)
 
 This file and its siblings are full of dated findings — "X is blocked", "Y returns 401", "Z yields
