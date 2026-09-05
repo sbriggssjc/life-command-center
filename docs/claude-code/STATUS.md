@@ -16,6 +16,54 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-05 — SEC1-unit2: gov anon+mutating 5 → 1 · dia dedupe ported · Unit 2 DECLINED with a reason · 🚨 and the branch is NOT on `main`
+
+🚨 **READ THIS FIRST: the privilege changes are APPLIED LIVE and the migrations are NOT MERGED.**
+The work sits on `origin/claude/sec1-unit2-anon-gov-triage-01KgcbZF2CgeC8nisk5PEi74`; `main` at
+`b22d1c29` does not contain it (the PR merged today was **#2139 ASC39**, a different branch). **A
+rebuild from `main` silently restores the anon grants this unit removed.** That is the *"running but
+not merged"* class GOVDUP1-a recorded **yesterday**, now landing on our own security work — and it
+is the worse direction, because the repo does not describe the database and nothing errors.
+👤 **Operator step: merge that branch.** Until then, treat gov's lockdown as un-reproducible.
+
+### Unit 1 — shipped and verified live, gov anon+mutating **5 → 1**
+
+Locked, each `anon` false / `authenticated` false / `service_role` true /
+`proacl = {postgres=X,service_role=X}`: **`gov_apply_om_confirmed_noi`**,
+**`gov_truncate_sam_public_staging`**, `gov_match_sam_public_extract`, and
+`gov_pse_propagate_to_sale` (a trigger — locked for tidiness, not reachability). The single holdout
+is **`gov_check_queue_slas`, left anon deliberately** as a monitor-shaped exception with the reason
+recorded — *a decision to leave something anon is a result, not a gap.*
+
+⚠️ **`gov_apply_om_confirmed_noi` already carried a `REVOKE ALL FROM PUBLIC` in its migration and
+was still anon-executable.** That is the two-grant footgun, live, on a function whose author
+believed they had closed it — the clearest confirmation yet of the canonical
+`CLAUDE.md` §*SECURITY DEFINER PRIVILEGES* section: **PUBLIC and the explicit `anon`/`authenticated`
+grants are independent, and removing one is a no-op for the other.**
+
+✅ **CC did the deployed-caller check GOVDUP1-a earned.** Both real callers of the NOI function were
+confirmed to use the **service-role** path before the revoke — `om-comp-resolver.js` via
+`domainQuery`, and `ingest_sam_public_extract.py` hard-coded to the service key — then each function
+was behaviourally re-probed inside a rolled-back transaction after the revoke. **That is the
+sequence: find the caller, revoke, re-probe.**
+
+### Unit 3 — the dia dedupe port, shipped and proven
+
+`trg_dia_sf_staging_identity_dedupe` / `_record` live on dia's `sf_property_staging`. Proven
+rolled-back: a fresh staging row for a known `sf_property_id` returns
+`linked_property_id = 22008`, `match_method = 'sf_identity_dedupe'` instead of minting. ✅ **Both new
+definer trigger functions shipped LOCKED** (`anon` false, `{postgres=X,service_role=X}`) — the
+SEC1-definer-default guard working for the **second** consecutive unit.
+
+### Unit 2 — the 62 were triaged and deliberately NOT locked, and that restraint is correct
+
+CC classified them (`docs/audits/SEC1_UNIT2_RESULTS_2026-09-05.md`) and declined to revoke, because
+**the deployed-artifact caller search was not completed** — citing GOVDUP1-a's proof that a real
+caller can live in an edge function, cron command or PA flow that no repo grep can see. Nine
+`*_check_*` health functions are flagged as likely deliberate-anon. **Refusing to revoke 62
+functions whose callers you have not enumerated is the right answer**, and it is the same discipline
+that made Unit 1 safe. → **SEC1-unit2-lock**.
+
 ## 2026-09-05 — GOVDUP1-a SHIPPED: the writer was DEPLOYED BUT NEVER COMMITTED · and yesterday's SEC1 guard worked on its first real opportunity
 
 **PR #2138, verified live.**
