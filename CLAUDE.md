@@ -525,6 +525,14 @@ exactly the capability that was locked — and it is anon-executable**, along wi
   sibling that does the same thing under a different name. **Before declaring a privilege sweep
   complete, ask "what else can do this?", never "did I finish my list?"**
 - **A `p_dry_run` default is not a mitigation** — an anon caller passes `false`.
+- ✅ **Unit 1 shipped 2026-09-05 (PR #2136): all seven locked and behaviourally re-probed after the
+  revoke.** dia anon+mutating **9 → 4**, gov **7 → 5** — *the census moved by exactly the predicted
+  amount, which is the check that a revoke hit its intended population and nothing else.*
+- ⚠️ **A TRIGGER function is not RPC-callable, and that axis cuts both ways.** PostgREST does not
+  expose `returns trigger`, and Postgres does not check `EXECUTE` when a trigger fires, so an anon
+  grant on one is not a reachable path. It takes gov's residue from 5 to 4
+  (`gov_pse_propagate_to_sale`) and does **nothing** to LCC Opps' 62 — **0 of those return
+  trigger.** Tested and refuted there; do not re-spend the query.
 - ⚠️ **And a shape matched by a regex over `pg_get_functiondef` is a hypothesis, not a ranking.**
   `lcc_apply_cleared_tombstones` was filed as "anon + mutating + dynamic SQL — the MERGE1 shape" and
   told to lead the triage; read live, its dynamic SQL is over a **hard-coded `VALUES` map of column

@@ -193,7 +193,12 @@ that fires `gov_classify_agency()`; do not read it as broken.
      found the sweep is only HALF done: `dia_consolidate_property_reviewed(p_keep_id, p_drop_id, …)` is
      the same keep/drop merge SEC1-property locked, still anon-executable**, with
      `dia_reverse_property_consolidation`, `dia_merge_twins`, `p31_property_consolidation_apply` and
-     `p31_same_event_sales_apply` (both domains) beside it. → **`SEC1-merge-family` is the next unit.**
+     `p31_same_event_sales_apply` (both domains) beside it. ✅ **`SEC1-merge-family` Unit 1 SHIPPED
+     2026-09-05 (PR #2136) — all 7 locked and behaviourally re-probed; dia anon+mutating 9 → 4, gov
+     7 → 5.** Residue is **`SEC1-unit2`**: LCC Opps' 62 (untouched), plus gov's
+     `gov_apply_om_confirmed_noi` (anon can write an NOI onto any property) and
+     `gov_truncate_sam_public_staging` (no args, TRUNCATEs). ⚠️ The four `*_check_*` monitors may be
+     deliberately anon (`compute_feed_freshness` shape) — check, do not sweep.
      Original filing: (was `GOVDUP1-b`, widened) gov: `gov_merge_property_apply`'s generic
      `WHEN unique_violation` arm **DELETEs** while the wrapper snapshots child *ids*, and
      `investment_scores` is UNIQUE on `property_id` **alone** — so **397 of 397 lane groups

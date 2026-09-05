@@ -99,6 +99,47 @@ than *did I lock the functions on my list?*
 Mitigating, and it must be said: most of these default to `p_dry_run` and several are reversal or
 review paths. **None is a reason to leave them anon** — an anon caller passes `false`.
 
+## ✅ Unit 1 SHIPPED (PR #2136) — verified live from Cowork, 2026-09-05
+
+All seven locked: `anon` **false**, `authenticated` **false**, `service_role` **true**,
+`proacl = {postgres=X/postgres,service_role=X/postgres}` on every one — asserted with
+`has_function_privilege()`, not read off the REVOKE.
+
+dia: `dia_consolidate_property_reviewed`, `dia_reverse_property_consolidation`, `dia_merge_twins`,
+`p31_property_consolidation_apply`, `p31_same_event_sales_apply` ·
+gov: `p31_property_consolidation_apply`, `p31_same_event_sales_apply`.
+
+**The census moved by exactly the amount the lockdown predicted** — which is the check that the
+revoke hit the intended population and nothing else:
+
+| project | definer | anon (was) | anon + mutating (was) |
+|---|---:|---:|---:|
+| LCC Opps | 196 | 89 (89) | **62** (62) — untouched, Unit 2 |
+| dia | 79 | **8** (13) | **4** (9) |
+| gov | 54 | **7** (9) | **5** (7) |
+
+### ⚠️ A triage axis worth adding: a TRIGGER function is not RPC-callable
+
+PostgREST does not expose functions returning `trigger`, and Postgres does not check `EXECUTE` when
+a trigger fires — so an anon `EXECUTE` grant on one is **not a reachable path**, and revoking it is
+**harmless to the trigger**. Applied to the residue:
+
+- **gov's 5 is really 4**: `gov_pse_propagate_to_sale` returns `trigger` (it is B6c-dup's
+  propagation function). Lock it for tidiness, not urgency.
+- **LCC Opps' 62 is really 62** — I expected this axis to shrink the big number and it does not:
+  **0 of the 62 return `trigger`.** A hypothesis tested and refuted, recorded so the next reader
+  does not spend the query.
+
+### The residue, named — and it is not one class
+
+| function | domain | shape | note |
+|---|---|---|---|
+| **`gov_apply_om_confirmed_noi`** | gov | `(p_property_id, p_noi, p_as_of, p_sf_file_id, p_dry_run)` | 🚨 **anon can write an NOI onto any gov property** — a curated-value write, arguably the sharpest one left |
+| **`gov_truncate_sam_public_staging`** | gov | `()` → jsonb | 🚨 **no arguments, TRUNCATEs** — nothing to get wrong from the caller's side |
+| `gov_match_sam_public_extract` | gov | `(p_dry_run, p_batch)` | batch matcher |
+| `dia_propagate_closed_sales_to_workbook` | dia | `(p_dry_run, p_batch_tag, p_months, p_cap_lo, p_cap_hi)` | propagation with a dry-run default |
+| `dia_check_fred_staleness` · `dia_check_market_turnover_batch_retirement` · `dia_check_queue_slas` · `gov_check_queue_slas` | dia + gov | monitors | ⚠️ **These are the `compute_feed_freshness` SHAPE — health checks a cross-DB pull may read as anon BY DESIGN. Check each before revoking; a deliberate anon grant here is a result, not a gap.** |
+
 ## ⚠️ Correction to the filing prompt: `lcc_apply_cleared_tombstones` is NOT the MERGE1 shape
 
 The SEC1 prompt called it *"the one function that is anon + mutating + dynamic SQL — the MERGE1
