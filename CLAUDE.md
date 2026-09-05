@@ -515,6 +515,15 @@ below for the mechanism — it is accurate history — but the defect it describ
 (8/8 pass). The 205 historical dia losses are NOT backfilled — they are gone, recorded as a number
 and a date. `gov_property_merge_backup` remains 0 rows; this migration merged nothing on either domain.
 
+**SEC1-definer-default (2026-09-05):** the MERGE1 fold helpers above shipped anon-executable
+(no revoke stanza in the same migration) and were fixed 10 minutes later in a companion file —
+exactly the recurring class this section and the B6d/OCR2 sections describe. A CI-runnable guard
+now catches a NEW instance of it: `test/sql-definer-privilege-stanza.test.mjs` requires every
+migration that creates a `SECURITY DEFINER` function to carry a `revoke ... from public, anon,
+authenticated` + `has_function_privilege()` stanza in the SAME file, with a named, non-rotting
+allowlist for the 219 pre-existing offenders. Triage notes:
+`docs/audits/SEC1_DEFINER_ANON_TRIAGE_2026-09-05.md`.
+
 `gov_merge_property_reversible` snapshots the dropped property row and its child **ids** into
 `gov_property_merge_backup`, then calls `gov_merge_property_apply`, whose generic
 `WHEN unique_violation` arm runs `DELETE FROM %s WHERE %I = $1`. **The row is gone and the id in the
