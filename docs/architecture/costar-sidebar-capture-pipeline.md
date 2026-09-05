@@ -26,6 +26,12 @@ acquisition dia has.
 | `upsertLoanRecords` | `loans` | summary only — the CMBS detail arm has never fired (PR5d) |
 | `upsertDocumentLinks` / `captureDocumentBytesAtIngest` | `property_documents` | session-bound CDN links must be fetched in-tab |
 
+> ⚠️ **NOT this producer: gov's 399 duplicate-address property groups.** They were nearly filed here
+> as an ADDR continuation. Measured 2026-09-05, the producer is **`excel_master` — one spreadsheet
+> import of 9,633 rows on 2026-03-05** — plus an unidentified `unknown_writer`. See
+> `gov-property-duplicates.md` / backlog **GOVDUP1**. *A defect that resembles this one's shape is
+> not evidence it came from this one.*
+
 ⚠️ **This producer's defects share a shape: it reads the right PAGE and the wrong REGION of it.**
 Four of the five arcs below are that, and the fifth (SALE1) is the same producer overwriting a value
 it should have left alone.
