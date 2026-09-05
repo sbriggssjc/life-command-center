@@ -119,13 +119,36 @@ test('fresh tenant scans target the provenance-producing frame and reject anothe
   );
 });
 
+test('structured CoStar tenant grids retain a secondary ASC tenant without column drift', () => {
+  const api = identityApi();
+  const rows = [
+    ['Tenant', 'Industry', 'Floor', 'SF Occupied', '# Emps', 'Move Date', 'Exp Date'],
+    ['Beverly Hills Plastic Surgery', 'Health Care and Social Assistance', '2nd, 3rd', '6,832', '6', '-', '-'],
+    ['The Practice Healthcare', '', '1st', '6,283', '-', '-', '-'],
+    ['Bedford Breast Center', 'Health Care and Social Assistance', '3rd', '4,948', '15', '-', '-'],
+    ['Anastasia Beverly Hills', 'Retailer', '1st', '4,722', '3', '-', '-'],
+    ['436 Beverly Hills Surgery Center', 'Health Care and Social Assistance', '1st', '4,575', '30', 'Jan 2007', '-'],
+    ['Bedford Dental', 'Health Care and Social Assistance', '3rd', '4,200', '10', '-', '-'],
+  ];
+  const tenants = api.tenantRosterFromGridRows(rows);
+  assert.deepEqual(
+    [...tenants.map((tenant) => tenant.name)],
+    ['Beverly Hills Plastic Surgery', 'The Practice Healthcare', 'Bedford Breast Center',
+      'Anastasia Beverly Hills', '436 Beverly Hills Surgery Center', 'Bedford Dental'],
+  );
+  assert.equal(tenants[4].sf, '4,575 SF');
+  assert.deepEqual([...api.tenantRosterFromGridRows([
+    ['Owner', 'Address', 'Value'], ['436 Beverly Hills Surgery Center', '436 N Bedford', '$1'],
+  ])], []);
+});
+
 test('all three runtime layers enforce the shared record boundary', () => {
   const manifest = JSON.parse(readFileSync(join(ROOT, 'extension/manifest.json'), 'utf8'));
   const costarScript = manifest.content_scripts.find((entry) =>
     entry.matches.some((match) => match.includes('costar.com'))
   );
   assert.equal(costarScript.js[0], 'shared/property-identity.js');
-  assert.equal(manifest.version, '1.0.49');
+  assert.equal(manifest.version, '1.0.50');
 
   const content = readFileSync(join(ROOT, 'extension/content/costar.js'), 'utf8');
   const background = readFileSync(join(ROOT, 'extension/background.js'), 'utf8');
@@ -138,6 +161,8 @@ test('all three runtime layers enforce the shared record boundary', () => {
   assert.match(sidepanel, /Capture blocked — CoStar record changed/);
   assert.match(sidepanel, /validateCostarContext\(liveCtx\)/);
   assert.match(content, /GET_FRESH_ASC_TENANT_CONTEXT/);
+  assert.match(content, /extractStructuredTenantGrid\(\)/);
+  assert.match(content, /tenantRosterFromGridRows\(rows\)/);
   assert.match(sidepanel, /getFreshAscTenantContext\(liveCtx\)/);
   assert.match(sidepanel, /mergeFreshTenantRoster\(ctx, fresh, activeUrl\)/);
   assert.match(sidepanel, /freshTenantFrameTarget\(ctx, tabId\)/);

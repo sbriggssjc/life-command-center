@@ -126,6 +126,32 @@
     return { ok: true, tabId: activeTabId, frameId };
   }
 
+  function tenantRosterFromGridRows(rows) {
+    if (!Array.isArray(rows) || rows.length < 2) return [];
+    const normalized = rows.map((row) => Array.isArray(row)
+      ? row.map((cell) => String(cell || '').trim())
+      : []);
+    const header = normalized[0].map((cell) => cell.toLowerCase());
+    const tenantIndex = header.findIndex((cell) => cell === 'tenant' || cell === 'tenant name');
+    const sfIndex = header.findIndex((cell) => /^sf\s+occupied$|^occupied\s+sf$/.test(cell));
+    if (tenantIndex < 0 || sfIndex < 0 || !header.includes('industry')) return [];
+
+    const seen = new Set();
+    const tenants = [];
+    for (const row of normalized.slice(1)) {
+      const name = row[tenantIndex] || '';
+      if (name.length < 3 || name.length > 120 || seen.has(name.toLowerCase())) continue;
+      seen.add(name.toLowerCase());
+      const tenant = { name };
+      const sfDigits = (row[sfIndex] || '').replace(/[^\d]/g, '');
+      if (sfDigits && Number.parseInt(sfDigits, 10) >= 100) {
+        tenant.sf = `${Number.parseInt(sfDigits, 10).toLocaleString('en-US')} SF`;
+      }
+      tenants.push(tenant);
+    }
+    return tenants;
+  }
+
   root.LccPropertyIdentity = Object.freeze({
     propertyIdentityKey,
     costarPropertyId,
@@ -133,5 +159,6 @@
     contextIntegrity,
     mergeFreshTenantRoster,
     freshTenantFrameTarget,
+    tenantRosterFromGridRows,
   });
 })(globalThis);
