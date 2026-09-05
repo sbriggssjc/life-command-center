@@ -491,6 +491,69 @@ Full writeup: `docs/audits/B6d_FEED_EXPECTATION_GRADING_2026-08-29.md`.
   (`from public, anon, authenticated`), then ASSERT with `has_function_privilege()`.** The one rule
   that covers both halves: *never read a privilege off the GRANT or REVOKE you just wrote.*
 
+### ⚠️ A COLLISION HANDLER THAT *DELETES* MAKES THE SURROUNDING REVERSIBILITY A LIE (GOVDUP1-b, 2026-09-05)
+
+`gov_merge_property_reversible` snapshots the dropped property row and its child **ids** into
+`gov_property_merge_backup`, then calls `gov_merge_property_apply`, whose generic
+`WHEN unique_violation` arm runs `DELETE FROM %s WHERE %I = $1`. **The row is gone and the id in the
+backup points at nothing.** Measured across all 397 review-lane groups against the real unique
+constraints: `investment_scores` is UNIQUE **on `property_id` alone**, so **397 of 397 groups
+collide**; `property_embeddings` (PK on `property_id`) 334; `property_financials`
+`(property_id, fiscal_year)` 316 — **~1,321 child rows destroyed unrecoverably** if the lane were
+merged today.
+
+- **The fix is to FOLD on collision** — fill-blanks from the drop row into the keep row, then delete
+  — **never to document the loss better.** `gov_unmerge_property` already reports `_lost` per table
+  plus an explicit `note`, and that honesty is what made this findable; it is not sufficiency.
+- **This is P196 one layer down.** There, `lcc_merge_entity`'s pivot DELETE *destroyed content
+  instead of folding it*, and correlating the predicate would have looked like a fix while moving
+  nothing. Here the identical shape sits in the **generic** handler serving *every* gov child table
+  at once, so one defect spans all of them.
+- ⚠️ **Read the UNIQUE INDEXES, not one probe.** A single round-trip found three tables losing rows
+  and supported the reasonable-sounding conclusion *"a pair with disjoint children may round-trip
+  cleanly."* The index definitions say no such pair exists. **A per-pair check answers "did this one
+  lose"; the constraint answers "can any pair not lose."**
+- 🚨 **AND THE SAME CLASS IS LIVE ON dia, WHERE IT HAS ALREADY RUN 205 TIMES (MERGE1).**
+  `dia_property_merge_backup`: **585 merges, 206 collisions, 205 on a CASCADE table** — and
+  **`dc_twin_verdict`, the human-verdict Decision Center lane, collides on 90 of 116 (78%)**. An
+  operator confirming a twin destroys a child row four times in five, told it is reversible.
+- ⚠️ **THE TWO DOMAINS LOSE THE ROW BY DIFFERENT ROUTES, SO A GREP FOR ONE FINDS NOTHING ON THE
+  OTHER.** gov `DELETE`s and records `*_deleted_on_collision`; **dia records `<tbl>.<col>_error`,
+  moves on, and the row dies to `ON DELETE CASCADE`** when the property is deleted afterwards.
+  Keying on gov's vocabulary undercounted dia at **76** before re-keying on `%\_error` gave **206**.
+  **Establish the mechanism per domain before counting, and check `pg_constraint.confdeltype`** — a
+  `'c'` turns a recorded error into a silent destruction, `'a'` would have aborted, `'n'` orphans.
+  Three different outcomes that must never be reported as one.
+- ⚠️ **Split the census by WHAT was lost.** The one merge directed from Cowork
+  (`addr1a_20260904`) collided only on `pending_updates` — a queue row — while all 7 leases, the
+  deed, the listing and the document repointed correctly. **"205 merges lost data" overstates that
+  row and understates a `cap_rate_history` loss.** Substantive / re-derivable / queue are three
+  policies, and the fold must state which applies per table rather than infer it from the name.
+
+### ⚠️ A CHILD ROW WRITTEN 1:1 WITH ITS PARENT IS A CO-WRITER, NOT A DOWNSTREAM CONSUMER (GOVDUP1-a, 2026-09-05)
+
+A gov producer minted **154 empty copies of one address** and was written up as *"producer NOT
+FOUND"* after the SF promotion worker, the CoStar sidebar and `auto_apply_property_links.py` were
+each correctly ruled out on structural grounds. **The producer names itself in a child row the same
+investigation had already discovered**: every husk carries a `pending_updates` row with
+`field_name='_new_property'` and `reason='Salesforce auto-created property — verify accuracy and
+check for duplicates'`, all 154 sharing **one `sf_property_id`** with a different `staging_id` each
+time. The rows were classified as *"a downstream matcher proposed something against them"* without
+opening the payload.
+
+- **When a child row appears 1:1 with its parent in the same second, read its payload before
+  classifying it.** Class-wide this is **808 gov properties minted from 125 Salesforce properties**,
+  8 still live, newest 2026-08-25.
+- ⚠️ **A `data_source`-keyed hunt cannot find a producer that wears more than one label.** Two rows
+  for the same SF property, minted a day apart, carry `costar_sidebar` and `unknown_writer`. The
+  invariant was `field_name='_new_property'` + `sf_property_id`.
+- ⚠️ **It had already been cleaned once (June) and recurred** — P176, committed by a unit that cited
+  P176 in its own prompt. **A retire that does not name the producer schedules its own repeat.**
+- ⚠️ **And the husks were not inert: each carries an `investment_scores` row with NO DECLARED FK.**
+  P160's lesson again — *declared FKs alone MISS `owner_contact_pivot.active_contact_entity_id`;
+  match on column NAME* — so "enumerate every FK to `properties`" is still not enumerating every
+  reference.
+
 ### ⚠️ A DUPLICATE COUNT IS A PROPERTY OF THE KEY — CHECK THE KEY BEFORE CALLING A RE-MEASUREMENT A RETRACTION (GOVDUP1, 2026-09-05)
 
 Sizing gov's property duplicates, an earlier figure of **399 groups / 953 properties** was

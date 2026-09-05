@@ -177,18 +177,29 @@ that fires `gov_classify_agency()`; do not read it as broken.
    Record: `docs/audits/ENTC_JUNK80_AND_P195_UNMERGE_2026-09-03.md`.
    ⚠️ **`SEC1` moved a step**: all three definer *unmerge* functions are now `service_role` only;
    the other 88 anon-executable definer functions are untouched.
-3. **`GOVDUP1`** (drafted 2026-09-05; **replaces the planned `ADDR1c-twin-lane`**) — the sizing
-   stands at **399 groups / 953 live properties**, but reading the rows refuted the plan to port
-   dia's lane. **The producer is `excel_master`, one spreadsheet import on 2026-03-05** — not a
-   capture, so this is not an ADDR1 continuation. **`co-located ≠ twin` is dia's risk, not gov's**:
-   two agencies in one federal building is what a merge *fixes*, and 122 of 128 exact-key pairs have
-   both members carrying real attachments, so it is consolidation, never deleting an empty shadow.
-   🚨 **gov has no `merged_into_property_id`** — the merge hard-DELETEs and the backup holds child
-   *ids*, not rows, so the round trip must be proven on this population before any batch (P195).
-   Three classes: 154 empty husks from an unidentified `unknown_writer` (retire, not merge) · 267
-   punctuation-only groups · 132 exact-string groups. ⚠️ **Do not gate on city similarity** and
-   **exclude `international airport` TX by construction** — two different airports on a placeholder
-   string. Human-verdict only; the unit merges nothing. Then **`SEC1-wider`** — 63 mutating-like
+3. ✅ **`GOVDUP1` SHIPPED 2026-09-05** (LCC #2127, gov #397) — lane live at **397 groups / 797
+   properties**, 154 husks archived reversibly, **0 merges**. Canonical page:
+   `docs/architecture/gov-property-duplicates.md`. **Two conclusions were corrected by verification
+   and both make the picture worse**, so the follow-ups are ordered by that:
+   - 🚨 **`MERGE1` FIRST** (was `GOVDUP1-b`, widened). gov: `gov_merge_property_apply`'s generic
+     `WHEN unique_violation` arm **DELETEs** while the wrapper snapshots child *ids*, and
+     `investment_scores` is UNIQUE on `property_id` **alone** — so **397 of 397 lane groups
+     collide**, ~1,321 rows, **no pair round-trips cleanly**. 🚨 **The same class is LIVE on dia and
+     has already run: 585 merges, 206 collisions, 205 on a CASCADE table, and the human-verdict
+     `dc_twin_verdict` lane collides on 78%.** ⚠️ The two domains lose the row by different routes
+     (gov `DELETE`s; dia records `*_error` and `ON DELETE CASCADE` kills it), so a grep for one finds
+     nothing on the other. **dia first — it is live.** Fix = FOLD per table with a stated
+     re-derivable / substantive / queue policy. **P196 one layer down**, in a handler generic over
+     every child table. Prompt written.
+   - 🚨 **`GOVDUP1-a`** — the husk producer IS identified: a **Salesforce auto-create path that does
+     not dedupe on `sf_property_id`** (`pending_updates.field_name='_new_property'`). **808 gov
+     properties from 125 SF properties, 8 still live, newest 2026-08-25**, already cleaned once in
+     June and recurred. ⚠️ A `data_source`-keyed hunt cannot find it — it wears both
+     `costar_sidebar` and `unknown_writer`.
+   - Then `GOVDUP1-c` (154 orphaned `pending_updates`), `-d` (`verdict_hint` is a synonym for
+     `address_match`), `-e` (94 live `.0` zips), `-guard` (3 mutations, not 9).
+
+   Then **`SEC1-wider`** — 63 mutating-like
    anon-executable definer functions on LCC Opps need itemizing before anything is revoked, and
    `compute_feed_freshness` is deliberately anon on both domains.
 4. **`CONTACT1b`** — CONTACT1a shipped the CREATE path; **the UPDATE path still records nothing**,
