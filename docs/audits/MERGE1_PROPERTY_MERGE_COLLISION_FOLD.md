@@ -122,9 +122,25 @@ NULL (fold); `property_embeddings` collapsed to one row.
 Both runs executed inside `BEGIN; ... ROLLBACK;` — **no data was mutated on either live database**
 by this verification.
 
+## ⚠️ A bug caught mid-build, worth keeping: the fold looked up the keep row by the wrong column
+
+The first cut of `_{dia,gov}_merge_fold_one_row` located the keep-side row with
+`pk_col = keep_id`. That is only correct when the table's primary key **is** the FK column — true
+for `property_embeddings` (`PK(property_id)`), and **false** for `cap_rate_history` (`PK id`,
+FK `property_id`), `property_metadata_backfill_queue` (`PK queue_id`) and `pending_updates`
+(`PK id`). On those three it would have found no keep row and folded nothing, **silently** — the
+migration would have applied clean and the fold would have been a no-op on exactly the substantive
+tables it exists for. Caught and fixed before either domain's migration was applied.
+
+**Same family as the C10 / UX-T1a-gates class:** a column that is *usually* the right one,
+generalised from a table where it happens to be. **A surrogate PK and a foreign key are different
+columns even when one row carries both** — and the failure mode is a silent no-op, not an error.
+
 ## Guard
 
-`test/merge1-fold-on-collision.test.mjs` (8 tests, all pass) — reads both migrations' source
+`test/merge1-fold-on-collision.test.mjs` (8 tests, all pass — ⚠️ **no mutation pass was run or
+reported**, so treat these as shape assertions of unmeasured strength; → **MERGE1-guard-mutations**,
+alongside GOVDUP1's) — reads both migrations' source
 (comments stripped), asserts: every measured-colliding table carries a policy row on both domains;
 the properties-FK loop in each merge function routes `unique_violation` through the fold
 dispatcher (and gov's old `_deleted_on_collision` shape is gone); the fold engine `COALESCE`s
