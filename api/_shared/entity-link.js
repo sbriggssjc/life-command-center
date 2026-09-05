@@ -35,9 +35,13 @@ import { recordFieldWrites, provenanceTargetDatabase } from './field-priority-gu
 // INSERT; `shouldWriteField` is deliberately NOT called pre-write here.
 // Flipping `enforce_mode` is backlog PR5c-enforce, NOT this change.
 // ============================================================================
-const CONTACT1A_TARGET_DB = provenanceTargetDatabase('lcc_opps');
-const CONTACT1A_TARGET_TABLE = 'entities';
-const CONTACT1A_FIELDS = ['email', 'phone'];
+// Exported (CONTACT1b) so the OTHER live writer of these columns —
+// sidebar-pipeline.js's fill-blank PATCH on an EXISTING entity — can record
+// under the identical (targetDb, targetTable, source-mapping) rather than a
+// second copy that could drift from this one's registered rung spellings.
+export const CONTACT1A_TARGET_DB = provenanceTargetDatabase('lcc_opps');
+export const CONTACT1A_TARGET_TABLE = 'entities';
+export const CONTACT1A_FIELDS = ['email', 'phone'];
 
 // The registry's spelling must match byte-for-byte or lcc_merge_field takes
 // the UNREGISTERED branch (still records a row — PR5 — just without a rung).
@@ -48,11 +52,40 @@ const CONTACT1A_FIELDS = ['email', 'phone'];
 // rung"). This is deliberately NOT `canonicalIdentitySystem()` — that
 // function canonicalizes DOMAIN-DB spellings (dia/gov), a different
 // vocabulary from `field_source_priority.source`.
-function contact1aProvenanceSource(sourceSystem) {
+export function contact1aProvenanceSource(sourceSystem) {
   const s = String(sourceSystem == null ? '' : sourceSystem).trim().toLowerCase();
   if (s === 'salesforce') return 'salesforce';
   if (s === 'costar' || s === 'costar_sidebar') return 'costar_sidebar';
   return sourceSystem || 'unspecified';
+}
+
+// CONTACT1b (2026-09-05) — the ONE call any of the other 13 census'd
+// entities.email/phone write sites should make, instead of re-deriving the
+// (targetDb, targetTable, source-mapping, non-null-only) shape inline. Audit
+// only, same as CONTACT1a: never call shouldWriteField / never gate the
+// write on it. Silently no-ops when `fields` carries nothing worth
+// recording (a caller need not pre-filter).
+export async function recordContactFieldWrites({ recordPk, source, workspaceId, fields, confidence = 1.0 }) {
+  const filtered = {};
+  for (const f of CONTACT1A_FIELDS) {
+    const v = fields ? fields[f] : undefined;
+    if (v != null && String(v).trim() !== '') filtered[f] = v;
+  }
+  if (!Object.keys(filtered).length) return { recorded: 0, failed: 0 };
+  try {
+    return await recordFieldWrites({
+      targetDb:    CONTACT1A_TARGET_DB,
+      targetTable: CONTACT1A_TARGET_TABLE,
+      recordPk,
+      source:      contact1aProvenanceSource(source),
+      workspaceId,
+      confidence,
+      fields:      filtered,
+    });
+  } catch (err) {
+    console.warn('[recordContactFieldWrites] provenance record failed (entity written):', err?.message);
+    return { recorded: 0, failed: Object.keys(filtered).length };
+  }
 }
 
 /**

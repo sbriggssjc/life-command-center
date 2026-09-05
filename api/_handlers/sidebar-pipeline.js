@@ -16,7 +16,7 @@
 //   - On-demand via POST /api/entities?action=process_sidebar_extraction
 // ============================================================================
 
-import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, canonicalEntityDomain, isJunkEntityName, normalizeEmail, isGenericInboxEmail, looksLikeContactPhone } from '../_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, canonicalEntityDomain, isJunkEntityName, normalizeEmail, isGenericInboxEmail, looksLikeContactPhone, recordContactFieldWrites } from '../_shared/entity-link.js';
 import { isCompetitorBroker } from '../_shared/sf-nm-classifier.js';
 import { opsQuery, insertEntityRelationship, fetchWithTimeout } from '../_shared/ops-db.js';
 import { uploadArtifactToStorage } from '../_shared/artifact-storage.js';
@@ -2279,6 +2279,20 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
           `entities?id=eq.${link.entityId}&workspace_id=eq.${workspaceId}`,
           updates
         );
+        // CONTACT1b — this is the UPDATE-path twin of ensureEntityLink's
+        // CREATE-path recordFieldWrites (entity-link.js). ensureEntityLink
+        // never PATCHes email/phone onto a pre-existing entity, so a SECOND
+        // capture of a contact already minted here (the common CoStar
+        // sidebar shape: mint on first sight, enrich on a later re-visit)
+        // landed with NO field_provenance row at all — one producer, two
+        // write paths, one ledger entry. Audit-only, same as CONTACT1a:
+        // both rungs are `record_only`, so this never blocks the write.
+        await recordContactFieldWrites({
+          recordPk: link.entityId,
+          source,
+          workspaceId,
+          fields: updates,
+        });
       }
     }
 
