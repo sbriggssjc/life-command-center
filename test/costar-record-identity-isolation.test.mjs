@@ -100,13 +100,32 @@ test('fresh ASC tenant roster replaces stale tenant observations only for the sa
   assert.ok(empty.reasons.includes('fresh_tenant_roster_empty'));
 });
 
+test('fresh tenant scans target the provenance-producing frame and reject another active tab', () => {
+  const api = identityApi();
+  const context = { _source_tab_id: 41, _tenant_source_frame_id: 7 };
+
+  assert.deepEqual(
+    { ...api.freshTenantFrameTarget(context, 41) },
+    { ok: true, tabId: 41, frameId: 7 },
+  );
+  assert.deepEqual(
+    [...api.freshTenantFrameTarget(context, 42).reasons],
+    ['fresh_tenant_tab_identity_mismatch'],
+  );
+  assert.equal(api.freshTenantFrameTarget({ _source_tab_id: 41 }, 41).frameId, 0);
+  assert.deepEqual(
+    [...api.freshTenantFrameTarget(context, null).reasons],
+    ['missing_active_costar_tab'],
+  );
+});
+
 test('all three runtime layers enforce the shared record boundary', () => {
   const manifest = JSON.parse(readFileSync(join(ROOT, 'extension/manifest.json'), 'utf8'));
   const costarScript = manifest.content_scripts.find((entry) =>
     entry.matches.some((match) => match.includes('costar.com'))
   );
   assert.equal(costarScript.js[0], 'shared/property-identity.js');
-  assert.equal(manifest.version, '1.0.48');
+  assert.equal(manifest.version, '1.0.49');
 
   const content = readFileSync(join(ROOT, 'extension/content/costar.js'), 'utf8');
   const background = readFileSync(join(ROOT, 'extension/background.js'), 'utf8');
@@ -115,11 +134,14 @@ test('all three runtime layers enforce the shared record boundary', () => {
   assert.match(content, /snapshot\._source_field_provenance/);
   assert.match(background, /discarded stale or mixed-record snapshot/);
   assert.match(background, /senderTabKey !== incomingKey/);
+  assert.match(background, /incoming\._tenant_source_frame_id = sender\?\.frameId \?\? 0/);
   assert.match(sidepanel, /Capture blocked — CoStar record changed/);
   assert.match(sidepanel, /validateCostarContext\(liveCtx\)/);
   assert.match(content, /GET_FRESH_ASC_TENANT_CONTEXT/);
   assert.match(sidepanel, /getFreshAscTenantContext\(liveCtx\)/);
   assert.match(sidepanel, /mergeFreshTenantRoster\(ctx, fresh, activeUrl\)/);
+  assert.match(sidepanel, /freshTenantFrameTarget\(ctx, tabId\)/);
+  assert.match(sidepanel, /frameId: target\.frameId/);
   assert.match(
     sidepanel,
     /costar_property_id: domain === 'costar'[\s\S]*LccPropertyIdentity\.costarPropertyId\(liveCtx\.page_url\)/,

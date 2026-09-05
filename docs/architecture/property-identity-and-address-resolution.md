@@ -97,8 +97,11 @@ Range containment never substitutes for the approved operating tenant, independe
 or second review.
 
 For a CoStar Tenant-tab attachment, the tenant observation used by the restricted ASC matcher is refreshed
-from the top-frame DOM at click time. The fresh roster replaces the cached roster only when its URL,
-declared property key, tenant provenance key, and active-tab identity all resolve to the same CoStar record.
+from the exact content-script frame that produced the current tenant snapshot at click time. CoStar may
+render the roster outside frame 0, so the background context records the provenance-validated tenant frame
+and the sidebar also requires the active tab ID to match. The fresh roster replaces the cached roster only
+when its URL, declared property key, tenant provenance key, and active-tab identity all resolve to the same
+CoStar record.
 An empty roster, unavailable scan, or any record/provenance disagreement fails closed. The scalar primary
 tenant may remain a different occupant in a multi-tenant building; an approved operating identity can match
 only an exact name in the freshly observed full roster.
