@@ -460,6 +460,13 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           return;
         }
         incoming._source_tab_id = sender?.tab?.id ?? null;
+        // CoStar renders some detail tabs inside a child frame. Remember the
+        // exact frame that produced a non-empty tenant roster so click-time
+        // ASC validation can query that live DOM instead of assuming frame 0.
+        // The record/provenance checks above run before this frame is trusted.
+        if (Array.isArray(incoming.tenants) && incoming.tenants.length > 0) {
+          incoming._tenant_source_frame_id = sender?.frameId ?? 0;
+        }
       }
 
       // Primary: URL-based identity. Both keys present and equal = same property.
