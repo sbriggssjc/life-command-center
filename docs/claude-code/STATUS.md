@@ -16,6 +16,59 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-05 — GOVDUP1-a SHIPPED: the writer was DEPLOYED BUT NEVER COMMITTED · and yesterday's SEC1 guard worked on its first real opportunity
+
+**PR #2138, verified live.**
+
+🚨 **The producer is `intake-salesforce`, a Supabase edge function on Dialysis_DB — deployed
+`version 23`, ACTIVE, while the committed source is v1-era with ~400 lines of drift.** Path:
+`handleCrawlComplete → linkProbe(autoCreate=true) → autoCreateProperty()` → a bare POST into
+`gov.properties` plus the `_new_property` advisory. **GOVDUP1's search was not sloppy — it read the
+committed file, which genuinely has no insert path.** ⚠️ **This is "running but not merged", the
+inverse of the doctrine this repo states everywhere, and it is the SECOND instance** (P194: the
+extension's hard-coded Vercel URLs, also client-side and also invisible to a repo grep). **A
+producer whose deployed code is ahead of the repo is invisible to every code search, and no test,
+guard or reviewer can see it.** Confirmed independently: `list_edge_functions` on
+`zqzrriwuavgrquhisnoa` shows `intake-salesforce` v23 ACTIVE.
+
+**The defective key, confirmed:** `uq_sf_property_staging_dedup` is
+`(sf_property_id, source_system, **import_batch**)` — and `import_batch` changes every crawl, so it
+**can never collide**. A dedupe key containing a per-run value is not a dedupe key.
+
+**The fix, proven behaviourally (rolled back):** two `BEFORE INSERT` triggers on
+`sf_property_staging` pre-link by `sf_property_id` *ahead of* the mint. A fresh crawl row for the
+Rutland `sf_property_id` — the exact shape that minted 154 husks — now returns
+`linked_property_id = 36283`, `match_method = 'sf_identity_dedupe'`, confidence 1.0, so
+`autoCreateProperty` never fires. ✅ **And it prefers a LIVE row when one exists**: given the
+39064 (active) / 39128 (archived) pair it links to **39064**. Linking to an archived husk happens
+only when every row for that SF property is archived — which beats re-minting.
+
+✅ **The SEC1-definer-default guard worked on its first real opportunity.** Both new trigger
+functions (`gov_sf_staging_identity_dedupe`, `gov_sf_staging_identity_record`) are SECURITY DEFINER
+and shipped **locked** — `anon` false, `authenticated` false, `proacl = {postgres=X,service_role=X}`.
+The migration carries the stanza because the guard requires it. *That is the first evidence the
+guard changes behaviour rather than merely existing.*
+
+**Counts:** `_new_property` advisories still `pending` **220 → 63** (157 resolved this batch, with a
+fix to the expiry function, which only asked *does the property exist* — and archiving does not
+delete). Live duplicate properties **6 → 3** (18945, 22102, 39064); the two 2026-05-17 rows were
+deliberately **left alone** as the sole record at their address, which is the right call —
+archiving them would have destroyed real data. ✅ **Guard `test/govdup1a-sf-property-dedupe.test.mjs`:
+12/12 mutations RED, 0 survivors — the first genuine full mutation pass of the week**, after three
+that reported a strength they did not have.
+
+⚠️ **My "8 still live" in the filing prompt was wrong; the answer is 6.** I counted advisory **rows**
+where the population is **properties** — two properties carried two advisories each. `CLAUDE.md`'s
+own rule (*state which grain a count is on — rows ≠ assets ≠ owners*) broken by me, in the prompt
+that told CC to re-measure everything. CC re-measured and corrected it, which is exactly what the
+standing rule is for.
+
+**Open, filed honestly rather than skipped:** the ~400-line deployed-vs-committed drift; sibling
+staging tables (comps, listings) sharing the same collision-prone key shape; a dia-side branch of
+the same function not covered by this dedupe; and **the real confirmation — that no new
+`_new_property` rows appear — needs ~24h**, since the crawl is hourly. Flagged unverified rather
+than claimed. → **GOVDUP1-a-residue**.
+
 ## 2026-09-05 — SEC1-merge-family Unit 1 SHIPPED: the 7 functions a name-only sweep missed are locked
 
 **PR #2136, verified live.** `anon` false / `authenticated` false / `service_role` true /
