@@ -16,6 +16,57 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-05 — MERGE1 SHIPPED (fold-on-collision, both domains) · and its own migration shipped 4 ANON-EXECUTABLE destructive definer functions, found and fixed the same day
+
+**Verified live (PR #2130, commit `344d360e`).** `{dia,gov}_merge_child_policy` seeded from the
+measured population; `{dia,gov}_merge_fold_table` + `_{dia,gov}_merge_fold_one_row` created; both
+merge functions route `unique_violation` through the fold dispatcher and **gov's old
+`_deleted_on_collision` shape is gone** (grep = 0). `gov_property_merge_backup` still **0** —
+nothing merged. Lane still 397. Audit: `docs/audits/MERGE1_PROPERTY_MERGE_COLLISION_FOLD.md`.
+
+**The fix is proven behaviourally on BOTH domains, not read off the code** — each re-run inside
+`BEGIN … ROLLBACK` after the privilege change below:
+
+| domain | policy exercised | result |
+|---|---|---|
+| dia | `property_embeddings` → `re_derivable` | 1 row remains on keep; ledger `{"policy":"re_derivable","discarded_re_derivable":1}` |
+| gov | `property_financials` → `fold_fill_blanks` | 1 row remains, and the keep row's **NULL `noi` was filled from the drop row (987654.32)** — the value the old code destroyed |
+
+✅ **The new `rewired` ledger reports `folded` / `repointed` / `resolved_in_place` /
+`discarded_re_derivable` separately per table**, so a deliberate discard and a loss no longer read
+the same — which was the substantive complaint against `_error` / `_deleted_on_collision`.
+
+🚨 **MERGE1-sec — the four new fold helpers shipped reachable by `anon` and `authenticated` on both
+databases.** They are **destructive and take a TABLE NAME as a parameter** (`*_merge_fold_table`
+runs dynamic `UPDATE`/`DELETE` against whatever table the caller names), so this was **a strictly
+worse hole than the one SEC1-property closed three days earlier** on
+`*_merge_property_reversible`. The callers were already locked; the helpers they gained were not.
+Measured: `proacl = {=X/postgres,…,anon=X/postgres,authenticated=X/postgres,…}`,
+`has_function_privilege('anon',…)` **TRUE** on all four.
+
+- **Fixed live on both domains and committed** as
+  `supabase/migrations/{dialysis,government}/20260905130000_*_merge1_fold_function_privileges.sql`,
+  each carrying a positive-controlled assertion that fails loudly if either role can still reach
+  either function **and** if `service_role` cannot. After: anon/auth **false**, service_role
+  **true**, `proacl = {postgres=X,service_role=X}`, all four.
+- ⚠️ **Third instance of this class in a week** (B6d `compute_feed_cadence`, OCR2
+  `<dom>_merge_document_extracted_data`, ADDR1b `gov_merge_property_apply`) and **the first where
+  the same PR that fixed a data-loss defect opened a privilege one.** Postgres grants EXECUTE to
+  PUBLIC on every new function and Supabase additionally grants `anon`/`authenticated`
+  **explicitly**, so `REVOKE … FROM public` alone is a no-op for the two roles that matter.
+  **A migration that CREATEs a definer function needs its privilege stanza in the same file.**
+  → filed as **SEC1-definer-default** so the rule stops being re-learned.
+
+**Historical losses NOT backfilled** — the 205 dia merges are gone, recorded as a number and a date
+(PR12 rule). `dc_twin_verdict` merges from here forward fold instead of destroying.
+
+⚠️ **Stated gap CC recorded rather than solved:** `resolve_status` (dia `pending_updates`) repoints
+the row back on unmerge but does **not** restore its original `status`, so that reversal is not
+byte-perfect. The row survives; the reversal is lossy in one column. → **MERGE1-resolve-status**.
+
+⚠️ **The response `.docx` was 0 bytes** (Word lock file `~$RGE1…` beside it) — this entry was
+reconciled from the merged PR and `docs/audits/MERGE1_PROPERTY_MERGE_COLLISION_FOLD.md` instead.
+
 ## 2026-09-05 — SEC1-property SHIPPED (all 4 locked, migrations committed on both domains) · 🚨 the CMBS Loan-tab capture produced NOTHING — the arm is confirmed unreachable, not merely uncaptured · GOVDUP1 drafted, and it REPLACES the planned ADDR1c-twin-lane.
 
 ### GOVDUP1 SHIPPED — and the verification found the producer CC could not, plus a merge that cannot be reversed
