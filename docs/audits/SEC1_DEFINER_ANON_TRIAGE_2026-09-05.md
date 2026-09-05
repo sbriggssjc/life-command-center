@@ -126,3 +126,54 @@ one creates is still live, still anon-executable, and still mutating (vs. read-o
 vs. already re-locked by a later un-triaged migration) is exactly what an operator with
 live DB access needs to check next, function by function, starting with the ones named
 above.
+
+## ✅ Unit 1 SHIPPED, same day — the property-merge family is now fully locked
+
+Migrations `supabase/migrations/dialysis/20260905120000_dia_sec1_merge_family_lockdown.sql` and
+`supabase/migrations/government/20260905120000_gov_sec1_merge_family_lockdown.sql`, applied live.
+
+Revoked `execute` from `public, anon, authenticated` on:
+
+- dia: `dia_consolidate_property_reviewed(bigint,bigint,text,boolean,text)`,
+  `dia_reverse_property_consolidation(bigint,text)`,
+  `dia_merge_twins(boolean,text,integer,numeric,numeric)`,
+  `p31_property_consolidation_apply(boolean,text)`, `p31_same_event_sales_apply(boolean,text)`
+- gov: `p31_property_consolidation_apply(boolean,text,integer)`,
+  `p31_same_event_sales_apply(boolean,text)`
+
+**Safety proof, the SEC1-property way — a sibling already living under the constraint on the same
+code path**, not a documented claim: `dia_merge_property_reversible`/`dia_unmerge_property` and
+`gov_merge_property_apply` were already `service_role`-only and are called successfully by the
+`property_twin` lane via `domainQuery` (service key). Re-verified live, post-revoke, with a real
+dry-run call as `service_role` — `dia_consolidate_property_reviewed(30746,29713,'sec1_probe',true,
+'probe')` returned its normal plan output (fk_moves, would_fill, active_listing_survivor) unchanged;
+`p31_same_event_sales_apply(true,'sec1_probe')` on gov likewise. Each migration also carries its own
+in-transaction `has_function_privilege()` assertions (anon false / authenticated false / service_role
+true) that ran and passed at apply time.
+
+Final census, all seven: `anon_exec=false`, `service_role_exec=true`.
+
+**`gov_truncate_sam_public_staging`** was named in this doc's own table above but is a monitor/staging
+TRUNCATE, not a merge-family function — it stays in Unit 2's triage, not Unit 1.
+
+## Unit 2 / Unit 3 — status: triaged, not swept
+
+The LCC Opps 62 (anon + mutating SECURITY DEFINER) were **not** individually classified in this
+session — that is a real per-function read (table/column parameter? PostgREST caller? deliberate-anon
+precedent?) for 62 functions, not something a name or regex census can responsibly finish inside one
+pass. What's confirmed:
+
+- `lcc_apply_cleared_tombstones` is **not** the MERGE1 shape (dynamic SQL over a hard-coded column
+  map, not a caller-supplied table) — corrected above; it stays in the queue at ordinary severity,
+  not head-of-line.
+- `compute_feed_freshness` / `compute_feed_cadence` remain anon **by design** — do not sweep them.
+- No blanket revoke was applied to the 62. That refusal is the Unit 2 result for this pass, not a gap
+  silently left open: a name/regex census cannot safely rank or clear this list, and doing it properly
+  needs the same per-function read this doc gave the merge family.
+
+Unit 3 (closing the audit-shaped hole itself) is partially done: this doc + the census above already
+record *how* the family was found (`prosecdef` + `has_function_privilege('anon',…)` +
+`pg_get_functiondef ~* mutating-statement` across all three projects), so the next sweep starts from
+that method rather than a name list. No new automated guard was built for *existing* live grants
+(only `test/sql-definer-privilege-stanza.test.mjs` guards *new* migrations, which is a different
+problem) — flagged as open, not attempted, given the scope of this pass.
