@@ -31,7 +31,7 @@ import { parseAddress, parseAddressList } from './_shared/outlook-recipients.js'
 import { maybeAttachActionSummary, touchedActionLabels } from './_shared/action-summary.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
-import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, recordContactFieldWrites } from './_shared/entity-link.js';
 import { processIntakeExtraction, handleExtractRoute } from './_handlers/intake-extractor.js';
 import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
 import { processSidebarExtraction } from './_handlers/sidebar-pipeline.js';
@@ -1620,6 +1620,14 @@ async function processExtractedContacts(contacts, workspaceId, userId, senderEma
             `entities?id=eq.${existing.id}&workspace_id=eq.${workspaceId}`,
             updates
           );
+          // CONTACT1b — fill-blank UPDATE site #2 of the census; ungoverned
+          // before this. Audit-only (see entity-link.js recordContactFieldWrites).
+          await recordContactFieldWrites({
+            recordPk: existing.id,
+            source: 'intake_email',
+            workspaceId,
+            fields: updates,
+          });
         }
 
         // Link to intake item

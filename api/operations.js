@@ -59,7 +59,7 @@
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler, insertEntityRelationship } from './_shared/ops-db.js';
 import { closeResearchLoop } from './_shared/research-loop.js';
-import { ensureEntityLink, normalizeCanonicalName, refreshPlaceholderEntityNameById, looksLikePersonName } from './_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, refreshPlaceholderEntityNameById, looksLikePersonName, recordContactFieldWrites } from './_shared/entity-link.js';
 import { invokeChatProvider } from './_shared/ai.js';
 import { generateDraft, generateBatchDrafts, listActiveTemplates, loadTemplate, recordTemplateSend, computeEditDistance, chooseBestTemplate } from './_shared/templates.js';
 import { runListingBdPipeline, runListingBdDraftConsumer } from './_shared/listing-bd.js';
@@ -803,6 +803,13 @@ async function bridgeSetContactEmail(req, res, user, workspaceId) {
     `entities?id=eq.${pgFilterVal(entityId)}&workspace_id=eq.${pgFilterVal(workspaceId)}`,
     { email, updated_at: new Date().toISOString() });
   if (!r.ok) return res.status(r.status || 500).json({ error: 'Failed to save email', detail: r.data });
+  // CONTACT1b — an operator-typed email in the draft flow. Audit-only.
+  await recordContactFieldWrites({
+    recordPk: entityId,
+    source: 'manual',
+    workspaceId,
+    fields: { email },
+  });
   return res.status(200).json({ ok: true, entity_id: entityId, email });
 }
 
@@ -1173,6 +1180,16 @@ async function bridgeUpdateEntity(req, res, user, workspaceId) {
   if (!result.ok) {
     return res.status(result.status || 500).json({ error: 'Failed to update entity' });
   }
+
+  // CONTACT1b — this PATCH runs unconditionally on the ALLOWED-FIELDS list
+  // (overwrites, not fill-blank), so it is the generic bridge writer of
+  // entities.email/phone. Audit-only.
+  await recordContactFieldWrites({
+    recordPk: entityId,
+    source: source_system,
+    workspaceId,
+    fields: updates,
+  });
 
   return res.status(200).json({
     updated: true,

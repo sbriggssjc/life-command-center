@@ -120,7 +120,7 @@ import {
   isNonDealSnapshot, hasFullDealSignature, normalizeDocType,
   snapshotLooksLikeListing, LISTING_DOCUMENT_TYPES, classifyStagedIntake,
 } from './_shared/intake-classify.js';
-import { normalizeState, parseContactFromJunk, normalizeCanonicalName } from './_shared/entity-link.js';
+import { normalizeState, parseContactFromJunk, normalizeCanonicalName, recordContactFieldWrites } from './_shared/entity-link.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
 import {
   SELLER_QUEUE_CHIPS, buildQueuePath, buildChipCountPath, buildPagination,
@@ -9433,6 +9433,12 @@ async function handleJunkBucket(req, res) {
       // Effect FIRST.
       const pr = await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(e.id), patch);
       if (!pr.ok) { failed++; errors.push({ id: e.id, error: pr.data }); continue; }
+      // CONTACT1b — an operator picked this verdict for this bucket; the
+      // parsed values are not a source's own claim, so recorded as `manual`
+      // rather than the (absent) capture source. Audit-only.
+      await recordContactFieldWrites({
+        recordPk: e.id, source: 'manual', workspaceId, fields: patch,
+      });
 
       // Record the verdict on the existing seeded decision (best-effort — the
       // entity effect is the source of truth; a missing decision row is rare).
@@ -10298,6 +10304,14 @@ async function handleDecisionVerdict(req, res) {
             { reverted_at: nowIso }).catch(() => {});
           return res.status(502).json({ error: 'owner_contact_attach_review: owner_patch_failed', detail: upd.data });
         }
+        // CONTACT1b — a human confirmed this via the Decision Center verdict;
+        // recorded as `manual`, the ladder's highest rung, not the proposal's
+        // originating capture source. Already governed by the ledger above;
+        // this additionally makes it visible on the shared field_provenance
+        // ledger. Audit-only.
+        await recordContactFieldWrites({
+          recordPk: ownerId, source: 'manual', workspaceId, fields: patch,
+        });
         await opsQuery('PATCH', 'lcc_owner_contact_propagate_review?review_id=eq.' + review.review_id,
           { status: 'confirmed', applied_verdict: 'same_party', applied_log_id: applyLogId,
             decided_by: user.id || null, decided_at: nowIso });
@@ -10336,6 +10350,11 @@ async function handleDecisionVerdict(req, res) {
       if (cls.has_phone && !String(el.entity.phone || '').trim()) personPatch.phone = String(review.contact_phone).trim();
       if (Object.keys(personPatch).length) {
         await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(personId), personPatch).catch(() => {});
+        // CONTACT1b — same human-verdict reasoning as the same_party branch
+        // above: recorded as `manual`. Audit-only.
+        await recordContactFieldWrites({
+          recordPk: personId, source: 'manual', workspaceId, fields: personPatch,
+        }).catch(() => {});
       }
 
       const role = cls.role || 'prospecting_contact';

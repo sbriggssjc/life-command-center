@@ -181,9 +181,60 @@ per-caller wiring. Guard: `test/contact1a-entity-link-provenance.test.mjs` (beha
 is disabled).
 
 **Not done here, deliberately:** no `enforce_mode` flip (PR5c-enforce stays blocked — CONTACT1a
-gives the ladder its first real, ongoing feed but the history has to accrue before there's
+gives the ladder first real, ongoing feed but the history has to accrue before there's
 anything to grade); `SF_CONTACT_WRITEBACK` untouched; `metadata.field_sources`/
 `planContactFieldPromotion` untouched; no backfill of past writes.
+
+### CONTACT1b — CONTACT1a governed the CREATE path; 10 of 14 write sites were still UPDATE-path and ungoverned (2026-09-05)
+
+The CONTACT1b handoff's filing premise was wrong and refuted by reading the code first:
+`writeEntitySalesforceLink` (`api/_shared/salesforce-sync.js`) touches `external_identities` and
+`entities.metadata`, never `email`/`phone` — it was never a candidate site. A re-census of the
+**14** live `entities.email`/`phone` write sites (not the CREATE-only 9 above) found **4 already
+governed** (CONTACT1a's `ensureEntityLink` CREATE path; `contact-writeback.js` and
+`owner-contact-propagate.js`, both via `filterByFieldPriority`) and **10 UPDATE-path sites with no
+provenance at all** — sharpest instance: the CoStar sidebar's own SECOND capture of a contact
+already minted by its FIRST (`sidebar-pipeline.js::unpackContacts`'s fill-blank enrichment PATCH)
+went unrecorded while the mint next to it was audited — one producer, two paths, one ledger entry.
+
+Extracted the one-per-write shape CONTACT1a's inline block owned alone into
+`entity-link.js::recordContactFieldWrites({ recordPk, source, workspaceId, fields })` (audit-only,
+never gates — same reasoning as CONTACT1a: all ten rungs are `record_only`) and wired it into
+**six** of the ten: `sidebar-pipeline.js::unpackContacts`'s enrichment PATCH, `intake.js`'s
+existing-contact fill-blank, `operations.js::bridgeSetContactEmail` and `::bridgeUpdateEntity`,
+and both PATCH branches of `admin.js`'s `owner_contact_attach_review` human verdict (recorded
+`source: 'manual'` — a human confirming a contact is a higher-authority write than any automated
+source, per the ladder's own `manual`@1 rung) plus `admin.js::handleJunkBucket`'s `parse_contact`
+verdict (also `manual`: an operator chose this verdict, the parsed values are not a source's own
+claim). **Left two of the ten ungoverned, with the reason recorded at the site, not silently
+dropped:** `admin.js`'s `tm_misparse_unstamp` (clears `email` to `null` inside an already-ledgered
+`junk_review_batch` reversal — recording a CLEAR as a source's positive write would misrepresent
+it) and `lease-extractor.js::writeEntityContact` (its own header comment already gives the
+reasoning — `entities` here is the BD graph, not a curated domain table, so this is graph
+enrichment, not a provenance-ledger write; confirmed rather than re-decided).
+
+Measured, not assumed: **the PATCH `/api/entities` generic endpoint's `allowedFields` list
+includes `email`/`phone`, and its one known caller (the Chrome extension's Update button) sends
+`extractSourceFields(liveCtx)`, built from `PROPERTY_FIELDS`/`ASSESSOR_FIELDS` — neither list
+contains an email or phone key.** A path that never carries the field is a different fact from one
+that carries it ungoverned (CONTACT1's own lesson: *a path that never runs cannot fail*) — so it
+was **not instrumented**, and is recorded here rather than guessed at.
+
+**What this buys, in numbers:** live churn over the prior 30 days measured 587 entities touched
+carrying email or phone, of which 417 were CREATEs (already covered by CONTACT1a) and **170 were
+UPDATEs to a pre-existing row — the case where a prior value exists and the ladder's opinion
+matters, and where the ledger was previously blind.** The six newly-wired sites do not cover 100%
+of that 170 (the two deliberate exclusions and any UPDATE traffic on the ungated generic endpoint
+are outside it), so re-measure the coverage ratio over the next 7 days rather than assuming full
+capture. **Separately: because every rung is `record_only`, none of this changes what gets
+WRITTEN today** — flipping any rung to `strict` (backlog `PR5c-enforce`) is the change that would
+turn a recorded conflict into a blocked write, and that decision needs its own blast-radius
+measurement against the now-fuller ledger, not this one.
+
+Guard: `test/contact1b-write-site-coverage.test.mjs` — Part A behavioural (invokes
+`recordContactFieldWrites` with a stubbed `fetch`), Part B a comment-stripped source census
+anchored on the exported symbol name at each of the six wired sites plus the two deliberate
+exclusions (mutation-verified RED when a wired call is removed).
 
 ## 5. Lessons carried verbatim from `CLAUDE.md` (moved 2026-09-02, unedited)
 
