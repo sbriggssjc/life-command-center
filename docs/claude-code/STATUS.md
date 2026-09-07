@@ -23,6 +23,30 @@
 `gov_govdup1a_sf_property_identity_dedupe.sql`. **The repo describes the database again** — a
 rebuild from `main` reproduces the lockdown instead of silently restoring the anon grants.
 
+## 2026-09-06 — CONTACT1b-manual-source CLOSED: fixed before a single row was mislabelled, and the guard now asserts the property
+
+**PR #2148, verified.** All three human-verdict sites (`admin.js` `handleJunkBucket` + both
+`owner_contact_attach_review` branches) now pass **`source: 'manual_resolution'`** — a registered
+rung-1 source. **Zero bare `source: 'manual'` remain** in `api/admin.js`.
+
+✅ **Nothing needed relabelling.** `field_provenance` on `entities` still shows only `salesforce`
+(23), `costar_sidebar` (5+5) and `domain_owner_contact` (4) — **no `manual` row ever existed**,
+because these are human-triggered paths and none ran between the deploy and the fix. *Caught in the
+window where the fix was three strings.*
+
+✅ **The guard was re-anchored on the PROPERTY, not the value.**
+`test/contact1b-write-site-coverage.test.mjs` (now **12/12**, up from 11) asserts membership in
+`REGISTERED_RUNG1_SOURCES = {manual_edit, manual_resolution}` rather than equality with one literal
+— so a future correction to the other valid spelling stays green, and an unregistered one goes red.
+**That is the fix for the class**, not just for this instance: the repo has met "a guard that pins a
+value defends the defect" in UX-T0 (×2), C13c, OCR2 (×2), B6c-dup and CONTACT1b.
+
+📍 **Consolidation:** the canonical `docs/architecture/field-provenance-ladder.md` still asserted
+*"per the ladder's own `manual`@1 rung"* as the justification — **the canonical page was carrying the
+defect's rationale.** Corrected in place with the measurement (`manual_edit` 207 rungs / 28 tables,
+`manual_resolution` 203 / 28, bare `manual` 1 / 1) and the reason the fix was the call sites rather
+than a new rung. *A topic page that is stale on its own topic is worse than no page.*
+
 ## 2026-09-06 — CONTACT1b SHIPPED (six UPDATE sites wired, one measured-and-declined) · 🚨 and the three human-verdict sites write an UNREGISTERED source
 
 **PR #2146, verified live.** ✅ **The ledger is moving**: `field_provenance` on `entities` now holds

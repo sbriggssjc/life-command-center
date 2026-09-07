@@ -202,11 +202,27 @@ Extracted the one-per-write shape CONTACT1a's inline block owned alone into
 never gates — same reasoning as CONTACT1a: all ten rungs are `record_only`) and wired it into
 **six** of the ten: `sidebar-pipeline.js::unpackContacts`'s enrichment PATCH, `intake.js`'s
 existing-contact fill-blank, `operations.js::bridgeSetContactEmail` and `::bridgeUpdateEntity`,
-and both PATCH branches of `admin.js`'s `owner_contact_attach_review` human verdict (recorded
-`source: 'manual'` — a human confirming a contact is a higher-authority write than any automated
-source, per the ladder's own `manual`@1 rung) plus `admin.js::handleJunkBucket`'s `parse_contact`
-verdict (also `manual`: an operator chose this verdict, the parsed values are not a source's own
-claim). **Left two of the ten ungoverned, with the reason recorded at the site, not silently
+and both PATCH branches of `admin.js`'s `owner_contact_attach_review` human verdict plus
+`admin.js::handleJunkBucket`'s `parse_contact` verdict — all three recorded as
+**`source: 'manual_resolution'`** (a human confirming a contact is a higher-authority write than any
+automated source; an operator chose the verdict, so the values are not a capture source's own claim).
+
+> 🚨 **CORRECTED 2026-09-06 (CONTACT1b-manual-source) — these three shipped as `source: 'manual'`,
+> which is NOT a registered rung, and this page originally cited "the ladder's own `manual`@1 rung"
+> as the justification. There is no such rung.** The registered rung-1 sources for
+> `entities.email`/`phone` are **`manual_edit`** and **`manual_resolution`**. Fleet-wide the
+> convention is unambiguous — `manual_edit` **207 rungs / 28 tables**, `manual_resolution`
+> **203 / 28**, bare `manual` **1 rung / 1 table** — so the fix was the three call sites, never a new
+> rung. ⚠️ **The consequence inverted the intent**: *the registry is the allowlist* (PR8), so an
+> unregistered source is relabelled `domain_trigger` and takes `lcc_merge_field`'s **unregistered
+> branch** — fills a blank, never overrides, overridable by anyone. **The highest-authority write on
+> the ladder would have landed at the weakest tier, silently.** ✅ **Caught before it fired: zero
+> `manual` rows ever existed** (human-triggered paths, none run between deploy and fix), so nothing
+> needed relabelling. ⚠️ **The guard pinned the literal `'manual'` twice and would have gone red on
+> the correction** — it now asserts membership in `REGISTERED_RUNG1_SOURCES`
+> (`{manual_edit, manual_resolution}`), i.e. **the property, not the value**. Durable rule, now in
+> `CLAUDE.md`: *query `field_source_priority` for the exact registered spelling before writing a new
+> source — a source string is part of the contract, not a label.* **Left two of the ten ungoverned, with the reason recorded at the site, not silently
 dropped:** `admin.js`'s `tm_misparse_unstamp` (clears `email` to `null` inside an already-ledgered
 `junk_review_batch` reversal — recording a CLEAR as a source's positive write would misrepresent
 it) and `lease-extractor.js::writeEntityContact` (its own header comment already gives the
