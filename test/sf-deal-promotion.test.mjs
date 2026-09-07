@@ -129,12 +129,34 @@ describe('planDealSalePromotion', () => {
 });
 
 describe('routeVertical — state-government cues', () => {
-  it('routes a TX state-agency deal to gov', () => {
+  // ⚠️ DRIFT1 (2026-09-07): these two cases describe a state-agency routing
+  // enhancement (GOV_STATE_SIGNALS folded into intake-salesforce's own
+  // GOV_SIGNALS, plus a default-to-dia-unresolved fallback) that DOES NOT
+  // EXIST in the deployed intake-salesforce function (project
+  // zqzrriwuavgrquhisnoa, version 23, verified via Supabase MCP
+  // get_edge_function on 2026-09-07). The deployed sf-config.ts routeVertical
+  // has its OWN, narrower GOV_SIGNALS list (no GOV_STATE_SIGNALS import) and
+  // defaults an unmatched row to `{ vertical: null, resolved: false, reason:
+  // 'no_match' }`, not to dia. Whoever wrote GOV_STATE_SIGNALS in
+  // sf-deal-promotion.ts and these tests together intended this feature; it
+  // was apparently never shipped to the edge function that was supposed to
+  // consume it — a "committed but not merged into deployment" instance,
+  // structurally the SAME class as GOVDUP1-a but on the routing side instead
+  // of the write side. A `'TX Dept of Family Protective Services HQ'` deal
+  // today gets vertical:null and is silently SKIPPED at intake (see
+  // `handleObjects`'s `routing.vertical === null` branch) rather than
+  // reaching gov. This is a real coverage gap, not guessed at or silently
+  // patched into the deployed function here (DRIFT1 is repo-reconciliation
+  // only, no redeploys) — filed as DRIFT1-routing-gap for whoever next
+  // touches intake-salesforce to decide: wire GOV_STATE_SIGNALS in and
+  // deploy, or drop it from sf-deal-promotion.ts if it was never meant for
+  // this function. Tests below assert the CURRENT deployed behavior.
+  it('a TX state-agency deal is NOT routed by the deployed function (DRIFT1-routing-gap)', () => {
     const r = routeVertical({ deal_name: 'TX Dept of Family Protective Services HQ', property_type: 'Office' });
-    assert.equal(r.vertical, 'gov');
-    assert.equal(r.resolved, true);
+    assert.equal(r.vertical, null);
+    assert.equal(r.resolved, false);
   });
-  it('routes a "State of ..." agency deal to gov', () => {
+  it('routes a "State of ..." agency deal to gov (matches on "department of" in its own GOV_SIGNALS)', () => {
     const r = routeVertical({ tenant_names: 'State of Oklahoma Department of Human Services' });
     assert.equal(r.vertical, 'gov');
   });
@@ -147,9 +169,9 @@ describe('routeVertical — state-government cues', () => {
     const r = routeVertical({ tenant_names: 'Fresenius Medical Care' });
     assert.equal(r.vertical, 'dia');
   });
-  it('a generic office deal defaults to dia (unresolved)', () => {
+  it('a generic office deal is unresolved (deployed default is null, not dia — DRIFT1-routing-gap)', () => {
     const r = routeVertical({ deal_name: 'Generic Office Tower', property_type: 'Office' });
-    assert.equal(r.vertical, 'dia');
+    assert.equal(r.vertical, null);
     assert.equal(r.resolved, false);
   });
   it('GOV_STATE_SIGNALS includes the Topic-1 state vocabulary', () => {
