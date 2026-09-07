@@ -1294,6 +1294,16 @@ Every cross-table field write to curated tables is observed:
 
 ### The provenance ladder — invariants (2026-09-02 arc PR1→PR12 + PR5c-entities; full text + measurements in `docs/architecture/field-provenance-ladder.md`)
 
+- ⚠️ **A SOURCE STRING IS PART OF THE CONTRACT — CHECK THE REGISTERED SPELLING, NOT THE CONCEPT
+  (CONTACT1b, 2026-09-06).** Three human-verdict writers shipped `source: 'manual'`; the registered
+  rung-1 names are **`manual_edit`** and **`manual_resolution`**, and fleet-wide those carry
+  **207 and 203 rungs across 28 tables each** while bare `manual` has **one rung on one table**.
+  Because the registry is the allowlist, an unregistered source is relabelled `domain_trigger` and
+  takes `lcc_merge_field`'s unregistered branch (fills a blank, never overrides, overridable by
+  anyone) — so **the highest-authority write on the ladder lands at the weakest tier, silently.**
+  **Query `field_source_priority` for the exact string before writing a new source**, and note the
+  guard pinned the wrong literal too: *a guard that asserts a VALUE rather than a PROPERTY defends a
+  defect as readily as a fix.*
 - **The registry IS the allowlist (PR8).** `lcc_flush_provenance_events()` merges an event under
   its own source name only if a `field_source_priority` row exists for THAT (table, field, source);
   anything else lands as `domain_trigger`. Removing that relabel **armed** every registered source —
