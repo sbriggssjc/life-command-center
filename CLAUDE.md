@@ -630,6 +630,14 @@ genuinely has no insert path.**
   **A live-applied change is not shipped until the migration is on `main`; confirm with
   `git ls-tree -r origin/main`, not with the fact that the SQL ran.** Knowing the lesson did not
   prevent it — the same 24 hours it was written down.
+- 🚨 **AND IT IS NOT ONE FUNCTION — MEASURED 2026-09-06 (DRIFT1): ≈10 DEPLOYED EDGE FUNCTIONS HAVE
+  NO COMMITTED SOURCE AT ALL.** `supabase/functions/` holds 28 directories against **dia 25 /
+  LCC Opps 11 / gov 2** deployments; the sourceless ones are dia `sf-test`,
+  `salesforce-enrichment`, `test-function`, `ai-copilot-v2`, `w41-corpus-export`,
+  `w43-sf-link-export`; LCC Opps `cortex-webex-sync`, `docai-diag`; gov `bulk-import-awards`,
+  `sam-entity-lookup`. ⚠️ **`version` counts DEPLOYMENTS, not content** — to detect drift compare a
+  content-derived marker, not the number. ⚠️ **Never "tidy up" by redeploying from the committed
+  file** — where the repo is behind, that rolls production back.
 - **When a producer cannot be found in source, enumerate the DEPLOYED artifacts before concluding
   it does not exist**: `list_edge_functions` on all three projects (compare `version` against what
   the repo last deployed), `cron.job` command text, Power Automate flows, and the Chrome extension.
