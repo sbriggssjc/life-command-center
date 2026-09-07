@@ -23,6 +23,56 @@
 `gov_govdup1a_sf_property_identity_dedupe.sql`. **The repo describes the database again** — a
 rebuild from `main` reproduces the lockdown instead of silently restoring the anon grants.
 
+## 2026-09-06 — CONTACT1b SHIPPED (six UPDATE sites wired, one measured-and-declined) · 🚨 and the three human-verdict sites write an UNREGISTERED source
+
+**PR #2146, verified live.** ✅ **The ledger is moving**: `field_provenance` on `entities` now holds
+**23 `salesforce` email rows, all within 2 days, newest 2026-09-06 17:01** — where two days ago it
+held only 5+5 `costar_sidebar` and 4 `domain_owner_contact`.
+
+✅ **`recordContactFieldWrites` is a genuine single owner** — one definition
+(`entity-link.js:68`), called from `sidebar-pipeline.js`, `intake.js`, `operations.js`, `admin.js`.
+The CONTACT1a inline block was extracted rather than copied, so no second normalizer exists.
+
+✅ **Unit 2 was measured and DECLINED, which is the right answer.** `PATCH /api/entities` accepts
+`email`/`phone`, and its only known caller — the extension's Update button — builds its payload from
+`PROPERTY_FIELDS`/`ASSESSOR_FIELDS`, **neither of which contains a contact field**. CC recorded the
+finding instead of instrumenting a path that never carries the value. Two further leave-alones each
+carry a reason: `tm_misparse_unstamp` (it *clears* email to null inside an already-ledgered reversal
+— recording a clear as a source's write would misrepresent it) and `lease-extractor.js` (its
+existing "BD graph, not a curated table" comment re-confirmed rather than re-litigated).
+
+### 🚨 The defect: `source: 'manual'` is not a registered rung, and the guard pins it
+
+The three human-verdict sites (`admin.js:9440` `handleJunkBucket`, `:10313` and `:10356`
+`owner_contact_attach_review`) pass **`source: 'manual'`**. The registered rung-1 sources for
+`entities.email`/`phone` are **`manual_edit`** and **`manual_resolution`**. There is no `manual`.
+
+**Fleet-wide the convention is unambiguous:** `manual_edit` **207 rungs / 28 tables**,
+`manual_resolution` **203 / 28**, `manual_verify` 2 / 2 — and bare **`manual` exists on exactly ONE
+rung, one table.** It is an outlier, not a standard. **So the fix is to change the three call sites,
+not to register `manual`.**
+
+⚠️ **The consequence inverts the intent.** PR8 established *the registry IS the allowlist*:
+`lcc_flush_provenance_events` relabels an event whose source is not registered for that
+(table, field) to `domain_trigger`, and in `lcc_merge_field` "unregistered" is a **different
+branch** — fills a blank, can never override, overridable by anyone. So **the human verdict, which
+should be rung 1 and the highest authority on the ladder, would be recorded at the weakest tier or
+under another name.** Nothing errors.
+
+✅ **Found before it fired: there are ZERO `manual` rows** — the paths are human-triggered and none
+has run since the deploy. The fix is three source strings.
+
+⚠️ **The guard cements it.** `test/contact1b-write-site-coverage.test.mjs` (11/11 pass) asserts the
+literal `'manual'` **twice**, so correcting the code turns the guard red. **Fix both in the same
+change** — and this is the shape the repo keeps meeting: *a guard that pins a value rather than a
+property will defend a defect as readily as a fix.*
+
+⚠️ **Mutation reporting, fourth instance.** The response says "mutation-verified (demonstrated red on
+a real removal, restored green)" — **that is ONE mutation, not N/N.** GOVDUP1-a remains the only
+full pass this arc (12/12, 0 survivors). → **MERGE1-guard-mutations** covers this class.
+
+→ **CONTACT1b-manual-source.**
+
 ### CONTACT1b drafted — and CONTACT1a is working better than last recorded
 
 ✅ **The CONTACT1a CREATE wiring is producing rows.** `field_provenance` on `entities` holds
