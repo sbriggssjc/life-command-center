@@ -2,465 +2,86 @@
 // intake-salesforce — Salesforce object intake for the SF -> LCC bridge
 // Life Command Center
 //
-// 🚨 THIS FILE IS **NOT** WHAT RUNS. DO NOT REASON ABOUT THE PIPELINE FROM IT
-//    WITHOUT CHECKING THE DEPLOYED VERSION FIRST (GOVDUP1-a, 2026-09-05).
-//
-//    Committed here:  PAYLOAD_VERSION "sf-2026-05-v1"
-//    Deployed:        version 23, PAYLOAD_VERSION "sf-2026-05-v8", on the
-//                     **Dialysis_DB** project (zqzrriwuavgrquhisnoa) — not on
-//                     LCC Opps, and not on gov.
-//
-//    The deployed v8 carries an entire feature this file does not: an
-//    auto-create path. `linkProbe(autoCreate=true)` -> `autoCreateProperty()`
-//    POSTs a NEW row into the domain `properties` table when the address probe
-//    finds no match, then `logPendingUpdate()` writes the '_new_property'
-//    advisory. It also adds ?action=link-all, ?action=backfill-pending-updates,
-//    a `scope`/`auto_create`/`limit` query surface on crawl-complete, silent-
-//    failure auditing, and a three-state routeVertical() that can return null.
-//    NONE of that is in this file. The sentence below — "it never writes a
-//    domain table" — is true of THIS source and false of the deployment.
-//
-//    That gap minted 808 gov properties from 125 Salesforce properties (53 of
-//    them fanning out into 736 rows) and survived three cleanups, because each
-//    investigation read this file, correctly concluded "no INSERT path into
-//    gov.properties", and was reasoning about a different program. The dedupe
-//    that stops it is DB-side and writer-agnostic for exactly that reason:
-//    supabase/migrations/government/20260905130000_gov_govdup1a_sf_property_identity_dedupe.sql
-//    Canonical: docs/architecture/gov-property-duplicates.md §GOVDUP1-a.
-//
-//    Before editing or redeploying this file, diff it against the deployed
-//    source (Supabase MCP `get_edge_function`, project zqzrriwuavgrquhisnoa,
-//    slug intake-salesforce). Deploying this file AS-IS would delete the
-//    auto-create path and every other v2..v8 change.
+// Deployed version: sf-2026-05-v8 (project zqzrriwuavgrquhisnoa, function
+// version 23), synced to this repo 2026-09-07 (DRIFT1 Unit 2) from the live
+// deployment via Supabase MCP `get_edge_function`. This file now matches what
+// actually runs. Previously this repo held a stale "sf-2026-05-v1" that was
+// ~400 lines behind the deployment (see GOVDUP1-a, 2026-09-05, and
+// docs/architecture/gov-property-duplicates.md §GOVDUP1-a for the incident
+// that made the drift visible: an auto-create path present only in the
+// deployed v8 minted 808 gov properties from 125 Salesforce properties while
+// three separate investigations read this stale file and correctly-but-
+// wrongly concluded there was no insert path).
 //
 // The front door Power Automate's "SF -> LCC: Object Sync" flow POSTs to.
 // Transport (Power Automate) -> brain (this function): validate, dedup, route
-// per vertical, stage. It never writes a domain table — promotion is the
-// sf-promotion-worker's job, gated by lcc_merge_field().
+// per vertical, stage — AND, since v2+, auto-create an unmatched gov/dia
+// property row when the address probe finds no match
+// (`linkProbe(autoCreate=true)` -> `autoCreateProperty()` POSTs a new row into
+// the domain `properties` table, then `logPendingUpdate()` writes the
+// '_new_property' advisory). It is NOT true that this function never writes a
+// domain table — it does, for `property` objects with no confident address
+// match. Promotion of everything else (comps/listings/deals staged here)
+// remains the sf-promotion-worker's job, gated by lcc_merge_field().
 //
-// Routes:
-//   POST ?action=objects         — stage a batch of Salesforce records
-//   POST ?action=crawl-complete  — close a batch: crawl_run row + link-probe
-//   POST ?action=retry           — re-stage failed sync_log rows; dead-letter exhausted
-//   POST ?action=dead-letter     — mark sync_log rows dead
-//   GET  ?action=watermark       — last successful crawl_run date
-//   GET  ?action=file-targets    — staged SF ids for Flow 2 file discovery
-//   GET  ?action=retry-queue     — failed sync_log rows for Flow 3
-//   GET  (no action)             — info
+// Before redeploying this file, re-diff it against the live deployment
+// (Supabase MCP `get_edge_function`, project zqzrriwuavgrquhisnoa, slug
+// intake-salesforce) — this sync is a snapshot, not a standing guarantee that
+// the two stay in lockstep. See docs/architecture/edge-function-deploy-drift.md
+// for the drift-detection runbook (DRIFT1).
 // ============================================================================
 
 import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { authenticateWebhook } from "../_shared/auth.ts";
 import { queryParams, parseBody, isoNow } from "../_shared/utils.ts";
-import {
-  OBJECT_CONFIG, resolveObjectKey, mapRecord, routeVertical, normalizeAddress,
-  type Vertical,
-} from "./sf-config.ts";
-
-const PAYLOAD_VERSION = "sf-2026-05-v1";
+import { OBJECT_CONFIG, resolveObjectKey, mapRecord, routeVertical, normalizeAddress, type Vertical } from "./sf-config.ts";
+const PAYLOAD_VERSION = "sf-2026-05-v8";
 const MAX_RETRY = 5;
+function dbEnv(vertical: Vertical): { url: string; key: string } | null { const map: Record<Vertical, [string, string]> = { ops: ["OPS_SUPABASE_URL", "OPS_SUPABASE_SERVICE_KEY"], gov: ["GOV_SUPABASE_URL", "GOV_SUPABASE_KEY"], dia: ["DIA_SUPABASE_URL", "DIA_SUPABASE_KEY"] }; const [u, k] = map[vertical]; const url = Deno.env.get(u), key = Deno.env.get(k); return url && key ? { url, key } : null; }
+async function dbFetch(vertical: Vertical, method: string, path: string, body?: unknown, prefer = "return=minimal"): Promise<{ ok: boolean; status: number; data: unknown }> { const env = dbEnv(vertical); if (!env) return { ok: false, status: 503, data: { error: `${vertical} DB not configured` } }; const res = await fetch(`${env.url}/rest/v1/${path}`, { method, headers: { apikey: env.key, Authorization: `Bearer ${env.key}`, "Content-Type": "application/json", Prefer: method === "GET" ? "count=exact" : prefer }, body: body && method !== "GET" ? JSON.stringify(body) : undefined }); const text = await res.text(); let data: unknown = null; try { data = text ? JSON.parse(text) : null; } catch { data = text; } return { ok: res.ok, status: res.status, data }; }
+function ledgerRows(rows: Record<string, unknown>[]) { return dbFetch("ops", "POST", "sf_sync_log", rows); }
+// Audit a silent-failure: log to ops sf_sync_log so it surfaces in the retry queue / monitoring.
+// Skips re-logging if the failure was the ledger itself (avoid infinite loop).
+async function auditSilentFailure(context: string, vertical: Vertical | null, path: string, status: number, data: unknown): Promise<void> {
+  console.error(`[${context}] silent failure on ${vertical || "?"} ${path} status=${status}:`, data);
+  if (path.startsWith("sf_sync_log")) return; // don't recurse
+  try { await dbFetch("ops", "POST", "sf_sync_log", [{ sync_type: "silent_failure", target_database: vertical, sf_object_type: context, sf_object_id: path, import_batch: `audit_${Date.now()}`, payload: { path, status, data }, status: "error", error_message: `${context} write failed: ${typeof data === "string" ? data : JSON.stringify(data)}`.slice(0, 500) }]); } catch (e) { console.error("[auditSilentFailure] meta-fail:", e); }
+}
+function uuid(): string { return crypto.randomUUID(); }
+function buildPropertyInsert(vertical: Vertical, stagingRow: Record<string, unknown>): Record<string, unknown> { const base: Record<string, unknown> = { address: stagingRow.street ?? null, city: stagingRow.city ?? null, state: stagingRow.state ?? null, zip_code: stagingRow.zip_code ?? null, year_built: stagingRow.year_built ?? null }; if (vertical === "dia") { base.building_name = stagingRow.property_name ?? null; base.building_size = stagingRow.building_sf ?? null; base.property_type = stagingRow.property_type ?? null; } else if (vertical === "gov") { base.rba = stagingRow.building_sf ?? null; if (stagingRow.tenant_names) base.agency = stagingRow.tenant_names; if (stagingRow.county) base.county = stagingRow.county; } for (const k of Object.keys(base)) { if (base[k] === null || base[k] === undefined || base[k] === "") delete base[k]; } return base; }
 
-// ── per-vertical DB access (service-role, server-side only) ─────────────────
-function dbEnv(vertical: Vertical): { url: string; key: string } | null {
-  const map: Record<Vertical, [string, string]> = {
-    ops: ["OPS_SUPABASE_URL", "OPS_SUPABASE_SERVICE_KEY"],
-    gov: ["GOV_SUPABASE_URL", "GOV_SUPABASE_KEY"],
-    dia: ["DIA_SUPABASE_URL", "DIA_SUPABASE_KEY"],
-  };
-  const [u, k] = map[vertical];
-  const url = Deno.env.get(u), key = Deno.env.get(k);
-  return url && key ? { url, key } : null;
+async function logPendingUpdate(vertical: Vertical, newPropertyId: number, stagingRow: Record<string, unknown>): Promise<boolean> {
+  const sourceData = { sf_property_id: stagingRow.sf_property_id ?? null, sf_property_name: stagingRow.property_name ?? null, sf_street: stagingRow.street ?? null, sf_city: stagingRow.city ?? null, sf_state: stagingRow.state ?? null, sf_zip: stagingRow.zip_code ?? null, sf_building_sf: stagingRow.building_sf ?? null, sf_year_built: stagingRow.year_built ?? null, sf_property_type: stagingRow.property_type ?? null, sf_tenant_names: stagingRow.tenant_names ?? null, staging_id: stagingRow.staging_id ?? null };
+  let res;
+  if (vertical === "dia") {
+    res = await dbFetch("dia", "POST", "pending_updates", [{ update_id: uuid(), property_id: newPropertyId, table_name: "properties", reason: "Salesforce auto-created property — verify accuracy and check for duplicates", status: "needs_match", source: "salesforce", update_type: "sf_property_auto_create", new_value: sourceData, entity: "property", entity_id: String(newPropertyId), field_name: "_new_property", confidence_score: 0.5, created_at: isoNow(), created_by: "sf-intake-pipeline", notes: `Auto-created from SF property ${stagingRow.sf_property_id} (${stagingRow.property_name || "unnamed"})` }]);
+  } else if (vertical === "gov") {
+    res = await dbFetch("gov", "POST", "pending_updates", [{ table_name: "properties", record_id: String(newPropertyId), property_id: newPropertyId, field_name: "_new_property", new_value: JSON.stringify(sourceData), reason: "Salesforce auto-created property — verify accuracy and check for duplicates", confidence: 0.5, status: "pending", source_context: sourceData, priority_score: 60 }]);
+  } else { return false; }
+  if (!res.ok) { await auditSilentFailure("logPendingUpdate", vertical, "pending_updates", res.status, res.data); return false; }
+  return true;
 }
 
-async function dbFetch(
-  vertical: Vertical, method: string, path: string,
-  body?: unknown, prefer = "return=minimal",
-): Promise<{ ok: boolean; status: number; data: unknown }> {
-  const env = dbEnv(vertical);
-  if (!env) return { ok: false, status: 503, data: { error: `${vertical} DB not configured` } };
-  const res = await fetch(`${env.url}/rest/v1/${path}`, {
-    method,
-    headers: {
-      apikey: env.key,
-      Authorization: `Bearer ${env.key}`,
-      "Content-Type": "application/json",
-      Prefer: method === "GET" ? "count=exact" : prefer,
-    },
-    body: body && method !== "GET" ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  let data: unknown = null;
-  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-  return { ok: res.ok, status: res.status, data };
+async function autoCreateProperty(vertical: Vertical, stagingRow: Record<string, unknown>): Promise<number | null> {
+  const insertRow = buildPropertyInsert(vertical, stagingRow);
+  if (!insertRow.address && !insertRow.city) return null;
+  const ins = await dbFetch(vertical, "POST", "properties", [insertRow], "return=representation");
+  if (!ins.ok) { await auditSilentFailure("autoCreateProperty.insert", vertical, "properties", ins.status, ins.data); return null; }
+  const rows = Array.isArray(ins.data) ? ins.data as Record<string, unknown>[] : [];
+  const newPropertyId = rows[0]?.property_id;
+  if (!newPropertyId) { await auditSilentFailure("autoCreateProperty.no_id", vertical, "properties", 200, ins.data); return null; }
+  await logPendingUpdate(vertical, Number(newPropertyId), stagingRow);
+  return Number(newPropertyId);
 }
 
-// Append rows to the central LCC ledger (OPS.sf_sync_log).
-function ledgerRows(rows: Record<string, unknown>[]) {
-  return dbFetch("ops", "POST", "sf_sync_log", rows);
-}
-
-// ── main handler ────────────────────────────────────────────────────────────
-Deno.serve(async (req: Request) => {
-  const cors = handleCors(req);
-  if (cors) return cors;
-
-  const params = queryParams(req);
-  const action = params.get("action");
-
-  if (req.method === "GET" && !action) {
-    return jsonResponse(req, {
-      service: "intake-salesforce",
-      version: PAYLOAD_VERSION,
-      actions: ["objects", "crawl-complete", "retry", "dead-letter", "watermark", "file-targets", "retry-queue"],
-    });
-  }
-
-  // Everything else requires the Power Automate webhook secret.
-  if (!authenticateWebhook(req)) {
-    return errorResponse(req, "Unauthorized — missing or invalid X-PA-Webhook-Secret", 401);
-  }
-
-  try {
-    if (req.method === "GET") {
-      if (action === "watermark") return await handleWatermark(req);
-      if (action === "file-targets") return await handleFileTargets(req, params);
-      if (action === "retry-queue") return await handleRetryQueue(req);
-      return errorResponse(req, `Unknown GET action: ${action}`, 400);
-    }
-    if (req.method === "POST") {
-      const body = (await parseBody(req)) as Record<string, unknown> | null;
-      if (action === "objects") return await handleObjects(req, body);
-      if (action === "crawl-complete") return await handleCrawlComplete(req, body);
-      if (action === "retry") return await handleRetry(req, body);
-      if (action === "dead-letter") return await handleDeadLetter(req, body);
-      return errorResponse(req, `Unknown POST action: ${action}`, 400);
-    }
-    return errorResponse(req, `Method ${req.method} not allowed`, 405);
-  } catch (err) {
-    console.error("[intake-salesforce]", err);
-    return errorResponse(req, `Internal error: ${err instanceof Error ? err.message : String(err)}`, 500);
-  }
-});
-
-// ── POST ?action=objects ────────────────────────────────────────────────────
-async function handleObjects(req: Request, body: Record<string, unknown> | null): Promise<Response> {
-  if (!body) return errorResponse(req, "Missing JSON body", 400);
-  const batchId = String(body.batch_id || "");
-  const objectType = String(body.object_type || "");
-  const records = Array.isArray(body.records) ? body.records as Record<string, unknown>[] : null;
-  if (!batchId) return errorResponse(req, "batch_id is required", 400);
-  if (!records) return errorResponse(req, "records[] is required", 400);
-
-  const objectKey = resolveObjectKey(objectType);
-  if (!objectKey) return errorResponse(req, `Unrecognized object_type: ${objectType}`, 400);
-  const cfg = OBJECT_CONFIG[objectKey];
-
-  const ledger: Record<string, unknown>[] = [];
-  const stagingByVertical: Record<string, Record<string, unknown>[]> = {};
-  let errors = 0;
-
-  for (const record of records) {
-    try {
-      const mapped = await mapRecord(objectKey, record);
-      const { vertical, resolved } = routeVertical(mapped.row);
-
-      ledger.push({
-        sync_type: "object_intake",
-        target_database: vertical,
-        sf_object_type: objectType,
-        sf_object_id: mapped.sfId,
-        import_batch: batchId,
-        // payload is only ever read back by handleRetry (status='error' rows).
-        // Persisting the full raw SF record on every success row pushed
-        // sf_sync_log's payload into TOAST; combined with autovacuum never
-        // reclaiming the backfill's churn it bloated to 5.5 GB and filled the
-        // LCC Opps disk, putting the DB read-only and locking out sign-in
-        // (2026-05-29 incident). Success rows keep their identifying columns
-        // (sf_object_id, import_batch, target_database) for audit but drop the
-        // redundant payload so it never TOASTs.
-        payload: null,
-        status: "ok",
-      });
-
-      const stagingRow = {
-        ...mapped.row,
-        source_system: "salesforce",
-        import_batch: batchId,
-        process_status: resolved ? "pending" : "review",
-        process_notes: resolved ? null : "vertical routing unresolved — defaulted to dia",
-        match_method: resolved ? null : "vertical_unresolved",
-        imported_at: isoNow(),
-        updated_at: isoNow(),
-      };
-      (stagingByVertical[vertical] ??= []).push(stagingRow);
-    } catch (err) {
-      errors++;
-      ledger.push({
-        sync_type: "object_intake", target_database: null,
-        sf_object_type: objectType, sf_object_id: (record?.Id as string) ?? null,
-        import_batch: batchId, payload: record, status: "error",
-        error_message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  // one batched write to the central ledger
-  if (ledger.length) await ledgerRows(ledger);
-
-  // one batched upsert per vertical (idempotent on the dedup unique index)
-  const byVertical: Record<string, number> = {};
-  for (const [vertical, rows] of Object.entries(stagingByVertical)) {
-    const onConflict = `${cfg.sfIdColumn},source_system,import_batch`;
-    const result = await dbFetch(
-      vertical as Vertical, "POST",
-      `${cfg.stagingTable}?on_conflict=${onConflict}`,
-      rows, "resolution=merge-duplicates,return=minimal",
-    );
-    byVertical[vertical] = result.ok ? rows.length : 0;
-    if (!result.ok) {
-      errors += rows.length;
-      await ledgerRows([{
-        sync_type: "object_intake", target_database: vertical,
-        sf_object_type: objectType, import_batch: batchId,
-        payload: { staging_table: cfg.stagingTable, count: rows.length },
-        status: "error",
-        error_message: `staging upsert failed: ${JSON.stringify(result.data)}`,
-      }]);
-    }
-  }
-
-  return jsonResponse(req, {
-    ok: errors === 0,
-    batch_id: batchId,
-    object_type: objectType,
-    object_key: objectKey,
-    received: records.length,
-    staged: Object.values(byVertical).reduce((a, b) => a + b, 0),
-    errors,
-    by_vertical: byVertical,
-  });
-}
-
-// ── POST ?action=crawl-complete ─────────────────────────────────────────────
-async function handleCrawlComplete(req: Request, body: Record<string, unknown> | null): Promise<Response> {
-  if (!body) return errorResponse(req, "Missing JSON body", 400);
-  const batchId = String(body.batch_id || "");
-  if (!batchId) return errorResponse(req, "batch_id is required", 400);
-  const failures = Array.isArray(body.failures) ? body.failures : [];
-
-  // close the batch — this crawl_run row is the watermark store
-  await ledgerRows([{
-    sync_type: "crawl_run",
-    sf_object_id: batchId,
-    import_batch: batchId,
-    payload: body,
-    status: failures.length ? "error" : "ok",
-  }]);
-
-  // run the address link-probe for everything staged under this batch
-  const probe: Record<string, unknown> = {};
-  for (const vertical of ["dia", "gov"] as Vertical[]) {
-    for (const [objectKey, cfg] of Object.entries(OBJECT_CONFIG)) {
-      const linked = await linkProbe(vertical, cfg.stagingTable, batchId);
-      if (linked.scanned > 0) probe[`${vertical}.${objectKey}`] = linked;
-    }
-  }
-
-  return jsonResponse(req, { ok: true, batch_id: batchId, link_probe: probe });
-}
-
-// Match this batch's staged rows to properties by normalized address.
-// Conservative: exact normalized match within the same city/state -> linked;
-// otherwise process_status='review'. No fuzzy promotion here.
-async function linkProbe(vertical: Vertical, table: string, batchId: string) {
-  const stats = { scanned: 0, linked: 0, review: 0 };
-  const staged = await dbFetch(
-    vertical, "GET",
-    `${table}?import_batch=eq.${encodeURIComponent(batchId)}&linked_property_id=is.null` +
-    `&select=staging_id,normalized_address,city,state`,
-  );
-  const rows = Array.isArray(staged.data) ? staged.data as Record<string, unknown>[] : [];
-  if (!rows.length) return stats;
-  stats.scanned = rows.length;
-
-  // index properties for the city/state pairs present in this batch
-  const pairs = new Set(rows.filter((r) => r.city && r.state).map((r) => `${r.city}|${r.state}`));
-  const index: Record<string, Record<string, unknown>> = {};
-  for (const pair of pairs) {
-    const [city, state] = pair.split("|");
-    const props = await dbFetch(
-      vertical, "GET",
-      `properties?city=ilike.${encodeURIComponent(city)}&state=ilike.${encodeURIComponent(state)}` +
-      `&select=property_id,address`,
-    );
-    const bucket: Record<string, unknown> = {};
-    for (const p of (Array.isArray(props.data) ? props.data : []) as Record<string, unknown>[]) {
-      const n = normalizeAddress(p.address as string);
-      if (n) bucket[n] = p.property_id;
-    }
-    index[pair] = bucket;
-  }
-
-  for (const r of rows) {
-    const norm = r.normalized_address as string | null;
-    const bucket = index[`${r.city}|${r.state}`] || {};
-    let matchId: unknown = null;
-    if (norm) {
-      for (const [pn, pid] of Object.entries(bucket)) {
-        if (pn === norm || norm.includes(pn) || pn.includes(norm)) { matchId = pid; break; }
-      }
-    }
-    const update = matchId
-      ? { linked_property_id: matchId, match_method: "normalized_address", match_confidence: 0.9,
-          process_status: "linked", processed: true, processed_at: isoNow(), updated_at: isoNow() }
-      : { match_method: "review", process_status: "review",
-          process_notes: "no confident property match", updated_at: isoNow() };
-    await dbFetch(vertical, "PATCH", `${table}?staging_id=eq.${r.staging_id}`, update);
-    if (matchId) stats.linked++; else stats.review++;
-  }
-  return stats;
-}
-
-// ── GET ?action=watermark ───────────────────────────────────────────────────
-async function handleWatermark(req: Request): Promise<Response> {
-  const res = await dbFetch(
-    "ops", "GET",
-    "sf_sync_log?sync_type=eq.crawl_run&status=eq.ok&order=created_at.desc&limit=1&select=created_at",
-  );
-  const rows = Array.isArray(res.data) ? res.data as Record<string, unknown>[] : [];
-  const watermark = rows.length ? String(rows[0].created_at).slice(0, 10) : null;
-  return jsonResponse(req, { watermark });
-}
-
-// ── GET ?action=file-targets ────────────────────────────────────────────────
-// Returns the staged Salesforce ids Flow 2 should walk for ContentDocumentLink.
-async function handleFileTargets(req: Request, params: URLSearchParams): Promise<Response> {
-  const limit = Math.min(parseInt(params.get("limit") || "1000", 10), 5000);
-  const wantVertical = params.get("vertical");
-  const targets: Record<string, Record<string, string[]>> = {};
-
-  for (const vertical of ["dia", "gov"] as Vertical[]) {
-    if (wantVertical && wantVertical !== vertical) continue;
-    targets[vertical] = {};
-    for (const [objectKey, cfg] of Object.entries(OBJECT_CONFIG)) {
-      const res = await dbFetch(
-        vertical, "GET",
-        `${cfg.stagingTable}?processed=eq.false&select=${cfg.sfIdColumn}&limit=${limit}`,
-      );
-      const rows = Array.isArray(res.data) ? res.data as Record<string, unknown>[] : [];
-      targets[vertical][objectKey] = rows
-        .map((r) => r[cfg.sfIdColumn] as string).filter(Boolean);
-    }
-  }
-  return jsonResponse(req, { targets });
-}
-
-// ── GET ?action=retry-queue ─────────────────────────────────────────────────
-async function handleRetryQueue(req: Request): Promise<Response> {
-  const res = await dbFetch(
-    "ops", "GET",
-    `sf_sync_log?status=eq.error&retry_count=lt.${MAX_RETRY}&order=created_at.asc&limit=200` +
-    "&select=sync_id,sync_type,target_database,sf_object_type,sf_object_id,import_batch,payload,retry_count,error_message",
-  );
-  const items = Array.isArray(res.data) ? res.data : [];
-  return jsonResponse(req, { items, count: Array.isArray(items) ? items.length : 0 });
-}
-
-// ── POST ?action=retry ──────────────────────────────────────────────────────
-// body: { limit? }
-// Drains sf_sync_log error rows (retry_count < MAX_RETRY): re-maps and re-stages
-// each from its stored SF-record payload. On success the ledger row flips to
-// 'ok'; on repeated failure retry_count increments and the row is dead-lettered
-// once it reaches MAX_RETRY. One server-side action that supersedes the manual
-// retry-queue (read) + dead-letter (write) pair.
-async function handleRetry(req: Request, body: Record<string, unknown> | null): Promise<Response> {
-  const b = body || {};
-  const limit = Math.min(Number(b.limit) || 100, 200);
-
-  const res = await dbFetch(
-    "ops", "GET",
-    `sf_sync_log?status=eq.error&retry_count=lt.${MAX_RETRY}&order=created_at.asc&limit=${limit}` +
-    "&select=sync_id,sync_type,sf_object_type,sf_object_id,import_batch,payload,retry_count",
-  );
-  const items = (Array.isArray(res.data) ? res.data : []) as Record<string, unknown>[];
-  const stats = { scanned: items.length, retried_ok: 0, still_error: 0, dead_lettered: 0, skipped: 0 };
-
-  for (const item of items) {
-    const syncId = String(item.sync_id);
-    const objectType = String(item.sf_object_type || "");
-    const batchId = String(item.import_batch || "");
-    const payload = item.payload as Record<string, unknown> | null;
-    const nextRetries = (Number(item.retry_count) || 0) + 1;
-
-    // Only object_intake rows carrying a real SF record (has an Id) are
-    // retryable — staging-upsert-failure markers ({staging_table,count}) are
-    // skipped and left for manual attention.
-    const objectKey = resolveObjectKey(objectType);
-    if (item.sync_type !== "object_intake" || !objectKey || !payload || !payload.Id) {
-      stats.skipped++;
-      continue;
-    }
-
-    let ok = false;
-    let errMsg = "";
-    try {
-      const mapped = await mapRecord(objectKey, payload);
-      const { vertical, resolved } = routeVertical(mapped.row);
-      const cfg = OBJECT_CONFIG[objectKey];
-      const stagingRow = {
-        ...mapped.row,
-        source_system: "salesforce",
-        import_batch: batchId,
-        process_status: resolved ? "pending" : "review",
-        process_notes: resolved ? null : "vertical routing unresolved — defaulted to dia",
-        match_method: resolved ? null : "vertical_unresolved",
-        imported_at: isoNow(),
-        updated_at: isoNow(),
-      };
-      const onConflict = `${cfg.sfIdColumn},source_system,import_batch`;
-      const up = await dbFetch(
-        vertical, "POST",
-        `${cfg.stagingTable}?on_conflict=${onConflict}`,
-        [stagingRow], "resolution=merge-duplicates,return=minimal",
-      );
-      ok = up.ok;
-      if (!ok) errMsg = `staging upsert failed: ${JSON.stringify(up.data)}`;
-    } catch (err) {
-      errMsg = err instanceof Error ? err.message : String(err);
-    }
-
-    if (ok) {
-      await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=eq.${syncId}`, {
-        status: "ok", retry_count: nextRetries, retried_at: isoNow(), error_message: null,
-      });
-      stats.retried_ok++;
-    } else if (nextRetries >= MAX_RETRY) {
-      await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=eq.${syncId}`, {
-        status: "dead", retry_count: nextRetries, retried_at: isoNow(),
-        error_message: `retry exhausted: ${errMsg}`.slice(0, 500),
-      });
-      stats.dead_lettered++;
-    } else {
-      await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=eq.${syncId}`, {
-        status: "error", retry_count: nextRetries, retried_at: isoNow(),
-        error_message: errMsg.slice(0, 500),
-      });
-      stats.still_error++;
-    }
-  }
-
-  return jsonResponse(req, { ok: true, ...stats });
-}
-
-// ── POST ?action=dead-letter ────────────────────────────────────────────────
-async function handleDeadLetter(req: Request, body: Record<string, unknown> | null): Promise<Response> {
-  const ids = Array.isArray(body?.sync_ids) ? body!.sync_ids as string[] : [];
-  if (!ids.length) return errorResponse(req, "sync_ids[] is required", 400);
-  const inList = ids.map((i) => `"${i}"`).join(",");
-  const res = await dbFetch(
-    "ops", "PATCH",
-    `sf_sync_log?sync_id=in.(${inList})`,
-    { status: "dead", retried_at: isoNow() },
-  );
-  return jsonResponse(req, { ok: res.ok, dead_lettered: res.ok ? ids.length : 0 });
-}
+Deno.serve(async (req: Request) => { const cors = handleCors(req); if (cors) return cors; const params = queryParams(req); const action = params.get("action"); if (req.method === "GET" && !action) { return jsonResponse(req, { service: "intake-salesforce", version: PAYLOAD_VERSION, actions: ["objects", "crawl-complete", "link-all", "retry", "dead-letter", "watermark", "file-targets", "retry-queue", "backfill-pending-updates"], features: { auto_create_unmatched_properties: true, pending_updates_dashboard_integration: true, dia_status: "needs_match", gov_status: "pending", silent_failure_auditing: true } }); } if (!authenticateWebhook(req)) return errorResponse(req, "Unauthorized — missing or invalid X-PA-Webhook-Secret", 401); try { if (req.method === "GET") { if (action === "watermark") return await handleWatermark(req); if (action === "file-targets") return await handleFileTargets(req, params); if (action === "retry-queue") return await handleRetryQueue(req); return errorResponse(req, `Unknown GET action: ${action}`, 400); } if (req.method === "POST") { const body = (await parseBody(req)) as Record<string, unknown> | null; if (action === "objects") return await handleObjects(req, body); if (action === "crawl-complete") return await handleCrawlComplete(req, body, params); if (action === "link-all") return await handleLinkAll(req, params); if (action === "backfill-pending-updates") return await handleBackfillPendingUpdates(req, params); if (action === "retry") return await handleRetry(req, body); if (action === "dead-letter") return await handleDeadLetter(req, body); return errorResponse(req, `Unknown POST action: ${action}`, 400); } return errorResponse(req, `Method ${req.method} not allowed`, 405); } catch (err) { console.error("[intake-salesforce]", err); return errorResponse(req, `Internal error: ${err instanceof Error ? err.message : String(err)}`, 500); } });
+async function handleObjects(req: Request, body: Record<string, unknown> | null): Promise<Response> { if (!body) return errorResponse(req, "Missing JSON body", 400); const batchId = String(body.batch_id || ""); const objectType = String(body.object_type || ""); const records = Array.isArray(body.records) ? body.records as Record<string, unknown>[] : null; if (!batchId) return errorResponse(req, "batch_id is required", 400); if (!records) return errorResponse(req, "records[] is required", 400); const objectKey = resolveObjectKey(objectType); if (!objectKey) return errorResponse(req, `Unrecognized object_type: ${objectType}`, 400); const cfg = OBJECT_CONFIG[objectKey]; const ledger: Record<string, unknown>[] = []; const stagingByVertical: Record<string, Record<string, unknown>[]> = {}; let errors = 0; let skipped = 0; for (const record of records) { try { const mapped = await mapRecord(objectKey, record); const routing = routeVertical(mapped.row); if (routing.vertical === null) { skipped++; ledger.push({ sync_type: "object_intake", target_database: null, sf_object_type: objectType, sf_object_id: mapped.sfId, import_batch: batchId, payload: { skip_reason: routing.reason, sf_id: mapped.sfId }, status: "skipped" }); continue; } const vertical = routing.vertical; ledger.push({ sync_type: "object_intake", target_database: vertical, sf_object_type: objectType, sf_object_id: mapped.sfId, import_batch: batchId, payload: mapped.raw, status: "ok" }); const stagingRow = { ...mapped.row, source_system: "salesforce", import_batch: batchId, process_status: "pending", process_notes: `routed via ${routing.reason}`, match_method: null, imported_at: isoNow(), updated_at: isoNow() }; (stagingByVertical[vertical] ??= []).push(stagingRow); } catch (err) { errors++; ledger.push({ sync_type: "object_intake", target_database: null, sf_object_type: objectType, sf_object_id: (record?.Id as string) ?? null, import_batch: batchId, payload: record, status: "error", error_message: err instanceof Error ? err.message : String(err) }); } } if (ledger.length) { const lr = await ledgerRows(ledger); if (!lr.ok) console.error(`[handleObjects] ledger write failed status=${lr.status}:`, lr.data); } const byVertical: Record<string, number> = {}; for (const [vertical, rows] of Object.entries(stagingByVertical)) { const onConflict = `${cfg.sfIdColumn},source_system,import_batch`; const result = await dbFetch(vertical as Vertical, "POST", `${cfg.stagingTable}?on_conflict=${onConflict}`, rows, "resolution=merge-duplicates,return=minimal"); byVertical[vertical] = result.ok ? rows.length : 0; if (!result.ok) { errors += rows.length; await ledgerRows([{ sync_type: "object_intake", target_database: vertical, sf_object_type: objectType, import_batch: batchId, payload: { staging_table: cfg.stagingTable, count: rows.length }, status: "error", error_message: `staging upsert failed: ${JSON.stringify(result.data)}` }]); } } return jsonResponse(req, { ok: errors === 0, batch_id: batchId, object_type: objectType, object_key: objectKey, received: records.length, staged: Object.values(byVertical).reduce((a, b) => a + b, 0), skipped, errors, by_vertical: byVertical }); }
+async function handleCrawlComplete(req: Request, body: Record<string, unknown> | null, params: URLSearchParams): Promise<Response> { if (!body) return errorResponse(req, "Missing JSON body", 400); const batchId = String(body.batch_id || ""); if (!batchId) return errorResponse(req, "batch_id is required", 400); const scope = (params.get("scope") || "batch").toLowerCase(); const scanAll = scope === "all"; const autoCreate = (params.get("auto_create") || "true").toLowerCase() !== "false"; const limit = Math.min(parseInt(params.get("limit") || "500", 10), 2000); const failures = Array.isArray(body.failures) ? body.failures : []; await ledgerRows([{ sync_type: "crawl_run", sf_object_id: batchId, import_batch: batchId, payload: { ...body, scope, auto_create: autoCreate }, status: failures.length ? "error" : "ok" }]); const probe: Record<string, unknown> = {}; for (const vertical of ["dia", "gov"] as Vertical[]) { for (const [objectKey, cfg] of Object.entries(OBJECT_CONFIG)) { if (!("city" in cfg.parsed) || !("state" in cfg.parsed)) continue; const linked = await linkProbe(vertical, cfg.stagingTable, scanAll ? null : batchId, limit, autoCreate && objectKey === "property"); if (linked.scanned > 0) probe[`${vertical}.${objectKey}`] = linked; } } return jsonResponse(req, { ok: true, batch_id: batchId, scope, limit, auto_create: autoCreate, link_probe: probe }); }
+async function handleLinkAll(req: Request, params: URLSearchParams): Promise<Response> { const limit = Math.min(parseInt(params.get("limit") || "500", 10), 2000); const wantVertical = params.get("vertical"); const autoCreate = (params.get("auto_create") || "true").toLowerCase() !== "false"; const runId = `linkall_${new Date().toISOString().replace(/[:.]/g, "").slice(0, 15)}Z`; await ledgerRows([{ sync_type: "link_all", sf_object_id: runId, import_batch: runId, payload: { limit, vertical: wantVertical, auto_create: autoCreate }, status: "ok" }]); const probe: Record<string, unknown> = {}; for (const vertical of ["dia", "gov"] as Vertical[]) { if (wantVertical && wantVertical !== vertical) continue; for (const [objectKey, cfg] of Object.entries(OBJECT_CONFIG)) { if (!("city" in cfg.parsed) || !("state" in cfg.parsed)) continue; const linked = await linkProbe(vertical, cfg.stagingTable, null, limit, autoCreate && objectKey === "property"); if (linked.scanned > 0) probe[`${vertical}.${objectKey}`] = linked; } } return jsonResponse(req, { ok: true, run_id: runId, limit, auto_create: autoCreate, link_probe: probe }); }
+async function handleBackfillPendingUpdates(req: Request, params: URLSearchParams): Promise<Response> { const limit = Math.min(parseInt(params.get("limit") || "200", 10), 1000); const wantVertical = params.get("vertical"); const out: Record<string, unknown> = {}; for (const vertical of ["dia", "gov"] as Vertical[]) { if (wantVertical && wantVertical !== vertical) continue; const cols = "staging_id,sf_property_id,linked_property_id,property_name,street,city,state,zip_code,building_sf,year_built,property_type,tenant_names"; const r = await dbFetch(vertical, "GET", `sf_property_staging?match_method=eq.sf_auto_created&linked_property_id=not.is.null&select=${cols}&limit=${limit}`); const rows = Array.isArray(r.data) ? r.data as Record<string, unknown>[] : []; let inserted = 0; let failed = 0; for (const row of rows) { const ok = await logPendingUpdate(vertical, Number(row.linked_property_id), row); if (ok) inserted++; else failed++; } out[vertical] = { scanned: rows.length, inserted, failed }; } return jsonResponse(req, { ok: true, backfill: out }); }
+async function linkProbe(vertical: Vertical, table: string, batchId: string | null, limit = 500, autoCreate = false) { const stats = { scanned: 0, linked: 0, review: 0, auto_created: 0, patch_failed: 0 }; const batchFilter = batchId ? `import_batch=eq.${encodeURIComponent(batchId)}&` : ""; const cols = autoCreate ? "staging_id,sf_property_id,normalized_address,city,state,street,zip_code,property_name,building_sf,year_built,property_type,tenant_names,county" : "staging_id,normalized_address,city,state"; const staged = await dbFetch(vertical, "GET", `${table}?${batchFilter}linked_property_id=is.null&select=${cols}&limit=${limit}`); const rows = Array.isArray(staged.data) ? staged.data as Record<string, unknown>[] : []; if (!rows.length) return stats; stats.scanned = rows.length; const pairs = new Set(rows.filter((r) => r.city && r.state).map((r) => `${r.city}|${r.state}`)); const index: Record<string, Record<string, unknown>> = {}; for (const pair of pairs) { const [city, state] = pair.split("|"); const props = await dbFetch(vertical, "GET", `properties?city=ilike.${encodeURIComponent(city)}&state=ilike.${encodeURIComponent(state)}&select=property_id,address`); const bucket: Record<string, unknown> = {}; for (const p of (Array.isArray(props.data) ? props.data : []) as Record<string, unknown>[]) { const n = normalizeAddress(p.address as string); if (n) bucket[n] = p.property_id; } index[pair] = bucket; } for (const r of rows) { const norm = r.normalized_address as string | null; const bucket = index[`${r.city}|${r.state}`] || {}; let matchId: unknown = null; if (norm) { for (const [pn, pid] of Object.entries(bucket)) { if (pn === norm || norm.includes(pn) || pn.includes(norm)) { matchId = pid; break; } } } let update: Record<string, unknown>; if (matchId) { update = { linked_property_id: matchId, match_method: "normalized_address", match_confidence: 0.9, process_status: "linked", processed: true, processed_at: isoNow(), updated_at: isoNow() }; stats.linked++; } else if (autoCreate) { const newId = await autoCreateProperty(vertical, r); if (newId) { update = { linked_property_id: newId, match_method: "sf_auto_created", match_confidence: 0.5, process_status: "linked", processed: true, processed_at: isoNow(), process_notes: "auto-created LCC property from SF; pending verification (see pending_updates)", updated_at: isoNow() }; stats.auto_created++; } else { update = { match_method: "review", process_status: "review", process_notes: "auto-create attempted but failed", updated_at: isoNow() }; stats.review++; } } else { update = { match_method: "review", process_status: "review", process_notes: "no confident property match", updated_at: isoNow() }; stats.review++; } const patchRes = await dbFetch(vertical, "PATCH", `${table}?staging_id=eq.${r.staging_id}`, update); if (!patchRes.ok) { stats.patch_failed++; await auditSilentFailure("linkProbe.patch", vertical, `${table}?staging_id=eq.${r.staging_id}`, patchRes.status, patchRes.data); } } return stats; }
+async function handleWatermark(req: Request): Promise<Response> { const res = await dbFetch("ops", "GET", "sf_sync_log?sync_type=eq.crawl_run&status=eq.ok&order=created_at.desc&limit=1&select=created_at"); const rows = Array.isArray(res.data) ? res.data as Record<string, unknown>[] : []; const watermark = rows.length ? String(rows[0].created_at).slice(0, 10) : null; return jsonResponse(req, { watermark }); }
+async function handleFileTargets(req: Request, params: URLSearchParams): Promise<Response> { const limit = Math.min(parseInt(params.get("limit") || "1000", 10), 5000); const wantVertical = params.get("vertical"); const targets: Record<string, Record<string, string[]>> = {}; for (const vertical of ["dia", "gov"] as Vertical[]) { if (wantVertical && wantVertical !== vertical) continue; targets[vertical] = {}; for (const [objectKey, cfg] of Object.entries(OBJECT_CONFIG)) { const res = await dbFetch(vertical, "GET", `${cfg.stagingTable}?processed=eq.false&select=${cfg.sfIdColumn}&limit=${limit}`); const rows = Array.isArray(res.data) ? res.data as Record<string, unknown>[] : []; targets[vertical][objectKey] = rows.map((r) => r[cfg.sfIdColumn] as string).filter(Boolean); } } return jsonResponse(req, { targets }); }
+async function handleRetryQueue(req: Request): Promise<Response> { const res = await dbFetch("ops", "GET", `sf_sync_log?status=eq.error&retry_count=lt.${MAX_RETRY}&order=created_at.asc&limit=200&select=sync_id,sync_type,target_database,sf_object_type,sf_object_id,import_batch,payload,retry_count,error_message`); const items = Array.isArray(res.data) ? res.data : []; return jsonResponse(req, { items, count: Array.isArray(items) ? items.length : 0 }); }
+async function handleRetry(req: Request, body: Record<string, unknown> | null): Promise<Response> { const b = body || {}; const limit = Math.min(Number(b.limit) || 100, 200); const res = await dbFetch("ops", "GET", `sf_sync_log?status=eq.error&retry_count=lt.${MAX_RETRY}&order=created_at.asc&limit=${limit}&select=sync_id,sync_type,sf_object_type,sf_object_id,import_batch,payload,retry_count`); const items = (Array.isArray(res.data) ? res.data : []) as Record<string, unknown>[]; const stats = { scanned: items.length, retried_ok: 0, still_error: 0, dead_lettered: 0, skipped: 0 }; for (const item of items) { const syncId = String(item.sync_id); const objectType = String(item.sf_object_type || ""); const batchId = String(item.import_batch || ""); const payload = item.payload as Record<string, unknown> | null; const nextRetries = (Number(item.retry_count) || 0) + 1; const objectKey = resolveObjectKey(objectType); if (item.sync_type !== "object_intake" || !objectKey || !payload || !payload.Id) { stats.skipped++; continue; } let ok = false; let errMsg = ""; let skipReason = ""; try { const mapped = await mapRecord(objectKey, payload); const routing = routeVertical(mapped.row); if (routing.vertical === null) { skipReason = routing.reason; } else { const vertical = routing.vertical; const cfg = OBJECT_CONFIG[objectKey]; const stagingRow = { ...mapped.row, source_system: "salesforce", import_batch: batchId, process_status: "pending", process_notes: `routed via ${routing.reason}`, match_method: null, imported_at: isoNow(), updated_at: isoNow() }; const onConflict = `${cfg.sfIdColumn},source_system,import_batch`; const up = await dbFetch(vertical, "POST", `${cfg.stagingTable}?on_conflict=${onConflict}`, [stagingRow], "resolution=merge-duplicates,return=minimal"); ok = up.ok; if (!ok) errMsg = `staging upsert failed: ${JSON.stringify(up.data)}`; } } catch (err) { errMsg = err instanceof Error ? err.message : String(err); } if (skipReason) { await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=eq.${syncId}`, { status: "skipped", retry_count: nextRetries, retried_at: isoNow(), error_message: `skipped: ${skipReason}` }); stats.skipped++; } else if (ok) { await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=eq.${syncId}`, { status: "ok", retry_count: nextRetries, retried_at: isoNow(), error_message: null }); stats.retried_ok++; } else if (nextRetries >= MAX_RETRY) { await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=eq.${syncId}`, { status: "dead", retry_count: nextRetries, retried_at: isoNow(), error_message: `retry exhausted: ${errMsg}`.slice(0, 500) }); stats.dead_lettered++; } else { await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=eq.${syncId}`, { status: "error", retry_count: nextRetries, retried_at: isoNow(), error_message: errMsg.slice(0, 500) }); stats.still_error++; } } return jsonResponse(req, { ok: true, ...stats }); }
+async function handleDeadLetter(req: Request, body: Record<string, unknown> | null): Promise<Response> { const ids = Array.isArray(body?.sync_ids) ? body!.sync_ids as string[] : []; if (!ids.length) return errorResponse(req, "sync_ids[] is required", 400); const inList = ids.map((i) => `\"${i}\"`).join(","); const res = await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=in.(${inList})`, { status: "dead", retried_at: isoNow() }); return jsonResponse(req, { ok: res.ok, dead_lettered: res.ok ? ids.length : 0 }); }
