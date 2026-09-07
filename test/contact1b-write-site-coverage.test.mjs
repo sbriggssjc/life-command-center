@@ -180,6 +180,32 @@ describe('CONTACT1b — source census of the write-site coverage decision', () =
       `expected >=3 recordContactFieldWrites call sites in admin.js, found ${matches.length}`);
   });
 
+  // CONTACT1b's own three admin.js call sites pass a human-verdict source.
+  // The property that matters is REGISTERED RUNG-1 for entities.email/phone
+  // (field_source_priority carries `manual_edit`@1 and `manual_resolution`@1
+  // — NOT the bare literal 'manual', which has no rung there and is
+  // relabelled `domain_trigger` by the unregistered branch, silently
+  // landing the highest-authority write on the ladder's weakest tier).
+  // Anchored on the PROPERTY (membership in the registered set), never
+  // pinned to one literal value — a guard that pins a value rather than a
+  // property defends a defect as readily as a fix.
+  it('every admin.js recordContactFieldWrites call passes a registered rung-1 source, never the bare unregistered "manual"', () => {
+    const REGISTERED_RUNG1_SOURCES = new Set(['manual_edit', 'manual_resolution']);
+    const src = readStripped('api/admin.js');
+    const callRe = /recordContactFieldWrites\s*\(\s*\{[^}]*?\bsource:\s*'([^']*)'/gs;
+    const sourcesSeen = [];
+    let m;
+    while ((m = callRe.exec(src)) !== null) sourcesSeen.push(m[1]);
+    assert.ok(sourcesSeen.length >= 3,
+      `expected >=3 recordContactFieldWrites(...source: '...') call sites in admin.js, found ${sourcesSeen.length}`);
+    for (const s of sourcesSeen) {
+      assert.ok(REGISTERED_RUNG1_SOURCES.has(s),
+        `admin.js passed source '${s}' to recordContactFieldWrites — must be one of ` +
+        `${[...REGISTERED_RUNG1_SOURCES].join(', ')} (a registered field_source_priority rung), ` +
+        `never the unregistered literal 'manual'`);
+    }
+  });
+
   it('admin.js tm_misparse_unstamp (a null CLEAR inside an already-ledgered reversal) is deliberately NOT instrumented', () => {
     const src = readStripped('api/admin.js');
     // Anchor on the reversal's own distinctive literal, not a line number.

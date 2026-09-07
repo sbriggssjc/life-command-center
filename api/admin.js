@@ -9434,10 +9434,14 @@ async function handleJunkBucket(req, res) {
       const pr = await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(e.id), patch);
       if (!pr.ok) { failed++; errors.push({ id: e.id, error: pr.data }); continue; }
       // CONTACT1b — an operator picked this verdict for this bucket; the
-      // parsed values are not a source's own claim, so recorded as `manual`
-      // rather than the (absent) capture source. Audit-only.
+      // parsed values are not a source's own claim, so recorded as the
+      // registered rung-1 source `manual_resolution` (a human resolving a
+      // junk-bucket row) rather than the bare, UNREGISTERED string 'manual'
+      // (field_source_priority has no such rung for entities.email/phone —
+      // an unregistered source silently takes lcc_merge_field's weakest,
+      // never-override branch). Audit-only.
       await recordContactFieldWrites({
-        recordPk: e.id, source: 'manual', workspaceId, fields: patch,
+        recordPk: e.id, source: 'manual_resolution', workspaceId, fields: patch,
       });
 
       // Record the verdict on the existing seeded decision (best-effort — the
@@ -10305,12 +10309,14 @@ async function handleDecisionVerdict(req, res) {
           return res.status(502).json({ error: 'owner_contact_attach_review: owner_patch_failed', detail: upd.data });
         }
         // CONTACT1b — a human confirmed this via the Decision Center verdict;
-        // recorded as `manual`, the ladder's highest rung, not the proposal's
-        // originating capture source. Already governed by the ledger above;
-        // this additionally makes it visible on the shared field_provenance
-        // ledger. Audit-only.
+        // recorded as the registered rung-1 source `manual_resolution` (the
+        // ladder's highest rung for a resolved verdict), not the proposal's
+        // originating capture source and not the bare, UNREGISTERED string
+        // 'manual' (see the same-name guard note in the junk-bucket branch
+        // above). Already governed by the ledger above; this additionally
+        // makes it visible on the shared field_provenance ledger. Audit-only.
         await recordContactFieldWrites({
-          recordPk: ownerId, source: 'manual', workspaceId, fields: patch,
+          recordPk: ownerId, source: 'manual_resolution', workspaceId, fields: patch,
         });
         await opsQuery('PATCH', 'lcc_owner_contact_propagate_review?review_id=eq.' + review.review_id,
           { status: 'confirmed', applied_verdict: 'same_party', applied_log_id: applyLogId,
@@ -10351,9 +10357,10 @@ async function handleDecisionVerdict(req, res) {
       if (Object.keys(personPatch).length) {
         await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(personId), personPatch).catch(() => {});
         // CONTACT1b — same human-verdict reasoning as the same_party branch
-        // above: recorded as `manual`. Audit-only.
+        // above: recorded as the registered rung-1 source `manual_resolution`,
+        // never the bare, UNREGISTERED string 'manual'. Audit-only.
         await recordContactFieldWrites({
-          recordPk: personId, source: 'manual', workspaceId, fields: personPatch,
+          recordPk: personId, source: 'manual_resolution', workspaceId, fields: personPatch,
         }).catch(() => {});
       }
 
