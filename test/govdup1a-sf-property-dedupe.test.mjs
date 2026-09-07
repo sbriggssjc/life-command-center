@@ -222,24 +222,35 @@ test('expire_orphan_pending_updates gains the archived-parent arm', () => {
 });
 
 // ── 7. the drift warning that stops the next reader repeating GOVDUP1 ──────
-test('the committed intake-salesforce source warns that the deployed version is the writer', () => {
+//
+// SUPERSEDED BY DRIFT1 (2026-09-07): this test originally pinned a repo that
+// deliberately stayed on the stale v1 body PLUS a warning header saying "this
+// is not what runs". DRIFT1 Unit 2 did the next step that warning existed to
+// invite — it synced the ACTUAL deployed body (sf-2026-05-v8) into this file.
+// So the file now IS what runs, and the old assertions (header says "not what
+// runs"; body does NOT have autoCreateProperty) would fail a correct sync.
+// The GOVDUP1-a incident this guards against — three investigations reading a
+// stale repo file and correctly-but-wrongly concluding no insert path existed
+// — is prevented differently now: by the file being CURRENT, not by a warning
+// on top of a stale one. Assert the new invariant: the header still names
+// GOVDUP1-a for searchability, names the synced version, and the body now
+// genuinely DOES carry the auto-create path (because that's what's deployed).
+test('the committed intake-salesforce source is synced to the deployed version and documents the sync', () => {
   const head = edgeRaw.slice(0, 4000);
   assert.match(head, /GOVDUP1-a/,
-    'the repo copy must name GOVDUP1-a so the drift is discoverable from the file itself');
-  // Pin the WARNING, not just the ticket id: an assertion that only checks for
-  // "GOVDUP1-a" survives deleting the sentence that does the actual work.
-  assert.match(head, /NOT\*{0,2}\s*WHAT RUNS/i,
-    'the header must say plainly that this file is not what runs');
+    'the repo copy must name GOVDUP1-a so the drift incident is discoverable from the file itself');
   assert.match(head, /sf-2026-05-v8/,
-    'the header must name the deployed PAYLOAD_VERSION so the drift is checkable');
+    'the header must name the deployed PAYLOAD_VERSION so the sync is checkable');
   assert.match(head, /autoCreateProperty/,
-    'the warning must name the deployed function that does the minting');
-  // The body must still genuinely lack the auto-create path — if someone syncs
-  // the deployed source into the repo, this assertion is the prompt to
-  // re-verify the whole finding rather than let the warning silently rot.
-  assert.doesNotMatch(
+    'the header must name the function that does the minting');
+  assert.match(head, /DRIFT1/,
+    'the header must name the DRIFT1 unit that performed the sync, for provenance');
+  // The body must NOW genuinely carry the auto-create path — this is the
+  // deployed reality DRIFT1 synced in. A guard that still required its
+  // absence would fail every correct sync forever.
+  assert.match(
     stripTsComments(edgeRaw),
     /function autoCreateProperty/,
-    'the committed source still has no auto-create path; if that changes, re-verify the GOVDUP1-a drift note',
+    'the committed source must match the deployed body, which does mint properties via autoCreateProperty',
   );
 });
