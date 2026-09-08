@@ -275,3 +275,146 @@ here to keep this pass to the discipline of reading the SAME query the app runs,
 **live-verify round 1 done 2026-09-08 (§7): the W5.2 trio confirmed dead-not-broken, zero verdicts
 ever on 1,403+ live candidate rows across three fully one-click-wired lanes.** The remaining twelve
 ungraded lanes (§5) and the per-lane one-click redesign are still open.
+
+---
+
+## 9. Live-verify pass, round 2 — the remaining 12 ungraded lanes (2026-09-08)
+
+Same discipline as §7: every open-count below is the lane's OWN source filter re-run in SQL (read
+from `api/admin.js` `listFederatedLane`, not re-derived), every verdict count is from `lcc_decisions`
+(LCC Opps `xengecqvemvfknjvbvrq`), every clean zero was positive-controlled, and each "completion"
+path was traced to the row that actually writes the terminal status. Domain reads: dia
+`zqzrriwuavgrquhisnoa`, gov `scknotsqkcheojiaewwh`. Cron state from `cron.job` / `cron.job_run_details`.
+
+### 9.1 Verdict census — `lcc_decisions` for the 12 lanes
+
+```sql
+select decision_type, status, verdict, count(*), min(created_at), max(coalesce(decided_at,created_at)), count(distinct decided_by)
+from lcc_decisions where decision_type in (…12 lanes…) group by 1,2,3;
+```
+
+| lane | rows ever | verdict mix | first → last | deciders |
+|---|---:|---|---|---:|
+| `naming_hygiene_review` | **657** | confirm 625 · reject 29 (skipped) · keep 3 (skipped) | 2026-08-08 → **2026-09-07** | 1 |
+| `comms_owner_attribution_review` | **22** | confirm 22 | 2026-08-14 → 2026-08-14 (one day) | 1 |
+| `merge_duplicate_entities` | **14** | merge 13 · research 1 | 2026-06-29 → 2026-06-29 (one day) | 1 |
+| `intake_disposition` | **0** | — | — | — |
+| `cms_link_suspect` | **0** | — | — | — |
+| `implausible_value` | **0** | — | — | — |
+| `caprate_review` | **0** | — | — | — |
+| `bad_rent_lease` | **0** | — | — | — |
+| `resolve_owner_parent` | **0** | — | — | — |
+| `listing_event_action` | **0** | — | — | — |
+| `resolve_ownership` | **0** | — | — | — |
+| `contact_company_link` | **0** | — | — | — |
+
+Positive control on the zero: the same table, same query window, carries September rows for six
+OTHER types (`naming_hygiene_review` 200, `junk_entity_review` 143, `junk_entity_name` 50,
+`match_disambiguation` 13, `milestone_confirm` 7, `sf_contact_account_mismatch` 2 — last write
+2026-09-08). The mechanism records; these nine lanes simply have nothing recorded.
+
+**Nine of twelve have never received a verdict.** With §7's three, that is **12 of the 15 ungraded
+lanes — and 12 of all 28 Decision Center lanes — with zero human decisions ever.**
+
+### 9.2 Is `naming_hygiene_review`'s 657 real work or a bulk sweep? — REAL
+
+The two September days are suspiciously round (exactly 100 each) so they were checked for the
+bulk-sweep signature (`min/max decided_at` per day, `context.deterministic`, `context.kind`):
+
+| day | n | first → last | deterministic | llm_rename | address_link |
+|---|---:|---|---:|---:|---:|
+| 08-08 | 50 | 14:24 → 14:27 | 50 | 0 | 0 |
+| 08-11 | 186 | 02:42 → 14:58 | 150 | 36 | 0 |
+| 08-13 | 153 | 03:14 → 17:56 | 100 | 33 | 20 |
+| 08-14 | 65 | 21:02 → 21:16 | 50 | 14 | 1 |
+| 09-05 | 100 | 17:40 → 18:18 | 90 | 10 | 0 |
+| 09-07 | 100 | 12:47 → 13:42 | **0** | **100** | 0 |
+
+The 100 on 09-07 are all `llm_rename` (the non-deterministic tier, no bulk-confirm affordance),
+spread over 55 minutes, one decider — a person working cards. The round numbers are the lane's
+page cap (`cap`), not a sweep. **This is the ONE lane of the twelve that is alive**, and it is
+alive at a rate of ~100 cards per sitting. Source table: `naming_hygiene_review` status
+`applied` 610 · `dismissed` 55 · `conflict` 15 · **`proposed` 227** (= `v_naming_hygiene_review_open`
+227, the live backlog). Producer `naming-hygiene-tick` (cron 210, 04:25 UTC) is green AND writing:
+802 proposals in August, 105 in September, last 2026-09-08.
+
+### 9.3 The two lanes that were worked once and never again
+
+**`comms_owner_attribution_review`** — 22 confirms in one sitting on 2026-08-14; source table
+`applied` 22 / `proposed` 9; `v_comms_owner_attribution_review_open` = **9**. ⚠️ **Producer: cron 219
+`comms-owner-attribution-tick` succeeded on all 7 of the last 7 days, yet the table has 31 proposals
+total, ALL created 2026-08-14 → 2026-08-20, and NOTHING since.** That is the exact "green cron, zero
+write delta" shape `CURRENT-STATE.md` §3 warns about (P135/P136/P159a). Not adjudicated here whether
+the pool is exhausted (the tick found nothing new to propose for 19 days) or the tick is
+re-discovering (`already_attributed`) — the tick's own log/tally would need reading, and per the
+standing rule the tally is not evidence. Filed as **UX-T1c-coa-stall**.
+
+**`merge_duplicate_entities`** — 14 verdicts, all 2026-06-29 (the R17/Tier-4 build day). Source
+populations TODAY, using the handler's three arms: `v_lcc_merge_candidates` where
+`auto_mergeable or sf_inheritance` = **3,224** groups · `v_lcc_person_email_merge_candidates`
+`name_compatible=false` = **169** · `v_lcc_canonical_twin_candidates` = **5,140** → **8,533**
+candidate groups against 14 decisions ever (0.16%). ⚠️ This does NOT mean merging is dead —
+`lcc_entity_merge_log` holds **145 merges, all 2026-08-27 → 2026-09-03** (5 since unmerged), from the
+nine OTHER human-verdict call sites P196 named (`owner_reconcile` 215 decisions, junk lanes, etc.).
+The machinery is used; **this lane's card is not the door people go through.** Also note §5's
+caution stands: the twin view's normalizer blind spots (P189/N15c) mean 5,140 is the view's number,
+not a precision-graded one.
+
+### 9.4 The nine never-worked lanes — what is actually sitting in each
+
+| lane | source (exact handler filter) | live open | terminal-status writer | notes |
+|---|---|---:|---|---|
+| `resolve_ownership` | gov `v_ownership_resolution` (all rows; spe_vs_parent excluded in view) | **1,597** props / **$1.50B** annual rent | `keep` = record-only (exclusion via `lcc_decisions.subject_ref`); `update_owner` = deed propagation RPC | ⚠️ **`recommended_action` = `confirm` on 1,597 of 1,597** — a column with one value is not a recommendation; the card cannot triage on it. Mix: `gsa_lessor_change` 804 · `deed_grantee` 598 · `discrepancy` 99 · `state_lessor_change` 96. Recency: fresh 680 · **stale 602 · undated 315 (57% not fresh)**. The biggest unworked population in the Decision Center by $ — and since OWN-T0 (2026-09-02) the property panel reads `v_lcc_property_ownership_reconciled`, NOT this view, so whether this lane's 1,597 and the reconciled store agree is an open question (**UX-T1c-resolveown-vs-ownt0**). |
+| `intake_disposition` | LCC `staged_intake_items` `status in (review_required,failed)` `limit=1000`, classified in JS | **1,011** raw (900 review_required + 111 failed); SQL-approximated klass: matched 456 · other/noise 325 · **create_candidate ~119** · no_data 111 | `dismiss` record-only; `create_property` mints; `reextract` → research_task | 🚨 **The handler's own `limit=1000` is now BELOW the population (1,011).** Ordered `created_at.desc`, the 11 OLDEST rows are never fetched and therefore never classified or shown — **2 matched, 4 other, 5 create_candidate today** (positive control: `row_number() > 1000`). This is the A5/A5a class exactly (a requested limit vs a capped response), 11 rows today and growing with every intake that is not worked. **`no_data` 111 rows are described in the code comment as "auto-retired, not shown" but still sit at `review_required`/`failed` — hidden, not retired.** Filed **UX-T1c-intake-cap**. |
+| `resolve_owner_parent` | LCC `v_lcc_owner_parent_candidates` | **452** clusters | `lcc_register_owner_parent` RPC → `lcc_owner_parent_reviewed` | Positive control on the writer: `lcc_owner_parent_reviewed` has **4 rows, all `disposition='attach'`, 2026-07-24** — written by the Boyd Watterson migration (`20260725120000_…`), not by this lane (which writes `confirmed`/`set_manual`). So the RPC path works; the card path has never fired. |
+| `contact_company_link` | LCC `v_lcc_contact_company_link_candidates` `match_class in (exact_ambiguous,fuzzy) and auto_appliable=false` | **410** (fuzzy 353 · exact_ambiguous 57) | `not_a_match` record-only; `link` writes the owner link | Also on the view: `exact_unique/auto=false` **8** rows that match NEITHER the lane filter NOR the auto-applier's `auto_appliable=true` — a gap between the two consumers (small, named: **UX-T1c-ccl-gap**). Cron 176 `lcc-contacts-company-link` green daily. |
+| `cms_link_suspect` | dia `v_property_cms_link_suspect` | **255** (`city_diff` + `state_diff`) | `link_correct` record-only; `break_link` PATCHes; `research` → research_task | Clean: source non-empty, nothing else consumes it. |
+| `caprate_review` | dia+gov `v_caprate_review_worklist` | **394** (dia 244 + gov 150) | `apply` → `<dom>_apply_caprate_review` RPC; `keep_old` PATCH `resolution` | ⚠️ `caprate_recompute_review`: **`resolution` NULL on 413 of 413** across both DBs, and **`last_seen` = 2026-06-18 on every row in both DBs** — the R43 producer ran ONCE (build day) and has never re-run; no LCC Opps cron matches `caprate`. The worklist is a June snapshot. |
+| `bad_rent_lease` | dia+gov `v_bad_rent_leases` | **19** (gov 19 · **dia 0**) | `mark_fixed`/`confirm_rent` PATCH `resolution`; `research` → research_task | dia zero positive-controlled: dia `caprate_recompute_review.tag` holds only `suspect_cap` (244); gov holds `suspect_cap` 150 + `bad_rent` 19. Same June-18 single-run producer. |
+| `listing_event_action` | LCC `v_lcc_listing_event_queue` `processed_at is null` | **112** (of 115 events; 3 retracted) | `lcc_mark_listing_event_processed` RPC | `lcc_listing_events.processed_at` is **NULL on 115 of 115** — nothing, human or cron, has ever marked one processed. ⚠️ Cron 135 `lcc-listing-event-process` runs HOURLY, succeeded 168/168 in 7 days, and processed_at is still 0/115 — whatever that job does, it is not this lane's terminal write. Producer alive: events detected 05→09 monthly (58/12/12/32/1), last 2026-09-02. |
+| `implausible_value` | dia+gov `v_implausible_sale_values` | **42** (gov 30 · dia 12) | `confirm_as_is` record-only; `correct` PATCHes `sales_transactions.sold_price`; `void`/`research` → research_task | Smallest and cheapest; gov side is 30 rows on named federal assets. |
+
+### 9.5 What round 2 changes about the picture
+
+1. **The Decision Center has 28 lanes and 12 of them have never been clicked.** Of the 15 lanes §2
+   called ungraded, exactly ONE (`naming_hygiene_review`) is being worked today; two were worked on
+   their build day and abandoned; twelve have zero verdicts. That is not a grading problem, it is a
+   surface problem: the fifteen-plus-tile Decision Center presents ~14,200 candidate rows
+   (8,533 merge groups + 1,597 ownership + 1,011 intake + 452 + 410 + 394 + 255 + 112 + 42 + 19 + the
+   §7 1,403) with no ranking ACROSS lanes, and the operator has rationally chosen one lane and
+   ignored the rest.
+2. **Six record-only "completions" hide the lane's true drain.** `resolve_ownership.keep`,
+   `cms_link_suspect.link_correct`, `implausible_value.confirm_as_is`, `contact_company_link.not_a_match`,
+   `merge_duplicate_entities.keep_separate`, `intake_disposition.dismiss` all write NOTHING to the
+   source — exclusion is by `lcc_decisions.subject_ref` at fetch time (`fetchExcludedRefs`). A view
+   count is therefore never the open count for those lanes; today it happens to be, because the
+   decision count is zero.
+3. **Two producers are single-shot snapshots** (`caprate_review` / `bad_rent_lease`, June 18) and one
+   is green-but-silent (`comms_owner_attribution_review`, 19 days). Working those cards would be
+   working stale rows.
+4. **One handler has hit the PostgREST cap** (`intake_disposition`, 1,011 > 1,000). Same class as
+   A5a; small today, silent, and monotonic.
+
+### 9.6 Ranked residue for the redesign (UX44) — by what a human verdict would be worth
+
+| rank | lane | why | size |
+|---|---|---|---|
+| 1 | `resolve_ownership` | $1.50B rent, 1,597 props, ONE recommended_action value; must first be reconciled against OWN-T0's store or the work is double-entry | 1,597 |
+| 2 | `intake_disposition` (create_candidate slice) | the only lane that MINTS properties; 119 listing docs waiting; handler cap defect | ~119 visible / 5 hidden |
+| 3 | `merge_duplicate_entities` | 8,533 groups but the machinery is already used via other doors — the question is whether this door should exist | 8,533 |
+| 4 | `resolve_owner_parent` | 452 sponsor clusters — directly feeds Tier-0 owner contact (OWN-T0e's "one confirm clears a family") | 452 |
+| 5 | `contact_company_link` | 410 person→owner links; links are the binding constraint on the seller-prospect queue (`no_linked_person` 384, UX-T1a-queue) | 410 |
+| 6 | `agency_risk_action` (§7) | 15 guaranteed-visible cards, gov credit risk | 15–692 |
+| 7 | `listing_event_action` | 112 sale events, value-ranked, never processed by anything | 112 |
+| 8 | `cms_link_suspect` | 255 dia CMS links — data hygiene, no $ | 255 |
+| 9 | `npi_dedup_*` (§7) | 711 dia NPI clusters — data hygiene | 711 |
+| 10 | `caprate_review` / `bad_rent_lease` | June snapshot; re-run the producer BEFORE anyone works a card | 413 |
+| 11 | `implausible_value` | 42 rows, cheap | 42 |
+| — | `comms_owner_attribution_review` | 9 open; fix the producer question first | 9 |
+| — | `naming_hygiene_review` | working as designed; leave it alone | 227 |
+
+**Not done this pass (named, not guessed):** no precision grade on any of the nine (that needs a
+human to read cards); no reconciliation of `v_ownership_resolution` against
+`v_lcc_property_ownership_reconciled`; the `comms-owner-attribution-tick` log was not read; the
+`lcc-listing-event-process` cron body was not read to learn what it DOES process; the `_pids`
+tracked-exposure filter from §7 is still unmeasured.
