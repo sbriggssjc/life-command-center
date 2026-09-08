@@ -1,5 +1,12 @@
 # Flow Detail: LoopNet Power Automate
 
+> 🚨 **STALE (DOCMAP2, 2026-09-08): the endpoint below (`life-command-center-nine.vercel.app`) is
+> the RETIRED Vercel deployment (retired 2026-07-20, root `CLAUDE.md`).** It still answers and
+> still holds a service key (P194), so the flow is not broken — but this doc's endpoint is wrong;
+> the live endpoint is the Railway host (`server.js` `/api/loopnet-ingest`). Already tracked as
+> backlog **J13** in `docs/os/PLANNED-BACKLOG.md`. Do not repoint the live Power Automate flow from
+> this doc alone — confirm against `docs/architecture/infrastructure-topology.md` first.
+
 Last updated: 2026-05-11
 Flow export: `LoopNetPowerAutomate_20260511214000.zip`
 Definition path: `Microsoft.Flow/flows/.../definition.json`
