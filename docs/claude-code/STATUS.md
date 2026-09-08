@@ -60,6 +60,25 @@ hostname, not the brand) · DOCMAP2 response corrected in place (5 strikes) · D
 docx + a `.response.md` transcript → `responses/done/` · 2 banners. **Operator items, unchanged:** DRIFT1-retire
 (`sf-test`, `test-function`, `ai-copilot-v2` still ACTIVE on Dialysis_DB), `intake-salesforce` redeploy,
 DRIFT1-sfenrich, and the Vercel teardown.
+## 2026-09-08 — OWN-T0e designed, dry-run surface live: the A3 gate reaches 317 of 1,617 conflicts, and 13 of its top groups are sponsor DUPLICATES, not SPEs
+
+Design doc `docs/audits/OWN_T0e_SPONSOR_FAMILY_LANE_DESIGN_2026-09-08.md`; read-only view
+`v_lcc_ownt0e_sponsor_family_proposals` (migration `20260908150000`, applied to LCC Opps). **Nothing
+writes.** The reconciled store holds **2,097** conflict properties (gov 1,769 / dia 328), 1,617
+`unclassified_rival` — not the 756 OWN-T0 quoted from `v_lcc_property_multi_current` (two
+denominators, filed OWN-T0h). Applying A3's one sanctioned gate `lcc_ownership_sponsor_token` with
+sponsor = the party holding more current properties (a recorded fact, ties surfaced): **182 groups /
+317 properties / $172.7M; 126 breadth-decided non-generic / 241 props / $109.1M; 0 already
+confirmed** against a registry of 6 hand-written rows. Read on named rows: **13 groups / 85
+properties have a "SPE" holding ≥2 properties — the sponsor under a duplicate entity**
+(`Gardner Tanenbaum Holdings ← Gardner-Tanenbaum` (18), `RMR ← RMR Group`, `Massmutual ←
+MassMutual Life`), which a family confirm would paper over; the lane therefore gets a `same_party`
+verdict routing to `merge_duplicate_entities`. 6 generic-token groups (`realty`, `federal`,
+`george`, `john`) flagged, not filtered. Hedge-phrase entities (`… or affiliated individuals`) are
+live owner candidates — filed OWN-T0i. Lane design §4: four verdicts, one write (INSERT into
+`lcc_ownership_sponsor_family`, reversible by DELETE), verify on `conflict_class` counts. **Build is
+the next step.**
+
 ## 2026-09-08 — RO2 REFUTED on named rows: the "217 syncs" are sponsor↔SPE pairs, name variants and capture artifacts; RO1 verified live at 761
 
 Read the 217 deed-arm rows where the grantee equals gov's `true_owner` before building the sync
