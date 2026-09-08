@@ -162,6 +162,47 @@ by reading its content, not its name, per the standing rule "filenames in this w
 authoritative") are moved to `docs/claude-code/responses/done/`, renamed to match the folder's
 convention. Both underlying pieces of work (C1a-e and UX-T1b) are fully reconciled into
 `PLANNED-BACKLOG.md`/`STATUS.md`/canonical docs as of this entry, correction included.
+## 2026-09-08 — DOCMAP1 RECONCILE: 7 more stale docs, the map's own false claim, and a broken-link check of MINE that was wrong
+
+**Merged.** Revised verdict counts: **STALE 11 · DUPLICATE 1 · HISTORICAL 31 · CANONICAL 138 = 181**
+(was 4/1/31/145). ~86 `title+skim` files remain unverified, and the classification doc says so.
+
+### 🚨 My "no broken inbound links" verification was WRONG, and the cause is the third under-match in three turns
+
+I reported the `docs/os/architecture/` → `docs/architecture/` merge as link-clean: *"the only
+surviving references are self-describing."* **False.** The follow-up found **5 live `runbook:` fields
+in `docs/os/FLOW-REGISTRY.yaml`** and **1 comment in
+`supabase/migrations/20260728180000_deal_address_observations_engine.sql`**, all pointing at moved
+files.
+
+**Cause: my grep was `--include=*.md --include=*.js --include=*.mjs --include=*.ts`. It never looked
+at `.yaml` or `.sql`.** ⚠️ **When checking REFERENCES, do not filter by file type** — pointers live
+in YAML registries, SQL comments and JSON config, and **a `runbook:` field in a machine-read registry
+is worse than a broken markdown link, because something may consume it.**
+
+⚠️ **This is the third under-matching detector of mine in three turns** — the `~~` marker matching two
+populations, the Vercel retirement-phrase list inflating 35 candidates, and now this. **The first two
+I caught by spot-checking before publishing. This one I published.** The rule the first two produced
+(*a comparator that cannot express the question returns a plausible number*) applies to scope as well
+as to phrasing, and **the spot-check is what separates the two outcomes.**
+
+### ✅ The map corrected a false claim inside DOCMAP1's own output
+
+`DOCUMENTATION-MAP.md` §1a asserted that `grep -rl docs/os/architecture` *"returns nothing outside
+this sentence."* It now carries a dated correction naming the measurement that refuted it. The
+follow-up's own words: **"a fresh instance of the exact defect class DOCMAP1 exists to catch — a
+canonical page asserting something now-false and reading authoritative — found inside DOCMAP1's own
+output."** That is the right way to record it, and the recursion is the point: **the class is not
+rare, and a page written yesterday is not exempt.**
+
+### 🎯 The finding that changes DOCMAP2's design
+
+The 7 new STALE docs were found by **deep reading**, and **none of them mentions Vercel** — the
+grep-one-retired-term-at-a-time technique *could not have caught any of them*. So that technique,
+which DOCMAP1 rightly identified as what worked, **has a ceiling: it finds one class (a named dead
+dependency) and is blind to the rest** (a superseded design, a flag that flipped, a build that never
+shipped). **DOCMAP2 is re-scoped accordingly — grep is the cheap first pass, not the method.**
+
 ## 2026-09-08 — DOCMAP1 SHIPPED: one architecture directory, a map that maps, and an unusually honest boundary
 
 **PR merged, independently verified.**
@@ -172,9 +213,12 @@ convention. Both underlying pieces of work (C1a-e and UX-T1b) are fully reconcil
 | `docs/architecture/` | 152 | **181** |
 | `DOCUMENTATION-MAP.md` mentions of those files | **6** | **145** |
 
-✅ **The move did not break inbound links** — the only surviving references to `docs/os/architecture/`
-are self-describing (the DOCMAP1 prompt quoting the pre-state, the classification doc, and the map
-explaining the merge). Spot-checked four moved files; all present.
+~~✅ **The move did not break inbound links** — the only surviving references to
+`docs/os/architecture/` are self-describing.~~ 🚨 **THIS CLAIM WAS WRONG — see the DOCMAP1 RECONCILE
+entry above.** The follow-up found **5 live `runbook:` fields in `docs/os/FLOW-REGISTRY.yaml`** and a
+comment in a migration still pointing at the old path. **My grep filtered to `.md`/`.js`/`.mjs`/`.ts`
+and never looked at `.yaml` or `.sql`.** Spot-checked four moved files; all present — that half
+holds.
 
 **Classification: 145 CANONICAL / 31 HISTORICAL / 4 STALE / 1 DUPLICATE = 181.** ✅ **The positive
 control was used** — `field-provenance-ladder.md` was deep-read specifically to confirm the known
