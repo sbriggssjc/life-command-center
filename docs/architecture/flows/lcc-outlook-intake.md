@@ -1,5 +1,14 @@
 # Flow Detail: LCC Outlook Intake
 
+> 🚨 **STALE (DOCMAP3, 2026-09-08): the endpoint below (`life-command-center-nine.vercel.app`) is
+> the RETIRED Vercel deployment (retired 2026-07-20, root `CLAUDE.md`).** It still answers and
+> still holds a service key (P194), so the flow is not broken — but this doc's endpoint is wrong;
+> the live endpoint is the Railway host (`server.js`, current route on the path shown below).
+> Already tracked as backlog **J13** in `docs/os/PLANNED-BACKLOG.md`; sibling instances fixed by
+> DOCMAP2 in `loopnet-power-automate.md` / `rcm-power-automate.md`. Do not repoint the live Power
+> Automate flow from this doc alone — confirm against `docs/architecture/infrastructure-topology.md`
+> first.
+
 Last updated: 2026-05-11
 Flow export: `LCCOutlookIntake_20260511212049.zip`
 Definition path: `Microsoft.Flow/flows/.../definition.json`

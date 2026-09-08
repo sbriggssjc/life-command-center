@@ -1,5 +1,11 @@
 # LCC Production-Readiness Checklist — 2026-04-22
 
+> 🚨 **STALE (DOCMAP3, 2026-09-08): this doc references Vercel as a live deployment target.**
+> Vercel was retired 2026-07-20 (root `CLAUDE.md`: *"PRODUCTION RUNS ON RAILWAY (Vercel retired
+> 2026-07-20)"*). `server.js` on Railway is now the single source of `/api/*` routing;
+> `vercel.json` is deleted. Treat any Vercel-dashboard step or vercel.app URL below as historical
+> / needing translation to the Railway equivalent before acting on it.
+
 Completed the intake-pipeline rebuild today (Path C staging, pdf-parse via `createRequire`,
 state normalization, directional stripping, gov `agency`-column fix, Outlook storage_path
 support). Pipeline proven end-to-end on five test intakes across LCC-native, dialysis,

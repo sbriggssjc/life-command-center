@@ -256,3 +256,86 @@ an exhaustive one, and says so rather than claiming completeness.
 - **No file was deep-verified against a live database or a live deploy** in this pass except
   `field-provenance-ladder.md` (the task brief's named example) and the four Vercel-stale files. Every
   other "verified" tag means "cited by a current index," not "re-derived from source of truth."
+
+---
+
+## Subdirectories (DOCMAP3, 2026-09-08) — `docs/architecture/flows/`, `ai-chat-routing/`, `backfill-artifacts/`, `office-scripts/`
+
+DOCMAP2 counted these 51 files (`docs/architecture/` grew 181→232 non-recursively-missed) but did
+not classify any of them. This pass reads and verdicts all 51, cross-referenced against
+`docs/os/FLOW-REGISTRY.yaml` (the authority on which flow docs are current/retired) — the method
+DOCMAP1 used for the rest of `docs/architecture/`, i.e. registry citation ⇒ CANONICAL, retired-flow
+match ⇒ RETIRED, else title+skim ⇒ HISTORICAL unless a concrete stale claim is found.
+
+### `flows/` (45 files)
+
+| file | verdict | rationale |
+|---|---|---|
+| `FLOW_CHANGES_LOG.md` | **CANONICAL** | Registry `runbook:` for `sf-property-promotion`. Append-only dated log — one historical entry (Apr 28 2026) quotes the retired Vercel URL as part of a past run's diagnosis; left as-is (accurate history of what the flow called *then*), not a live-instruction defect. |
+| `sync-sf-activities-to-supabase.md` | **CANONICAL** | Registry `runbook:` for `sf-activity-sync`. |
+| `dead-letter-fault-branch-runbook.md` | **CANONICAL** | Registry `runbook:` for `sf-retry-dead-letter`. |
+| `processing-complete-move-message.md` | **CANONICAL** | Registry `runbook:` for `outlook-processing-complete`. |
+| `todo-completion-poll.md` | **CANONICAL** | Registry `runbook:` for `outlook-todo-completion-poll`. |
+| `lcc-flagged-email-intake.md` | **CANONICAL** | Registry `runbook:` for `outlook-flagged-email-intake`. |
+| `http-switch-salesforce-lookup.md` | **CANONICAL** | Registry `runbook:` for `sf-http-switch-lookup`. |
+| `todo-lcc-sync.md` | **RETIRED→FIXED (DOCMAP3)** | Matches `retired_flows: retired-todo-lcc-sync` ("To Do - Life Command Center Sync") in FLOW-REGISTRY.yaml. Carried no retirement banner; banner added this pass. |
+| `unflag-completed-email-tasks.md` | **RETIRED→FIXED (DOCMAP3)** | Matches `retired_flows: retired-unflag-completed`. Same defect; banner added this pass. |
+| `http-init-llc-repair-runbook.md` | **STALE→FIXED (DOCMAP3)** | Cited the retired Vercel host as the live endpoint (2 hits); banner added this pass, per J13/CLAUDE.md. |
+| `http-parsejson-property-email.md` | **STALE→FIXED (DOCMAP3)** | Same — banner added. |
+| `lcc-daily-briefing.md` | **STALE→FIXED (DOCMAP3)** | Same — banner added. |
+| `lcc-morning-briefing.md` | **STALE→FIXED (DOCMAP3)** | Same — banner added. |
+| `lcc-outlook-calendar-write.md` | **STALE→FIXED (DOCMAP3)** | Same — banner added. |
+| `lcc-outlook-intake.md` | **STALE→FIXED (DOCMAP3)** | Same — banner added. |
+| `lcc-weekday-briefing-email.md` | **STALE→FIXED (DOCMAP3)** | Same — banner added. |
+| `button-send-http-request.md` | **HISTORICAL** _[title+skim]_ | Small build note for a flow action not represented as its own `logical_id` in the registry; no registry citation, no stale-endpoint hit. |
+| `closing-the-loop-overview.md` | **HISTORICAL** _[title+skim]_ | Cross-flow narrative overview; not a registry `runbook:` target. |
+| `complete-sf-task.md` | **HISTORICAL** _[title+skim]_ | Not a registry `runbook:` target; describes a build/troubleshooting session. |
+| `daily-briefing-processing-summary.md` | **HISTORICAL** _[title+skim]_ | Same. |
+| `flagged-email-cleanup-sweep-build-sheet.md` | **HISTORICAL** _[title+skim]_ | Build sheet, dated by nature; not a registry `runbook:` target. |
+| `flagged-email-cleanup-sweep.md` | **HISTORICAL** _[title+skim]_ | Same class. |
+| `flagged-email-to-todo-task.md` | **HISTORICAL** _[title+skim]_ | Same class. |
+| `flagged-email-to-todo.md` | **HISTORICAL** _[title+skim]_ | Same class. |
+| `flagged-personal-email-to-todo.md` | **HISTORICAL** _[title+skim]_ | Same class. |
+| `google-alerts-subfolder-watch.md` | **HISTORICAL** _[title+skim]_ | Not a registry-cited flow (Google Alerts flow is outside the 17-flow PA baseline). |
+| `google-news-alert-power-automate.md` | **HISTORICAL** _[title+skim]_ | Same. |
+| `govlease-lead-sync.md` | **HISTORICAL** _[title+skim]_ | Not registry-cited. |
+| `http-init-llc.md` | **HISTORICAL** _[title+skim]_ | Sibling of the STALE repair-runbook above; no vercel hit itself, not registry-cited. |
+| `http-postmessagechat.md` | **HISTORICAL** _[title+skim]_ | Not registry-cited. |
+| `http-postmessagechat2.md` | **HISTORICAL** _[title+skim]_ | Not registry-cited. |
+| `lcc-personal-calendar-sync.md` | **HISTORICAL** _[title+skim]_ | Not registry-cited (distinct from registry's `outlookcalendar-lcc-sync` naming). |
+| `lcc-sf-flow1-queue-worker.md` | **HISTORICAL** _[title+skim]_ | Not registry-cited under this filename (registry's SF queue drainer runbook is `SF-WRITEBACK-AND-DOSSIER-BUILD-STATE.md`). |
+| `log-activity-to-sf-from-lcc.md` | **HISTORICAL** _[title+skim]_ | Not registry-cited. |
+| `manual-foreachpost-teams.md` | **HISTORICAL** _[title+skim]_ | Not registry-cited. |
+| `move-queue-executor.md` | **HISTORICAL** _[title+skim]_ | Not registry-cited. |
+| `outlook-draft-reply-executor.md` | **HISTORICAL** _[title+skim]_ | Not registry-cited. |
+| `outlookcalendar-lcc-sync.md` | **HISTORICAL** _[title+skim]_ | Not registry-cited (registry has no calendar-sync `logical_id`). |
+| `recovery-reflag-completed-emails.md` | **HISTORICAL** _[title+skim]_ | Dated recovery-procedure note. |
+| `sync-flagged-emails-to-supabase.md` | **HISTORICAL** _[title+skim]_ | Not registry-cited. |
+| `sync-sf-tasks-to-supabase.md` | **HISTORICAL** _[title+skim]_ | Not registry-cited (distinct from the registry-cited `sync-sf-activities-to-supabase.md`). |
+
+**⚠️ These 27 HISTORICAL verdicts are title+skim only — no cross-check for a stale claim inside each
+was performed beyond the case-insensitive Vercel grep (which returned 0 hits on all 27).** A future
+pass should grep them for other known-retired identifiers before trusting their operational detail.
+
+### `ai-chat-routing/` (4 files)
+
+| file | verdict | rationale |
+|---|---|---|
+| `AI_CHAT_DASHBOARD_INTERPRETATION.md` | **HISTORICAL** _[title+skim]_ | Interpretation guide for a rollout checklist; no cross-reference found in CLAUDE.md/CURRENT-STATE/canon for "ai chat routing" — not confirmed current, not confirmed stale. |
+| `AI_CHAT_ROLLOUT_CHECKLIST.md` | **HISTORICAL** _[title+skim]_ | States "Current Target: policy: balanced" — this specific claim was NOT verified against the live routing config (out of budget this pass); flagged for follow-up rather than asserted either way. |
+| `AI_CHAT_ROLLOUT_RESULTS_TEMPLATE.md` | **HISTORICAL** _[title+skim]_ | Blank results template — structurally cannot be stale (no factual claims to check). |
+| `LCC_AI_COST_AND_CHATBOT_REVIEW.md` | **HISTORICAL** _[title+skim]_ | Dated 2026-03-24 review session, five-plus months before this pass; likely superseded by later AI-surface work (canon/AI-SURFACES-OPERATIONAL-REFERENCE.md) but not confirmed superseded — not deep-read. |
+
+### `backfill-artifacts/` (1 md file)
+
+| file | verdict | rationale |
+|---|---|---|
+| `README.md` | **HISTORICAL** _[title+skim]_ | Dated 2026-07-30 deliverables README for a completed backfill; points to `../contact-reconciliation.md` as the live design doc, consistent with a historical artifacts record rather than a canonical page. |
+
+### `office-scripts/` (1 md file)
+
+| file | verdict | rationale |
+|---|---|---|
+| `README.md` | **CANONICAL** _[title+skim]_ | Describes the live mechanism (Office Scripts + Excel Online connector) the Document Assembly Agent currently uses for >5MB/cell-level workbook edits — operational reference for a live capability, not dated build narrative. Not deep-verified against the actual deployed script. |
+
+**Unit A totals: 51 enumerated, 51 read (title+skim or deeper as noted), 9 defects found (7 stale-endpoint + 2 missing-retirement-banner), 9 defects fixed (all 9 — 7 stale-endpoint banners + 2 retirement banners).**

@@ -16,6 +16,158 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-08 — DOCMAP3 (Unit 1b, deep-read by consequence) — 18 defects found and fixed, 4 unit-boundary reports
+
+Picks up the deep-read DOCMAP2 named but did not start. Four units, each reporting
+enumerated/read/found/fixed counts (never "files reviewed" alone).
+
+**Unit A — `docs/architecture/` subdirectories (flows/, ai-chat-routing/, backfill-artifacts/,
+office-scripts/), 51 files.** Enumerated 51, read 51 (title+skim or deeper), found **9 defects**,
+fixed **9**. `docs/os/DOCMAP1_CLASSIFICATION.md` gained a new dated section verdicting all 51 by
+DOCMAP1's own tier method, cross-referenced against `docs/os/FLOW-REGISTRY.yaml` (the authority on
+current/retired flows). Defects: **7 stale-Vercel-endpoint flow docs** (`http-init-llc-repair-
+runbook.md`, `http-parsejson-property-email.md`, `lcc-daily-briefing.md`, `lcc-morning-briefing.md`,
+`lcc-outlook-calendar-write.md`, `lcc-outlook-intake.md`, `lcc-weekday-briefing-email.md` — the six
+files DOCMAP2's case-sensitive grep missed, plus one it didn't reach) banner-fixed in the format
+DOCMAP2 already used on `loopnet-power-automate.md`/`rcm-power-automate.md`; **2 retired-flow docs
+with no in-doc retirement notice** (`todo-lcc-sync.md`, `unflag-completed-email-tasks.md` — both
+match `retired_flows` entries in FLOW-REGISTRY.yaml) banner-fixed. `FLOW_CHANGES_LOG.md`'s one
+Vercel mention is inside a historical dated log entry describing a past run and was correctly left
+untouched. 27 of the 45 `flows/` files verdict HISTORICAL on title+skim only (build/troubleshooting
+notes for flows outside the 17-flow registry baseline) — not deep-verified beyond a case-insensitive
+Vercel grep (0 further hits). `office-scripts/README.md` verdicts CANONICAL (live mechanism);
+`backfill-artifacts/README.md` verdicts HISTORICAL (completed 2026-07-30 deliverable). The four
+`ai-chat-routing/` files verdict HISTORICAL/unconfirmed — `AI_CHAT_ROLLOUT_CHECKLIST.md`'s
+"Current Target: policy: balanced" claim was NOT cross-checked against the live routing config
+(out of budget; filed as NOT REACHED, not asserted true or false).
+
+**Unit B — six count-only terms from DOCMAP2, re-grepped case-insensitively across ALL file types
+(not just .md) and read.**
+
+| term | DOCMAP2's old count | re-count (`grep -ril`, all file types) | defects found | defects fixed |
+|---|---:|---:|---:|---:|
+| `SOS-direct` | 18 | 79 (47 .md) | 0 | 0 |
+| `CONTACTS_HUB` | 13 | 33 (24 .md) | 1 | 1 |
+| `owner-contact-websearch` | 6 | 19 (11 .md) | 0 | 0 |
+| `GOV_STATE_SIGNALS` | 6 | 12 (9 .md) | 0 | 0 |
+| `queue_v2_enabled` | 7 | 18 (10 .md) | 0 | 0 |
+| `exec_sql` | 5 | 13 (9 .md) | 0 | 0 |
+
+Old counts were `.md`-only file counts from DOCMAP2; the re-count above is grepped across every file
+type, which is why every number moved (not a discrepancy — a wider net). The one defect:
+`docs/CONTACTS_SPLIT_BRAIN_CUTOVER_RUNBOOK.md` presented the `CONTACTS_HUB=ops` flip as a
+still-pending step ("3. Flip the routing: set `CONTACTS_HUB=ops`") when the cutover completed
+2026-08-17 (root CLAUDE.md: "It is currently set to `ops`"); banner-fixed in place. **Five terms
+read clean — 0 candidates were defects, all genuinely current or correctly self-describe as
+paused/blocked/retired.** Recording this explicitly per the task's instruction so a future DOCMAP4
+does not re-grep these five from scratch: `SOS-direct` and `owner-contact-websearch` are correctly
+and consistently documented as blocked/paused everywhere sampled; `GOV_STATE_SIGNALS` is correctly
+documented post-DRIFT1-routing-gap as merged into `GOV_SIGNALS` and NOT YET deployed;
+`queue_v2_enabled` and `exec_sql` mentions are all either accurate current-state descriptions or
+correctly-dated historical audit entries. Two additional renamed-symbol sweeps, done the same way:
+`gov_merge_property` (renamed target `gov_merge_property_apply`) — many hits, sampled the
+non-`docs/history`/non-dated-audit set, 0 defects (every current doc correctly describes the old
+name as now raising, per ADDR1b-merge); `docs/os/architecture/` (the DOCMAP1-merged path) — 6 file
+hits, all inside historical/reconcile narrative correctly describing the merge (e.g. "0 — merged
+into `docs/architecture/`"), confirming DOCMAP1's "0" claim reproduces once you read the 6 hits
+rather than just count them. `life-command-center-production.up.railway.app` (I16b, the dormant
+Railway service) — 16 file hits, count-only per the task's instruction (deliberately tracked in
+FLOW-REGISTRY.yaml, not "fixed").
+
+**Unit C — deep-read named set: 3 repo-root files + 51 BUILD/PLAN/SPEC/ROADMAP/SETUP/CHECKLIST
+files under `docs/setup/`+`docs/architecture/` (recursive) + 6 non-architecture files CLAUDE.md's
+"Pointers to canonical docs" section cites (the remaining ~30 pointer targets are `docs/architecture/`
+files already carrying a CANONICAL verdict in DOCMAP1, or `docs/audits/` files out of this task's
+scope per `docs/audits/README.md`).** Enumerated 60, read 60 (grep-based staleness sweep on all 60;
+manual read on ~20 flagged/high-risk ones). Found **8 defects**, fixed **8**.
+
+Named set (repo-root):
+- `BRIGGS-WRITING-VOICE.md` — verdict **CANONICAL**. Confirmed live: read by path from
+  `api/draft-assist.js`, `api/_handlers/briefing-analyst-take-tick.js`,
+  `api/_shared/briefing-analyst-take.js`, and asserted-on by `test/draft-assist.test.mjs` /
+  `test/briefing-analyst-take.test.mjs`. No defect.
+- `SPEC_forsale_om_and_webpage_ingest.md` — verdict **PARTIALLY BUILT, not banner-fixed**. Part A
+  (embedded Marketing Brochure capture) is confirmed shipped in `extension/content/costar.js`
+  (`Marketing Brochure / embedded-OM helpers`); Parts B/C (broker-webpage crawl registry) were not
+  independently confirmed within budget. Filed NOT REACHED rather than asserted stale.
+- `SPEC_sos_direct_scraper.md` — verdict **STALE→FIXED**. Proposed a `?_route=sos-research-tick`
+  Vercel/edge worker in THIS repo (2026-05-21); the real build is `sos_detail_fetcher.py` in the
+  **government-lease** repo behind the residential-egress `sos-proxy/` (CLAUDE.md §25) — a different
+  mechanism, and Vercel itself is retired. Banner-fixed.
+
+Six additional Vercel-dead-instruction docs found and fixed via the grep sweep across the 51-file
+BUILD/PLAN/SPEC/etc. set: `docs/setup/copilot_plugin_registration.md` (curl commands hit the retired
+`.vercel.app` host as a live prerequisite), `docs/setup/copilot_studio_manifest/lcc-agent/README.md`
+(spec-endpoint URL is the retired host), `docs/setup/RUNBOOK_lcc_deployment.md` ("Access to Vercel
+dashboard" listed as a live deployment prerequisite), `docs/setup/wave0_portal_configuration_guide.md`
+(step 1 is "Set Vercel environment variables"), `docs/setup/production_readiness_checklist_2026-04-22.md`
+(env-var rotation steps say "Vercel → life-command-center project"), `docs/setup/TEAMS_CHAT_BOT_SETUP.md`
+(architecture diagram cites a `vercel.json rewrite` that no longer exists) — all six banner-fixed with
+the same citation (root CLAUDE.md: "PRODUCTION RUNS ON RAILWAY (Vercel retired 2026-07-20)").
+`docs/architecture/field_source_priority_ramp_plan.md`, `docs/architecture/copilot_wave1_build_plan.md`,
+`docs/architecture/round_76_deploy_checklist.md`, `docs/setup/LCC_OneDrive_Upload_Setup_2026-04-21.md`
+mention Vercel but are dated historical narrative correctly describing state as of their own date —
+left unbannered. `docs/architecture/context_broker_api_spec.md` and
+`docs/architecture/touchpoint_execution_agent_roadmap.md` already carried DOCMAP1 Vercel banners —
+confirmed present, not re-fixed.
+
+`docs/AUTH_ENFORCEMENT_ROLLOUT.md` §5 heading read "Railway/Vercel" for a live rollout-order section;
+corrected in place to note Vercel's retirement (minor fix, 8th defect). `docs/OWNERSHIP_RESOLUTION_ENGINE.md`
+does not exist in this repo — it is a cross-repo pointer to the government-lease repo, correctly
+documented as such in CLAUDE.md; not a defect. `docs/os/{README,REGISTRY,SURFACE-SYNC-PROTOCOL,
+DATA-PROCESS-AUDIT-HANDOFF}.md` — 0 Vercel/dead-path hits, not further deep-read within budget.
+
+**Unit D — five directories DOCMAP2 never opened: `docs/setup/` (23 .md), `docs/os/canon/` (22),
+`docs/copilot/` (6), `docs/data-quality/` (2), `docs/resolver/` (3) = 56 files.** Enumerated 56,
+title+skim read 56 (deeper read where overlapping Unit C's set — noted, not double-counted). Found
+**0 additional defects** — a case-insensitive Vercel grep across all 56 returned zero new hits beyond
+the ones already caught in Unit C's overlapping `docs/setup/` files. `docs/os/canon/00-INDEX.md`
+reads CANON_VERSION 1.8.0, dated 2026-09-03 — five days before this pass, plausibly current; no
+canon block was found asserting a claim contradicted by CLAUDE.md/FLOW-REGISTRY.yaml within budget.
+Per the task's explicit instruction, no canon-edit/CANON_VERSION-bump/render-surfaces cycle was
+attempted — that stays an operator-paced unit. `docs/copilot/LCC_Deal_Agent_Instructions_LEAN.md`
+self-describes as a "Phase 1 paste artifact" (a rendered/paste-only file) — not hand-edited, per the
+GENERATED-file rule.
+
+### Totals
+
+| | enumerated | read | defects found | defects fixed |
+|---|---:|---:|---:|---:|
+| Unit A | 51 | 51 | 9 | 9 |
+| Unit B | 6 terms (+2 rename sweeps +1 count-only term) | grep-sampled per term | 1 | 1 |
+| Unit C | 60 | 60 | 8 | 8 |
+| Unit D | 56 | 56 | 0 | 0 |
+| **Total files** | **≈218** (with overlap between B's file hits and A/C/D counted once each) | — | **18** | **18** |
+
+### NOT REACHED (DOCMAP3 boundary — filed the same way DOCMAP1's NOT REACHED section is)
+
+- **`AI_CHAT_ROLLOUT_CHECKLIST.md`'s "Current Target: policy: balanced" claim** was not
+  cross-checked against the live AI-routing config — filed as an open question, not asserted true
+  or false.
+- **`SPEC_forsale_om_and_webpage_ingest.md` Parts B/C** (broker-webpage crawl registry —
+  `lcc_listing_page_snapshots` etc.) were not confirmed built or unbuilt; only Part A (embedded OM
+  capture) was verified shipped.
+- **The 27 HISTORICAL-verdicted `flows/` files** (Unit A) got title+skim + one Vercel grep only — no
+  cross-check against any other known-retired identifier.
+- **`docs/os/canon/` block content** was title-skimmed for version/date plausibility only — no
+  individual canon block's factual claims were checked against current DB/code state, and the
+  canon-edit cycle (bump CANON_VERSION, `render-surfaces.mjs`, re-paste into rendered surfaces) was
+  deliberately not attempted per the task's scope boundary.
+- **`SOS-direct` and `CONTACTS_HUB`'s full hit sets** (47 and 24 `.md` files respectively) were not
+  each individually opened — a targeted content grep (for assertion-shaped phrasing: "enabled",
+  "live", claims about current routing target) was run across the full set, and every file that
+  phrasing surfaced was read; files whose only appearance was an incidental mention were sampled,
+  not exhaustively read one-by-one.
+- **`docs/os/{README,REGISTRY,SURFACE-SYNC-PROTOCOL,DATA-PROCESS-AUDIT-HANDOFF}.md`** got a
+  Vercel/dead-path grep only, not a substantive re-check of their central claims.
+- **Everything DOCMAP1's own NOT REACHED section already named** remains not reached:
+  `docs/audits/` (out of scope by design — see `docs/audits/README.md`), `docs/capital-markets/`
+  (156 files), `docs/history/`, `docs/archive/`, `docs/claude-code/` non-`done/` (~230 files, dated
+  by nature), and re-verdicting DOCMAP1's 87 remaining title+skim rows.
+
+Branch `docs/docmap3-audit`, all changes doc-only (banners + one classification-file extension +
+this entry), no code/DB/migration touched.
+
 ## 2026-09-08 — UX-T1c live-verify round 1: the W5.2 trio is fully wired and 100% unworked
 
 Continued the Decision Center bucket audit (`docs/audits/UX_T1c_DECISION_CENTER_BUCKET_AUDIT_2026-09-08.md`)
