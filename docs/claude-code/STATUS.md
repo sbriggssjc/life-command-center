@@ -16,6 +16,24 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-08 — UX-T1c-intake-cap SHIPPED: the intake_disposition lane pages its population instead of capping it
+
+Took the round-2 recommendation immediately. `api/admin.js` `intake_disposition` fetched
+`staged_intake_items` with one `limit=1000`; the population is 1,011, so the 11 oldest rows (5
+create_candidate) were never fetched. Fix: `pageIntakeReviewRows` in `api/_shared/intake-classify.js`
+— stride 1,000, stop on the RETURNED count (A5a rule), cap 20 pages with `intake_truncated` reported,
+`intake_fetch_failed` reported instead of reading a failed page as empty. Order gained an `intake_id`
+tiebreak. Guard `test/uxt1c-intake-cap-paging.test.mjs`: 5 behavioural (1,011 → 2 pages, full-page
+probe, short page, failed page, truncation) + 1 structural, mutation-verified RED on the old fetch.
+Also corrected the handler comment that called the 111 `no_data` rows "auto-retired" — they are
+hidden by filter and still sit at `review_required`/`failed`. **Not live until the Railway redeploy;**
+verify on the lane's `intakeView=all` total exceeding 1,000. Backlog row flipped to ✅ with the
+residual (`no_data` retire-vs-hide) kept in the row.
+
+⚠️ Session note: mid-turn the working tree was found checked out on `main` (reflog: `checkout:
+moving from docs/uxt1c-live-verify-round2 to main`, not by this session) — the round-2 commit
+`9bb8bb1b` was intact on its branch and the code edits were carried across; nothing lost.
+
 ## 2026-09-08 — UX-T1c live-verify round 2: 12 of 28 Decision Center lanes have never been clicked; four producer/handler defects found on the way
 
 Finished the live-verify pass over the 12 remaining ungraded lanes (`docs/audits/UX_T1c_DECISION_CENTER_BUCKET_AUDIT_2026-09-08.md` **§9**), same discipline as round 1: each lane's OWN handler filter re-run in SQL, verdicts from `lcc_decisions`, every zero positive-controlled, every "completion" traced to the row that writes it.
