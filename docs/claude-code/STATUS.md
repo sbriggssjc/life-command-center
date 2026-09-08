@@ -16,6 +16,69 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-08 — CORRECTION: C1c's retirement sweep never ran; response files reconciled; two docx artifacts moved to done/
+
+**What this entry corrects.** The `## 2026-09-08 — C1a–e SHIPPED (#2152)` entry below (written earlier
+the same day) headlines *"945 tasks retired"* and states *"No response file was found in
+`docs/claude-code/responses/` for this run — reconciled directly from the merged commits' messages."*
+Both halves need correcting, found while reconciling UX-T1b (PR #2160, later the same day) per its own
+live measurement: `owner_needs_salesforce` (gov) and `true_owner_needs_salesforce` (dia) still read
+**100% `status='queued'`**, zero rows carry `outcome.reason='c1c_lane_no_consumer'`. **`lcc_c1c_retire_sf_lanes()`
+is dry-run-default per C1's own runbook, and nobody has invoked it with `dry_run=false` against
+production.** The retirement is a written, correct, one-time operator/cron action — C1c's *code* shipped;
+its *sweep* has not run. C1a (mirror repoint), C1b (gate), C1d (27 dia automated fills) and C1e (ladder
+rung) are unaffected — those are self-executing writers already live, and this correction changes
+nothing about them. Corrected in place in `PLANNED-BACKLOG.md` row **C1** (never delete the wrong
+sentence — the record of why the next reader would have believed it stays, with the correction beside
+it); tracked as **UX-T1b-g2**.
+
+**The "no response file was found" claim was also incomplete.** `docs/claude-code/responses/C1 execution
+desktop response.docx` existed in the folder at commit time (mtime 07:48 UTC, the reconciliation commit
+landed 08:05 UTC) but was not checked before reconciling from commit messages alone. Read in full this
+turn: it is the background agent's own dispatch report for the C1a-e run, and it independently
+corroborates the exact gap this entry corrects — its closing lines state plainly *"this sandbox has no
+live Supabase/DB access, so it cannot perform §0's live re-measurement or any of the 'Verify on'
+checks"* and *"Branch is pushed, no PR opened (as instructed). Want me to open a PR now, or do you want
+to review/verify against live data first?"* — i.e. the implementing run itself flagged, at the time,
+that nothing had been verified against production, which is exactly what UX-T1b's later live census
+found still unresolved. Nothing in the response changes what shipped (C1a/b/d/e's own commit diffs are
+the authority there); it only confirms the retirement sweep was never confirmed to have run, consistent
+with the correction above.
+
+**Filesystem cleanup, same pass:** both response `.docx` files (`C1 execution desktop response.docx`
+and the UX-T1b response — saved under the misleading filename `UX-t1a desktop response.docx`, confirmed
+by reading its content, not its name, per the standing rule "filenames in this workflow are not
+authoritative") are moved to `docs/claude-code/responses/done/`, renamed to match the folder's
+convention. Both underlying pieces of work (C1a-e and UX-T1b) are fully reconciled into
+`PLANNED-BACKLOG.md`/`STATUS.md`/canonical docs as of this entry, correction included.
+## 2026-09-08 — CONSOLIDATE1 SHIPPED: the backlog is open items again, and nothing was lost
+
+**PR #2159, independently verified.** `PLANNED-BACKLOG.md` **1,047 → 937 lines**; 116 closed rows
+archived verbatim to `docs/history/PLANNED-BACKLOG_closed_2026-09.md` grouped by arc, 12 self-created
+"(original filing)" duplicates folded, closed-arcs index added.
+
+**Cowork's independent check of the guarantee that matters — "without losing any planned features":**
+
+- **0 open-marked rows (`🚨`/`🔴`/`⏳`/`👤`) sit in the archive.** All **17** red/open rows are still
+  in the working backlog.
+- **Every ID that disappeared is literally labelled `(original filing)` or `(original)`** — the 12
+  intended folds, and nothing else.
+- ⚠️ **Cowork's row counts (680 → 552) differ from CC's (656 → 528) because the denominators differ**
+  — `grep -c '^| '` counts every table line in the file, CC counted backlog rows. **The DELTA agrees
+  exactly: 128 both ways, and 116 + 12 = 128.** *Two honest measurements with different denominators
+  are not a discrepancy — check whether the deltas agree before adjudicating the totals* (the
+  GOVDUP1 key lesson, arriving on a row count).
+- **Standing invariants: none rescued, and the answer was checked rather than assumed** — CC reports
+  the durable rules from the archived arcs (P196 reversibility, the SEC1 privilege sweep, OWN-T0,
+  N15c's canonical-name trigger) already live in `CLAUDE.md`. That was Unit 2's stated risk and it
+  came back empty for a reason, not by omission.
+
+🎯 **The trap this unit was written to avoid, and it was real:** `| ~~X~~ |` matches **two different
+populations** — ~44 closed items whose *ID* is struck while the row carries the whole record, and 17
+duplicate filings. **A filter on the strike-through marker alone would have archived 44 live records
+as "duplicates."** Caught by spot-checking six rows before acting, not by reasoning about the
+pattern.
+
 ## 2026-09-08 — DRIFT1-routing-gap CLOSED: one canonical GOV_SIGNALS list, wired, per-term justified, deploy pending
 
 **Repo change only, not deployed** (`test/sf-deal-promotion.test.mjs`,
