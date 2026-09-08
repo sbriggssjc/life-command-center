@@ -16,6 +16,27 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-08 — UX-T1c-resolveown-vs-ownt0 MEASURED: half the `resolve_ownership` lane is a no-op, and its properties are 3× as conflicted in the OWN-T0 store as the fleet
+
+Audit §10. Read gov `v_ownership_resolution`'s live definition, re-ran its three arms, carried the
+1,597 property_ids to LCC Opps and joined `v_lcc_property_ownership_reconciled`. **836 of 1,597
+(52%) propose the owner already recorded** — the lessor changed *to* the party we hold, surfaced as a
+decision (A1's `agrees` shape). Real disputes: 761 rows / $1.07B, 598 of them the deed arm; **391
+deeds undated**, ≥124 sponsor↔SPE-shaped (`uirc`/`easterly`/`boyd`). gov disagrees with itself
+first: **217 deed proposals ARE gov's `true_owner`** (only `recorded_owners` lags); 767 rows are
+recorded ≠ proposed ≠ true_owner. Against the OWN-T0 store: 1,535 present, **470 `conflict` (29.4%
+vs 9.4% fleet)**, 409 primaries ≠ gov true_owner, 433 with no LCC resolution at all. `confirm`×1,597
+is a data fact (`no_recorded` 0, `deed_auto_fixable` 0), not the CASE — corrects §9's phrasing.
+**Nothing built.** Decision recorded as RO1 (retire the 836), RO2 (sync the 217), RO3 (repoint the
+lane at the reconciled store + select `true_owner_name`; design question for Scott), RO4 (391 undated
+deeds), RO5 (split the 470 by arm). Canonical page `ownership-history-lane.md` § OWN-T0 gained the
+pointer. Also: the view is `security_invoker=on` + anon SELECT → 0 rows to anon (P157 class, inert).
+
+**Deploy verified:** Railway `/version` = `0c696da4` (PR #2176), and the intake-cap fix proven
+behaviourally — `GET /api/decisions?type=intake_disposition&intake_view=all` → `total: 902`, above
+the 889 the old single `limit=1000` could ever have returned. Backlog row's "not yet verified live"
+cleared.
+
 ## 2026-09-08 — UX-T1c-intake-cap SHIPPED: the intake_disposition lane pages its population instead of capping it
 
 Took the round-2 recommendation immediately. `api/admin.js` `intake_disposition` fetched

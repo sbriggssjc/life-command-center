@@ -418,3 +418,121 @@ human to read cards); no reconciliation of `v_ownership_resolution` against
 `v_lcc_property_ownership_reconciled`; the `comms-owner-attribution-tick` log was not read; the
 `lcc-listing-event-process` cron body was not read to learn what it DOES process; the `_pids`
 tracked-exposure filter from §7 is still unmeasured.
+
+---
+
+## 10. UX-T1c-resolveown-vs-ownt0 — the `resolve_ownership` lane against the OWN-T0 store (2026-09-08)
+
+§9 ranked `resolve_ownership` first for the redesign: 1,597 gov properties / $1.50B rent / 0 verdicts
+ever / `recommended_action = confirm` on every row. Before anyone redesigns it, two questions had
+to be answered with a measurement: **(a) what is the lane actually asking**, and **(b) does the
+store the property panel now reads (`v_lcc_property_ownership_reconciled`, OWN-T0) agree with it.**
+Method: read the live definition of gov `v_ownership_resolution` (`pg_get_viewdef`, 6,913 chars),
+re-run its three arms with the same names, then carry the 1,597 `property_id`s to LCC Opps and join
+the reconciled store. Name comparisons use `regexp_replace(lower(x),'[^a-z0-9]','','g')` — lower()
+BEFORE the strip (the documented footgun) — and a name key is a grouping aid here, never identity.
+
+### 10.1 What the lane is asking — read from the definition, then measured
+
+The view unions three signal arms per property and proposes ONE owner name:
+`COALESCE(deed.latest_deed_grantee, lessor.suspected_grantee, disc.discrepancy_proposed)`, compared
+against **`recorded_owners`** via `properties.recorded_owner_id` (not `true_owners`).
+`recommended_action` is `enrich` when there is no recorded owner, `auto_update` when the deed arm
+says `auto_fixable`, else `confirm`. Today `no_recorded = 0` and `deed_auto_fixable = 0 of 1,597`, so
+the column reads `confirm` 1,597 times — **a data fact, not a design fact; §9 called it "a column with
+one value" and that is true of the population, not the CASE.** `is_newer_than_recorded` is
+`latest_deed_date IS NOT NULL` — it means *dated*, not *newer* (207 rows).
+
+| arm | rows | proposed **= recorded** (a no-op) | differs | of which prefix variant | rent (differs) |
+|---|---:|---:|---:|---:|---:|
+| `gsa_lessor_change` | 804 | **734** | 70 | 6 | $47.6M |
+| `state_lessor_change` | 96 | **95** | 1 | 0 | $0.2M |
+| `deed_grantee` | 598 | 0 | 598 | 99 | $983.8M |
+| `discrepancy` | 99 | 7 | 92 | 22 | $38.3M |
+| **total** | **1,597** | **836 (52%)** | **761** | 127 | $1,069.9M |
+
+**836 of 1,597 cards (52%) propose the owner already recorded** — the lessor of record changed *to*
+the party we already hold, and the lane surfaces it as a decision. That is the A1 `agrees` shape
+(a confirmation presented as a question), and it is why the lane reads as 1,597 rows of `confirm`.
+The real dispute population is **761 rows, $1.07B** — and it is almost entirely the **deed arm**.
+
+The deed arm itself: **391 of 598 deeds carry NO date**, 170 more are >3 years old, **37 are fresh
+and dated**; 586 pass the grantee guards. **124 of 598 (a lower bound, $123.7M) share a leading
+≥4-char token between recorded and proposed** — `uirc` 13, `easterly` 9, `boyd` 6, `elman` 4 —
+i.e. the sponsor ↔ SPE class OWN-T0 and A3 both measured, where **both names are true** and the
+correct answer is a family confirm (OWN-T0e), not an owner update.
+
+### 10.2 gov's own three stores disagree before LCC is even consulted
+
+`v_ownership_resolution` exposes `true_owner_name` beside the recorded owner; nothing in the lane
+compares them.
+
+| arm | recorded = true_owner | proposed = true_owner | three-way disagree | rent (3-way) |
+|---|---:|---:|---:|---:|
+| `gsa_lessor_change` (804) | 517 | 479 | 282 | $238.6M |
+| `deed_grantee` (598) | **0** | **217** | 380 | $757.4M |
+| `discrepancy` (99) | 85 | 7 | 9 | $3.8M |
+| `state_lessor_change` (96) | **0** | 0 | 96 | $0.3M |
+
+Two things fall out. **On the deed arm, 217 of 598 proposals are ALREADY gov's `true_owner`** — the
+deed grantee is the owner gov itself believes in; only `recorded_owners` lags. Those 217 need a
+recorded-owner sync, not a human. And **767 of 1,597 rows are a three-way disagreement** (recorded ≠
+proposed ≠ true_owner, $1.0B) — the lane asks the operator to pick between two names while gov holds
+a third it never shows on the card.
+
+### 10.3 Against the OWN-T0 store — 1,535 of 1,597 present, 470 in `conflict`
+
+Joined on `(source_domain='gov', source_property_id)` to `v_lcc_property_ownership_reconciled`,
+`is_current` rows only (positive control: 1,535 matched, 62 absent — the join key is right).
+
+| LCC state for the 1,597 lane properties | n |
+|---|---:|
+| no current owner row in LCC at all | **62** |
+| `single_current_owner` | 1,064 |
+| **`conflict`** (`unclassified_rival` 421 · `duplicate_entity` 36 · `sponsor_family_confirmed` 13) | **470 (29.4%)** |
+| `only_non_owner_claims` | 1 |
+| LCC primary **=** gov `true_owner` | **1,126** |
+| LCC primary **≠** gov `true_owner` | 409 (307 of them hold the true_owner as a NON-primary current row) |
+| primary is the domain mirror only (`domain true owner of record`, unresolved) | 371 |
+| `n_current_owners` = 2 / 3 / 4 | 371 / 96 / 3 |
+
+**The lane's properties are three times as conflicted in the LCC store as the fleet** (29.4% vs
+9.4% fleet-wide per OWN-T0) — which is what you would expect of a population selected because
+sources disagree, and it means a `resolve_ownership` verdict that writes gov `recorded_owner` would
+land on a property where LCC already holds 2–4 current owners and would not resolve the LCC-side
+conflict at all. **433 of the 1,597 (371 mirror-only + 62 absent) have no LCC-side resolution to
+agree or disagree with.**
+
+### 10.4 What this settles
+
+1. **Do not redesign the card; retire the no-op half first.** 836 rows where the proposal equals the
+   recorded owner are not decisions — suppress them in the view (`proposed_key = recorded_key`) or
+   auto-close them the A4 way. That alone takes the lane 1,597 → 761.
+2. **Sync, don't ask, where gov already agrees with itself.** 217 deed rows propose exactly the gov
+   `true_owner`; the fix is a `recorded_owners` ← `true_owners` reconciliation, an automated write with
+   its own reversibility, not 217 cards.
+3. **The remaining dispute population is dominated by sponsor ↔ SPE and undated deeds.** ≥124 of the
+   598 deed rows are family-shaped and belong to OWN-T0e (one confirm clears a family — A3 measured
+   `boyd` at 20 of 24); 391 deeds carry no date, so "newer than recorded" is unknowable on 65% of the
+   arm and the card cannot honestly say *update*.
+4. **The lane should read the reconciled store, not `recorded_owners`.** OWN-T0's doctrine is one
+   door; the DC lane is the last consumer still reasoning about gov `recorded_owners` alone, while
+   the panel an operator opens from the card shows `v_lcc_property_ownership_reconciled` — the
+   two will disagree on 409 + 470 rows and the operator will see it.
+5. **Put gov's `true_owner_name` on the card.** It is on the view and the handler never selects it
+   — the P134 *diff the view's columns against the handler's `select=`* finding, again.
+
+### 10.5 Also found, not part of the question
+
+- **gov `v_ownership_resolution` is `security_invoker=on` and grants SELECT to `anon` — it returns
+  0 rows to anon** (P157 class, `SET LOCAL ROLE anon` → 0 vs 1,597). Inert today: the DC lane reads it
+  through `domainQuery` with the service key. Named so nobody builds an anon/pg_net consumer on it and
+  reads the empty array as "no disputes".
+- The Railway deploy of `0c696da4` (PR #2176) is live — `/version` via `net.http_get` — and the
+  intake-cap fix is **verified behaviourally**: `GET /api/decisions?type=intake_disposition&intake_view=all`
+  returns `total: 902`, above the 889 ceiling the old single `limit=1000` could ever have returned
+  (1,000 − the 111 `no_data` rows, all of which are older than the window).
+
+**Not done:** no per-row precision read of the 761 (a human reading cards); no LCC-side split of the
+470 conflicts by lane arm (needs the names carried across, ~70 KB — deferred as not worth the cost
+until the no-op half is retired); the 62 absent properties not characterised.

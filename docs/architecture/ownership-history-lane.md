@@ -430,3 +430,15 @@ merges (and `lcc_entity_canonical_key` keeps a trailing `(The)`) · `OWN-T0d` 11
 **`OWN-T0e` ~1,550 unconfirmed sponsor/SPE pairs — one confirm clears a family; the highest-leverage
 follow-up** · `OWN-T0f` per-row UUIDs in `ownership_source` · `OWN-T0g`
 `lcc_finalize_entity_portfolios` supersedes only within its own payload (gov) and not at all (dia).
+
+### The `resolve_ownership` Decision Center lane vs this store (UX-T1c §10, 2026-09-08)
+
+The gov DC lane `resolve_ownership` reads gov `v_ownership_resolution`, which compares deed / lessor /
+discrepancy proposals against **`recorded_owners`** — not `true_owners`, and not this store. Measured
+on its 1,597 rows: **836 propose the owner already recorded** (no-ops), **217 deed proposals are
+already gov's `true_owner`** (a recorded-owner sync), and against this store **470 of the 1,597 are
+`conflict`** (29.4%, vs 9.4% fleet-wide) with 409 primaries ≠ gov `true_owner`. The lane has 0 human
+verdicts ever. **It is the last consumer still reasoning on `recorded_owners` alone**; the panel an
+operator opens from its card reads this view and will disagree. Backlog **RO1–RO5**; the
+family-shaped deed rows (≥124) belong to **OWN-T0e**. Full measurement:
+`docs/audits/UX_T1c_DECISION_CENTER_BUCKET_AUDIT_2026-09-08.md` §10.
