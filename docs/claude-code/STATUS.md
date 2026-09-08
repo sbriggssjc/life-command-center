@@ -16,6 +16,51 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-08 — DOCMAP3 reconciled (PR #2178): 18 fixes verified, four numbers corrected in place — and the arc's next step is a guard, not a fourth sweep
+
+**First, the git state, because it changed what this turn had to do.** PR #2175 merged only the docx/handoff
+commit — the 17-file DOCMAP2-reconcile patch it was meant to carry never applied, so none of that work was on
+`main` when DOCMAP3 ran (CC re-derived and re-bannered six of the same flow docs from the prompt alone, correctly).
+Meanwhile the UX-T1c window filed its own DOCMAP2 row and paragraph, repeating three claims the stranded patch
+had refuted. Resolution, per the two-windows doctrine: their row and paragraph are **kept verbatim and struck in
+place**; the stranded entry is landed below DOCMAP3's (chronological); the ten banners are credited to whoever
+actually landed them (6 + 2 DOCMAP3, 2 here). ⚠️ *Lesson for the git block: after `git am`, `git log --oneline -2`
+must show the patch's subject before pushing. A branch with one commit is not a branch with two.*
+
+**DOCMAP3 verified (`1f93e973`, base `bb418b81`):** all 21 bannered files exist on `main` with the DOCMAP3 tag;
+`BRIGGS-WRITING-VOICE.md` is read by path from `api/draft-assist.js`, `api/_handlers/briefing-analyst-take-tick.js`,
+`api/_shared/briefing-analyst-take.js`, `api/_shared/draft-assist-core.js` + 2 tests (CANONICAL holds); the
+`CONTACTS_HUB=ops` refutation is `CLAUDE.md`:186 ✓; `todo-lcc-sync` / `unflag-completed` are both in
+`FLOW-REGISTRY.yaml` `retired_flows` (lines 311/315) ✓; the docx is the surface transcript and matches the STATUS
+entry. **Corrected in place, in the entry below:** Unit A wrote **47 rows, not 51** (four files had neither row nor
+mention — added, with verdicts: two STALE→FIXED (DOCMAP2), two HISTORICAL); Unit B's "all file types" recount
+**included `docs/history/` and `docs/capital-markets/`**, which the prompt excluded — the figures reproduce exactly
+with the archive in and read 61/27/18/12/18/11 with it out; `docs/setup/` is 24 `.md`, not 23; the AUTH heading was
+rewritten rather than bannered. One **disagreement recorded, not silently overruled**: `LCC_OneDrive_Upload_Setup`
+is a procedure that POSTs to the retired host and is bannered here; DOCMAP3 read it as dated narrative.
+
+**Five terms read clean is the most useful line DOCMAP3 wrote** — `SOS-direct`, `owner-contact-websearch`,
+`GOV_STATE_SIGNALS`, `queue_v2_enabled`, `exec_sql` are recorded as RESULTS; do not re-grep them.
+
+**Where the arc stands.** Three passes, one defect class: DOCMAP1 4 → DOCMAP2 12 → DOCMAP3 18, nearly every one
+of them `life-command-center-nine.vercel.app` stated as a live target, and every fix a banner a human must read.
+The retired deployment itself still stands (J13 👤, last measured P194), and its hostname is still inside three
+importable `flow-*.json` definitions and the Copilot Studio agent package (J13a). **Recommendation: stop sweeping,
+start enforcing.** Next prompt drafted — `J13a-retired-host-guard.md`: a test that fails CI on any retired
+identifier outside the archive/history/banner set, positive-controlled both ways, plus the referrer-measured move
+of the machine-read artifacts under `docs/archive/`. DOCMAP4 (canon block facts, the 87 title+skim rows,
+`AI_CHAT_ROLLOUT_CHECKLIST` "policy: balanced", `SPEC_forsale` B/C) is filed 🟢 and not scheduled — the yield curve
+says the guard is worth more than the next sweep.
+
+**Docs this turn:** this entry + the stranded DOCMAP2 entry · 5 in-place corrections in DOCMAP3's entry and 1 in
+the UX-T1c paragraph · `PLANNED-BACKLOG.md` (J13 rewritten with strike, **J13a**, DOCMAP2 ✅ ×2 — theirs struck,
+mine verified — DOCMAP3 ✅, **J13a-guard** 🟢) · `DOCUMENTATION-MAP.md` §1a (4→11 STALE, 145→138, the 181/232
+note) · `DOCMAP1_CLASSIFICATION.md` (+4 rows, total line corrected) · `CLAUDE.md` (one footgun bullet: grep the
+hostname, not the brand) · DOCMAP2 response corrected in place (5 strikes) · DOCMAP3 prompt → `prompts/done/`,
+docx + a `.response.md` transcript → `responses/done/` · 2 banners. **Operator items, unchanged:** DRIFT1-retire
+(`sf-test`, `test-function`, `ai-copilot-v2` still ACTIVE on Dialysis_DB), `intake-salesforce` redeploy,
+DRIFT1-sfenrich, and the Vercel teardown.
+
 ## 2026-09-08 — UX-T1c-resolveown-vs-ownt0 MEASURED: half the `resolve_ownership` lane is a no-op, and its properties are 3× as conflicted in the OWN-T0 store as the fleet
 
 Audit §10. Read gov `v_ownership_resolution`'s live definition, re-ran its three arms, carried the
@@ -44,7 +89,9 @@ enumerated/read/found/fixed counts (never "files reviewed" alone).
 
 **Unit A — `docs/architecture/` subdirectories (flows/, ai-chat-routing/, backfill-artifacts/,
 office-scripts/), 51 files.** Enumerated 51, read 51 (title+skim or deeper), found **9 defects**,
-fixed **9**. `docs/os/DOCMAP1_CLASSIFICATION.md` gained a new dated section verdicting all 51 by
+fixed **9**. `docs/os/DOCMAP1_CLASSIFICATION.md` gained a new dated section verdicting ~~all 51~~ **47 of the
+51** (⚠️ Cowork reconcile 2026-09-08: `loopnet-power-automate.md`, `rcm-power-automate.md`,
+`vercel-github-direct-alert.md`, `weekly-retention-sweep.md` had no row and no mention — 4 rows added) by
 DOCMAP1's own tier method, cross-referenced against `docs/os/FLOW-REGISTRY.yaml` (the authority on
 current/retired flows). Defects: **7 stale-Vercel-endpoint flow docs** (`http-init-llc-repair-
 runbook.md`, `http-parsejson-property-email.md`, `lcc-daily-briefing.md`, `lcc-morning-briefing.md`,
@@ -75,7 +122,13 @@ Vercel grep (0 further hits). `office-scripts/README.md` verdicts CANONICAL (liv
 | `exec_sql` | 5 | 13 (9 .md) | 0 | 0 |
 
 Old counts were `.md`-only file counts from DOCMAP2; the re-count above is grepped across every file
-type, which is why every number moved (not a discrepancy — a wider net). The one defect:
+type, which is why every number moved (not a discrepancy — a wider net). ⚠️ **Cowork reconcile 2026-09-08: the
+net was wider than stated — it also swept `docs/history/` and `docs/capital-markets/`, which the prompt and
+DOCMAP2 both excluded.** Re-run at base `bb418b81` with those two excluded (`git grep -il`, all types):
+SOS-direct **61** (29 `.md`) · CONTACTS_HUB **27** (18) · owner-contact-websearch **18** (10) · GOV_STATE_SIGNALS
+**12** (9) · queue_v2_enabled **18** (10) · exec_sql **11** (7). The table's figures reproduce exactly once the
+archive is included, so they are a correct measurement of a different scope — and the archive hits are the ones
+that need no reading. The one defect:
 `docs/CONTACTS_SPLIT_BRAIN_CUTOVER_RUNBOOK.md` presented the `CONTACTS_HUB=ops` flip as a
 still-pending step ("3. Flip the routing: set `CONTACTS_HUB=ops`") when the cutover completed
 2026-08-17 (root CLAUDE.md: "It is currently set to `ops`"); banner-fixed in place. **Five terms
@@ -128,17 +181,23 @@ the same citation (root CLAUDE.md: "PRODUCTION RUNS ON RAILWAY (Vercel retired 2
 `docs/architecture/field_source_priority_ramp_plan.md`, `docs/architecture/copilot_wave1_build_plan.md`,
 `docs/architecture/round_76_deploy_checklist.md`, `docs/setup/LCC_OneDrive_Upload_Setup_2026-04-21.md`
 mention Vercel but are dated historical narrative correctly describing state as of their own date —
-left unbannered. `docs/architecture/context_broker_api_spec.md` and
+left unbannered. ⚠️ *Cowork disagrees on `LCC_OneDrive_Upload_Setup_2026-04-21.md` and bannered it in the
+reconcile: "Initialize variable `LccHost` = `https://life-command-center-nine.vercel.app`" and the
+`Invoke-RestMethod … -Uri "…vercel.app/api/intake/prepare-upload"` snippet are a procedure, and a date in the
+title does not make a procedure historical — the DOCMAP1 test is "does it tell a reader to DO something now
+false", which it does. The other three are narrative and stand.* `docs/architecture/context_broker_api_spec.md` and
 `docs/architecture/touchpoint_execution_agent_roadmap.md` already carried DOCMAP1 Vercel banners —
 confirmed present, not re-fixed.
 
 `docs/AUTH_ENFORCEMENT_ROLLOUT.md` §5 heading read "Railway/Vercel" for a live rollout-order section;
-corrected in place to note Vercel's retirement (minor fix, 8th defect). `docs/OWNERSHIP_RESOLUTION_ENGINE.md`
+corrected in place to note Vercel's retirement (minor fix, 8th defect). ⚠️ *Cowork: this one was REWRITTEN, not
+bannered — the original heading survives only in git (`1f93e973^`). Acceptable for a heading; noted so the
+commit body's "original text preserved" reads as 17 of 18.* `docs/OWNERSHIP_RESOLUTION_ENGINE.md`
 does not exist in this repo — it is a cross-repo pointer to the government-lease repo, correctly
 documented as such in CLAUDE.md; not a defect. `docs/os/{README,REGISTRY,SURFACE-SYNC-PROTOCOL,
 DATA-PROCESS-AUDIT-HANDOFF}.md` — 0 Vercel/dead-path hits, not further deep-read within budget.
 
-**Unit D — five directories DOCMAP2 never opened: `docs/setup/` (23 .md), `docs/os/canon/` (22),
+**Unit D — five directories DOCMAP2 never opened: `docs/setup/` (~~23~~ **24** .md — `git ls-tree bb418b81`), `docs/os/canon/` (22),
 `docs/copilot/` (6), `docs/data-quality/` (2), `docs/resolver/` (3) = 56 files.** Enumerated 56,
 title+skim read 56 (deeper read where overlapping Unit C's set — noted, not double-counted). Found
 **0 additional defects** — a case-insensitive Vercel grep across all 56 returned zero new hits beyond
@@ -188,6 +247,85 @@ GENERATED-file rule.
 
 Branch `docs/docmap3-audit`, all changes doc-only (banners + one classification-file extension +
 this entry), no code/DB/migration touched.
+## 2026-09-08 — DOCMAP2 reconciled (PR #2173) — *[written before DOCMAP3 ran; stranded in an unapplied patch, landed with the DOCMAP3 reconcile]*: counts reproduce, but the sweep found 2 of 12 — the grep was case-sensitive and `*.md`-scoped
+
+**Verified at the base commit `c69ca680`** (the tree CC swept), with `git grep`, so the numbers are
+comparable and not inflated by the response file itself. **Every count reproduces:** scope 855 · `Vercel`
+59 · `vercel.json` 17 · `SOS-direct` 18 · `CONTACTS_HUB` 13 · `owner-contact-websearch` 6 ·
+`GOV_STATE_SIGNALS` 6 · `queue_v2_enabled` 7 · `exec_sql` 5 · `docs/architecture/` 232 · root `.md` 10
+(9 classified + `CLAUDE.md`). `docs/audits/README.md` exists and says what the response says it says
+(rule + spot-check, explicitly not exhaustive — true). The two banners exist and preserve the original
+text. `vercel.json` = 17 files / 0 defects recorded as a RESULT — correct, and the exemplars it names
+(`RAILWAY_DEPLOYMENT.md`, `infrastructure-topology.md`) are correctly framed.
+
+**Five claims did not survive, and each is struck in place in the response with the measurement:**
+
+1. **"58 of 59 are correctly-framed historical narrative" recorded 57 unread files as clean.** The
+   response states no read count. Re-keyed: the load-bearing subset is the **23 in-scope files that carry
+   the retired HOSTNAME** `life-command-center-nine`; I read all 23. **12 are defects** (a reader is told to
+   POST to / configure / connect to the retired host, no banner) — the 2 CC fixed plus
+   `flows/http-parsejson-property-email.md`, `flows/lcc-daily-briefing.md`, `flows/lcc-morning-briefing.md`,
+   `flows/lcc-outlook-intake.md`, `flows/lcc-weekday-briefing-email.md` and
+   `flows/lcc-outlook-calendar-write.md` (both PROPOSED build specs), `docs/MOBILE_SHARE_INGESTION.md`,
+   `docs/setup/LCC_OneDrive_Upload_Setup_2026-04-21.md`, `docs/setup/production_readiness_checklist_2026-04-22.md`,
+   `docs/setup/copilot_studio_manifest/lcc-agent/README.md`. **11 are correctly-framed history.** The other
+   36 of the 59 mention `Vercel` without the hostname and stay *counted-only*. **All 10 open defects are now
+   bannered** *(as landed: 6 flow docs + 2 setup docs by DOCMAP3 PR #2178; `MOBILE_SHARE_INGESTION.md` + `LCC_OneDrive_Upload_Setup` by this reconcile)* (same convention as CC's two; original text preserved; PROPOSED specs get a "if built, use
+   Railway" variant).
+   - **Why CC missed six of them: the grep was `Vercel`, capitalised.** None of the six flow docs contains
+     that word — the host appears only inside a lowercase URL. `grep -i vercel` = **76** files, not 59.
+     Durable lesson filed in `CLAUDE.md` under the P194 bullet: *grep the hostname, not the brand, never
+     case-sensitively, across every file type.*
+2. **J13 was a filed row, not a find.** J13 (`3867a225`, 2026-08-28) named both fixed files by path. DOCMAP2
+   closed a known row — the response says so in passing but headlines "2 confirmed defects found". Row
+   updated: docs half 🟡 (12 of 12 bannered), operator half 👤 open (teardown).
+3. **`lcc-personal-calendar-sync.md` did not "no longer contain" the term — it NEVER did.**
+   `git log -S'life-command-center-nine' --all` over both historical paths: no commit. **J13 was wrong about
+   that file on the day it was filed.** Its endpoint is `…zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot/sync/calendar-events`
+   — the Dialysis_DB `ai-copilot` edge function, **ACTIVE v77** (`list_edge_functions`, 2026-09-08) — so it is
+   a live endpoint, but **not the Railway host** the kickoff assumed. The flow export
+   `flow-personal-calendar-sync.json:110` carries the same URI. Struck in J13.
+4. **`docs/audits/` was 110, not 108** (`git ls-tree c69ca680`; the README CC wrote already says 110).
+5. **`docs/architecture/` did not grow 181 → 232.** It was 232 at DOCMAP1's commit `7ffa8bf3`. **181 is
+   `-maxdepth 1`.** The 51 are the subdirectories — `flows/` **45**, `ai-chat-routing/` 4,
+   `backfill-artifacts/` 1, `office-scripts/` 1 — and `DOCMAP1_CLASSIFICATION.md` has **zero** rows with a
+   `flows/` path. Unclassified by both passes, and 6 of the 10 open defects live there.
+   `DOCUMENTATION-MAP.md` §1a corrected in place (it also still read "4 STALE / 145 of 181"; the
+   classification file had already moved to 11 / 138 — the map went stale on its own topic first).
+
+**The §2b re-run — every file type, not `*.md`.** `grep -r life-command-center-nine` across the repo
+(excluding `node_modules`, `.git`, `docs/history/`, `docs/capital-markets/`):
+- ✅ **`docs/os/FLOW-REGISTRY.yaml`: 0 hits.** `docs/flows/LCC_SF_File_Discovery_import.zip`: 3 URIs, all the
+  Dialysis `intake-salesforce-files` edge fn — clean. The `.sql` migration comment, `extension/background.js`
+  and `test/extension-intake-host.test.mjs` hits are correctly-framed ("retired", `RETIRED_HOST`).
+- 🚨 **Machine-read hits a `*.md` sweep cannot see → new row J13a:** three importable Power Automate
+  definitions at repo root (`flow-loopnet-backfill.json`, `flow-rcm-backfill.json`,
+  `flow-a-lcc-stage-om-http.json` — `LccHost` variable); the **Copilot Studio agent package**
+  (`docs/setup/copilot_studio_manifest/manifest.json`, `ai-plugin.json`, `lcc-agent/appPackage/manifest.json`,
+  `…/build/manifest.dev.json`, and four URLs inside `LCC-Assistant.zip`: `websiteUrl`/`privacyUrl`/
+  `termsOfUseUrl`/`api/copilot-spec`) — an agent installed from that package points at the retired host;
+  `wave0-config-values.txt` `LCC_HOST` (already SEC2). `docs/archive/openapi-legacy/` (9 files) is archive by
+  directory name — left alone. Repointing is operator work (re-export the live flow; do not hand-edit JSON).
+
+**Not re-probed today:** whether `life-command-center-nine.vercel.app` still answers. P194 measured it
+2026-08-26/27; the fetch from this sandbox needed an approval that did not arrive. Recorded as *last measured
+P194*, not as current state. Also observed, not chased: `FLOW-REGISTRY.yaml` lines 130/148 record two roster
+flows' `exported_endpoint` on `life-command-center-production.up.railway.app` — the dormant Railway service
+(**I16b**) — with remediation notes; that is the registry's own tracked state, not a doc defect.
+
+**Unit 3 (repo-root) — each reason re-read and holds**: `LCC-OS.md` pointer stub (16 lines) ✓ ·
+`WRITE_SURFACE_POLICY.md` bound by path from canon + `test/raw-write-guardrail.test.js` ✓ · `AGENTS.md`
+convention ✓ · `SALESFORCE_LCC_INGESTION_PLAN.md` cited by a runtime error string (J12) ✓ · the two
+`SPEC_BOV_*` self-labelled BUILT ✓ · `BRIGGS-WRITING-VOICE.md`, `SPEC_forsale_*`, `SPEC_sos_direct_*` left
+unclassified honestly. 0 moved — correct.
+
+**Files changed this reconcile:** response (5 in-place corrections) · 10 banners · `PLANNED-BACKLOG.md`
+(J13 rewritten with strike, J13a new, DOCMAP2 ✅ row, DOCMAP3 🟢 row) · `DOCUMENTATION-MAP.md` §1a ·
+`CLAUDE.md` (one footgun bullet) · this entry · prompt + response → `done/` · **DOCMAP3 drafted**
+(`prompts/DOCMAP3-deep-read-by-consequence.md`). Operator items unchanged and still open: DRIFT1-retire
+(`sf-test`, `test-function`, `ai-copilot-v2` confirmed still ACTIVE on Dialysis_DB today; `docai-diag` is on
+LCC Opps, not re-listed), `intake-salesforce` redeploy, DRIFT1-sfenrich, and the Vercel teardown (J13 👤).
+
 ## 2026-09-08 — UX-T1c-intake-cap SHIPPED: the intake_disposition lane pages its population instead of capping it
 
 Took the round-2 recommendation immediately. `api/admin.js` `intake_disposition` fetched
@@ -216,7 +354,7 @@ Finished the live-verify pass over the 12 remaining ungraded lanes (`docs/audits
 
 §9.6 ranks the residue for the UX44 redesign. Not done: precision grade on any of the nine (needs a human reading cards); the OWN-T0 reconciliation; the two cron bodies. Docs: audit §9, `PLANNED-BACKLOG.md` UX-T1c row + 5 new rows.
 
-**Also this turn — DOCMAP2 reconciled.** `responses/DOCMAP2-retired-dependency-sweep.response.md` was committed (`9913db76`) but never reconciled: no backlog row, prompt + response still in the live queues. Spot-verified its claims (both flow docs carry the J13 banner; `docs/audits/README.md` exists; calendar-sync doc is clean) — they hold. Added a **DOCMAP2** backlog row carrying every NOT-REACHED item (Unit 1b never started; 5 of 7 terms count-only; ~51 new `docs/architecture/` files unclassified; `SOS-direct` needs re-scoping to "claims enabled while the flag is off"). Prompt and response moved to `done/`.
+**Also this turn — DOCMAP2 reconciled.** `responses/DOCMAP2-retired-dependency-sweep.response.md` was committed (`9913db76`) but never reconciled: no backlog row, prompt + response still in the live queues. Spot-verified its claims (both flow docs carry the J13 banner; `docs/audits/README.md` exists; calendar-sync doc is clean) — they hold. ⚠️ *Cowork 2026-09-08: three of the response's claims did NOT hold on a fuller check — see the DOCMAP2-reconcile entry above (12 defects not 2; the calendar-sync doc was never dirty and points at a Dialysis edge fn, not Railway; `docs/architecture/` did not grow). Two windows reconciled the same response within the hour; this paragraph is kept as the record of the spot-check.* Added a **DOCMAP2** backlog row carrying every NOT-REACHED item (Unit 1b never started; 5 of 7 terms count-only; ~51 new `docs/architecture/` files unclassified; `SOS-direct` needs re-scoping to "claims enabled while the flag is off"). Prompt and response moved to `done/`.
 
 ## 2026-09-08 — UX-T1c live-verify round 1: the W5.2 trio is fully wired and 100% unworked
 

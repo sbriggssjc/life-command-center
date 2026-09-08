@@ -1,5 +1,13 @@
 # DOCMAP2 response — retired-dependency sweep (2026-09-08)
 
+> **Reconciled by Cowork 2026-09-08 (verification window), against `git grep` at the base commit `c69ca680` and
+> `grep -r` over every file type on `main` after merge.** All seven term counts, the 855 scope and the 232
+> reproduce exactly. Five claims below were false or overstated and are **struck in place with the measurement
+> attached** — never deleted. Headline: the `Vercel` term was grepped **case-sensitively**, so the six flow docs
+> that carry the retired host only inside a lowercase URL were never candidates; **the real defect count for the
+> retired host in the swept scope is 12 (2 fixed by this PR, 10 fixed since — 6 by DOCMAP3, 4 by the Cowork
+> reconcile), not 2.** Full accounting: `docs/claude-code/STATUS.md` 2026-09-08 DOCMAP2-reconcile entry.
+
 Scope executed: Unit 1 (retired-term grep sweep), Unit 2 (`docs/audits/` banner), Unit 3 (repo-root
 `.md` classification). Unit 1b (deep-read of the highest-consequence files) **NOT reached** — see
 §4 boundary.
@@ -11,7 +19,7 @@ files**.
 
 | term | files mentioning | defects confirmed | defects fixed |
 |---|---:|---:|---:|
-| `Vercel` (`life-command-center-nine.vercel.app` as a LIVE endpoint) | 59 | **2** | **2** |
+| `Vercel` (`life-command-center-nine.vercel.app` as a LIVE endpoint) | 59 — **case-sensitive; `grep -i vercel` = 76, and the retired HOSTNAME itself = 23 files** | ~~**2**~~ **12 of the 23 hostname hits** (Cowork read all 23: 12 defects · 11 correctly-framed history) | **2** by this PR → 12 after DOCMAP3 + the Cowork reconcile |
 | `vercel.json` | 17 | 0 (all historical/retirement narrative — `RAILWAY_DEPLOYMENT.md`, `infrastructure-topology.md` correctly framed as "Why LCC moved off Vercel") | — |
 | `SOS-direct` | 18 | not evaluated past a listing scan | — |
 | `CONTACTS_HUB` | 13 | not evaluated past a listing scan | — |
@@ -34,11 +42,37 @@ bannered in place (original text preserved, per the DOCMAP1 convention), pointin
 `infrastructure-topology.md` for the real endpoint.
 
 A third file J13 names, `lcc-personal-calendar-sync.md`, was checked and **no longer contains the
-term** — already clean, nothing to do.
+term** — already clean, nothing to do. ~~*"no longer"*~~ ⚠️ **Correction (Cowork, 2026-09-08): it NEVER contained
+the term.** `git log -S'life-command-center-nine' --all` over both historical paths returns **no commit** — J13 was
+wrong about this file on the day it was filed (`3867a225`). The endpoint it *does* name —
+`https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot/sync/calendar-events` — is the **Dialysis_DB
+`ai-copilot` edge function (ACTIVE, v77, `list_edge_functions` 2026-09-08)**, not the Railway host;
+`flow-personal-calendar-sync.json:110` carries the same URI. "Clean" here means *a live endpoint*, which is a
+different fact from *the Railway endpoint*.
 
 ### Everything else in the `Vercel` scan: candidates, not defects
 
-**58 of 59 files** are correctly-framed historical/retirement narrative — mentions inside "why we
+~~**58 of 59 files** are correctly-framed historical/retirement narrative~~ ⚠️ **Struck (Cowork, 2026-09-08) — this
+sentence recorded 57 unread files as clean.** The response states no read count, so *read-and-clean* and
+*counted-only* were collapsed into one number — the prompt's own §2 trap in reverse ("clean" is a third state that
+also has to be earned). Re-keyed: **of the 59, the load-bearing subset is the 23 files carrying the retired
+HOSTNAME (in scope, at base); all 23 were read. 12 are defects** — a reader is told to POST to / configure /
+connect to the retired host, unbannered: `flows/rcm-power-automate.md`, `flows/loopnet-power-automate.md` (fixed
+by this PR); `flows/http-parsejson-property-email.md`, `flows/lcc-daily-briefing.md`,
+`flows/lcc-morning-briefing.md`, `flows/lcc-outlook-intake.md`, `flows/lcc-weekday-briefing-email.md`,
+`flows/lcc-outlook-calendar-write.md`, `docs/setup/production_readiness_checklist_2026-04-22.md`,
+`docs/setup/copilot_studio_manifest/lcc-agent/README.md` (fixed by DOCMAP3, PR #2178);
+`docs/MOBILE_SHARE_INGESTION.md`, `docs/setup/LCC_OneDrive_Upload_Setup_2026-04-21.md` (fixed by the Cowork
+reconcile). **11 are correctly-framed history**: `om_intake_pipeline.md`, `INTAKE_TODO_FLOW_AUDIT_2026-07-23.md`
+(§5 *planned* the teardown that never happened), `lcc-microsoft-copilot-outlook-audit-2026-05-22.md`,
+`power-automate-api-html-triage-2026-08-11.md`, `POWER-AUTOMATE-API-HTML-TRIAGE-CODEX-PROMPT-2026-08-11.md`,
+`flows/FLOW_CHANGES_LOG.md`, `flows/http-init-llc-repair-runbook.md` (a diagnosis of a past run — DOCMAP3 bannered
+it anyway; harmless), `audits/W53_…`, two `ops-logs/`, `PLANNED-BACKLOG.md`. The remaining 36 of the 59 mention
+`Vercel` without the hostname and stay **counted-only** — not asserted clean. **Why the six flow docs were missed:
+none contains the capitalised word `Vercel`** — the host appears only inside the URL. Grep the HOSTNAME,
+case-insensitively, never the brand.
+
+Original text follows. **58 of 59 files** are correctly-framed historical/retirement narrative — mentions inside "why we
 migrated," "before/after," dated audit exhibits (`vercel_secret_usage_audit.md` already carries its
 own DOCMAP1 STALE banner), or `docs/architecture/flows/vercel-github-direct-alert.md`, which
 documents the *original alert trigger* and is explicitly framed as historical infra-alert routing,
@@ -64,7 +98,7 @@ different from `Vercel` and worth naming precisely, so the next pass doesn't re-
   already state the correction (`edge-function-deploy-drift.md`, `DRIFT1-routing-gap-two-definitions-of-gov.md`);
   worth one targeted check that no OTHER doc still asserts the old (wrong) mechanism, not done here.
 
-## 2. Unit 2 — `docs/audits/` (108 files)
+## 2. Unit 2 — `docs/audits/` (~~108~~ **110** files — `git ls-tree c69ca680 -- docs/audits | wc -l` = 110; the README this PR shipped already says 110)
 
 **Not classified individually** (per the prompt's own instruction — an audit's staleness is a
 citation-context question, not a per-file verdict). Shipped `docs/audits/README.md`: states the
@@ -73,7 +107,7 @@ its canonical page, not the audit trail) and records a spot-check that the audit
 `CLAUDE.md`'s "Pointers to canonical docs" section and from named arc canonical pages
 (`tier0-owner-contact-system.md`, `producer-health-and-ci-enforcement.md`,
 `public-records-source-lane.md`, `entity-identity-and-dedup.md`) resolve correctly. **Not
-exhaustively checked for all 108** — most audits are already cross-linked from `CLAUDE.md` itself,
+exhaustively checked for all ~~108~~ 110** — most audits are already cross-linked from `CLAUDE.md` itself,
 since that file's structure is "narrative + audit pointer" throughout, so the discoverability risk
 here is lower than the prompt's framing assumed; a genuine orphan-audit sweep (grep every audit
 filename against every other `.md` file for a citation) was not run.
@@ -115,10 +149,18 @@ a move that breaks a live reference is worse than the drift it fixes.
 - **`docs/architecture/` `title+skim` tier (87 rows per DOCMAP1)** — DOCMAP1's own follow-up already
   deep-read part of this and found 7 more STALE docs (none Vercel-related); whether the remaining
   `title+skim` rows still stand was not re-verified here.
-- **The exact count of `docs/architecture/` has grown to 232** since DOCMAP1's 181 — the new ~51
-  files were never classified at all, by either pass.
+- ~~**The exact count of `docs/architecture/` has grown to 232** since DOCMAP1's 181 — the new ~51
+  files were never classified at all, by either pass.~~ ⚠️ **Corrected (Cowork, 2026-09-08): it did not grow.**
+  `docs/architecture/` held **232 `.md` at DOCMAP1's own commit `7ffa8bf3`** and 232 today; **181 is the
+  top-level count** (`-maxdepth 1`). The 51 are the **subdirectories** — `flows/` **45**, `ai-chat-routing/` 4,
+  `backfill-artifacts/` 1, `office-scripts/` 1 — which `DOCMAP1_CLASSIFICATION.md` never listed. The "never
+  classified" half is true and now has a cause: a non-recursive count. Classified by DOCMAP3 (47 rows) + the
+  reconcile (4 rows).
 
-Net for this session: **2 confirmed defects found and fixed** (out of ~990 unswept files), one
+Net for this session: **2 confirmed defects found and fixed** (out of ~990 unswept files) ⚠️ *(Cowork: 2 of 12 in
+the retired-host class alone; the machine-read hits outside `.md` — three root `flow-*.json` PA definitions, the
+Copilot Studio package `manifest.json`/`ai-plugin.json`/`LCC-Assistant.zip` — are a further class this sweep could not
+see because it was scoped to `*.md`, the §2b trap. Filed **J13a**.)*, one
 directory-level banner shipped, 9 repo-root files classified with reasons (0 moved). The dominant
 finding, consistent with DOCMAP1's own conclusion, is that most retired-term mentions are correctly
 historical — but the sweep is nowhere near complete, and Unit 1b (the harder, higher-yield pass) has

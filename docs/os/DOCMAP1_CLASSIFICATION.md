@@ -283,6 +283,10 @@ match ⇒ RETIRED, else title+skim ⇒ HISTORICAL unless a concrete stale claim 
 | `http-init-llc-repair-runbook.md` | **STALE→FIXED (DOCMAP3)** | Cited the retired Vercel host as the live endpoint (2 hits); banner added this pass, per J13/CLAUDE.md. |
 | `http-parsejson-property-email.md` | **STALE→FIXED (DOCMAP3)** | Same — banner added. |
 | `lcc-daily-briefing.md` | **STALE→FIXED (DOCMAP3)** | Same — banner added. |
+| `loopnet-power-automate.md` | **STALE→FIXED (DOCMAP2)** _[deep-read, Cowork reconcile 2026-09-08 — row missing from the DOCMAP3 pass]_ | Stated the retired Vercel host as the live POST endpoint; bannered by DOCMAP2 (PR #2173). Flow export dated 2026-05-11; registry-cited. |
+| `rcm-power-automate.md` | **STALE→FIXED (DOCMAP2)** _[deep-read, Cowork reconcile 2026-09-08 — row missing from the DOCMAP3 pass]_ | Same as above — bannered by DOCMAP2 (PR #2173). |
+| `vercel-github-direct-alert.md` | **HISTORICAL** _[title+skim, Cowork reconcile 2026-09-08 — row missing from the DOCMAP3 pass]_ | 2026-07-20 closing-the-loop mailbox design ("Flow 2"); the Vercel mention is an alert-SENDER filter (`notifications@vercel.com`), not an endpoint claim; not in `FLOW-REGISTRY.yaml`. Whether the flow was ever built is not on file. |
+| `weekly-retention-sweep.md` | **HISTORICAL** _[title+skim, Cowork reconcile 2026-09-08 — row missing from the DOCMAP3 pass]_ | 2026-07-20 closing-the-loop "Flow 4" design (the only deleting flow, `Processed/Duplicates` >30d); no retired identifier; not in `FLOW-REGISTRY.yaml`. Build state not on file. |
 | `lcc-morning-briefing.md` | **STALE→FIXED (DOCMAP3)** | Same — banner added. |
 | `lcc-outlook-calendar-write.md` | **STALE→FIXED (DOCMAP3)** | Same — banner added. |
 | `lcc-outlook-intake.md` | **STALE→FIXED (DOCMAP3)** | Same — banner added. |
@@ -338,4 +342,4 @@ pass should grep them for other known-retired identifiers before trusting their 
 |---|---|---|
 | `README.md` | **CANONICAL** _[title+skim]_ | Describes the live mechanism (Office Scripts + Excel Online connector) the Document Assembly Agent currently uses for >5MB/cell-level workbook edits — operational reference for a live capability, not dated build narrative. Not deep-verified against the actual deployed script. |
 
-**Unit A totals: 51 enumerated, 51 read (title+skim or deeper as noted), 9 defects found (7 stale-endpoint + 2 missing-retirement-banner), 9 defects fixed (all 9 — 7 stale-endpoint banners + 2 retirement banners).**
+**Unit A totals: 51 enumerated, 51 read (title+skim or deeper as noted) — ⚠️ but only **47 rows were written**; `loopnet-power-automate.md`, `rcm-power-automate.md`, `vercel-github-direct-alert.md`, `weekly-retention-sweep.md` had no row and no mention until the Cowork reconcile (2026-09-08) added the four above — 9 defects found (7 stale-endpoint + 2 missing-retirement-banner), 9 defects fixed (all 9 — 7 stale-endpoint banners + 2 retirement banners).**

@@ -1523,6 +1523,16 @@ All three converge on `api/_shared/intake-om-pipeline.js::stageOmIntake`:
     `/version` probe answers for the host you asked. Before trusting it, establish that the
     traffic in question actually reaches that host** — the P131 lesson ("check the fix against
     the deployed sha") has a prior step nobody wrote down: *which* deployed sha.
+  - **⚠️ GREP THE HOSTNAME, NOT THE BRAND — AND NEVER CASE-SENSITIVELY (DOCMAP2 reconcile, 2026-09-08).**
+    A sweep for docs still pointing at this deployment grepped `Vercel` (capitalised) and reported 2
+    defects. `grep -ri life-command-center-nine` over the same 855 files found **12**: six flow docs in
+    `docs/architecture/flows/` carry the host ONLY inside a lowercase URL and never say the word "Vercel".
+    The same sweep was scoped to `*.md`, so it could not see the three root `flow-*.json` Power Automate
+    definitions and the Copilot Studio `manifest.json`/`ai-plugin.json`/`LCC-Assistant.zip` that still name
+    the host — importable artifacts, which are worse than prose (J13a). **A retired dependency is found by
+    its machine identifier (hostname, table, function name), across every file type, case-insensitively;
+    the brand name is what the correctly-framed history mentions.** Same family: `docs/architecture/` "grew
+    181 → 232" was a non-recursive count — the 51 were subdirectories that had never been classified.
   - **Diagnose it from Supabase `edge_logs`, not app logs.** Every PostgREST write carries the
     calling server's `request.headers.cf_connecting_ip`. Railway is a small set of STABLE
     addresses (`152.55.x`, `162.220.232.x`) carrying tens of thousands of requests; a serverless

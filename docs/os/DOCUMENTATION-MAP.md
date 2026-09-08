@@ -40,10 +40,18 @@ bootstraps a fresh chat and points at them.
 > rather than quoting either version of it.
 
 Below is every file classified **CANONICAL** in
-[`docs/os/DOCMAP1_CLASSIFICATION.md`](DOCMAP1_CLASSIFICATION.md) (145 of 181), grouped by topic,
-one line each. The full table — including the 31 HISTORICAL, 4 STALE (now fixed in place), and
+[`docs/os/DOCMAP1_CLASSIFICATION.md`](DOCMAP1_CLASSIFICATION.md) (~~145 of 181~~ **138 of 181** after the
+DOCMAP1 follow-up re-verdicted 7 title+skim rows STALE — see that file's revision note), grouped by topic,
+one line each. The full table — including the 31 HISTORICAL, ~~4~~ **11** STALE (all bannered in place), and
 1 DUPLICATE (folded + pointed) files — lives in that classification file, along with the method
 and confidence tier for every verdict.
+
+> ⚠️ **Correction (DOCMAP2 reconcile, 2026-09-08).** "181" is the **top-level** count of `docs/architecture/`.
+> The directory holds **232** `.md` files and did at DOCMAP1's own commit; the other **51** are the
+> subdirectories — `flows/` (45), `ai-chat-routing/` (4), `backfill-artifacts/` (1), `office-scripts/` (1) —
+> and **none of them has a row in `DOCMAP1_CLASSIFICATION.md`**. They are unclassified, not canonical. Six of
+> the ten retired-Vercel-endpoint defects DOCMAP2 missed live in `flows/` — they carry the host only inside a
+> lowercase URL, which a case-sensitive `Vercel` grep does not match. Classification of the 51 is DOCMAP3 Unit A.
 
 ⚠️ **This index is hand-maintained. A new canonical architecture doc must be added here (one
 line, right topic group) in the SAME change that creates it** — that is the rule this map exists
