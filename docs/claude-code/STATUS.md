@@ -16,6 +16,34 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-08 — CONSOLIDATE1 SHIPPED: the backlog is open items again, and nothing was lost
+
+**PR #2159, independently verified.** `PLANNED-BACKLOG.md` **1,047 → 937 lines**; 116 closed rows
+archived verbatim to `docs/history/PLANNED-BACKLOG_closed_2026-09.md` grouped by arc, 12 self-created
+"(original filing)" duplicates folded, closed-arcs index added.
+
+**Cowork's independent check of the guarantee that matters — "without losing any planned features":**
+
+- **0 open-marked rows (`🚨`/`🔴`/`⏳`/`👤`) sit in the archive.** All **17** red/open rows are still
+  in the working backlog.
+- **Every ID that disappeared is literally labelled `(original filing)` or `(original)`** — the 12
+  intended folds, and nothing else.
+- ⚠️ **Cowork's row counts (680 → 552) differ from CC's (656 → 528) because the denominators differ**
+  — `grep -c '^| '` counts every table line in the file, CC counted backlog rows. **The DELTA agrees
+  exactly: 128 both ways, and 116 + 12 = 128.** *Two honest measurements with different denominators
+  are not a discrepancy — check whether the deltas agree before adjudicating the totals* (the
+  GOVDUP1 key lesson, arriving on a row count).
+- **Standing invariants: none rescued, and the answer was checked rather than assumed** — CC reports
+  the durable rules from the archived arcs (P196 reversibility, the SEC1 privilege sweep, OWN-T0,
+  N15c's canonical-name trigger) already live in `CLAUDE.md`. That was Unit 2's stated risk and it
+  came back empty for a reason, not by omission.
+
+🎯 **The trap this unit was written to avoid, and it was real:** `| ~~X~~ |` matches **two different
+populations** — ~44 closed items whose *ID* is struck while the row carries the whole record, and 17
+duplicate filings. **A filter on the strike-through marker alone would have archived 44 live records
+as "duplicates."** Caught by spot-checking six rows before acting, not by reasoning about the
+pattern.
+
 ## 2026-09-08 — DRIFT1-routing-gap CLOSED: one canonical GOV_SIGNALS list, wired, per-term justified, deploy pending
 
 **Repo change only, not deployed** (`test/sf-deal-promotion.test.mjs`,
