@@ -60,6 +60,21 @@ hostname, not the brand) · DOCMAP2 response corrected in place (5 strikes) · D
 docx + a `.response.md` transcript → `responses/done/` · 2 banners. **Operator items, unchanged:** DRIFT1-retire
 (`sf-test`, `test-function`, `ai-copilot-v2` still ACTIVE on Dialysis_DB), `intake-salesforce` redeploy,
 DRIFT1-sfenrich, and the Vercel teardown.
+## 2026-09-08 — RO1 SHIPPED: the resolve_ownership lane drops 1,597 → 761 by filtering the no-op half at the source
+
+gov `v_ownership_resolution` gained `proposal_is_recorded` (appended LAST, whole view restated,
+applied live via migration `20261010120000_gov_ro1_…`); the `resolve_ownership` handler filters
+`=eq.false` on both the fetch and the badge count. Live split after apply: true 836 / false 761 —
+identical to §10.1's prediction, by arm (`gsa_lessor_change` 734/70, `state_lessor_change` 95/1,
+`discrepancy` 7/92, `deed_grantee` 0/598). Nothing written to `lcc_decisions`: the 836 were never
+decisions and return automatically if a proposal stops matching. Guard
+`test/ro1-resolve-ownership-noop-retire.test.mjs`, both mutations RED. Handler half needs the Railway
+redeploy; verify the lane badge reads 761.
+
+**Correction to my own §10 / RO3 claim:** "the handler never selects `true_owner_name`" was wrong —
+it is in `sel`, in the context, and rendered by `dc-lanes.js` ("True owner: …"). Corrected in place
+in the audit, the backlog row and RO3; the real gap is the *comparison* (proposal = true_owner on
+217 rows), not the column.
 
 ## 2026-09-08 — UX-T1c-resolveown-vs-ownt0 MEASURED: half the `resolve_ownership` lane is a no-op, and its properties are 3× as conflicted in the OWN-T0 store as the fleet
 
@@ -73,7 +88,7 @@ recorded ≠ proposed ≠ true_owner. Against the OWN-T0 store: 1,535 present, *
 vs 9.4% fleet)**, 409 primaries ≠ gov true_owner, 433 with no LCC resolution at all. `confirm`×1,597
 is a data fact (`no_recorded` 0, `deed_auto_fixable` 0), not the CASE — corrects §9's phrasing.
 **Nothing built.** Decision recorded as RO1 (retire the 836), RO2 (sync the 217), RO3 (repoint the
-lane at the reconciled store + select `true_owner_name`; design question for Scott), RO4 (391 undated
+lane at the reconciled store; design question for Scott — ⚠️ the 'select `true_owner_name`' half of that row was wrong, it is already on the card), RO4 (391 undated
 deeds), RO5 (split the 470 by arm). Canonical page `ownership-history-lane.md` § OWN-T0 gained the
 pointer. Also: the view is `security_invoker=on` + anon SELECT → 0 rows to anon (P157 class, inert).
 

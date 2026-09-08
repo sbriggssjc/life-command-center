@@ -8463,8 +8463,14 @@ async function fetchFederatedSource(type, cap, opts) {
       + 'latest_deed_grantee,latest_deed_date,deed_conflict_kind,deed_auto_fixable,'
       + 'suspected_grantor,suspected_grantee,suspected_sale_date,lessor_signal_source,'
       + 'discrepancy_source,discrepancy_proposed,has_deed_signal,has_lessor_signal,has_discrepancy_signal';
-    const r = await domainQuery('gov', 'GET', 'v_ownership_resolution?select=' + sel
-      + '&order=recency_rank.asc,annual_rent.desc.nullslast,property_id&limit=' + cap);
+    // RO1 (UX-T1c §10, 2026-09-08): 836 of 1,597 rows proposed the owner ALREADY
+    // recorded (the lessor of record changed *to* the party we hold) — a
+    // confirmation presented as a question. `proposal_is_recorded` is an
+    // appended view column; the lane reads only the genuine disputes, and the
+    // badge counts the same population (never the raw view count).
+    const roFilter = '&proposal_is_recorded=eq.false';
+    const r = await domainQuery('gov', 'GET', 'v_ownership_resolution?select=' + sel + ',proposal_is_recorded'
+      + roFilter + '&order=recency_rank.asc,annual_rent.desc.nullslast,property_id&limit=' + cap);
     const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
     out.items = rows.map((row) => ({
       subject_ref: 'resolveown:gov:' + row.property_id,
@@ -8490,7 +8496,7 @@ async function fetchFederatedSource(type, cap, opts) {
         has_discrepancy_signal: row.has_discrepancy_signal,
       },
     }));
-    out.total = await domCnt('gov', 'v_ownership_resolution');
+    out.total = await domCnt('gov', 'v_ownership_resolution?proposal_is_recorded=eq.false');
     return out;
   }
 
