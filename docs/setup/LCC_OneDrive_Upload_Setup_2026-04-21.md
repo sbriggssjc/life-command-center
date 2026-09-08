@@ -1,4 +1,9 @@
 # LCC OneDrive + Supabase Storage Ingestion Setup
+
+> 🚨 **STALE (DOCMAP2 reconcile, 2026-09-08): every `life-command-center-nine.vercel.app` URL in this procedure is the
+> RETIRED Vercel deployment (retired 2026-07-20, root `CLAUDE.md`). It still answers and still holds a service key
+> (P194), so following these steps would not fail — it would write against a frozen pre-cutover build.**
+> The live endpoint is the Railway host (`tranquil-delight-production-633f.up.railway.app`; `server.js` mounts every `/api/*` route). Original text preserved below as the record of the procedure at its date. Backlog **J13**.
 _2026-04-21 — supersedes the direct-to-Vercel path for large OMs_
 
 ## What this unlocks
