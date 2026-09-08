@@ -97,6 +97,14 @@ let opsResearchLaneAction = '';  // '' | mismatch | all_guarded | agrees | no_re
 let opsResearchLaneActionCounts = [];
 let opsEntitiesPage = 1;
 let opsResearchPage = 1;
+
+// UX-T1b — the research workbench tab picker (2026-09-08).
+// 'flow' = the flow dashboard (default landing); 'ownership_history' /
+// 'owner_contact' / 'npi' / 'followups' = the four genuine-human-queue tabs
+// (each its own action per UX32); 'all' = the pre-existing full research
+// list + raw ~18-entry lane-chip picker, kept reachable for anything not yet
+// disposed into a tab (see docs/architecture/research-workbench.md).
+let opsWorkbenchTab = 'flow';
 let opsInboxSelected = new Set();
 // Render-side windowing: cap the DOM render to N rows; "Load more" grows it.
 // opsInboxData stays the full in-memory backlog so counts and selection work
@@ -5607,7 +5615,77 @@ function setResearchLane(type) {
 }
 window.setResearchLane = setResearchLane;
 
+// UX-T1b tab bar. Always rendered at the top of #researchContent, whichever
+// tab is active — the flow dashboard, one of the four workbench lanes, or
+// the legacy full list.
+function researchWorkbenchTabsHTML() {
+  const tabs = [
+    ['flow', 'Flow Dashboard'],
+    ['ownership_history', 'Ownership History'],
+    ['owner_contact', 'Owner Contact'],
+    ['npi', 'NPI Intel'],
+    ['followups', 'Follow-ups'],
+    ['all', 'All (legacy)'],
+  ];
+  return '<div class="ops-workbench-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
+    + tabs.map(([key, label]) => `<button class="q-action${opsWorkbenchTab === key ? ' primary' : ''}" onclick="setWorkbenchTab('${key}')">${esc(label)}</button>`).join('')
+    + '</div>';
+}
+
+// Switching tabs resets page/action state — staying on page N of a
+// different tab is how an operator lands on an empty list (the same reason
+// setResearchLane resets to page 1).
+function setWorkbenchTab(tab) {
+  opsWorkbenchTab = tab;
+  opsResearchPage = 1;
+  opsResearchLaneAction = '';
+  opsResearchTypeFilter = (tab === 'ownership_history') ? 'establish_ownership_history' : '';
+  renderResearchPage(1);
+}
+window.setWorkbenchTab = setWorkbenchTab;
+
+// The flow dashboard: one row per genuine-human-queue lane, reading
+// v_lcc_research_workbench_flow (raw pre-split queue size next to the
+// human_needed count, so a lane displays the drop the split actually bought
+// instead of a raw badge). This is the workbench's default landing page.
+async function renderResearchFlowDashboard() {
+  const el = document.getElementById('researchContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const perf = opsPerf('render:research-flow');
+  const res = await opsApi('/api/queue?view=research_workbench_lanes');
+  if (!res.ok) {
+    el.innerHTML = researchWorkbenchTabsHTML() + opsErrorState(res, 'renderResearchFlowDashboard()', 'Could not load the workbench flow dashboard');
+    perf.end();
+    return;
+  }
+  const rows = res.data?.items || [];
+  let html = researchWorkbenchTabsHTML();
+  html += `<div class="ops-header"><h2>Research Workbench</h2></div>`;
+  html += `<div style="font-size:12px;color:var(--text2);margin-bottom:10px">Per lane: how many cards exist vs how many actually need a human today. Click a tile to open that lane.</div>`;
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">';
+  rows.forEach((r) => {
+    const raw = Number(r.raw_open_tasks) || 0;
+    const human = Number(r.human_needed_tasks) || 0;
+    const pct = raw ? Math.round((100 * human) / raw) : 0;
+    html += `<div class="q-item" style="cursor:pointer" onclick="setWorkbenchTab('${esc(r.lane_key)}')">
+      <div class="q-item-title">${esc(r.lane_label)}</div>
+      <div style="font-size:26px;font-weight:700;margin:4px 0">${human}<span style="font-size:13px;font-weight:400;color:var(--text2)"> of ${raw}</span></div>
+      <div style="font-size:11px;color:var(--text2)">need a human today${raw ? ` (${pct}%)` : ''}</div>
+      <div style="font-size:11px;color:var(--text2);margin-top:4px">${Number(r.real_completions) || 0} completed ever${r.oldest_open_age_days != null ? ` &middot; oldest open ${esc(String(r.oldest_open_age_days))}d` : ''}</div>
+    </div>`;
+  });
+  html += '</div>';
+  el.innerHTML = html;
+  perf.end();
+}
+window.renderResearchFlowDashboard = renderResearchFlowDashboard;
+
 async function renderResearchPage(page = opsResearchPage) {
+  // UX-T1b: the flow dashboard is a completely different render (it reads a
+  // rollup view, not the task list), so it short-circuits before any of the
+  // list-fetching logic below runs.
+  if (opsWorkbenchTab === 'flow') return renderResearchFlowDashboard();
   const el = document.getElementById('researchContent');
   if (!el) return;
   opsResearchPage = Math.max(parseInt(page, 10) || 1, 1);
@@ -5627,17 +5705,24 @@ async function renderResearchPage(page = opsResearchPage) {
   const statusParam = opsResearchFilter === 'active' ? 'active'
     : opsResearchFilter === 'completed' ? 'completed'
     : '';
-  const typeParam = opsResearchTypeFilter ? `&research_type=${encodeURIComponent(opsResearchTypeFilter)}` : '';
+  // UX-T1b: owner_contact/npi/followups filter server-side via `workbench=`
+  // (owner_contact through the decidability view, the other two by a fixed
+  // research_type list) instead of the raw `research_type=` param — the two
+  // are mutually exclusive, never both sent.
+  const usesWorkbenchParam = ['owner_contact', 'npi', 'followups'].includes(opsWorkbenchTab);
+  const typeParam = (!usesWorkbenchParam && opsResearchTypeFilter) ? `&research_type=${encodeURIComponent(opsResearchTypeFilter)}` : '';
+  const wbParam = usesWorkbenchParam ? `&workbench=${encodeURIComponent(opsWorkbenchTab)}` : '';
   // A1: the action filter only applies inside the ownership lane.
   const inOwnershipLane = opsResearchTypeFilter === 'establish_ownership_history';
   const actionParam = (inOwnershipLane && opsResearchLaneAction)
     ? `&lane_action=${encodeURIComponent(opsResearchLaneAction)}` : '';
   // P180: fetch the lane summary ALONGSIDE the tasks. allSettled, not all — a
   // failed picker must never strand the queue itself (the Overview-tile lesson).
-  // A1 adds the per-action rollup on the same terms.
+  // A1 adds the per-action rollup on the same terms. Skipped for the three
+  // workbench-param tabs — they don't render the raw ~18-chip lane picker.
   const [resS, lanesS, actionsS] = await Promise.allSettled([
-    opsApi(`/api/queue?view=research&page=${opsResearchPage}&per_page=25${statusParam ? `&status=${statusParam}` : ''}${typeParam}${actionParam}`),
-    opsApi('/api/queue?view=research_lanes'),
+    opsApi(`/api/queue?view=research&page=${opsResearchPage}&per_page=25${statusParam ? `&status=${statusParam}` : ''}${typeParam}${wbParam}${actionParam}`),
+    usesWorkbenchParam ? Promise.resolve(null) : opsApi('/api/queue?view=research_lanes'),
     inOwnershipLane ? opsApi('/api/queue?view=ownership_lane_actions') : Promise.resolve(null)
   ]);
   const res = resS.status === 'fulfilled' ? resS.value : { ok: false, status: 0, data: null };
@@ -5654,7 +5739,8 @@ async function renderResearchPage(page = opsResearchPage) {
   opsResearchData = res.data?.items || res.data || [];
 
   let html = '';
-  html += researchLanePickerHTML(lanes);
+  html += researchWorkbenchTabsHTML();
+  if (!usesWorkbenchParam) html += researchLanePickerHTML(lanes);
   if (inOwnershipLane) html += researchActionChipsHTML(opsResearchLaneActionCounts);
   html += `<div class="ops-header">
     <h2>Research <span style="font-size:13px;color:var(--text2);font-weight:400">${opsResearchData.length}${res.data?.count != null ? ` of ${Number(res.data.count).toLocaleString()}` : ''} tasks${opsResearchLaneAction ? ` &middot; ${esc((RESEARCH_ACTION_META[opsResearchLaneAction] || {}).label || opsResearchLaneAction)}` : ''}</span></h2>
