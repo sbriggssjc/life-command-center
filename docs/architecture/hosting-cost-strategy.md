@@ -1,5 +1,14 @@
 # Long-Term Hosting Strategy
 
+> 🚨 **STALE (DOCMAP1, 2026-09-08): the Vercel-vs-Railway decision this doc weighs has been made
+> and superseded.** Vercel was retired 2026-07-20 (root `CLAUDE.md`: "PRODUCTION RUNS ON RAILWAY
+> (Vercel retired 2026-07-20)" — after 40+ failed deploys against the old Hobby 12-function cap).
+> **Railway is the sole production host; `server.js` is the single source of `/api/*` routing and
+> there is no per-function cap to optimize around.** Every Vercel-tier comparison below (Hobby vs
+> Pro, the $45–$525/mo table, "Vercel Pro is the worst option") describes a choice that no longer
+> exists. Kept as history of the reasoning that led to the Railway move; do not use it to evaluate
+> a live hosting decision.
+>
 > Last reviewed: 2026-05-10. Optimization branch: `claude/optimize-cloud-subscriptions-KJT9J`.
 >
 > **Pricing update 2026-05-09**: Railway Hobby is $5/mo minimum with $5

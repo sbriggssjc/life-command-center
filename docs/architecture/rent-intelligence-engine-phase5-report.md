@@ -1,5 +1,10 @@
 # Rent Intelligence Engine — Phase 5 Report: The Self-Improving Loop
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Terminal report of an orphaned 5-part build-progress series, not cited by any current canonical index (CLAUDE.md/REGISTRY/CURRENT-STATE/PLANNED-BACKLOG); title-checked only, verify against live rent-intelligence code before citing.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 **DB:** dia `zqzrriwuavgrquhisnoa` · **Repo:** life-command-center ·
 **Branch:** `claude/rent-intelligence-phase-5-rxxzu9` · **Date:** 2026-08-08
 

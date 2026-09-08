@@ -9,6 +9,14 @@ last_updated: 2026-04-02
 - [Copilot Action Registry](./copilot_action_registry.md)
 - [Copilot Wave 1 Build Plan](./copilot_wave1_build_plan.md)
 - [Copilot Agent Catalog](./copilot_agent_catalog.md)
+- [Context Packet Schema](./context_packet_schema.md)
+- [Template Library Spec](./template_library_spec.md)
+- [Context Broker API Spec](./context_broker_api_spec.md)
+
+> **DOCMAP1 (2026-09-08):** the four cross-references above were folded in from
+> `copilot_operating_system_blueprint_v1.1.md` (an amendment that was never merged into this file and
+> that nothing in the repo referenced) before that file was replaced with a pointer here. No other
+> content differed between the two versions on inspection.
 
 # Copilot Operating System Blueprint
 
