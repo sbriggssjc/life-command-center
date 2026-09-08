@@ -162,6 +162,48 @@ by reading its content, not its name, per the standing rule "filenames in this w
 authoritative") are moved to `docs/claude-code/responses/done/`, renamed to match the folder's
 convention. Both underlying pieces of work (C1a-e and UX-T1b) are fully reconciled into
 `PLANNED-BACKLOG.md`/`STATUS.md`/canonical docs as of this entry, correction included.
+## 2026-09-08 — DOCMAP1 SHIPPED: one architecture directory, a map that maps, and an unusually honest boundary
+
+**PR merged, independently verified.**
+
+| | before | after |
+|---|---:|---:|
+| `docs/os/architecture/` | 29 | **0** — merged into `docs/architecture/` |
+| `docs/architecture/` | 152 | **181** |
+| `DOCUMENTATION-MAP.md` mentions of those files | **6** | **145** |
+
+✅ **The move did not break inbound links** — the only surviving references to `docs/os/architecture/`
+are self-describing (the DOCMAP1 prompt quoting the pre-state, the classification doc, and the map
+explaining the merge). Spot-checked four moved files; all present.
+
+**Classification: 145 CANONICAL / 31 HISTORICAL / 4 STALE / 1 DUPLICATE = 181.** ✅ **The positive
+control was used** — `field-provenance-ladder.md` was deep-read specifically to confirm the known
+`manual@1` claim is already corrected. All 4 STALE are the same class: **documents naming Vercel as a
+current deployment target after its 2026-07-20 retirement**, each fixed in place with a banner and
+the original text preserved.
+
+⚠️ **Read the NOT REACHED section before quoting "145 canonical" — it is a weaker claim than it
+sounds, and CC says so.** **87 of 181 rows are labelled `_[title+skim]_`**, and only
+`field-provenance-ladder.md` plus the four Vercel files were verified against live state. For
+everything else **"canonical" means "a current index points at this", not "its claims were
+re-derived."** *That distinction is the document's most valuable sentence.*
+
+🎯 **The transferable technique is in that boundary too:** grep the whole set for **one
+known-retired thing at a time** (`Vercel` yielded 4) rather than re-reading 181 files — next
+candidates named as `queue_v2_enabled`, `CONTACTS_HUB=gov` vs `ops`, renamed tables.
+
+### ⚠️ And sizing the next pass, Cowork's own detector under-matched — worth recording
+
+Measuring the residue, **58 docs outside `docs/history/` mention Vercel; 23 matched a
+retirement-phrase grep**, leaving 35 that read as candidate false-current claims. **Spot-checking one
+refuted that reading**: `infrastructure-topology.md` is accurate and explicitly headed *"Why LCC
+moved off Vercel"* — it simply phrases the retirement outside the grep's vocabulary. **35 is an
+inflated upper bound produced by a narrow phrase list, not a defect count**, and DOCMAP1's 4 may be
+close to right. Same class as the `~~` trap in CONSOLIDATE1 and the `lpad('',5,'0')` zip trap: *a
+comparator that cannot express the question returns a plausible number.* → **DOCMAP2** is scoped as
+*extend the technique to the ~990 files outside `docs/architecture/`*, **not** as "35 more Vercel
+defects".
+
 ## 2026-09-08 — CONSOLIDATE2 SHIPPED: STATUS halved, zero entries lost · and the doc SURFACE is the next problem
 
 **PR #2163, independently verified.** `STATUS.md` **8,975 → 4,746 lines**, comfortably under its own
