@@ -111,7 +111,7 @@ flows:
     exported_at: "2026-08-11T03:07:10Z"
     package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-opportunity-sync__SF-Deal-LCC-Opportunity-Sync__7657a3bc-8761-4d2e-b385-ed112411bc42__2026-08-11.zip
     sha256: 67b610a174c32ea3ebb03c0c1ba63c4924ae9fed2ed320711923628c8c865dc0
-    runbook: docs/os/architecture/BUILD-01B-sf-deal-sync-flow.md
+    runbook: docs/architecture/BUILD-01B-sf-deal-sync-flow.md
   - logical_id: sf-deal-team-roster
     display_name: "SF Deal Team → LCC Roster"
     flow_guid: 9879c0fd-2dc0-4304-a82b-d68de3fcc991
@@ -124,7 +124,7 @@ flows:
     exported_at: "2026-08-11T03:08:06Z"
     package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-deal-team-roster__SF-Deal-Team-LCC-Roster__9879c0fd-2dc0-4304-a82b-d68de3fcc991__2026-08-11.zip
     sha256: 89d62b1133c9ce99a9bbbaf082536c16832fdf2efca5b849797c93349c078930
-    runbook: docs/os/architecture/deal-party-roster-source.md
+    runbook: docs/architecture/deal-party-roster-source.md
     route_triage_2026_08_11:
       verified_from: retained_export_and_read_only_live_probe
       exported_endpoint: "POST https://life-command-center-production.up.railway.app/api/pipeline/ingest-deal-parties"
@@ -142,7 +142,7 @@ flows:
     exported_at: "2026-08-11T03:08:50Z"
     package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-deal-contact-roster__SF-Deal-Contacts-LCC-Roster__a50d3f56-3891-4d8f-8636-b9b09e58c2ee__2026-08-11.zip
     sha256: ac2c177ffb4fa7f85ab8c5a03f588cb190e0bc7f389d336d6672e2dfcdf0eb1a
-    runbook: docs/os/architecture/deal-party-roster-source.md
+    runbook: docs/architecture/deal-party-roster-source.md
     route_triage_2026_08_11:
       verified_from: retained_export_and_read_only_live_probe
       exported_endpoint: "POST https://life-command-center-production.up.railway.app/api/pipeline/ingest-deal-contacts"
@@ -173,7 +173,7 @@ flows:
     exported_at: "2026-08-11T03:10:38Z"
     package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-queue-drainer__LCC-SF-Queue-Drainer__2d5a0bb0-3948-4d14-9282-056ea923781e__2026-08-11.zip
     sha256: 314dcfe4765129f2fb4837bbd653f7581f5cd01ed897ebac68db7ef70b4ec7a9
-    runbook: docs/os/architecture/SF-WRITEBACK-AND-DOSSIER-BUILD-STATE.md
+    runbook: docs/architecture/SF-WRITEBACK-AND-DOSSIER-BUILD-STATE.md
   - logical_id: sf-retry-dead-letter
     display_name: "SF -> LCC: Retry & Dead-letter"
     flow_guid: f7e7bc07-6cbe-4638-b4c6-09a5f3206930
@@ -252,7 +252,7 @@ flows:
     exported_at: "2026-08-11T03:15:40Z"
     package_path: private/power-automate/exports/production/2026-08-11/03-outlook-task-loop/outlook-intake-hardened__LCC-Outlook-Intake-to-Teams-Hardened__45faffcc-a96c-4ca3-a62d-c2fa150386ed__2026-08-11.zip
     sha256: bed5f3d88c0cd09f6cb2e69474a7f8693fcde1bbe13f8dc4102cb12eb25646c8
-    runbook: docs/os/architecture/scott-pa-flows-reference.md
+    runbook: docs/architecture/scott-pa-flows-reference.md
   - logical_id: outlook-processing-complete
     display_name: "LCC Processing Complete → Move Message"
     flow_guid: 4e51f33d-dc56-47d0-8065-66e9a6e82961

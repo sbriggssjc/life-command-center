@@ -1,5 +1,12 @@
 # LCC Documentation Reconciliation — Architecture, OS, and Power Automate
 
+> ⚠️ **HISTORICAL (DOCMAP1 follow-up, 2026-09-08).** This is a point-in-time
+> reconciliation snapshot from 2026-08-11 — nearly a month before DOCMAP1
+> (`docs/os/DOCMAP1_CLASSIFICATION.md`, 2026-09-08) redid this exact exercise across
+> the whole `docs/architecture/` tree with citations. Treat this page as a dated
+> worklog of what the repo looked like then, not as the current doc-health register —
+> read `DOCMAP1_CLASSIFICATION.md` and `docs/os/DOCUMENTATION-MAP.md` for the current one.
+
 **Review date:** 2026-08-11
 **Scope:** `docs/architecture`, `docs/os`, and `docs/flows`
 **Purpose:** Establish what the repository already proves, identify documentation drift, and define the remaining evidence needed before the outpatient-healthcare lane is built.

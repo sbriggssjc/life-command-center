@@ -3,7 +3,21 @@ Full inventory: **181** files (152 originally under `docs/architecture/` + 29 or
 under `docs/os/architecture/`, merged into one directory by this same change — see
 `DOCMAP1_CLASSIFICATION.md` §Method and `docs/os/DOCUMENTATION-MAP.md`).
 
-**Verdict counts:** STALE **4** · DUPLICATE **1** · HISTORICAL **31** · CANONICAL **145**
+**Verdict counts (original pass):** STALE **4** · DUPLICATE **1** · HISTORICAL **31** · CANONICAL **145**
+
+> ⚠️ **Follow-up pass, same day (2026-09-08) — 7 more STALE found in the "title+skim" tier.**
+> This file's own §Method (below) named the 93 title+skim files as "not a substantive
+> re-derivation" and invited a deeper pass. Two independently-dispatched sub-agents (one per
+> original directory) did that deeper read and found 7 more STALE docs the Vercel-grep technique
+> could not have caught (none mention Vercel) — each now bannered in place with its citation,
+> not re-listed in the table below to avoid duplicating the banner text:
+> `cadence-engine.md`, `infrastructure_migration_plan.md`, `sf_connected_app_setup.md`,
+> `ai-next-step-engine-scope.md`, `BUILD-01-sf-opportunity-sync.md`,
+> `BUILD-01B-sf-deal-sync-flow.md`, `LCC_DOCUMENTATION_RECONCILIATION_2026-08-11.md`.
+> **Revised verdict counts: STALE 11 · DUPLICATE 1 · HISTORICAL 31 · CANONICAL 138.**
+> The same pass also found and fixed the false "grep returns nothing" claim in
+> `DOCUMENTATION-MAP.md` §1a (see that file). The remaining ~86 title+skim files are still
+> unverified at this deeper level — say so rather than treating 138 as a floor that's been proven.
 
 ## Method (read before trusting a verdict)
 

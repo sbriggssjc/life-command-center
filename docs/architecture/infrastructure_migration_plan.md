@@ -1,5 +1,14 @@
 # LCC Infrastructure Migration Plan
 
+> ⚠️ **STALE (DOCMAP1 follow-up, 2026-09-08).** Dated 2026-04-12, before the actual
+> Vercel→Railway cutover (2026-07-20, extensively documented in root `CLAUDE.md`:
+> *"PRODUCTION RUNS ON RAILWAY (Vercel retired 2026-07-20)"*). Any concrete hosting/
+> deploy step here describes a migration that has since happened differently — the
+> live topology is `server.js` mounting `/api/*` directly on Railway, verified via
+> `/version` + `merge-base`, never via a handler probe. Read this page for the
+> ORIGINAL PLANNING CONTEXT only; read root `CLAUDE.md` §"PRODUCTION RUNS ON RAILWAY"
+> and `docs/os/GITHUB-WORKFLOW.md` for the live deploy model.
+
 > **Owner:** Team Briggs / NorthMarq
 > **Date:** 2026-04-12
 > **Status:** Draft

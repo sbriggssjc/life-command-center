@@ -1,5 +1,11 @@
 # BUILD 01B — Power Automate flow: "SF Deal → LCC Opportunity Sync"
 
+> ⚠️ **VERIFY BEFORE TRUSTING (DOCMAP1 follow-up, 2026-09-08).** See the banner on
+> the companion `BUILD-01-sf-opportunity-sync.md` — the real SF-Opportunity inbound
+> producer may be the `intake-salesforce` edge function (root `CLAUDE.md` §GOVDUP1-a),
+> not this PA flow. Confirm which one is actually live before building against this
+> spec as written.
+
 Part B of BUILD 01. Part A (the LCC engine endpoint `POST /api/pipeline/ingest-opportunity`)
 is deployed and proven. This flow feeds it from Salesforce.
 

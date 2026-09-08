@@ -1,6 +1,6 @@
 -- ============================================================================
 -- 20260728180000_deal_address_observations_engine.sql   (OPS project xengecqvemvfknjvbvrq)
--- Phase 1 of deal-address resolution (see docs/os/architecture/deal-address-resolution-design.md).
+-- Phase 1 of deal-address resolution (see docs/architecture/deal-address-resolution-design.md).
 -- Mirrors the Owner Reconcile Engine: an address-observation table + a scored reconcile sweep that resolves
 -- flagged deals via the shared lcc_normalize_address + lcc_reconcile_match_threshold, combining address
 -- observations (Phase 2 feeds) with the tenant signal from lcc_property_attributes and a geo prior.

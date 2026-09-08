@@ -16,6 +16,73 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-08 — DOCMAP1 reconciled: a parallel window had already merged it (PR #2168); follow-up pass closes its own residual gaps
+
+**"Starting DOCMAP1" below turned out to be wrong** — a separate session had already executed and
+merged a full DOCMAP1 pass (PR #2168, commit `7ffa8bf3`) concurrently with this one, landing just
+before this session's own PR #2169. Live instance of the repo's own "two windows, one file"
+doctrine. Per that doctrine: **reconciled, not re-done.**
+
+The merged pass did real, correct work: merged `docs/os/architecture/` (29 files) into
+`docs/architecture/` (one directory now), resolved the two-"done"-folder ambiguity, built
+`docs/os/DOCMAP1_CLASSIFICATION.md` (181 files: STALE 4 · DUPLICATE 1 · HISTORICAL 31 ·
+CANONICAL 145) and a generated index in `DOCUMENTATION-MAP.md` §1a. It also **named its own
+limitation honestly** — 93 of 181 files got only "title + skim," explicitly inviting a deeper pass.
+
+Two sub-agents dispatched this session (one per original directory, each reading the DOCMAP1
+prompt first) did that deeper pass and found, in this order:
+
+1. **A false claim inside DOCMAP1's own just-built output.** `DOCUMENTATION-MAP.md` §1a asserted
+   `grep -rl docs/os/architecture` "returns nothing outside this sentence and the DOCMAP1
+   prompt/classification files." Measured: it also returned `docs/os/FLOW-REGISTRY.yaml` (5 live
+   `runbook:` fields) and `supabase/migrations/20260728180000_deal_address_observations_engine.sql`
+   (1 comment) — both real, live broken links, not covered by the stated exclusion. This is a fresh
+   instance of the exact defect class DOCMAP1 exists to catch, found inside DOCMAP1's own artifact
+   on the day it shipped. Fixed both files' links; corrected the false claim in place (never deleted).
+2. **7 more STALE docs** in the title+skim tier the Vercel-grep technique could not have caught
+   (none mention Vercel): `cadence-engine.md` (self-labeled straw-man; live code uses
+   `touchpoint_cadence`, not the doc's proposed `cadence_rules` table — corroborated by a sibling
+   doc's own line, *"The original cadence-engine doc predates the real stage vocabulary"*),
+   `infrastructure_migration_plan.md` (dated pre-Vercel-retirement), `sf_connected_app_setup.md`
+   (refuted by the C1 audit — no Connected App admin rights), `ai-next-step-engine-scope.md`,
+   `BUILD-01-sf-opportunity-sync.md`, `BUILD-01B-sf-deal-sync-flow.md` (verify against GOVDUP1-a's
+   `intake-salesforce` finding), `LCC_DOCUMENTATION_RECONCILIATION_2026-08-11.md` (superseded by
+   DOCMAP1 itself). Each bannered in place with its citation — nothing deleted or rewritten.
+3. `docs/os/PLANNED-BACKLOG.md`'s DOCMAP1 row updated to ✅ shipped, naming both passes and what's
+   still open (the ~86 remaining title+skim files, and everything outside `docs/architecture/` —
+   filed as **DOCMAP2** by the merged pass's own "NOT REACHED" section).
+
+**Two things flagged, not built, this same pass:**
+- 🔴 **Live security item, separate from doc staleness:** `SF-WRITEBACK-AND-DOSSIER-BUILD-STATE.md`
+  (surfaced by the sub-agent scoped to the old `docs/os/architecture/` tree) documents an
+  un-rotated Supabase `service_role` key that leaked into a Power Automate run output. This is an
+  operator action item, not a documentation defect — Scott should rotate that key.
+- A `cadence-engine.md` verdict discrepancy between the two sub-agents was resolved by reading the
+  live source and the doc directly rather than trusting either agent's report unverified — the doc's
+  own header ("Design straw-man... red-line the numbers") settled it in favor of STALE.
+
+**Not done in this pass, deliberately (DOCMAP1's own stated scope limit):** the ~86 remaining
+title+skim files; anything outside `docs/architecture/` (`docs/audits/`, `docs/setup/`,
+`docs/os/canon/`, `docs/copilot/`, `docs/data-quality/`, `docs/flows/`, `docs/resolver/`, root
+`.md` files) — filed as DOCMAP2 in the backlog, not guessed at here.
+
+## 2026-09-08 — Git sync resolved (PR #2169); DOCMAP1 starting
+
+The reconcile above landed via **PR #2169** after two git snags, both worth naming since they're
+the kind of thing that looks like a new defect and isn't: (1) a direct `git push origin main:main`
+was rejected by the required `npm test` status check — expected, branch protection working exactly
+as documented elsewhere in this file, fixed by routing through a branch+PR instead; (2) the branch
+name `docs/reconcile-uxt1c-docmap1` collided with a stale local+remote branch from an earlier
+attempt (visible in the merge log as PR #2167 on the same branch name, reused after a delete+recreate).
+Scott's desktop sync had already absorbed this session's STATUS.md/PLANNED-BACKLOG.md edits and the
+prompt-file move into local `main` before the PR branch was even cut — which is why `git add` on the
+old path 404'd and `git commit` reported nothing to commit; the content was already sitting in the
+local-ahead commits, not lost. Local `main` now tracks `origin/main` cleanly (verified: `git status`
+clean, HEAD = merge commit `3da8623a` for PR #2169).
+
+**Starting DOCMAP1** (`docs/claude-code/prompts/DOCMAP1-doc-surface-triage.md`) this same turn, per
+Scott's "let's continue... without losing any plans not yet implemented."
+
 ## 2026-09-08 — UX-T1c reconciled (already correct on main via PR #2165/#2166); a desktop git divergence cleaned up; DOCMAP1 filed to the backlog so it isn't lost
 
 **What prompted this entry.** Scott flagged "a new git issue" with the UX-T1c prompt. Diagnosis: his
