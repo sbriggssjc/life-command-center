@@ -41,7 +41,37 @@ always.
 
 ---
 
+## 2b. 🚨 The grep technique has a CEILING — proven the same day
+
+DOCMAP1's follow-up pass deep-read the `title+skim` tier and found **7 more STALE documents — and
+none of them mentions Vercel.** The grep-one-retired-term-at-a-time technique **could not have caught
+a single one.** Revised counts: **STALE 11 · DUPLICATE 1 · HISTORICAL 31 · CANONICAL 138.**
+
+**So grep finds ONE class — a named dead dependency — and is blind to the rest:** a superseded
+design, a flag that flipped, a build that never shipped, an interface that was renamed. **Unit 1 is
+the cheap first pass, not the method.** Budget for Unit 1b accordingly.
+
+⚠️ **And when grepping for REFERENCES, do not filter by file type.** Cowork verified the
+`docs/os/architecture/` merge as link-clean using `--include=*.md --include=*.js --include=*.mjs
+--include=*.ts`; the follow-up found **5 live `runbook:` fields in `docs/os/FLOW-REGISTRY.yaml`** and
+a comment in a `.sql` migration still pointing at the old path. **A pointer in a machine-read
+registry is worse than a broken markdown link, because something may consume it.** Grep everything,
+then filter the results.
+
 ## 3. Units
+
+### Unit 1b — deep-read the highest-consequence files, because grep will not reach them
+
+After Unit 1's cheap sweep, **deep-read a bounded, named set** — not "as many as time allows".
+Choose by **consequence, not age**: the files a future chat would treat as instructions. At minimum
+the repo-root `.md` files (Unit 3), anything `CLAUDE.md` or `DOCUMENTATION-MAP.md` cites as
+authoritative, and anything with `BUILD`, `PLAN`, `SPEC`, `ROADMAP` or `SETUP` in its name — those
+assert a *future* or a *procedure*, which is the shape that misdirects hardest when it has already
+happened or changed.
+
+**For each: does this tell a reader to do something, or believe something, that is now false?**
+Cite the refutation. This is the pass that found 7 of the 11 known STALE docs; expect a comparable
+yield, and **state how many files you deep-read** so the next pass has a real boundary.
 
 ### Unit 1 — the retired-dependency sweep
 
