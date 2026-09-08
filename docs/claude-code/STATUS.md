@@ -60,6 +60,23 @@ hostname, not the brand) · DOCMAP2 response corrected in place (5 strikes) · D
 docx + a `.response.md` transcript → `responses/done/` · 2 banners. **Operator items, unchanged:** DRIFT1-retire
 (`sf-test`, `test-function`, `ai-copilot-v2` still ACTIVE on Dialysis_DB), `intake-salesforce` redeploy,
 DRIFT1-sfenrich, and the Vercel teardown.
+## 2026-09-08 — RO2 REFUTED on named rows: the "217 syncs" are sponsor↔SPE pairs, name variants and capture artifacts; RO1 verified live at 761
+
+Read the 217 deed-arm rows where the grantee equals gov's `true_owner` before building the sync
+(audit §10.7). `true_owners.source` is NULL on 212 of 217, so "gov agrees with itself" cannot be
+shown to be two sources. The top 30 by rent, read: same-party variants (`GBA ASSOCIATES LP → GBA
+Associates`), sponsor↔SPE in both directions (`Boyd Watterson → WINCHESTER VA I FGF LLC`, `EGP 2400
+NEWPORT NEWS LLC → Easterly Government Properties`, `KanAm Grund → NGP V …`), a MANAGER as grantee
+(`GPT → RMR` ×7), a TENANT as grantee (`→ USPS`), a hedge phrase (`CIM Group or affiliated
+investors`), ~5 plausibly genuine and all undated. An automated write would have minted duplicate
+recorded owners, swapped sponsors for SPEs and made a manager and a tenant owners of record.
+**Nothing built.** RO2 → ❌ re-scoped: RO2a (gov `recorded_owners` name-variant dedup, ≥45), RO2b
+(9 artifact grantees). Also: a `GSA` contains-rule tried for sizing over-fired on 32 legitimate
+agency-named SPEs — the P158a trap, recorded so it is not filed as a guard.
+
+**RO1 verified live:** Railway `/version` `dbf37d82`, `resolve_ownership` lane total **761** (was
+1,597). Backlog row cleared.
+
 ## 2026-09-08 — RO1 SHIPPED: the resolve_ownership lane drops 1,597 → 761 by filtering the no-op half at the source
 
 gov `v_ownership_resolution` gained `proposal_is_recorded` (appended LAST, whole view restated,
