@@ -167,6 +167,35 @@ GENERATED-file rule.
 
 Branch `docs/docmap3-audit`, all changes doc-only (banners + one classification-file extension +
 this entry), no code/DB/migration touched.
+## 2026-09-08 — UX-T1c-intake-cap SHIPPED: the intake_disposition lane pages its population instead of capping it
+
+Took the round-2 recommendation immediately. `api/admin.js` `intake_disposition` fetched
+`staged_intake_items` with one `limit=1000`; the population is 1,011, so the 11 oldest rows (5
+create_candidate) were never fetched. Fix: `pageIntakeReviewRows` in `api/_shared/intake-classify.js`
+— stride 1,000, stop on the RETURNED count (A5a rule), cap 20 pages with `intake_truncated` reported,
+`intake_fetch_failed` reported instead of reading a failed page as empty. Order gained an `intake_id`
+tiebreak. Guard `test/uxt1c-intake-cap-paging.test.mjs`: 5 behavioural (1,011 → 2 pages, full-page
+probe, short page, failed page, truncation) + 1 structural, mutation-verified RED on the old fetch.
+Also corrected the handler comment that called the 111 `no_data` rows "auto-retired" — they are
+hidden by filter and still sit at `review_required`/`failed`. **Not live until the Railway redeploy;**
+verify on the lane's `intakeView=all` total exceeding 1,000. Backlog row flipped to ✅ with the
+residual (`no_data` retire-vs-hide) kept in the row.
+
+⚠️ Session note: mid-turn the working tree was found checked out on `main` (reflog: `checkout:
+moving from docs/uxt1c-live-verify-round2 to main`, not by this session) — the round-2 commit
+`9bb8bb1b` was intact on its branch and the code edits were carried across; nothing lost.
+
+## 2026-09-08 — UX-T1c live-verify round 2: 12 of 28 Decision Center lanes have never been clicked; four producer/handler defects found on the way
+
+Finished the live-verify pass over the 12 remaining ungraded lanes (`docs/audits/UX_T1c_DECISION_CENTER_BUCKET_AUDIT_2026-09-08.md` **§9**), same discipline as round 1: each lane's OWN handler filter re-run in SQL, verdicts from `lcc_decisions`, every zero positive-controlled, every "completion" traced to the row that writes it.
+
+**Verdict census.** `naming_hygiene_review` **657** and genuinely alive (the two round "100"s in September are the page cap, not a sweep — 09-07 was 100 `llm_rename` cards over 55 minutes by one person; 227 open; cron 210 writing daily). `comms_owner_attribution_review` 22 and `merge_duplicate_entities` 14 — each worked on ONE day (08-14 / 06-29) and never again. **The other nine have zero verdicts ever** (`intake_disposition`, `cms_link_suspect`, `implausible_value`, `caprate_review`, `bad_rent_lease`, `resolve_owner_parent`, `listing_event_action`, `resolve_ownership`, `contact_company_link`) — positive-controlled against six other types that wrote in September. **With round 1's trio: 12 of 28 lanes, ~14,200 candidate rows, never clicked.** Biggest: `resolve_ownership` 1,597 gov props / **$1.50B rent**, with `recommended_action = confirm` on every single row.
+
+**Defects found (filed, not fixed):** 🚨 `intake_disposition`'s handler `limit=1000` is now below its 1,011-row population — 11 oldest rows (5 create_candidate) silently never shown, the A5a class (**UX-T1c-intake-cap**). `caprate_recompute_review.last_seen` = 2026-06-18 on all 413 rows in both DBs — the R43 producer ran once; `caprate_review`/`bad_rent_lease` are June snapshots (**UX-T1c-caprate-rerun**). Cron 219 `comms-owner-attribution-tick` green 7/7 days, zero proposals since 08-20 (**UX-T1c-coa-stall**). 8 `exact_unique/auto=false` rows reachable by neither contact-company consumer (**UX-T1c-ccl-gap**). `v_ownership_resolution` never reconciled against OWN-T0's store (**UX-T1c-resolveown-vs-ownt0**). Also: `lcc_listing_events.processed_at` NULL on 115/115 while cron 135 runs hourly and green — whatever it processes, it isn't this; and `merge_duplicate_entities`' 8,533 groups vs 14 decisions is NOT dead machinery — `lcc_entity_merge_log` shows 145 merges 08-27→09-03 via the other nine call sites; this lane's door is the unused one.
+
+§9.6 ranks the residue for the UX44 redesign. Not done: precision grade on any of the nine (needs a human reading cards); the OWN-T0 reconciliation; the two cron bodies. Docs: audit §9, `PLANNED-BACKLOG.md` UX-T1c row + 5 new rows.
+
+**Also this turn — DOCMAP2 reconciled.** `responses/DOCMAP2-retired-dependency-sweep.response.md` was committed (`9913db76`) but never reconciled: no backlog row, prompt + response still in the live queues. Spot-verified its claims (both flow docs carry the J13 banner; `docs/audits/README.md` exists; calendar-sync doc is clean) — they hold. Added a **DOCMAP2** backlog row carrying every NOT-REACHED item (Unit 1b never started; 5 of 7 terms count-only; ~51 new `docs/architecture/` files unclassified; `SOS-direct` needs re-scoping to "claims enabled while the flag is off"). Prompt and response moved to `done/`.
 
 ## 2026-09-08 — UX-T1c live-verify round 1: the W5.2 trio is fully wired and 100% unworked
 
