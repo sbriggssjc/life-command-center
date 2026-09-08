@@ -16,6 +16,50 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-08 — UX-T1c reconciled (already correct on main via PR #2165/#2166); a desktop git divergence cleaned up; DOCMAP1 filed to the backlog so it isn't lost
+
+**What prompted this entry.** Scott flagged "a new git issue" with the UX-T1c prompt. Diagnosis: his
+local desktop `main` had drifted **2 commits ahead of `origin/main`** — a merge commit from pulling
+origin, plus a `Desktop Changes.` commit re-adding `docs/claude-code/prompts/UX-T1c-decision-center-
+bucket-audit.md` (the prompt file this session wrote directly to his local working tree in the prior
+turn, never committed by either of us before his desktop tooling picked it up). Direct push failed —
+correctly — with `Required status check "npm test" is expected`: a locally-built commit can never
+satisfy a required check, only a PR run can, exactly the class this file already documents at length.
+Confirmed the file is genuinely new content (not a duplicate/conflict with anything on `origin/main` —
+`git show origin/main:<path>` returned "exists on disk, but not in origin/main"), so nothing was lost
+or overwritten by leaving it in place.
+
+**UX-T1c itself needed no further correction — it already reconciled cleanly.** PR #2165
+(`claude/decision-center-bucket-audit-o6ixna`, merged as `36ef8457`) ran the drafted prompt as a
+background agent with no live DB access, and — correctly, per this repo's own anti-fabrication
+doctrine — stopped at a **static census** rather than guess at live open-counts: diffed
+`FEDERATED_DECISION_TYPES` (`api/admin.js`) against `_DC_FEDERATED` (`ops.js`) at **28/28, zero
+drift**; found 13 of 28 lanes already graded by a prior round (Tier 0, `property_twin`,
+`loan_maturity`, `provenance_conflict`, `sf_link_candidate`, `junk_entity_review`, etc.) and named the
+other **15 as ungraded**; mapped one-click-vs-second-screen from `dc-lanes.js` (only `property_merge`
+and `bad_rent_lease` route to a second screen; the other 26 lanes are already inline one-click); wrote
+`docs/audits/UX_T1c_DECISION_CENTER_BUCKET_AUDIT_2026-09-08.md` with the exact per-lane query list the
+live-verify pass needs; and updated the `PLANNED-BACKLOG.md` UX-T1c row honestly as *static census
+done, live-verify + per-lane redesign for the 15 ungraded lanes still open* — matched line-for-line
+against the response document. Read both the merged commit and the saved
+`docs/claude-code/responses/UX-T1c desktop response.docx` this turn; they agree. Nothing to correct.
+
+**Filesystem cleanup, same pass:** the prompt file is moved to
+`docs/claude-code/prompts/done/UX-T1c-decision-center-bucket-audit.md` (it has been executed, and its
+response is captured in the merged audit doc); the response `.docx` moves to
+`docs/claude-code/responses/done/UX-T1c-decision-center-bucket-audit desktop response.docx`.
+
+**DOCMAP1 filed to `PLANNED-BACKLOG.md`, not just left as a loose prompt file.** The prior entry below
+(CONSOLIDATE2) named DOCMAP1 as the next consolidation problem and a fully-drafted prompt already
+exists at `docs/claude-code/prompts/DOCMAP1-doc-surface-triage.md`, but it had no backlog row — exactly
+the kind of drafted-but-untracked plan Scott's standing instruction ("without losing any plans not yet
+implemented") exists to catch. Added as a row citing the prompt file directly, 🟢 ready to build.
+**Recommended as the next step** — it is precisely "clean and consolidate the repository by topic"
+(Scott's own words, this turn and the original ask both), it is already sized and grounded (1,171 md
+files, two `architecture/` directories, a map covering 6 of 152), and its verify-on requires citing
+the two known STALE-canonical-page instances as a positive control rather than accepting a clean bill
+of health.
+
 ## 2026-09-08 — CORRECTION: C1c's retirement sweep never ran; response files reconciled; two docx artifacts moved to done/
 
 **What this entry corrects.** The `## 2026-09-08 — C1a–e SHIPPED (#2152)` entry below (written earlier
