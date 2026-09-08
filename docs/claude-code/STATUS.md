@@ -16,6 +16,39 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-08 — UX-T1c live-verify round 1: the W5.2 trio is fully wired and 100% unworked
+
+Continued the Decision Center bucket audit (`docs/audits/UX_T1c_DECISION_CENTER_BUCKET_AUDIT_2026-09-08.md`)
+past its static-census half into the first live-verify pass, now that Supabase MCP DB access was
+available. Started with the trio §2 flagged as most likely to share a defect:
+`agency_risk_action` / `npi_dedup_review` / `npi_dedup_autoapprove`.
+
+**Finding (§7 of the audit doc): none of the three is broken — all three are simply unworked.**
+Queried gov (`agency_risk_signals`), dia (`mv_npi_inventory_signals`) and LCC Opps (`lcc_decisions`,
+`lcc_npi_signal_consumed`, `research_tasks`) directly. Live candidate populations today: 692 raw /
+≥15 guaranteed-visible `agency_risk_action` rows, 285 `npi_dedup_review`, 426
+`npi_dedup_autoapprove` — real, non-zero, positive-controlled against the fetch handler's own filter
+(`severity` values confirmed live, not a dead string). All three lanes are registered in both
+registries, have a `_DC_FED_META` entry, a card renderer, a tile with an `open:` handler, and a
+one-click inline verdict button (no navigate-away). **`lcc_decisions` has never recorded a single row
+for `agency_risk_action`, `agency_risk_disposition`, `npi_dedup_review`, or `npi_dedup_autoapprove`**
+— checked by listing all 24 distinct `decision_type` values actually on file (other lanes like
+`owner_reconcile` 215, `tier0_owner_contact` 33 are present and correctly counted, so the zero is
+real, not a query artifact). Corroborated: gov's own dismiss ledger
+(`agency_risk_signals.processed_reason`) shows only the tick's two automated dismissal reasons, never
+a human disposition; the npi ops-side consumption ledger has consumed exactly the two research-task
+signal types (`missing_inventory_npi`/`new_npi`, 222 rows, 1:1 with `research_tasks`) and zero
+`duplicate_inventory_npi` rows ever.
+
+**Not a code defect — recorded as an open question, not guessed at:** whether these three tiles are
+correctly deprioritized (buried far down a ~20-tile list under `junk_entity_name`'s 2,098) or simply
+overlooked. Also flagged, not measured this pass: how many of the 677 non-`high` `agency_risk_action`
+rows actually pass the tracked-property-exposure filter a human would see (vs. the 15 guaranteed
+`high` cards) — that number decides whether the lane's true visible backlog is 15 or closer to 692.
+
+Docs updated: `docs/audits/UX_T1c_DECISION_CENTER_BUCKET_AUDIT_2026-09-08.md` (new §7/§8),
+`docs/os/PLANNED-BACKLOG.md` UX-T1c row. Remaining 12 ungraded lanes from §5 not yet live-verified.
+
 ## 2026-09-08 — DOCMAP1 reconciled: a parallel window had already merged it (PR #2168); follow-up pass closes its own residual gaps
 
 **"Starting DOCMAP1" below turned out to be wrong** — a separate session had already executed and

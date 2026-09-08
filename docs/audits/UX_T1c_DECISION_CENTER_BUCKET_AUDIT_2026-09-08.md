@@ -193,8 +193,85 @@ until checked.
 
 ---
 
-## 6. Backlog update
+## 7. Live-verify pass, round 1 — the W5.2 trio: fully wired, zero verdicts ever (2026-09-08)
+
+§2 flagged the W5.2 trio (`agency_risk_action`, `npi_dedup_review`, `npi_dedup_autoapprove`) as the
+plausible first target, on the theory that a shared build-time doctrine means a shared defect. Run
+live against `government` (`scknotsqkcheojiaewwh`) and `Dialysis_DB` (`zqzrriwuavgrquhisnoa`) via the
+Supabase MCP, plus `LCC Opps` (`xengecqvemvfknjvbvrq`) for the ledgers. **The hypothesis was wrong in
+its specific mechanism (nothing is broken in the query/fetch logic) and right in its conclusion (all
+three lanes are dead) — for a different, plainer reason: nobody has ever worked a single card.**
+
+**Source populations, live today:**
+
+| lane | source filter (from `admin.js`, read not re-derived) | live count |
+|---|---|---|
+| `agency_risk_action` | gov `agency_risk_signals`, `processed_at is null and risk_level in (high,elevated)` | **692** raw (15 `high` — always a card, guaranteed visible; 677 `elevated`, shown only if `_pids.length>0`, i.e. the agency links to a tracked gov property) |
+| `npi_dedup_review` | dia `mv_npi_inventory_signals`, `signal_type=duplicate_inventory_npi and severity=data_error` | **285** |
+| `npi_dedup_autoapprove` | dia `mv_npi_inventory_signals`, `signal_type=duplicate_inventory_npi and severity=auto_resolvable` | **426** |
+
+Positive control on the `severity` filter (P182 discipline — don't trust a filtered zero without
+checking the filter matches *something*): grouped `mv_npi_inventory_signals` by
+`(signal_type, severity)` before trusting the two counts above — `auto_resolvable` and `data_error`
+are both live, non-empty values on `duplicate_inventory_npi` rows today, so the filter is not a dead
+string. (Also found, not part of this pass's scope: a fourth `severity`, `data_quality` on 220
+`duplicate_inventory_npi` rows plus all 4 `new_npi` and all 81 `official_change` rows — `data_quality`
+duplicates and `official_change` are digest-only per the §W5.2 design and correctly never reach either
+lane; not a defect.)
+
+**Real-verdict check — `lcc_decisions` (LCC Opps), the table both verdict-dispatch branches write to
+(`admin.js:11197`, `:11271`).** Queried `select decision_type, count(*) from lcc_decisions group by 1`
+directly (24 distinct types on file, not filtered to the three in question, so the query mechanism
+itself is proven working — `owner_reconcile` 215, `tier0_owner_contact` 33, `merge_duplicate_entities`
+14, etc., all present and correctly counted). **`agency_risk_action`, `agency_risk_disposition`,
+`npi_dedup_review`, and `npi_dedup_autoapprove` do not appear in that list at all — zero rows, ever,
+on any of the four.** This is a genuine, positive-controlled zero, not a P182 measurement artifact.
+
+Corroborating cross-checks:
+- gov `agency_risk_signals.processed_reason` (the tick's own auto-dismiss ledger) shows exactly two
+  values ever written — `low_moderate_below_floor` (15,494) and `elevated_no_tracked_exposure`
+  (3,475) — both automated dismissals. Nothing reads `pursued`/`disposed`/anything a human verdict
+  would stamp, because the `agency_risk_disposition` research_task the human verdict is supposed to
+  spawn (`admin.js:11213`) has never been spawned.
+- LCC Opps `lcc_npi_signal_consumed` (the ops-side ledger the npi lanes use for exclusion, since the
+  matview has no `processed_at` seam) has consumed exactly **222** rows ever, and **100% of them are
+  `missing_inventory_npi` (203) / `new_npi` (19)** — the two *research-task* signal types, which route
+  through `research_tasks` (203 `npi_missing_inventory`, 19 `npi_new_registration`, matching exactly).
+  **`duplicate_inventory_npi` has zero rows in that ledger, ever** — consistent with zero verdicts,
+  since a verdict is the only thing that would ever add a `duplicate_inventory_npi` hash to it.
+
+**These are not unreachable lanes (ruling out the P139/C1 "structurally invisible" class).** All
+three are registered in both `FEDERATED_DECISION_TYPES` (admin.js) and `_DC_FEDERATED` (ops.js, §1),
+carry a `_DC_FED_META` entry and a card renderer in `dc-lanes.js` (`agency_risk_action` line 74,
+`npi_dedup_review`/`_autoapprove` lines 76/82), have a tile with an `open:` handler in the `SUBLANES`
+list (`ops.js:2037-2039`), and offer a **one-click inline verdict** per §3 above (no navigate-away).
+The fetch logic (`admin.js:8206-8320`) is intact and returns real rows against live data — this was
+proven by re-deriving its exact filter and confirming non-zero counts, not by reading the code alone.
+
+**Conclusion: the W5.2 trio is not broken, it is simply unworked.** Three fully-wired, one-click
+Decision Center lanes, holding 692 + 285 + 426 = **1,403 live candidate rows today** (at minimum 15
+guaranteed-visible `agency_risk_action` cards with no filter dependency), have never received a single
+human verdict since the round that built them. This is the dormant-capability class this repo's own
+`feature_flags_registry` doctrine exists to surface for env-gated *code* — the same failure mode here
+is happening to a *lane* that is fully live and reachable, just never clicked. Two live possibilities,
+not adjudicated here (would need usage/session data this pass didn't query): (a) genuinely lower value
+than the ~20 other tiles competing for attention (`junk_entity_name` alone holds 2,098 decisions —
+these three sit far down a long list), or (b) the tiles are present but easy to miss/scroll past. Not
+ruled out either way; recorded as an open finding rather than guessed at.
+
+**Not investigated this pass, flagged for whoever picks up the redesign:** whether the 677 unfiltered
+`elevated` rows resolve to a non-trivial number after the `_pids.length>0` (tracked-property-exposure)
+filter — i.e. how many of the 692 raw rows a human would actually SEE on the card list, versus just
+the 15 guaranteed `high` ones. That number decides whether `agency_risk_action`'s true backlog is 15
+or closer to 692, and needs the same `properties.agency` join the handler itself does (not re-derived
+here to keep this pass to the discipline of reading the SAME query the app runs, per §5's caution).
+
+---
+
+## 8. Backlog update
 
 `docs/os/PLANNED-BACKLOG.md` row **UX-T1c** updated in this pass: static census done 2026-09-08
 (registry parity confirmed, 13/15 graded/ungraded split established, one-click-vs-navigate mapped);
-the live-verify pass (§5 above) and the per-lane one-click redesign are still open.
+**live-verify round 1 done 2026-09-08 (§7): the W5.2 trio confirmed dead-not-broken, zero verdicts
+ever on 1,403+ live candidate rows across three fully one-click-wired lanes.** The remaining twelve
+ungraded lanes (§5) and the per-lane one-click redesign are still open.
