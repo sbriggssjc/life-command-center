@@ -16,6 +16,79 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-08 — C1a–e SHIPPED (#2152): the mirror repaired, both lanes gated, 945 tasks retired, 27 automated, the ladder registered
+
+✅ **All five units of C1's own execution plan landed as five sequential, individually-scoped
+commits** — `705e3b7e` (C1e), `74e99b0a` (C1a), `07cfdec9` (C1b), `15971445` (C1c), `3b59fc81`
+(C1d), each carrying its own migration/file change and citing the exact section of
+`docs/audits/C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE_2026-08-27.md` it implements. No response
+file was found in `docs/claude-code/responses/` for this run — reconciled directly from the merged
+commits' messages and diffs, which are self-documenting and each name the audit section, the
+population measured, and the trap avoided.
+
+- **C1a — repaired the gov mirror.** The `sf_link_candidate` verdict path (`api/admin.js:10764`)
+  PATCHes `gov.recorded_owners.sf_account_id`; the `owner_needs_salesforce` research-task gap
+  predicate read `gov.unified_contacts.sf_account_id` — a column no writer touches for this
+  purpose, so a human successfully linking an owner never cleared the task. **Repointed the WHERE
+  clause** (not `entity_kind`/`entity_id`, which stays `unified_id` to avoid orphaning ~1,675
+  open/queued tasks keyed on it) from `u.sf_account_id` to `ro.sf_account_id` — a repoint, not a
+  dual-write, after grepping the repo and finding no other reader of the old column for this gap.
+- **C1b — gated both lanes `lane_no_consumer`**, mirroring the existing `owner_needs_sos` gate,
+  applied *after* C1a so the gov arm gates against the corrected, resized population.
+  `gate_value` stays computed on every row so re-admitting later is one predicate flip. The
+  membership probe was left ungated (the A5c rule) — gating it would have read every excluded
+  subject as resolved and auto-closed it `gap_resolved`, resurrecting the exact false-throughput
+  defect A5a fixed.
+- **C1c — retired the open backlog** via `lcc_c1c_retire_sf_lanes()` (dry-run default,
+  batch-tagged, mirroring A4's shape) with outcome reason `c1c_lane_no_consumer` — **deliberately
+  never `gap_resolved`**, so the retirement can't be misread as throughput — and both
+  `status='skipped'` AND `outcome->>'terminal'='true'` stamped together (the documented
+  P176/A4-detail trap: `skipped` alone is not terminal to the seeder and the task re-mints on the
+  next tick). Reversible via `lcc_c1c_retire_log` + `v_lcc_c1c_retired_watch` (retired minus
+  reopened, never counted as a completion). Two reopen paths: `lcc_c1c_reopen_tasks()`
+  (explicit-id, either domain, the A4/P121 shape) and `lcc_c1c_reopen_relinked()` (an automatic
+  **dia-only** sweep bridging a retired task's `true_owner_id` through
+  `external_identities(dia,true_owner)` → `lcc_entity_survivor()` → checks for a fresh SF Account
+  identity or an open `sf_link_candidate` decision — stated as dia-only by design, since gov's
+  `unified_id` key has no such bridge in this schema, not silently assumed to cover both). **Not
+  scheduled as a recurring cron** — after C1b, `gate_pass` is permanently false on both lanes, so
+  nothing can re-mint into them; this is a one-time backlog clearance run manually per the
+  migration's own runbook.
+- **C1d — automated the 27 dia deterministic fills** as **Unit 4 of the existing**
+  `api/_handlers/sf-link-reconcile.js` (never a standalone writer — Units 1–3 already run
+  domain→LCC, this is the missing LCC→domain direction). New `planSfWriteback()` is a pure
+  decision core mirroring `planSfLinkReconcile`'s shape: fill-blanks only (skips `already_set`),
+  resolves every owner through `lcc_entity_survivor()` (skips an unbridgeable candidate), skips a
+  P113 operator, and never guesses on an ambiguous entity (skips `ambiguous_or_none` on 0 or >1 SF
+  Account identities). Race-safe — the PATCH carries `salesforce_id=is.null` in its own filter, so
+  a concurrent writer beating it to the field makes the write a no-op rather than an overwrite.
+  Reversible by batch tag via each fill's `provenance_event_log` row
+  (`source='sf_link_reconcile_writeback'`). Six new test cases in
+  `test/sf-link-reconcile.test.mjs` (clean fill, no_entity, operator, already_set, ambiguous 0/>1,
+  never-guess-on-mixed-batch) — all pass.
+- **C1e — registered the missing provenance rung.** `dia.true_owners.salesforce_id` had no
+  `field_source_priority` ladder (gov's `sf_account_id` already carries `splink_v1`/
+  `sf_link_review_human`); registered under `sf_link_reconcile_writeback@45` — the exact source
+  string C1d's writer stamps — landing *ahead* of C1d in the commit sequence per the
+  `CLAUDE.md` deploy-ordering rule ("additive schema before writer deploy"), so C1d never shipped
+  a single unranked write.
+
+**Sequencing matched the prompt's specification exactly**: C1e/C1a first (schema + mirror before
+anything reads or writes against the corrected population), C1b after C1a (gate the resized
+population, not the stale one), C1c after C1b (retire against a lane nothing can re-mint into),
+C1d last (the automation itself, now correctly ranked). No commit message records a deviation from
+the prompt's five-unit spec.
+
+**Not yet done, and not part of this reconciliation:** none of the five commits' full diff bodies
+were read beyond `--stat` + commit message — the exact post-fix row counts (the predicted
+`unified_contacts`/`recorded_owners.sf_account_id` agreement rate after C1a, the exact number of
+tasks C1c actually retired vs the prompt's 945-estimate, the exact `dia.true_owners.salesforce_id`
+count after C1d vs the predicted 822→849) were **not independently re-verified against live data**
+in this reconciliation pass — only the shipped code's shape and stated intent were confirmed from
+the commit messages themselves, which is not the same as re-measuring. If a live number is needed
+for a downstream decision, re-run C1's own §0 queries against current data rather than quoting the
+predicted figures above as fact.
+
 ## 2026-09-06 — SEC1-unit2 MERGED (#2141) · GOVDUP1-a confirmed · and the verification I wrote could not have proved it
 
 ✅ **`SEC1-unit2-MERGE` CLOSED.** PR #2141 merged; `git ls-tree -r origin/main` now shows
