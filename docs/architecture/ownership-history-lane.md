@@ -428,7 +428,7 @@ growth that does not happen.
 `OWN-T0b` no LCC mirror of `v_ownership_transitions_portfolio` · `OWN-T0c` 417 duplicate-entity
 merges (and `lcc_entity_canonical_key` keeps a trailing `(The)`) · `OWN-T0d` 11 tombstone duplicates ·
 **`OWN-T0e` ~1,550 unconfirmed sponsor/SPE pairs — one confirm clears a family; the highest-leverage
-follow-up** · `OWN-T0f` per-row UUIDs in `ownership_source` · `OWN-T0g`
+follow-up** (🟡 DESIGNED 2026-09-08, dry-run view `v_lcc_ownt0e_sponsor_family_proposals` live: 182 groups / 317 props reachable by the A3 gate; 13 groups are sponsor DUPLICATES not SPEs — see `docs/audits/OWN_T0e_SPONSOR_FAMILY_LANE_DESIGN_2026-09-08.md`; ⚠️ the reconciled store reads **2,097** conflict properties, not 756 — OWN-T0h) · `OWN-T0f` per-row UUIDs in `ownership_source` · `OWN-T0g`
 `lcc_finalize_entity_portfolios` supersedes only within its own payload (gov) and not at all (dia).
 
 ### The `resolve_ownership` Decision Center lane vs this store (UX-T1c §10, 2026-09-08)
