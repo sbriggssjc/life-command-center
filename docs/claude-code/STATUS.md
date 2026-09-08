@@ -79,7 +79,7 @@ confuse a future chat"* — is well-founded and now quantified:
 |---|---:|
 | `.md` files under `docs/` | **1,171** (plus 10 at repo root) |
 | `docs/architecture/` | **152** |
-| `docs/os/architecture/` | **29** — **a second architecture directory** |
+| `docs/architecture/` | **29** — **a second architecture directory** |
 | `docs/audits/` | 108 |
 | `docs/claude-code/prompts/done/` 200 + `docs/claude-code/done/` 84 | **two "done" folders** |
 | **`DOCUMENTATION-MAP.md` mentions of `docs/architecture/*.md`** | **6 of 152 — 146 unmentioned** |

@@ -1,5 +1,10 @@
 # Codex Prompt: Power Automate API / HTML Response Triage
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** A prompt artifact for the triage session above, not itself a design reference.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 Use the prompt below in a separate Codex chat with access to the `sbriggssjc/life-command-center` repository
 and, if available, the Northmarq Power Automate environment.
 

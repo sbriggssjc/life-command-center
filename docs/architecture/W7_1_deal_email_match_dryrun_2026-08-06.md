@@ -1,5 +1,10 @@
 # W7.1 — Deal-email matcher: full-corpus dry-run report (2026-08-06)
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Dated dry-run report for one matcher round; matcher-recall-design.md is the living design reference.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 > **Approval gate.** Scott reviews this before the matcher goes on a live recurring
 > cadence. The matcher writes NOTHING in dry-run; the numbers below are what a live
 > run *would* attribute. Approve → set `DEAL_EMAIL_MATCH_ENABLED` in Railway (flips the

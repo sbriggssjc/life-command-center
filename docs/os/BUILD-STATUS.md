@@ -99,13 +99,13 @@ One honest answer to "are we done?" Legend: ✅ built/live · ⏳ built in repo,
   **192 edges / 192 deals.** Idempotent check-then-insert (no unique constraint added to the 109k-edge graph).
 - ✅ **Scope is now accurate** — open Team Briggs deals = **23 of 34** (19 owned + 4 partnership-only); 11 correctly
   excluded. Rule: `owner_user_id ∈ TB  OR  deal_party edge to a TB person  OR  metadata.team_briggs_include`;
-  default = exclude. (`docs/os/architecture/deal-backbone-design-refinements.md`.)
+  default = exclude. (`docs/architecture/deal-backbone-design-refinements.md`.)
 - ✅ **STAGE_REGIME** shipped in `mcp/opportunity-sync.js` (A active-listing / B contractual / C terminal) and
   returned by the ingest endpoint; cadence-scan + deal monitor read it.
 - 🚫 **Slice B via SF OpportunityContactRole — DEAD END for TB.** Endpoint `ingest-deal-contacts` built + working
   (verified with a real pair), but OCR is **empty for Team Briggs deals** (7,201 rows firm-wide, 0 on any of the
   592 backbone deals, confirmed after 15-char id normalization). TB does not track external parties in standard
-  contact roles. **Re-spec:** `docs/os/architecture/deal-party-roster-source.md`. Party source is likely the
+  contact roles. **Re-spec:** `docs/architecture/deal-party-roster-source.md`. Party source is likely the
   custom **`Deal_Participants__c`** object (verify next) and/or the `.md` dossier rosters; the deal-email matcher
   pivots to **strong-signal-primary** (address / escrow# / OM-PSA) with the roster as a byproduct. Pause the empty
   OCR flow.

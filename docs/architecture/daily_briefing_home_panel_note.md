@@ -1,5 +1,10 @@
 # Daily Briefing Home Panel Note
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Short note (35 lines); likely folded into the live daily-briefing docs, not itself the reference.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 ## Where the panel is rendered
 - Homepage container:
   - `index.html` -> `#pageHome` -> `.home-main`

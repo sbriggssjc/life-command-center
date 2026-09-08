@@ -13,7 +13,7 @@ Status: partially complete; repo hygiene fixed, live PA designer actions still r
 No Power Automate management connector is installed in this Codex session, so I could not open run history or edit flows directly. I reconciled the current Health-surface prompt against the existing live-triage docs:
 
 - `docs/os/ERROR-TRIAGE.md`
-- `docs/os/architecture/scott-pa-flows-reference.md`
+- `docs/architecture/scott-pa-flows-reference.md`
 - `docs/architecture/DOSSIER-PROGRAM-STATE-OF-PLAY.md`
 
 The amber counts are a seven-day rolling failure signal, not proof each flow is still actively failing after prior fixes.

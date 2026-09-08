@@ -37,7 +37,7 @@ artifacts per §1 (Northmarq→_WORKFLOW prompt, Personal→skills). They are st
 to carry a managed `CANON:BEGIN…END` region + a portable render target. Today only Copilot + ChatGPT auto-render.
 
 ## 2. Deployment architecture — TWO servers (+ BOV), and what "deploy" means
-There are **two Railway deployments from this repo** (`docs/os/architecture/mcp-server-unification.md`):
+There are **two Railway deployments from this repo** (`docs/architecture/mcp-server-unification.md`):
 - **`tranquil-delight-production-633f.up.railway.app`** = root web app (`server.js`). Since prompt 22 it ALSO
   mounts `/mcp` + OAuth + the 9 bounded `/api/*` read/comps routes (`mountLccMcp` at `server.js:162`, before the
   `/api/*` 404 at `server.js:559`). This is the URL ChatGPT (`/api/*`) and Copilot Studio MCP (`/mcp`) use.

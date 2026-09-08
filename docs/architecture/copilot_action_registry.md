@@ -1,5 +1,10 @@
 # Copilot Action Registry (Wave 1)
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Orphaned build-progress/plan report, not cited by any current index; superseded in practice by copilot_authoritative_architecture_plan.md + copilot_agent_catalog.md (REGISTRY.md §B).
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 ## Purpose
 Define the Wave 1, implementation-ready Copilot action inventory for LCC and connected domain systems.
 
