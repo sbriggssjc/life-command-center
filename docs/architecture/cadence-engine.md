@@ -1,4 +1,15 @@
 # Cadence Engine — stage-aware pipeline monitoring
+
+> ⚠️ **STALE (DOCMAP1 follow-up, 2026-09-08).** This is a self-labeled design straw-man
+> (below) proposing a `bd_opportunities` + new `cadence_rules` table + a
+> `POST /api/pipeline/cadence-scan` endpoint. **The live mechanism is different**:
+> `api/_shared/cadence-engine.js` implements `touchpoint_cadence` +
+> `PROSPECTING_SEQUENCE`/`TIER_MULTIPLIERS`/`COOLDOWNS` (see root `CLAUDE.md`
+> "Single-advance-owner (cadence)" and the P112/P159 sections). The sibling doc
+> `deal-backbone-design-refinements.md` already says so outright: *"The original
+> cadence-engine doc predates the real stage vocabulary."* Read this page for the
+> ORIGINAL THINKING only; read `api/_shared/cadence-engine.js` for what ships.
+
 _Design straw-man, 2026-07-27. **Red-line the numbers** — they encode Scott's description and are meant to be edited._
 
 ## Two layers, one engine

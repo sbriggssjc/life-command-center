@@ -1,4 +1,14 @@
 # BUILD 01 — SF Opportunity Sync (the spine's first step)
+
+> ⚠️ **VERIFY BEFORE TRUSTING (DOCMAP1 follow-up, 2026-09-08).** This build spec's
+> named endpoint (`POST /api/pipeline/ingest-opportunity`) should be re-checked
+> against `server.js`'s live route table before relying on it — root `CLAUDE.md`'s
+> GOVDUP1-a section documents that the real SF-Opportunity inbound producer is the
+> `intake-salesforce` edge function on Dialysis_DB (deployed far ahead of any
+> committed source at the time it was found), a "running but not merged" case that a
+> repo grep cannot see. Confirm the live route + producer before building against
+> this spec as written.
+
 _Build spec. The inbound mirror of the SF drainer._ Makes deals visible with stages, ensures the deal entity, and
 IS the dossier-at-BOV trigger. Everything in Domain E (dossier/cadence/monitor/NBA) depends on this.
 

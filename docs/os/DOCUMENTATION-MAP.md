@@ -27,9 +27,17 @@ bootstraps a fresh chat and points at them.
 
 **This is now ONE directory.** `docs/os/architecture/` (29 files) was merged into
 `docs/architecture/` in the same change that built this index — there is no longer a second
-"architecture" directory to be confused about. Every reference to the old path was fixed in the
-same change (`grep -rl docs/os/architecture` returns nothing outside this sentence and the
-DOCMAP1 prompt/classification files, which are historical record).
+"architecture" directory to be confused about.
+
+> ⚠️ **Correction (DOCMAP1 follow-up, 2026-09-08).** The line above used to claim
+> `grep -rl docs/os/architecture` "returns nothing outside this sentence and the DOCMAP1
+> prompt/classification files." **That was false** — measured the same day: it also returned
+> `docs/os/FLOW-REGISTRY.yaml` (5 live `runbook:` fields) and
+> `supabase/migrations/20260728180000_deal_address_observations_engine.sql` (1 comment), both
+> now fixed. This is itself a fresh instance of the exact defect class DOCMAP1 exists to catch —
+> a canonical page asserting something now-false and reading authoritative — found inside
+> DOCMAP1's own output on the day it shipped. **Re-run the grep before trusting this line again**
+> rather than quoting either version of it.
 
 Below is every file classified **CANONICAL** in
 [`docs/os/DOCMAP1_CLASSIFICATION.md`](DOCMAP1_CLASSIFICATION.md) (145 of 181), grouped by topic,
