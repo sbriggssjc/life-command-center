@@ -271,3 +271,23 @@ scheduled job that calls `list_edge_functions` from *somewhere with
 credentials* and diffs it against `git ls-tree` of `supabase/functions/`.
 Do not claim "CI covers this" — it does not, and cannot, without that
 external credentialed step.
+
+## DRIFT1-routing-gap — a downstream defect this reconciliation surfaced (2026-09-08)
+
+Syncing `intake-salesforce/sf-config.ts` to the deployed body (Unit 2) exposed a second, unrelated
+defect: `routeVertical` (the deployed function's `GOV_SIGNALS`) and `_shared/sf-deal-promotion.ts`'s
+`GOV_STATE_SIGNALS` were two independent judgements of "does this Salesforce row belong to gov?",
+and they disagreed — the same shape as this document's committed-vs-deployed drift, but at MODULE
+level inside one already-synced repo, not at the deploy boundary.
+
+- **Resolved 2026-09-08, repo-side:** merged into one canonical `GOV_SIGNALS`, exported from
+  `sf-deal-promotion.ts`, imported by `sf-config.ts`. Full writeup, sizing method, and the per-term
+  decision: `docs/claude-code/STATUS.md` (2026-09-08 entry) and `test/sf-deal-promotion.test.mjs`.
+- **⚠️ Still pending: the redeploy.** Per this document's own rule 5 above (never redeploy without a
+  human reviewing the change) — this session made the code change and explicitly did NOT deploy it.
+  `routeVertical`'s live behavior is unchanged until an operator redeploys `intake-salesforce`
+  (project `zqzrriwuavgrquhisnoa`) and confirms via `get_edge_function` that the new body matches.
+- **The sizing hit this document's own Limitation from a different angle.** The population of
+  Salesforce rows that route to `null` and get silently skipped leaves no row in either domain's
+  staging tables — a re-route replay of what IS staged cannot see what never arrived, exactly as
+  the Limitation above says a repo-side check cannot see a deployment it was never told about.

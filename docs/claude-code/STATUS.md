@@ -16,6 +16,44 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-08 — DRIFT1-routing-gap CLOSED: one canonical GOV_SIGNALS list, wired, per-term justified, deploy pending
+
+**Repo change only, not deployed** (`test/sf-deal-promotion.test.mjs`,
+`supabase/functions/_shared/sf-deal-promotion.ts`, `supabase/functions/intake-salesforce/sf-config.ts`).
+
+Sizing the gap: the skipped population leaves no row anywhere it can be counted from (Class 20,
+confirmed empirically this time, not just asserted) — a re-route replay of every row currently
+staged in dia's AND gov's `sf_property_staging`/`sf_comp_staging`/`sf_listing_staging`/
+`sf_deal_staging` tables (1,064 rows) produced zero flips, because a staging table can only ever
+hold rows that already resolved to its own vertical; the method cannot see what it exists to
+measure. Live Salesforce access (the only method that could see it) was not reachable this session.
+
+⚠️ **Correcting an inherited claim: `GOV_STATE_SIGNALS` was never actually "used by
+sf-promotion-worker."** That table row (and the PLANNED-BACKLOG entry) said so; `sf-promotion-worker/
+index.ts` imports only `planDealSalePromotion` from `sf-deal-promotion.ts` — `GOV_STATE_SIGNALS` had
+**zero production consumers**, referenced only by the test file. The two-implementations framing was
+right; the "which one runs where" detail was not.
+
+**Decision: merge into one canonical `GOV_SIGNALS`, exported from `sf-deal-promotion.ts`, imported by
+`sf-config.ts`'s `routeVertical` — not a blanket union.** Every state-agency term kept has an
+independent, already-live precedent: `api/_handlers/sidebar-pipeline.js`'s `GOV_TENANT_PATTERNS`
+(word-boundary-anchored, the Topic-1 Texas Facilities Commission audit) runs the same vocabulary in
+production today, minting gov properties with no reported false positive. **`"motor vehicles"` — the
+one `GOV_STATE_SIGNALS` term with no sidebar precedent — was deliberately left out**: this list
+matches by plain substring, not word-boundary regex, and a private auto dealer ("Regional Used Motor
+Vehicles Superstore") would collide with it. Filed as a named follow-up rather than guessed at
+(**DRIFT1-routing-gap-motorvehicles**). The deployed null-on-no-match default is kept (a
+default-to-dia would be its own fabrication — see the P124 `else`-branch doctrine).
+
+`GOV_STATE_SIGNALS` no longer exists as an export; a test asserts that explicitly so the fork cannot
+silently return. 24/24 tests pass (11 new/rewritten on the routing suite, comment-stripped mutation
+targets not yet run against this specific diff — do that before closing the PLANNED-BACKLOG row).
+
+⚠️ **Deploy required, NOT performed here.** `intake-salesforce` is a Supabase edge function
+(`zqzrriwuavgrquhisnoa`); this repo change does nothing until it is redeployed — the DRIFT1 lesson
+run in reverse (repo ahead of deployment, not behind it). Verify post-deploy on `routeVertical`'s
+`no_match` rate on new staging rows, the only measurement that sees the real population.
+
 ## 2026-09-08 — C1a–e SHIPPED (#2152): the mirror repaired, both lanes gated, 945 tasks retired, 27 automated, the ladder registered
 
 ✅ **All five units of C1's own execution plan landed as five sequential, individually-scoped
