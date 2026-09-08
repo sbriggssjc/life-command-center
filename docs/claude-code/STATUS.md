@@ -83,6 +83,35 @@ unwanted state transitions, **not destruction**. Close it deliberately; it is no
 committed body calls `authenticateWebhook(req)` and 401s without `X-PA-Webhook-Secret`. The gap is
 this function, not the pattern. → **DRIFT1-sfenrich**.
 
+### 🚨 The merge-blocking test failure was not noise — it found TWO routing implementations that disagree
+
+`npm test` failed on PR #2150 with 3 failures. Two were the expected consequence of syncing the real
+body (`govdup1a-sf-property-dedupe.test.mjs` asserted the committed file must **lack**
+`autoCreateProperty` — GOVDUP1-a deliberately kept the stale body plus a warning header, and DRIFT1
+took the step that warning invited). **The third was real**, and CC verified it against the live
+deployment rather than guessing.
+
+**Read on named rows, the shape is sharper than "a missing feature":**
+
+| module | routing terms | reaches |
+|---|---|---|
+| `intake-salesforce/sf-config.ts` `GOV_SIGNALS` **(deployed)** | `gsa`, `federal`, `government`, `department of`, `veterans affairs`, `social security`, `united states of america`, `u.s. government`, `u.s. department` — **federal only** | the intake path |
+| `_shared/sf-deal-promotion.ts` `GOV_STATE_SIGNALS` | `state of `, `human services`, `child protective services`, `family protective services`, `criminal justice`, `juvenile justice`, `parks and wildlife`, `comptroller`, `general land office`, `railroad commission`, `workforce commission`, … — **state agencies** | `sf-promotion-worker` |
+
+**So the same Salesforce property routes differently depending on which door it comes through.**
+`Texas Health and Human Services` matches the promotion path and **matches nothing on intake**;
+`TX Dept of Family Protective Services HQ` misses intake's `"department of"` on the abbreviation
+alone. Deployed `routeVertical` then returns `{vertical: null, resolved: false, reason: "no_match"}`
+— **and a skipped row leaves no staging row, no error and no queue entry**, which is Class 20
+exactly: *a missing feeder has no representation anywhere.* It cannot be counted from the
+destination side.
+
+⚠️ **This is the normaliser-drift class at MODULE level** — two copies of one judgement ("what is
+gov?") in one pipeline family, diverged. The failing tests were asserting that the two agreed; they
+do not, and that assumption is what made the gap invisible. **CC corrected the tests to assert
+deployed behaviour and documented the gap inline rather than deleting the discrepancy** — the right
+call, and the reason it surfaced at all. Suite now **5,439 pass / 0 fail**. → **DRIFT1-routing-gap**.
+
 **The meta-point: the blocking unknown was answerable in one call.** DRIFT1 correctly declined to
 commit the body, and correctly said the severity could not be judged without it — but the deployed
 source is readable directly. **When a decision is blocked on "the source is not in the repo", read
