@@ -106,7 +106,7 @@ re-check.
 It does **not** silently enforce into a lockout, and it never touches
 `auth-config` (which stays public so the frontend can always fetch its key).
 
-## 5. Safe rollout order (Scott's env changes — Railway/Vercel)
+## 5. Safe rollout order (Scott's env changes — Railway; Vercel retired 2026-07-20, DOCMAP3)
 
 These are **env-var changes you make in the deploy dashboard**, not code changes.
 Run them in this order:

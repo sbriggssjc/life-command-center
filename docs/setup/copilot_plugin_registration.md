@@ -1,5 +1,11 @@
 # MS Copilot Plugin Registration — Life Command Center
 
+> 🚨 **STALE (DOCMAP3, 2026-09-08): this doc references Vercel as a live deployment target.**
+> Vercel was retired 2026-07-20 (root `CLAUDE.md`: *"PRODUCTION RUNS ON RAILWAY (Vercel retired
+> 2026-07-20)"*). `server.js` on Railway is now the single source of `/api/*` routing;
+> `vercel.json` is deleted. Treat any Vercel-dashboard step or vercel.app URL below as historical
+> / needing translation to the Railway equivalent before acting on it.
+
 ## Recommended Path: Copilot Studio (No Admin Required)
 
 If you do not have M365 Global Admin or Teams Admin access, use Copilot Studio instead. Any licensed M365 user can create and publish a personal Copilot agent with external API connections — no admin approval required.
