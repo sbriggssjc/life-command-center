@@ -363,7 +363,7 @@ census blocked). 18 repo migration hygiene (`connector_type::text` cast + regres
 
 1. **Copilot MCP pivot is blocked by a pre-existing 2-server split (prompt 21 -> new prompt 22).** The probe found
    `POST tranquil-delight-.../mcp` = 404. Cause is already documented in
-   `docs/os/architecture/mcp-server-unification.md`: `tranquil-delight` is the root web app; the MCP server
+   `docs/architecture/mcp-server-unification.md`: `tranquil-delight` is the root web app; the MCP server
    (`mcp/server.js`) is a *separate, undocumented Railway service* that the working Claude connector uses. The
    decided fix is **unification** — mount `/mcp` + OAuth + bounded read routes onto the root app for one canonical
    URL. That unification is exactly what unblocks Copilot Studio, and also fixes the old "fixes land on the server

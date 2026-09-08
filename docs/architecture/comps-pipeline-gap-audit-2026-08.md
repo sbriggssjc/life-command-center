@@ -1,5 +1,10 @@
 # Comps Pipeline — Gap Audit (2026-08-05)
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Dated gap audit for one round.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 > **STATUS 2026-08-05 — CLOSED.** Every gap mapped below is fixed and live end-to-end. Fixes landed across prompts
 > 36–53: single renderer + conformance (36/37/48), OAuth connector (33/38), national subject-anchored selection
 > (39/49), on-market enrichment (40), recency/field-standardization + operator-as-similarity (41/52), data-quality

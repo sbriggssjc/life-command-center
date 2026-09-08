@@ -1,5 +1,10 @@
 # Dossier Design vs Production Reconciliation - 5247 Airways Blvd / property 23654
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Named one-property audit/comparison; feeds the living dossier docs, not itself the canonical reference.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 Read-only reconciliation run on 2026-08-01 against:
 
 - Dialysis DB `zqzrriwuavgrquhisnoa`, property_id `23654`, CCN `442740`

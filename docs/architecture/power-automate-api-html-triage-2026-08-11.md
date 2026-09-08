@@ -1,5 +1,10 @@
 # Power Automate API / HTML Triage Evidence Report
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Dated evidence report for one triage session.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 Date: 2026-08-11
 Branch: `codex/power-automate-route-triage`
 Scope: LCC Power Automate retained exports, Microsoft connector host evidence, Railway route mounts, and read-only live route probes.

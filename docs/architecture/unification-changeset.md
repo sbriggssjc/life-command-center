@@ -79,7 +79,7 @@ client-facing URL, no competing surfaces. Phase 2 below (optional) collapses it 
 Insert immediately after the primary handler routes (~line 413, before `/health`), so MCP routes are matched
 before `express.static`, the `/api/*` 404 (line 518), and the SPA fallback (line 527):
 ```js
-// ── Unified MCP surface (flag-gated; see docs/os/architecture/unification-changeset.md) ──
+// ── Unified MCP surface (flag-gated; see docs/architecture/unification-changeset.md) ──
 if (process.env.LCC_MOUNT_MCP === '1') {
   const { mountLccMcp } = await import('./mcp/server.js');
   mountLccMcp(app, { apiPrefix: '/ai' });   // AI read/comps → /api/ai/*, plus /mcp + OAuth

@@ -1,5 +1,10 @@
 # BD Copilot — Closed-Loop Reconciliation (analysis + status, 2026-07-31)
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Dated analysis+status note (2026-07-31); cadence-engine.md is the current design reference for cadence advancement.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 Scott's copilot loop: **suggest → draft → broker SENDS → capture the sent mail → log the action in
 the LCC + log the call in Salesforce + reschedule the open task in the LCC AND Salesforce per the
 cadence.** This is the review + reconciliation of the two write paths that implement it, what was

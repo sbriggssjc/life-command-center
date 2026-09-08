@@ -1,5 +1,10 @@
 # Flow 6 (`SF -> LCC: On-demand File Backfill`) — Next-Session Notes
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Dated session worklog ("Next-Session Notes"), point-in-time state capture for one flow debug session.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 **Flow Id:** `aaa452c0-7eb5-4c98-bfe2-f6d872d80639`
 **Current state:** Saved, status On, partial functionality.
 

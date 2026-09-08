@@ -1,5 +1,10 @@
 # Intent / Resolution Audit — Phase 1
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Dated "Phase 1" audit; request-understanding-and-consistency-layer.md is the design-level successor.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 Date: 2026-08-03  
 Scope: audit only. No tool code was changed.
 

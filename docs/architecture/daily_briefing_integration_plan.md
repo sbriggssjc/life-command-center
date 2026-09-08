@@ -1,5 +1,10 @@
 # Daily Briefing Integration Plan
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Integration PLAN doc; briefing-analyst-take-onprem.md (CLAUDE.md-cited) is the current canonical daily-briefing reference — this plan predates it.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 ## Purpose
 Integrate the existing Morning CRE / market briefing system into one unified LCC Daily Briefing Agent so the team has a single daily operational and intelligence surface.
 

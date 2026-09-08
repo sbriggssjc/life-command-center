@@ -2,7 +2,7 @@
 
 ## Why (this is the real unblock for the whole Microsoft/Copilot strategy)
 Prompt 21's readiness probe found `POST https://tranquil-delight-production-633f.up.railway.app/mcp` returns
-**404**. Root cause is already documented in `docs/os/architecture/mcp-server-unification.md`: there are **two
+**404**. Root cause is already documented in `docs/architecture/mcp-server-unification.md`: there are **two
 Railway deployments** from this repo — the root web app (`tranquil-delight`, runs repo-root `server.js`) and a
 **separate, undocumented MCP service** (runs `mcp/server.js`) that is what the working Claude connector uses.
 `/mcp` is live only on the hidden MCP service, not on `tranquil-delight`.
@@ -14,8 +14,8 @@ MCP pivot (prompt 21 Part 2), (b) fixes the long-standing "fixes land on the ser
 and (c) makes the docs true. The "repoint to the hidden MCP domain" stopgap is explicitly a throwaway.
 
 ## Task — follow the existing changeset, then add the protocol bump
-1. **Execute the unification** exactly as specified in `docs/os/architecture/mcp-server-unification.md`
-   ("Work to close it", steps 1-6) and `docs/os/architecture/unification-changeset.md` (Phase 2, if present):
+1. **Execute the unification** exactly as specified in `docs/architecture/mcp-server-unification.md`
+   ("Work to close it", steps 1-6) and `docs/architecture/unification-changeset.md` (Phase 2, if present):
    - Make `mcp/server.js` route wiring exportable (`mountLccMcp(app)` / Express Router): `/mcp` JSON-RPC +
      OAuth discovery (`/.well-known/oauth-*`, `/register`, `/authorize`, `/oauth/token`), `READ_HTTP_ROUTES`
      (`makeReadHttpRoute` + `boundHttpToolResult`), comps routes.
