@@ -246,6 +246,36 @@ listing.
    the repo to the deployment (not the reverse), and only redeploy when a
    human has reviewed the actual code change being shipped.
 
+## DRIFT1-routing-gap — what the merge-blocking test failure found (2026-09-08, CLOSED repo-side)
+
+**Not a drift item, but discovered by one** — syncing `intake-salesforce` to its deployed body broke
+three tests, and the third was real. **Two definitions of "gov" existed in one pipeline family:**
+deployed `intake-salesforce/sf-config.ts`'s `GOV_SIGNALS` (**federal only**) and
+`_shared/sf-deal-promotion.ts`'s `GOV_STATE_SIGNALS` (state agencies). `routeVertical` returns
+`{vertical: null, resolved: false, reason: "no_match"}`, so a state-agency property was **skipped at
+intake with no row, no error and no queue entry** — Class 20.
+
+⚠️ **Correcting the framing this document's first write-up carried (a Cowork error):
+`GOV_STATE_SIGNALS` was NOT "used by `sf-promotion-worker`."** That worker imports only
+`planDealSalePromotion`; the constant had **zero production consumers** and was referenced only by
+its test file. **The two-implementations finding was right; "which one runs where" was wrong** — and
+the error came from verifying the MODULE import and inferring the SYMBOL was used. *Grep the symbol,
+not the file.* The correction strengthens the case for merging: there was no second live consumer
+whose behaviour could change.
+
+**Resolution (PR #2157):** one canonical `GOV_SIGNALS` exported from `sf-deal-promotion.ts` and
+imported by `sf-config.ts`; the local fork is gone. ✅ **Not a blanket union — every state term kept
+has an independent live precedent** in `api/_handlers/sidebar-pipeline.js`'s `GOV_TENANT_PATTERNS`,
+already minting gov properties from that vocabulary in production. ✅ **`"motor vehicles"` was
+deliberately EXCLUDED** — the one term with no such precedent, and this list matches by plain
+substring, so private auto dealers would collide. It survives only as a comment explaining the
+exclusion. Verified on `origin/main`: fork removed, canonical list in place, `"motor vehicles"` in
+comments only, `GOV_STATE_SIGNALS` retired to comments. Tests 24/24; suite 5,450 pass / 0 fail.
+
+🚨 **NOT DEPLOYED.** `intake-salesforce` is a Supabase edge function — **this repo change does nothing
+in production until an operator redeploys it.** That is this document's own lesson running the other
+way: the repo is now *ahead* of the deployment, deliberately and with the header saying so.
+
 ## Limitation: this direction cannot be a repo-side test
 
 A test suite living in this repo can assert one direction cheaply: *"every

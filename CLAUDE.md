@@ -612,6 +612,39 @@ merged today.
   row and understates a `cap_rate_history` loss.** Substantive / re-derivable / queue are three
   policies, and the fold must state which applies per table rather than infer it from the name.
 
+### ⚠️ A CANONICAL TOPIC PAGE GOES STALE ON ITS OWN TOPIC FIRST — UPDATE IT IN THE SAME CHANGE (2026-09-08)
+
+Twice in one week the arc's *canonical page* was the last thing to learn what the arc found, while
+STATUS and the backlog were current: `field-provenance-ladder.md` still justified a write "per the
+ladder's own `manual`@1 rung" **after** that rung was proven not to exist, and
+`edge-function-deploy-drift.md` carried nothing about DRIFT1-routing-gap **while that finding came
+out of DRIFT1 itself.** The failure mode is structural, not careless — a turn's work naturally lands
+in the running log and the task list, and the topic page is the one artifact nobody is prompted to
+touch.
+
+- **A topic page that is stale on its own topic is worse than no page**, because it is the artifact
+  a future reader trusts *instead of* re-measuring. Both instances were actively misleading: one
+  stated a rung that does not exist, the other omitted the reason its own subject changed.
+- **The rule: when a unit changes what a canonical page asserts, the page moves in the SAME change**
+  — not in the reconcile turn afterwards. `BUILD-TURN-PROTOCOL.md` already says a change is finished
+  when the canonical pages are true; this is the specific failure that rule exists to catch.
+- ⚠️ **And correct it IN PLACE with the measurement**, never by deleting the wrong sentence — the
+  wrong sentence is the record of why the next reader would have believed it.
+
+### ⚠️ GREP THE SYMBOL, NOT THE FILE (DRIFT1-routing-gap, 2026-09-08)
+
+Cowork recorded that `GOV_STATE_SIGNALS` was "used by `sf-promotion-worker`" — from
+`grep -rln sf-deal-promotion`, which showed the worker importing the **module**. The worker imports
+only `planDealSalePromotion`; the constant had **zero production consumers** and lived in its test
+file alone. **A module import is not a symbol import**, and the inference was published as fact in
+two documents.
+
+- **Read the import list, not the import path** — `import { X } from "./m.ts"` is the evidence.
+- The finding it supported (two definitions of "gov") was correct; the *mechanism* claim was not, and
+  the correction **strengthened** it: with no second live consumer, merging the lists could not
+  change anyone's behaviour. **A wrong supporting detail can make a right conclusion look
+  better-founded than it is** — which is why the detail has to be checked at the same standard.
+
 ### 🚨 A PRODUCER WHOSE DEPLOYED CODE IS AHEAD OF THE REPO IS INVISIBLE TO EVERY CODE SEARCH (GOVDUP1-a, 2026-09-05)
 
 The gov SF fan-out producer is **`intake-salesforce`, a Supabase edge function on Dialysis_DB,
