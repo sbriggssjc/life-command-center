@@ -51,6 +51,52 @@ by reading its content, not its name, per the standing rule "filenames in this w
 authoritative") are moved to `docs/claude-code/responses/done/`, renamed to match the folder's
 convention. Both underlying pieces of work (C1a-e and UX-T1b) are fully reconciled into
 `PLANNED-BACKLOG.md`/`STATUS.md`/canonical docs as of this entry, correction included.
+## 2026-09-08 — CONSOLIDATE2 SHIPPED: STATUS halved, zero entries lost · and the doc SURFACE is the next problem
+
+**PR #2163, independently verified.** `STATUS.md` **8,975 → 4,746 lines**, comfortably under its own
+~8,000 rule; 104 entries archived verbatim to
+`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`.
+
+**Cowork's independent conservation check: 218 headings before = 114 kept + 104 archived. Zero
+headings lost** (set difference computed on heading text, not counts).
+
+✅ **The date-sort trap was handled, not tripped.** CC verified *"no later-dated entries below line
+4700"* before cutting, and took a **contiguous line span** rather than a date predicate — which is
+what the previous archive's own header warns about, and what would otherwise have stranded September
+entries in the archive while looking correct.
+
+✅ **Rescue list empty, WITH the method** — every named backlog ID in the span (`B6b-lead`,
+`B6c-orphan`, `C19`, `N14`, `N15b/g`, `N16`, `DOC1/8/9/12`, `PR5d`, `PR8`, `C13f/g/h`,
+`B6e-fred-verify`, `B6e-ci-mask-ruff`, `B6d-sam`, …) grepped against `PLANNED-BACKLOG.md`, all ≥1.
+*An empty answer is only credible with the method that produced it, and this one has it.*
+
+### 🚨 The next consolidation problem, measured: the doc SURFACE, not the logs
+
+Scott's ask — *"no misdirecting older files that are inaccurate or in various locations that might
+confuse a future chat"* — is well-founded and now quantified:
+
+| | |
+|---|---:|
+| `.md` files under `docs/` | **1,171** (plus 10 at repo root) |
+| `docs/architecture/` | **152** |
+| `docs/os/architecture/` | **29** — **a second architecture directory** |
+| `docs/audits/` | 108 |
+| `docs/claude-code/prompts/done/` 200 + `docs/claude-code/done/` 84 | **two "done" folders** |
+| **`DOCUMENTATION-MAP.md` mentions of `docs/architecture/*.md`** | **6 of 152 — 146 unmentioned** |
+| `docs/architecture/*.md` untouched since 2026-08-01 | **66 of 152** |
+
+🚨 **`CLAUDE.md` points at `DOCUMENTATION-MAP.md` as "where every doc, plan, audit and design is
+filed." It covers ~4% of the architecture directory** and was last touched 2026-09-01. A future chat
+following that pointer finds a map for 6 files, two directories both named "architecture", and no
+way to tell which of 152 documents is current.
+
+⚠️ **And the dangerous class is proven, twice in this arc** — not hypothetical staleness but
+canonical pages asserting things that are false: `field-provenance-ladder.md` justified a write "per
+the ladder's own `manual`@1 rung" **after that rung was shown not to exist**, and
+`intake-salesforce`'s committed header said it *"never writes a domain table"* **while it had minted
+808 gov properties**. Both were the document a reader would trust *instead of* re-measuring.
+→ **DOCMAP1**.
+
 ## 2026-09-08 — CONSOLIDATE1 SHIPPED: the backlog is open items again, and nothing was lost
 
 **PR #2159, independently verified.** `PLANNED-BACKLOG.md` **1,047 → 937 lines**; 116 closed rows
