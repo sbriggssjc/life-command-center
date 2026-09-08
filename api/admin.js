@@ -119,6 +119,7 @@ import { createPropertyFromIntake } from './_handlers/intake-create-property.js'
 import {
   isNonDealSnapshot, hasFullDealSignature, normalizeDocType,
   snapshotLooksLikeListing, LISTING_DOCUMENT_TYPES, classifyStagedIntake,
+  pageIntakeReviewRows,
 } from './_shared/intake-classify.js';
 import { normalizeState, parseContactFromJunk, normalizeCanonicalName, recordContactFieldWrites } from './_shared/entity-link.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
@@ -8319,12 +8320,23 @@ async function fetchFederatedSource(type, cap, opts) {
     // classify in JS — the alias normalization (offering_memorandum→om) can't be
     // a clean server-side count filter. `cap` only bounds the items RETURNED.
     const view = opts.intakeView === 'all' ? 'all' : 'create';
-    const r = await opsQuery('GET', 'staged_intake_items?select=' + INTAKE_LANE_SELECT
-      + '&status=in.(review_required,failed)&order=created_at.desc&limit=1000');
-    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    // UX-T1c-intake-cap (2026-09-08): PAGE the population at the PostgREST cap
+    // and stop on the RETURNED count. A single `limit=1000` silently dropped the
+    // oldest rows once the population passed 1,000 (measured 1,011 that day —
+    // 11 rows, 5 of them create_candidate, never shown). See pageIntakeReviewRows.
+    const paged = await pageIntakeReviewRows(
+      (path) => opsQuery('GET', path),
+      'staged_intake_items?select=' + INTAKE_LANE_SELECT
+      + '&status=in.(review_required,failed)&order=created_at.desc,intake_id.desc');
+    const rows = paged.rows;
+    out.intake_pages = paged.pages;
+    if (paged.truncated) out.intake_truncated = true;
+    if (paged.failed) out.intake_fetch_failed = true;
     const wanted = (view === 'all')
       ? (k) => k !== 'no_data'   // show-all surfaces every workable klass; the
-                                 // no-data empties are auto-retired, not shown
+                                 // no-data empties are hidden here by filter —
+                                 // NOT retired (they stay review_required/failed;
+                                 // 111 on 2026-09-08). Backlog UX-T1c-intake-cap.
       : (k) => k === 'create_candidate';
     const classified = rows.map((row) => {
       const cls = _intakeRowClass(row);
