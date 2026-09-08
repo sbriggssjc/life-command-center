@@ -1533,6 +1533,17 @@ All three converge on `api/_shared/intake-om-pipeline.js::stageOmIntake`:
     its machine identifier (hostname, table, function name), across every file type, case-insensitively;
     the brand name is what the correctly-framed history mentions.** Same family: `docs/architecture/` "grew
     181 → 232" was a non-recursive count — the 51 were subdirectories that had never been classified.
+    - ✅ **J13a-guard SHIPPED (2026-09-08) — this class is now a CI test, not a fourth sweep.**
+      `test/retired-identifiers-guard.test.mjs` scans every TRACKED file (`git ls-files`, all types,
+      case-insensitive, comment-stripped for JS/TS) for the identifiers in
+      `test/fixtures/retired-identifiers.json` and fails on any hit outside `docs/history/`,
+      `docs/audits/`, a `STALE (DOCMAP…`/`RETIRED`-bannered doc, or a named allowlist entry (BY PATH,
+      with a reason + re-measure date, itself asserted non-stale). **Add a newly-retired
+      host/path/symbol by editing the fixture — never by widening the exempt set to silence a hit.**
+      The three root `flow-*.json` files and the Copilot Studio `manifest.json`/`ai-plugin.json`/
+      `LCC-Assistant.zip`/Teams-Toolkit build artifacts that carried the retired host were moved to
+      `docs/archive/retired-vercel-artifacts/` (never hand-edited) — see that directory's README for
+      the live replacement of each.
   - **Diagnose it from Supabase `edge_logs`, not app logs.** Every PostgREST write carries the
     calling server's `request.headers.cf_connecting_ip`. Railway is a small set of STABLE
     addresses (`152.55.x`, `162.220.232.x`) carrying tens of thousands of requests; a serverless
