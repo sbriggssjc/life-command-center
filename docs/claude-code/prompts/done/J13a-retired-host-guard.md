@@ -1,5 +1,7 @@
 # J13a-guard — make the retired-host class un-recurrable (a test, not a fourth sweep)
 
+> **Filed to `done/` 2026-09-08.** Shipped as PR #2181 (`c544a16c`, `b1825b4d`); reconciled the same day — one seed row below was wrong and is struck in place; the guard's banner exemption was tightened after the reconcile found it exempting live code (see the STATUS entry).
+
 > **Three documentation passes found the same defect class three times** — DOCMAP1 (4 STALE), DOCMAP2 (12
 > retired-host defects, 2 fixed by the pass), DOCMAP3 (18 fixed) — and nearly every one was
 > `life-command-center-nine.vercel.app` stated as a live target. Every fix is a banner a human has to read.
@@ -27,7 +29,7 @@ each entry `{ id, kind, retired, replacement, note }`. Seed:
 | id | kind | retired | replacement |
 |---|---|---|---|
 | `life-command-center-nine.vercel.app` | host | 2026-07-20 | `tranquil-delight-production-633f.up.railway.app` (`server.js` mounts `/api/*`) |
-| `life-command-center-production.up.railway.app` | host (dormant Railway service, I16b) | — | same |
+| ~~`life-command-center-production.up.railway.app`~~ | ~~host (dormant Railway service, I16b)~~ | — | ~~same~~ | ⚠️ **Struck by Cowork 2026-09-08 — this seed was WRONG.** CC refused it (six `api/*.js` default `GOV_API_URL` to it, unverified); Cowork then measured it: `/health` → `lcc-mcp-server 1.0.0` — the live standalone MCP server. Never seed a retirement you have not probed. |
 | `docs/os/architecture/` | path (merged by DOCMAP1) | 2026-09-08 | `docs/architecture/` |
 | `GOV_STATE_SIGNALS` | symbol (merged into `GOV_SIGNALS`) | 2026-09 | `GOV_SIGNALS` |
 

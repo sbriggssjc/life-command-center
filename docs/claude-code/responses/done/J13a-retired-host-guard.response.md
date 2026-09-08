@@ -90,3 +90,35 @@ per the README's reconciliation table) — none needed editing in this change.
 - Guard seen RED (allowlist entry removed) and green (restored).
 - Full suite: `npm test` → **5471 pass / 0 fail / 6 skipped**, run after the archive move.
 - No file touched outside `test/`, `docs/`, the nine moved artifacts, and `CLAUDE.md`.
+
+---
+
+## Cowork reconcile (2026-09-08, after merge as PR #2181)
+
+**Held.** Ran the guard locally on `main`: 6/6 green, `tracked=4486 scanned=4403 hits=0 exempt=86
+allowlisted=2` (the response's 4482/4399/76 were measured before two more PRs landed — not a discrepancy).
+My own RED run — a synthetic tracked offender staged under `api/` — failed naming the file. A retired
+host in a JS *comment* is not flagged, by design (comment-stripped); the P194 class was code strings.
+Every moved artifact's referrer is inside an exempt directory or carries a banner; `scripts/
+build_canonical_connector.py` reads only the `openapi.json` siblings, which stayed. The decision **not to
+seed `life-command-center-production.up.railway.app` was correct and the prompt's seed row was wrong** —
+struck in the prompt. Live Railway `/version` = `dbf37d82` = `main` HEAD, so this PR is already deployed.
+
+**Did not hold — and closed in the same reconcile.** `hasRetirementBanner` tested `/STALE \(DOCMAP|RETIRED/i`
+over the first 40 lines of *any* file. 40+ tracked files rode the bare word "retired": live `api/_shared/*.js`,
+`dc-lanes.js`, four `.github/workflows/*.yml`, `CURRENT-STATE.md`, `AGENTS.md`, `WRITE_SURFACE_POLICY.md`.
+Positive control: appended `export const __PROBE = "https://life-command-center-nine.vercel.app/api/intake"`
+to `api/_shared/share-extractor.js` → **suite GREEN, `hits=0`**. That is the P194 shape — a fallback URL in
+live code — passing the guard built for it. Fix (this branch): the banner exemption applies to `.md` files
+only and requires a blockquote line (`> … STALE (DOCMAP` / `> … RETIRED`); two positive controls added (8
+tests); the same probe now fails naming the file; the three correctly-framed docs the word had been carrying
+(`INTAKE_TODO_FLOW_AUDIT_2026-07-23.md`, `POWER-AUTOMATE-API-HTML-TRIAGE-CODEX-PROMPT-2026-08-11.md`,
+`DOCMAP1_CLASSIFICATION.md`) are exempted by path with reasons. **"Seen red" on an allowlist removal is not
+"seen red" on the defect the guard exists for — positive-control the exemptions, not just the match.**
+
+**Live probes (`net.http_get` from LCC Opps, 21:43–21:44 UTC):** the retired Vercel host serves
+`/api/daily-briefing` → 200, briefing generated at that instant (P194 re-measured: it executes against the
+DB with its service key today); `/version` → NOT_FOUND only because the route postdates the frozen build.
+`life-command-center-production.up.railway.app` → `/health` `lcc-mcp-server 1.0.0`, `/` "Life Command Center
+MCP Server", `/api/*` Express 404 — **the live standalone MCP server, not a dormant service** → I16b is now a
+Conflict for the Railway dashboard to resolve before anything is deleted.

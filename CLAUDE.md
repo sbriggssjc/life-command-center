@@ -1510,7 +1510,8 @@ All three converge on `api/_shared/intake-om-pipeline.js::stageOmIntake`:
   a comment explaining that *"the intake endpoints live on Vercel, not on the Railway MCP
   server."* That was true until **2026-07-20**, when Vercel was retired and `server.js` became
   the single source of `/api/*` routing. **Nobody tore the Vercel deployment down.** It still
-  serves, and it still holds the LCC Opps service key — so the extension's POSTs did not fail,
+  serves *(re-measured 2026-09-08 21:44 UTC: `/api/daily-briefing` → 200 with a briefing generated at that
+  instant; `/version` → Vercel NOT_FOUND only because the route postdates the frozen build)*, and it still holds the LCC Opps service key — so the extension's POSTs did not fail,
   they SUCCEEDED against a build frozen before Prompt 61, writing into the same table.
   - **The row shape is the fingerprint: the P61 key set MINUS exactly the 7 keys P61 added**
     (43 observed vs 50 in `EXTRACTION_SCHEMA_KEYS`), plus no `_provider` even though
@@ -1544,6 +1545,21 @@ All three converge on `api/_shared/intake-om-pipeline.js::stageOmIntake`:
       `LCC-Assistant.zip`/Teams-Toolkit build artifacts that carried the retired host were moved to
       `docs/archive/retired-vercel-artifacts/` (never hand-edited) — see that directory's README for
       the live replacement of each.
+      - 🚨 **A WORD IS NOT A BANNER — AN EXEMPTION MUST BE SHAPED LIKE THE ARTIFACT IT EXCUSES (Cowork
+        reconcile, 2026-09-08).** The guard's first cut exempted any file whose first 40 lines matched
+        `/RETIRED/i`. Measured: **40+ tracked files rode the bare word** — live `api/_shared/*.js`,
+        `dc-lanes.js`, four `.github/workflows/*.yml`, `CURRENT-STATE.md`, `AGENTS.md`. Positive control:
+        a hardcoded retired host appended to `api/_shared/share-extractor.js` left the suite **GREEN** —
+        the P194 shape, the one thing the guard exists for, and it had already been "seen red" on an
+        allowlist removal. **Seen red on one path is not seen red on the path that matters.** Now
+        `.md`-only, blockquote-only; two positive controls pin it. When a guard passes, ask what its
+        exemptions would ALSO excuse, and try the defect you built it for inside one of them.
+      - ⚠️ **`life-command-center-production.up.railway.app` IS NOT DORMANT — it answers as the live
+        standalone MCP server** (`/health` → `lcc-mcp-server 1.0.0`, measured 2026-09-08 21:43 UTC via
+        `net.http_get` from LCC Opps). Two docs in this repo called it "the dormant Railway service
+        (I16b)" — both struck. Whether it is the same Railway *service* I16b wants deleted is a **Conflict**
+        only the Railway dashboard resolves; until then **I16/I16b's "delete it" is frozen** (see backlog
+        I16b). CC was right to refuse seeding it as retired — measure before you retire.
   - **Diagnose it from Supabase `edge_logs`, not app logs.** Every PostgREST write carries the
     calling server's `request.headers.cf_connecting_ip`. Railway is a small set of STABLE
     addresses (`152.55.x`, `162.220.232.x`) carrying tens of thousands of requests; a serverless
