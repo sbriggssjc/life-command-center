@@ -638,6 +638,14 @@ genuinely has no insert path.**
   `sam-entity-lookup`. ⚠️ **`version` counts DEPLOYMENTS, not content** — to detect drift compare a
   content-derived marker, not the number. ⚠️ **Never "tidy up" by redeploying from the committed
   file** — where the repo is behind, that rolls production back.
+- ✅ **CLOSED 2026-09-07 (DRIFT1)** — all 38 deployments censused with a verdict each; five
+  sourceless functions committed with liveness proven from `cron.job`, `intake-salesforce`
+  committed verbatim at `sf-2026-05-v8`, **and its false "never writes a domain table" header
+  removed** — that sentence is what made the original "producer NOT FOUND" read as conclusive.
+  Canonical page: `docs/architecture/edge-function-deploy-drift.md`. ⚠️ **A repo-side test cannot
+  close this class** — it can assert every committed function is deployed, but is structurally
+  blind to a deployment with no committed source, which is the entire population. The unit shipped
+  an operator runbook instead of a guard implying coverage it lacks.
 - **When a producer cannot be found in source, enumerate the DEPLOYED artifacts before concluding
   it does not exist**: `list_edge_functions` on all three projects (compare `version` against what
   the repo last deployed), `cron.job` command text, Power Automate flows, and the Chrome extension.
