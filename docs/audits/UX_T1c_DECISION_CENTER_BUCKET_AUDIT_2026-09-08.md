@@ -519,8 +519,12 @@ agree or disagree with.**
    door; the DC lane is the last consumer still reasoning about gov `recorded_owners` alone, while
    the panel an operator opens from the card shows `v_lcc_property_ownership_reconciled` — the
    two will disagree on 409 + 470 rows and the operator will see it.
-5. **Put gov's `true_owner_name` on the card.** It is on the view and the handler never selects it
-   — the P134 *diff the view's columns against the handler's `select=`* finding, again.
+5. ~~**Put gov's `true_owner_name` on the card.** It is on the view and the handler never selects it~~
+   ⚠️ **WRONG, corrected 2026-09-08 while building RO1:** the handler's `sel` DOES include
+   `true_owner_name` (`admin.js` ~8461), the context carries it, and `dc-lanes.js` renders
+   *"True owner: …"* (lines 212/232). The card already shows all three names; what it lacks is the
+   COMPARISON (§10.2's *proposal = true_owner* on 217 rows), not the column. Left in place as the
+   record of a claim made without reading the renderer — the C10 lesson inverted.
 
 ### 10.5 Also found, not part of the question
 
@@ -536,3 +540,15 @@ agree or disagree with.**
 **Not done:** no per-row precision read of the 761 (a human reading cards); no LCC-side split of the
 470 conflicts by lane arm (needs the names carried across, ~70 KB — deferred as not worth the cost
 until the no-op half is retired); the 62 absent properties not characterised.
+
+### 10.6 RO1 shipped the same day
+
+`proposal_is_recorded` appended to gov `v_ownership_resolution`
+(`supabase/migrations/government/20261010120000_gov_ro1_ownership_resolution_proposal_is_recorded.sql`,
+whole view restated, applied live 2026-09-08); the lane fetch and its badge count both filter
+`=eq.false`. Live split after apply, by arm: `deed_grantee` 0/598 · `discrepancy` 7/92 ·
+`gsa_lessor_change` **734/70** · `state_lessor_change` 95/1 → **true 836 / false 761, matching
+§10.1's prediction exactly.** Lane 1,597 → 761. Guard `test/ro1-resolve-ownership-noop-retire.test.mjs`
+(2 tests, both mutations RED: unfiltered count, dropped fetch filter). Nothing is closed in
+`lcc_decisions` — the 836 were never decisions; they are filtered at the source and return the
+moment a proposal stops matching the recorded owner.

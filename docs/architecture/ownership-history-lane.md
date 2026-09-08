@@ -438,7 +438,7 @@ discrepancy proposals against **`recorded_owners`** — not `true_owners`, and n
 on its 1,597 rows: **836 propose the owner already recorded** (no-ops), **217 deed proposals are
 already gov's `true_owner`** (a recorded-owner sync), and against this store **470 of the 1,597 are
 `conflict`** (29.4%, vs 9.4% fleet-wide) with 409 primaries ≠ gov `true_owner`. The lane has 0 human
-verdicts ever. **It is the last consumer still reasoning on `recorded_owners` alone**; the panel an
+verdicts ever. ✅ **RO1 (same day) filters the 836 at the source** (`proposal_is_recorded`, appended to the view) — the lane now holds 761. **It is the last consumer still reasoning on `recorded_owners` alone**; the panel an
 operator opens from its card reads this view and will disagree. Backlog **RO1–RO5**; the
 family-shaped deed rows (≥124) belong to **OWN-T0e**. Full measurement:
 `docs/audits/UX_T1c_DECISION_CENTER_BUCKET_AUDIT_2026-09-08.md` §10.
