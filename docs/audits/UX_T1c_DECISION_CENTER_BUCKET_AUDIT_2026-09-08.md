@@ -552,3 +552,45 @@ whole view restated, applied live 2026-09-08); the lane fetch and its badge coun
 (2 tests, both mutations RED: unfiltered count, dropped fetch filter). Nothing is closed in
 `lcc_decisions` — the 836 were never decisions; they are filtered at the source and return the
 moment a proposal stops matching the recorded owner.
+
+### 10.7 RO2 — "sync the 217" was MEASURED AND REFUTED on named rows (2026-09-08)
+
+§10.2 said 217 deed-arm proposals "ARE gov's `true_owner`" and framed them as a
+`recorded_owners ← true_owners` sync, no human needed. Before building it the population was read,
+not counted. **Do not build it.**
+
+**Is "proposal = true_owner" corroboration?** `true_owners.source` is **NULL on 212 of 217** (the
+other 5 are `connectivity4_recorded_resolution`). Nothing shows the true_owner was set independently
+of the deed capture that produced the grantee — one source observed twice reads exactly like two
+sources agreeing. `owner_guards_pass` is true on 211 of 217, and 138 of the 217 true_owners hold
+exactly one property (SPE-shaped).
+
+**What the 217 actually are** (gov `gov_owner_strict_core` equality + a leading-token test, then the
+top 30 by rent READ):
+
+| class | n | what a "sync" would have done |
+|---|---:|---|
+| same party, name variant (`GBA ASSOCIATES LIMITED PARTNERSHIP → GBA Associates`, `Jamestown → Jamestown Properties`, `600 GS Property LP → 600 GS PROP LP`) | 45 (+ variants the strict core misses) | re-point `recorded_owner_id` at a second `recorded_owners` row for the same party — a duplicate, not a correction |
+| sponsor ↔ SPE, either direction (`Boyd Watterson → WINCHESTER VA I FGF LLC`; `SUFFOLK VA III FGF, LLC → Boyd Watterson`; `US Fed Properties Trust / KanAm Grund / Western Devcon → NGP V … LLC`; `Easterly Partners → EGP 4411 OMAHA LP`; `EGP 2400 NEWPORT NEWS LLC → Easterly Government Properties`; `Cunningham → WESTSIDE GSA HOLDINGS …`; `CoreCivic → MSDG MOBILE`) | 39 by the token test, **~70+ by reading** — the token test misses every capital-partner/REIT-vs-SPE pair | swap the sponsor for the SPE (or back) on the recorded-owner slot — the OWN-T0 finding that **both are true**, and A3's family-confirm is the answer, not a write |
+| **manager as grantee** — `Government Properties Income Trust → RMR` ×5, `The RMR Group → RMR`, `Missing Middle Jefferson LLC → RMR` | 7 | promote the property MANAGER to recorded owner; a deed does not convey to a manager — capture artifact |
+| **tenant as grantee** — `COURT STREET ASSOCIATES → USPS` | 1 | make the federal tenant the owner of record |
+| hedge phrase — `ANDERSON JOEL R → CIM Group or affiliated investors` | 1 | write a non-name into `recorded_owners` |
+| plausibly genuine (`George Washington University → World Bank` $23.8M **undated**; `Westfield Realty → Potomac Gateway Associates`; `GENERAL GRANT REALTY CO. → Breihan Properties`) | ~5 | the only rows a sync would have got right — and all need a human because 150 of 217 deeds are undated |
+
+**Guards: `granteePassesOwnerGuards` passes `USPS`, `RMR` and `CIM Group or affiliated investors`.**
+Sized across the whole deed arm (598): bare `USPS` 1, `RMR` 7, hedge phrase 1 — **9 rows, named, not a
+class worth a new guard**. ⚠️ The first sizing regex (`\m(gsa|usps|department of|…)\M`) returned
+**33 "agency grantees"** — 32 of them legitimate SPEs named for their tenant agency
+(`BOYD BETHESDA II GSA LLC`, `UIRC-GSA PENSACOLA FL LLC`, `WESTSIDE GSA HOLDINGS …`), exactly the
+place-named/agency-named SPE shape A3 documented. **A contains-rule on `GSA` would have blocked the
+lane's most legitimate grantees** (P158a); recorded here so nobody files it.
+
+**Verdict:** RO2 is not a sync population. It is the sponsor/SPE class (OWN-T0e), the name-variant
+class (a `recorded_owners` dedup on gov — the P195 shape one database over), and ~9 capture
+artifacts, with a handful of genuine changes that a human must date before confirming. `propagateDeed
+GranteeToOwner` (the single existing writer, ladder-gated at `recorded_deed`@3) remains the only
+door and stays behind the human `update_owner` verdict. **Backlog RO2 → refuted/re-scoped; RO2a
+(gov `recorded_owners` name-variant dedup, sized 45+) and RO2b (9 artifact grantees) filed.**
+
+**RO1 verified live:** Railway `/version` = `dbf37d82`, `GET /api/decisions?type=resolve_ownership`
+→ `total: 761` (was 1,597).

@@ -123,6 +123,42 @@ hostname, not the brand) · DOCMAP2 response corrected in place (5 strikes) · D
 docx + a `.response.md` transcript → `responses/done/` · 2 banners. **Operator items, unchanged:** DRIFT1-retire
 (`sf-test`, `test-function`, `ai-copilot-v2` still ACTIVE on Dialysis_DB), `intake-salesforce` redeploy,
 DRIFT1-sfenrich, and the Vercel teardown.
+## 2026-09-08 — OWN-T0e designed, dry-run surface live: the A3 gate reaches 317 of 1,617 conflicts, and 13 of its top groups are sponsor DUPLICATES, not SPEs
+
+Design doc `docs/audits/OWN_T0e_SPONSOR_FAMILY_LANE_DESIGN_2026-09-08.md`; read-only view
+`v_lcc_ownt0e_sponsor_family_proposals` (migration `20260908150000`, applied to LCC Opps). **Nothing
+writes.** The reconciled store holds **2,097** conflict properties (gov 1,769 / dia 328), 1,617
+`unclassified_rival` — not the 756 OWN-T0 quoted from `v_lcc_property_multi_current` (two
+denominators, filed OWN-T0h). Applying A3's one sanctioned gate `lcc_ownership_sponsor_token` with
+sponsor = the party holding more current properties (a recorded fact, ties surfaced): **182 groups /
+317 properties / $172.7M; 126 breadth-decided non-generic / 241 props / $109.1M; 0 already
+confirmed** against a registry of 6 hand-written rows. Read on named rows: **13 groups / 85
+properties have a "SPE" holding ≥2 properties — the sponsor under a duplicate entity**
+(`Gardner Tanenbaum Holdings ← Gardner-Tanenbaum` (18), `RMR ← RMR Group`, `Massmutual ←
+MassMutual Life`), which a family confirm would paper over; the lane therefore gets a `same_party`
+verdict routing to `merge_duplicate_entities`. 6 generic-token groups (`realty`, `federal`,
+`george`, `john`) flagged, not filtered. Hedge-phrase entities (`… or affiliated individuals`) are
+live owner candidates — filed OWN-T0i. Lane design §4: four verdicts, one write (INSERT into
+`lcc_ownership_sponsor_family`, reversible by DELETE), verify on `conflict_class` counts. **Build is
+the next step.**
+
+## 2026-09-08 — RO2 REFUTED on named rows: the "217 syncs" are sponsor↔SPE pairs, name variants and capture artifacts; RO1 verified live at 761
+
+Read the 217 deed-arm rows where the grantee equals gov's `true_owner` before building the sync
+(audit §10.7). `true_owners.source` is NULL on 212 of 217, so "gov agrees with itself" cannot be
+shown to be two sources. The top 30 by rent, read: same-party variants (`GBA ASSOCIATES LP → GBA
+Associates`), sponsor↔SPE in both directions (`Boyd Watterson → WINCHESTER VA I FGF LLC`, `EGP 2400
+NEWPORT NEWS LLC → Easterly Government Properties`, `KanAm Grund → NGP V …`), a MANAGER as grantee
+(`GPT → RMR` ×7), a TENANT as grantee (`→ USPS`), a hedge phrase (`CIM Group or affiliated
+investors`), ~5 plausibly genuine and all undated. An automated write would have minted duplicate
+recorded owners, swapped sponsors for SPEs and made a manager and a tenant owners of record.
+**Nothing built.** RO2 → ❌ re-scoped: RO2a (gov `recorded_owners` name-variant dedup, ≥45), RO2b
+(9 artifact grantees). Also: a `GSA` contains-rule tried for sizing over-fired on 32 legitimate
+agency-named SPEs — the P158a trap, recorded so it is not filed as a guard.
+
+**RO1 verified live:** Railway `/version` `dbf37d82`, `resolve_ownership` lane total **761** (was
+1,597). Backlog row cleared.
+
 ## 2026-09-08 — RO1 SHIPPED: the resolve_ownership lane drops 1,597 → 761 by filtering the no-op half at the source
 
 gov `v_ownership_resolution` gained `proposal_is_recorded` (appended LAST, whole view restated,

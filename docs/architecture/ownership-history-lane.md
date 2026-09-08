@@ -428,7 +428,7 @@ growth that does not happen.
 `OWN-T0b` no LCC mirror of `v_ownership_transitions_portfolio` · `OWN-T0c` 417 duplicate-entity
 merges (and `lcc_entity_canonical_key` keeps a trailing `(The)`) · `OWN-T0d` 11 tombstone duplicates ·
 **`OWN-T0e` ~1,550 unconfirmed sponsor/SPE pairs — one confirm clears a family; the highest-leverage
-follow-up** · `OWN-T0f` per-row UUIDs in `ownership_source` · `OWN-T0g`
+follow-up** (🟡 DESIGNED 2026-09-08, dry-run view `v_lcc_ownt0e_sponsor_family_proposals` live: 182 groups / 317 props reachable by the A3 gate; 13 groups are sponsor DUPLICATES not SPEs — see `docs/audits/OWN_T0e_SPONSOR_FAMILY_LANE_DESIGN_2026-09-08.md`; ⚠️ the reconciled store reads **2,097** conflict properties, not 756 — OWN-T0h) · `OWN-T0f` per-row UUIDs in `ownership_source` · `OWN-T0g`
 `lcc_finalize_entity_portfolios` supersedes only within its own payload (gov) and not at all (dia).
 
 ### The `resolve_ownership` Decision Center lane vs this store (UX-T1c §10, 2026-09-08)
@@ -438,7 +438,7 @@ discrepancy proposals against **`recorded_owners`** — not `true_owners`, and n
 on its 1,597 rows: **836 propose the owner already recorded** (no-ops), **217 deed proposals are
 already gov's `true_owner`** (a recorded-owner sync), and against this store **470 of the 1,597 are
 `conflict`** (29.4%, vs 9.4% fleet-wide) with 409 primaries ≠ gov `true_owner`. The lane has 0 human
-verdicts ever. ✅ **RO1 (same day) filters the 836 at the source** (`proposal_is_recorded`, appended to the view) — the lane now holds 761. **It is the last consumer still reasoning on `recorded_owners` alone**; the panel an
+verdicts ever. ✅ **RO1 (same day) filters the 836 at the source** (`proposal_is_recorded`, appended to the view) — the lane now holds 761 (verified live). ⚠️ The 217 "deed grantee = gov true_owner" rows are NOT a sync population — read, they are sponsor↔SPE pairs, name variants and capture artifacts (RO2 refuted, §10.7). **It is the last consumer still reasoning on `recorded_owners` alone**; the panel an
 operator opens from its card reads this view and will disagree. Backlog **RO1–RO5**; the
 family-shaped deed rows (≥124) belong to **OWN-T0e**. Full measurement:
 `docs/audits/UX_T1c_DECISION_CENTER_BUCKET_AUDIT_2026-09-08.md` §10.
