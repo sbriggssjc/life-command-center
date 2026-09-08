@@ -39,6 +39,12 @@ bootstraps a fresh chat and points at them.
 > DOCMAP1's own output on the day it shipped. **Re-run the grep before trusting this line again**
 > rather than quoting either version of it.
 
+> ✅ **`test/retired-identifiers-guard.test.mjs` (J13a-guard, 2026-09-08) now enforces this line**
+> instead of leaving it to the next manual grep — it fails CI on any tracked file (outside
+> `docs/history/`/`docs/archive/`/`docs/audits/`/a bannered doc) that still names
+> `docs/os/architecture/`, alongside the retired Vercel host and `GOV_STATE_SIGNALS`. Add a
+> newly-retired path/host/symbol to `test/fixtures/retired-identifiers.json`, not a fresh sweep.
+
 Below is every file classified **CANONICAL** in
 [`docs/os/DOCMAP1_CLASSIFICATION.md`](DOCMAP1_CLASSIFICATION.md) (~~145 of 181~~ **138 of 181** after the
 DOCMAP1 follow-up re-verdicted 7 title+skim rows STALE — see that file's revision note), grouped by topic,
