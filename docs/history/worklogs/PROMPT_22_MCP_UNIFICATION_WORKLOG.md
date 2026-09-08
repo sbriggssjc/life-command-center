@@ -6,8 +6,8 @@ Unify the MCP surface onto the root Railway app so `tranquil-delight` serves `/m
 ## Constraints Read
 - `CLAUDE.md`: Railway root `server.js` is production routing source; prefer mounted/sub-routes; enforce auth when `LCC_API_KEY` is set.
 - `.github/AI_INSTRUCTIONS.md`: read before `/api/` changes; every route must be mounted in `server.js`.
-- `docs/os/architecture/mcp-server-unification.md`: final target is one URL on `tranquil-delight`; `/api/daily-briefing` should route to bounded MCP handler.
-- `docs/os/architecture/unification-changeset.md`: Phase 2 extraction pattern, but it keeps `/api/ai/*`; Prompt 22 supersedes that for `/api/daily-briefing`.
+- `docs/architecture/mcp-server-unification.md`: final target is one URL on `tranquil-delight`; `/api/daily-briefing` should route to bounded MCP handler.
+- `docs/architecture/unification-changeset.md`: Phase 2 extraction pattern, but it keeps `/api/ai/*`; Prompt 22 supersedes that for `/api/daily-briefing`.
 
 ## Plan
 1. Refactor `mcp/server.js` route wiring into exported `mountLccMcp(app, options)`.

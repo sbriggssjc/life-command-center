@@ -47,7 +47,7 @@ Northmarq Salesforce is SSO-gated and the repository records that a direct serve
 
 ### 5. Broker-specific versus shared flows
 
-`docs/os/architecture/scott-pa-flows-reference.md` distinguishes:
+`docs/architecture/scott-pa-flows-reference.md` distinguishes:
 
 - Broker-specific flows for mailbox intake, flagged-email completion, calendars, drafts, briefings, and folder watches.
 - Shared team flows for Salesforce pipeline, deal rosters, object/activity/file sync, writeback draining, market feeds, and shared reporting.

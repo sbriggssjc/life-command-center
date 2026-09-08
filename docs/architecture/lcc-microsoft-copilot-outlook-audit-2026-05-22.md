@@ -1,5 +1,10 @@
 # LCC ↔ Microsoft (Copilot + Outlook) — Audit & Bridge Plan
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Dated audit (2026-05-22, oldest cluster of any file in this directory); likely superseded by current Microsoft/Outlook wiring described in CLAUDE.md and connectivity-and-open-threads.md.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 Date: 2026-05-22 (revised same day — see §0)
 Owner: LCC Control Plane / integration-audit track
 Scope: The daily-use loop between Life Command Center, its Supabase databases, Microsoft Copilot (Studio agent + M365 Copilot), and Outlook — for prompting Copilot, drafting emails, and responding to client/broker requests.

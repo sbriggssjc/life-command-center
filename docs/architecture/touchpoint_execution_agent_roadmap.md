@@ -140,7 +140,9 @@ To enable send-from-Outlook and To Do task creation:
 3. Permissions: `Mail.Send`, `Tasks.ReadWrite`, `User.Read`
 4. Grant admin consent
 5. Create client secret
-6. Store in Vercel env vars: `MS_GRAPH_CLIENT_ID`, `MS_GRAPH_CLIENT_SECRET`, `MS_GRAPH_TENANT_ID`
+6. Store as **Railway** env vars (⚠️ DOCMAP1 2026-09-08: originally said "Vercel env vars" — Vercel
+   was retired 2026-07-20 per root `CLAUDE.md`; production env now lives on Railway):
+   `MS_GRAPH_CLIENT_ID`, `MS_GRAPH_CLIENT_SECRET`, `MS_GRAPH_TENANT_ID`
 7. Implement token refresh flow in `_shared/graph-auth.js`
 
 This replaces the current static `MS_GRAPH_TOKEN` with a proper OAuth flow.

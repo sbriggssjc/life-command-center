@@ -1,5 +1,10 @@
 # Dossier Reconciliation 23654 Worklog
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Named worklog for one property reconciliation session; superseded by dossier-standard-and-llm-contract.md + DOSSIER-PROGRAM-STATE-OF-PLAY.md as the living references.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 ## Objective
 Read-only reconciliation of the v2 gold-standard dossier design for 5247 Airways Blvd, Memphis, TN 38116 against the production property-panel/contact360/dossier code path and the current live values for dialysis property_id 23654 / CCN 442740 / OPS asset entity bd4aab4a-117c-47cf-b1cd-fbf64ec7b3e0.
 

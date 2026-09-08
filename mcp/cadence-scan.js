@@ -11,7 +11,7 @@
 // Owner scope (owner_email | owner=<lcc_user_id> | owner_sf=<salesforce_owner_id>): a broker's digest = the
 // deals THEY OWN. No arg = team overview (all in-scope, owner shown per line, labeled "not your to-dos").
 // Activity coverage note: LCC ingests one mailbox today, so overdue flags are caveated until team-mail intake.
-// (Design: docs/os/architecture/team-visibility-and-owner-scoping.md.)
+// (Design: docs/architecture/team-visibility-and-owner-scoping.md.)
 // ============================================================================
 
 import { STAGE_REGIME } from './opportunity-sync.js';

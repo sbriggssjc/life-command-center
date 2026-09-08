@@ -38,7 +38,7 @@ Copilot agent (LogSalesforceActivity)
 | Additive connector (94 ops, interim) | `copilot/lcc-deal-intelligence.connector.v3.swagger.json` |
 | ChatGPT spec (3.1.0) | `docs/comps-rollout/lcc-openapi.yaml` |
 | PA flow — SF Task creator (HTTP-triggered, link-only) | "Log Activity to SF from LCC" (unchanged) |
-| PA flow — queue drainer (NEW, recurrence) | "LCC → SF Queue Drainer" — build spec: `docs/os/architecture/LCC-SF-Queue-Drainer-Flow-Build.md` (delivered) |
+| PA flow — queue drainer (NEW, recurrence) | "LCC → SF Queue Drainer" — build spec: `docs/architecture/LCC-SF-Queue-Drainer-Flow-Build.md` (delivered) |
 
 ## Data model
 - **`entities`** — deals are `entity_type='asset'`; people are `entity_type='person'`.

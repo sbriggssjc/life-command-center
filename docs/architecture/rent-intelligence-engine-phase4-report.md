@@ -1,5 +1,10 @@
 # Rent Intelligence Engine — Phase 4 Report (Serving) + Build Close-Out
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Orphaned build-progress/plan report, not cited by any current index; superseded in practice by rent-intelligence-engine-phase5-report.md.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 **DB:** dia `zqzrriwuavgrquhisnoa` · **Repo:** life-command-center ·
 **Branch:** `claude/rent-intelligence-discovery-t7t0ey` · **Date:** 2026-08-08
 
