@@ -23,6 +23,76 @@
 `gov_govdup1a_sf_property_identity_dedupe.sql`. **The repo describes the database again** — a
 rebuild from `main` reproduces the lockdown instead of silently restoring the anon grants.
 
+## 2026-09-07 — DRIFT1 SHIPPED: the repo can rebuild its producers again · and the security finding is real but NOT what it says
+
+**PR #2150, verified live.** Canonical page: `docs/architecture/edge-function-deploy-drift.md` — a
+per-function census of all 38 deployments across the three projects, a verdict each, an incident
+writeup, and an operator runbook.
+
+✅ **Five previously sourceless functions committed**, each with liveness proven rather than assumed:
+`cortex-webex-sync` (**cron 159 `cortex-webex-poll`, `*/30 * * * *`, active** — confirmed), 
+`w41-corpus-export` (**cron 65 `w44-resolver-retrain-nightly`, `30 7 * * *`, active**, via
+`w44-retrain-tick`), `w43-sf-link-export`, gov `bulk-import-awards`, gov `sam-entity-lookup`.
+
+✅ **`intake-salesforce` repaired, and the specific thing that misled GOVDUP1 is gone.**
+`PAYLOAD_VERSION = "sf-2026-05-v8"` is committed with a header naming the deployed version;
+`autoCreateProperty` appears **5×** in the committed body; and the false
+*"never writes a domain table"* header is **absent (0 matches)**. **That sentence is what made the
+original "producer NOT FOUND" read as conclusive** — removing it is the durable half of the fix.
+
+✅ **Four retire verdicts recorded WITHOUT deleting live infrastructure** (`docai-diag`, `sf-test`,
+`test-function`, `ai-copilot-v2`) — deleting a deployment that still answers is exactly the P194
+hazard, so the verdict is filed for an operator rather than executed. Right call.
+
+### ⚠️ The security finding is real, and its severity is overstated in one load-bearing way
+
+The page describes `salesforce-enrichment` as *"a standing, callable, unauthenticated path from the
+public internet to arbitrary-effect SQL execution."* **Measured live on dia: both `exec_sql(query
+text)` and `execute_sql(sql text)` are `service_role`-only** — `anon` false, `authenticated` false,
+`proacl = {postgres=X,service_role=X}`. **An outside caller cannot reach them directly.**
+
+**What is true:** an **unauthenticated public endpoint that holds a service-role key and performs
+that key's writes** when called — its own sixteen fixed steps against `contacts`, `true_owners`,
+`salesforce_activities` and friends. Worth closing. Not "anyone can run arbitrary SQL".
+
+✅ **Answered the same day by reading the DEPLOYED body (`get_edge_function`) rather than waiting for
+it to be committed: NO caller-supplied input reaches any query string.** All sixteen steps are static
+template literals with zero interpolation; the only request data read is `dry_run` and the path.
+**There is no SQL-injection path, and the "arbitrary SQL" framing is retired.**
+
+**The confirmed exposure, exactly:** `POST /run` — or a bare `POST /` — with **no credential** runs a
+15-step write pipeline against dia `contacts`, `true_owners`, `salesforce_activities`,
+`contact_links`, `touchpoint_schedule`; `GET /diagnostics` returns row and linkage-gap counts to
+anyone; CORS is `*`. ✅ **Mitigating and worth stating: every write is fill-blanks or idempotent**
+(`COALESCE`, `WHERE … IS NULL`, `NOT EXISTS`, `IS DISTINCT FROM`) — a hostile trigger costs load and
+unwanted state transitions, **not destruction**. Close it deliberately; it is not a tonight problem.
+
+🚨 **Two findings the auth question was hiding, and both matter more for data quality:**
+
+1. **Steps 3 and 8B decide IDENTITY by NAME EQUALITY.** `lower(trim(t.name)) = lower(trim(sa.name))`
+   writes `true_owners.sf_company_id`/`salesforce_id`; `lower(trim(c.company)) = lower(trim(t.name))`
+   sets `contacts.true_owner_id`. **That is the technique this repo bans outright for identity
+   writes** — `lcc_normalize_entity_name` / `ownerCore` / `strictOwnerCore` are grouping-for-review,
+   never identity-for-write. A live function has been doing it since March.
+2. **It writes curated BD columns with NO provenance ladder** — `contacts.contact_email`/`_phone`,
+   `true_owners.contact_1_name`/`_2_name`, `is_prospect`. Sixteen steps, zero `field_provenance`
+   rows: **a ladder-invisible writer to the very tables the CONTACT1 arc has spent a week
+   instrumenting.**
+
+✅ For contrast the sibling on the same project **is** authenticated — `intake-salesforce`'s
+committed body calls `authenticateWebhook(req)` and 401s without `X-PA-Webhook-Secret`. The gap is
+this function, not the pattern. → **DRIFT1-sfenrich**.
+
+**The meta-point: the blocking unknown was answerable in one call.** DRIFT1 correctly declined to
+commit the body, and correctly said the severity could not be judged without it — but the deployed
+source is readable directly. **When a decision is blocked on "the source is not in the repo", read
+the deployment before deferring the decision.**
+
+✅ **Unit 3 states its own limitation honestly** — a repo-side test can assert that every committed
+function is deployed, but **cannot see a deployment with no committed source**, which is the whole
+population DRIFT1 found. It ships an operator runbook instead of a guard implying coverage it does
+not have. *That is the right answer, and this repo has a standing problem with the opposite.*
+
 ## 2026-09-06 — CONTACT1b-manual-source CLOSED: fixed before a single row was mislabelled, and the guard now asserts the property
 
 **PR #2148, verified.** All three human-verdict sites (`admin.js` `handleJunkBucket` + both

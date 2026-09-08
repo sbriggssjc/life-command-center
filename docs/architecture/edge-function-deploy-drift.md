@@ -123,6 +123,45 @@ running with a service-role key. Specifically:
   immediately, and `GET /diagnostics` reports table-level row counts —
   neither requires any credential.
 
+> ⚠️ **SEVERITY CORRECTED 2026-09-07 (Cowork, measured): the RPCs are `service_role`-only, so this
+> is NOT "arbitrary SQL from the internet".** Live on dia, both `exec_sql(query text)` and
+> `execute_sql(sql text)` read `anon` **false**, `authenticated` **false**, `service_role` **true**,
+> `proacl = {postgres=X/postgres,service_role=X/postgres}` — an outside caller cannot reach them
+> directly. **The real exposure is one step removed and still real: an unauthenticated public
+> endpoint that holds a service-role key and, when called, performs that key's writes.** The SQL
+> executed is the function's own sixteen fixed steps.
+>
+> ✅ **ANSWERED 2026-09-07 by reading the DEPLOYED body (`get_edge_function`): NO caller-supplied
+> input reaches any query string.** All sixteen steps are static template literals with zero
+> interpolation; the only request data the function reads is `searchParams.get("dry_run")` (compared
+> to the string `"true"`) and `url.pathname`. **There is no SQL-injection path.** Combined with the
+> `service_role`-only RPCs above, the "arbitrary-effect SQL execution" framing is retired.
+>
+> **The confirmed exposure, stated exactly:** `POST /run` — or a bare `POST /` — with **no
+> credential of any kind** runs a 15-step write pipeline against dia `contacts`, `true_owners`,
+> `salesforce_activities`, `contact_links` and `touchpoint_schedule`, then inserts a
+> `crm_enrichment_logs` row; and `GET /diagnostics` returns table row counts and linkage-gap counts
+> to anyone. CORS is `*`. **Mitigating and worth stating: every write is fill-blanks or
+> idempotent** (`COALESCE`, `WHERE … IS NULL`, `NOT EXISTS`, `IS DISTINCT FROM`), so a hostile
+> trigger costs load and unwanted state transitions — **not destruction.** That is why this is
+> "close it deliberately", not "pull the plug tonight".
+>
+> 🚨 **Two findings the auth question was hiding, both worse than the auth question for data
+> quality:**
+> 1. **Step 3 and Step 8 Pass B link identity by NAME** — `lower(trim(t.name)) = lower(trim(sa.name))`
+>    writes `true_owners.sf_company_id` / `salesforce_id`, and `lower(trim(c.company)) =
+>    lower(trim(t.name))` sets `contacts.true_owner_id`. **Name-equality deciding an identity write
+>    is the technique this repo bans outright** (`lcc_normalize_entity_name`, `ownerCore`,
+>    `strictOwnerCore` — grouping-for-review, never identity-for-write).
+> 2. **It writes curated BD columns with NO provenance ladder** — `contacts.contact_email`/`_phone`,
+>    `true_owners.contact_1_name`/`contact_2_name`, `is_prospect`. Sixteen steps, zero
+>    `field_provenance` rows. It is a ladder-invisible writer to the same tables the CONTACT1 arc
+>    has spent a week instrumenting.
+>
+> ✅ For contrast, the sibling on the same project **is** authenticated: `intake-salesforce`'s
+> now-committed body calls `authenticateWebhook(req)` and 401s without `X-PA-Webhook-Secret`. The
+> gap is specific to this function, not the pattern.
+
 This is a materially larger exposure than "an old function nobody
 remembers": it is a standing, callable, unauthenticated path from the public
 internet to arbitrary-effect SQL execution on a live production database,
