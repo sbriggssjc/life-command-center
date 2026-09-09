@@ -16,6 +16,37 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — first real retype verdict failed: `p_decision_id uuid` vs `lcc_decisions.id bigint` — fixed live, function only
+
+Scott clicked **Retype as organization** on Gardner-Tanenbaum → toast `entity_type_review: retype_failed`.
+`lcc_decisions` 3879817 (status still `open`) carries the cause in `effects.error`: **22P02 invalid input syntax
+for type uuid: "3879817"**. The handler passes the decision row id — a bigint, as on every other lane — and
+`lcc_retype_entity` declared `p_decision_id uuid` (the ledger column too). ⚠️ **The builder's rolled-back
+positive control passed `p_decision_id := null` — the one argument the caller always supplies — so it could
+not exercise the contract.** Migration `20261101140000_lcc_c13g_min_retype_decision_id_bigint.sql`: ledger
+column → bigint (0 rows), **DROP the uuid signature first** (N15d: a defaulted overload makes every call 42725),
+recreate with bigint, SEC1 stanza repeated on the new signature (ADDR1b), plus an apply-time assertion that the
+parameter type equals `lcc_decisions.id`'s; `notify pgrst`. Re-controlled with the REAL shape
+(`p_decision_id := 3879817`) inside a raised-and-rolled-back block: ok=t, entity → organization, ledger row
+carries 3879817; afterwards Gardner is `person`, log 0. No JS change. Decision 3879817 stays `open` — a re-click
+works it. ⚠️ **The hotfix-1 STATUS entry below was dropped from `main` by the #2207 STATUS conflict
+resolution (its migration and canonical note survived); restored here verbatim.**
+
+## 2026-09-09 — C13g-min-lane 502'd on first open: the candidate view read the 35 s PROPOSALS VIEW, not the OWN-T0e cache — fixed live, view-only
+
+Scott opened "Entity type — person or organization?" and got **HTTP 502 `federated_list_failed`**. Reproduced
+from the DB side (`net.http_get` with the vault key): body `"This operation was aborted"` = `opsQuery`'s **8 s**
+fetch abort. `EXPLAIN ANALYZE` on `v_lcc_entity_retype_candidates`: **34.7 s** — both its `own_t0e_blocked` CTE
+and its per-row LATERAL referenced `v_lcc_ownt0e_sponsor_family_proposals`, the view OWN-T0e design §6 measured
+at 64 → 20 s and deliberately put behind `lcc_ownt0e_sponsor_family_proposals_cache` *because a view built for
+point-queries is not a population source*. The C13g-min migration re-committed that exact footgun, and its own
+"18 rows" check could not see it — the SQL editor's statement timeout is longer than the app's fetch. ⚠️ **"The
+view returns the right rows" is not "the lane loads"; measure the read the HANDLER makes, at the HANDLER's
+timeout.** Migration `20261101130000_lcc_c13g_min_lane_view_reads_cache.sql` (whole view restated, both refs →
+the cache): **58 ms**, output **md5-identical** (18 rows, same two blocked cards), and the live endpoint now
+answers **200 / total 18** with Gardner-Tanenbaum first. No JS changed, no deploy. Trade: the blocker column can
+lag the 4-hourly cache — the same lag the sponsor lane shows; the write-gating facts are still read live.
+
 ## 2026-09-09 — Found while verifying the pings: `npm test` makes 14 live calls to the production `ai-copilot/chat` edge function per run — from CI and from Scott's desk — and every one is a 400
 
 **How it surfaced.** Reading `function_edge_logs` on Dialysis_DB for the two `sf-ping` 200s, the neighbouring rows
