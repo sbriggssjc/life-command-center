@@ -826,8 +826,13 @@ export async function invokeExtractionAI({ prompt, surface } = {}) {
     }
   }
 
-  // Step 3: backoff + retry primary once
-  for (let i = 0; i < MAX_RETRY_AFTER_FALLBACK; i++) {
+  // Step 3: backoff + retry primary once.
+  // TEST-NET-LEAK: under the hermetic seam the edge route is deterministically
+  // disabled (see hermeticTestsActive()), so retrying it can only fail again —
+  // skip the 35s backoff sleep entirely rather than paying it for a foregone
+  // conclusion (this is a timing optimization only; hermeticTestsActive()
+  // itself is what keeps the retry off the network).
+  for (let i = 0; i < MAX_RETRY_AFTER_FALLBACK && !hermeticTestsActive(); i++) {
     await new Promise(r => setTimeout(r, RATE_LIMIT_BACKOFF_MS));
     const retry = await invokeChatProvider({
       message: prompt,
@@ -905,11 +910,26 @@ export async function invokeVisionExtractionAI({ prompt, base64, mediaType, file
   }
 }
 
+// TEST-NET-LEAK (2026-09-09): the edge route below needs NO key — it just
+// POSTs straight to the live Supabase edge function — so a test that expects
+// "no AI key in the test env → the extractor throws" was silently reaching
+// production 14x/run (see test/_helpers/net-guard.mjs). Under `npm test`
+// (node's own `NODE_TEST_CONTEXT`, or the explicit `LCC_HERMETIC_TESTS` flag)
+// invokeChatProvider refuses BEFORE any fetch, in the exact shape a real
+// provider failure returns, so callers' error handling is exercised
+// identically — only the network round trip is skipped.
+function hermeticTestsActive() {
+  return Boolean(process.env.NODE_TEST_CONTEXT || process.env.LCC_HERMETIC_TESTS);
+}
+
 export async function invokeChatProvider({ message, context, history, attachments, user, workspaceId }) {
   const cfg = getAiConfig();
   const route = resolveAiRoute(cfg, context);
   if (route.provider === 'disabled' || route.provider === 'none') {
     return { ok: false, status: 503, data: { error: 'AI chat provider is disabled' }, provider: route.provider };
+  }
+  if (route.provider === 'edge' && hermeticTestsActive()) {
+    return { ok: false, status: 400, data: { error: 'edge route disabled in test' }, provider: route.provider };
   }
 
   if (route.provider === 'openai') {
