@@ -81,6 +81,8 @@ const _DC_FED_META = {
     intro: 'Prompt 188. People we ALREADY hold whose email domain matches an owner’s name — Boyd Watterson, RMR (incl. Adam Portnoy), Realty Income (incl. Sumit Roy). One card per (owner, email DOMAIN), not per person: “do the people at rmrgroup.com work for RMR?” is ONE judgement, and picking who to call is a second decision on the same card. ⚠ Read the evidence line before attaching. Salesforce campaign membership, a Salesforce contact record, Outlook and correspondence all answer “is this person real and known to us?” — they say NOTHING about whether they work for THIS owner. Only “company name matches THIS OWNER” corroborates the link. Gary George at georgesinc.com (a poultry company) passes three of the four for George Washington University. The match key is shown for exactly this reason: “matched on the token ‘george’” is what makes that card an obvious reject. ⚠ Precision is a curve — measured ~91% only for owners at roughly $16M+ of rent and ~60–70% in the ~$2M SPE band, with everything between never graded — so WORK THIS LANE TOP-DOWN. Brokers are never attachable at any deal size. Attach writes the owner’s active contact + a person→owner edge (reversible via lcc_tier0_confirm_log); Reject is terminal for that owner+domain only; Research spawns a task. Every verdict is recorded (won’t re-ask).' },
   sponsor_family_confirm: { title: 'Sponsor ↔ SPE families — confirm',
     intro: 'OWN-T0e. A property whose ownership store holds TWO live owner candidates with no recorded fact relating them (the `unclassified_rival` conflict class — 1,617 properties at build). Read on named rows the class is dominated by sponsor ↔ SPE: the sponsor is who we prospect, the SPE is on the deed and the GSA lease, both are true. ONE card per (sponsor, brand token) — A3 measured `boyd` clearing 20 of 24 chains on a single confirm — value-ranked by rent, breadth-decided groups first. The SPONSOR is the side holding MORE current properties (a recorded fact, never a name rule); a TIED group makes you name the sponsor. ⚠ Read the token line: the count is how many live entities carry that word — `realty`, `federal`, a given name — and a generic word is the weakest proposal in the set (shown, never filtered; a confirm on one is your call and is recorded as such). ⚠ An “SPE” holding 2+ properties of its own is usually a DUPLICATE ENTITY of the sponsor (Gardner Tanenbaum Holdings ~ Gardner-Tanenbaum) — that is “same party”: pick the duplicate and either merge it now (ONE reversible lcc_merge_entity call, second confirm) or route to the duplicate-entities merge lane — 5 of the 13 duplicate pairs have no card there, which is why the direct merge exists; a family row over a duplicate would paper over the merge. “Also confirmed for contacts” is evidence about a DIFFERENT question (who to call) and settles nothing here. Confirm writes ONE row into lcc_ownership_sponsor_family (reversible by deleting it) and every covered pair reads sponsor_family_confirmed on the property panel; Not a family is terminal for this card; Research spawns a task. Cards come from a 4-hourly snapshot — counts may lag, the guards do not.' },
+  entity_type_review: { title: 'Entity type — person or organization?',
+    intro: 'C13g-min-lane. A recorded PERSON-typed entity holding 2+ current ownership facts (18 rows / $69.4M at build) — a pattern real people almost never show, but neither name-shape instrument helps here: 0 of the 18 carry an org marker and 7 of the 18 fail the person-name check, so it is a human call, not a rule. ⚠ Read the evidence line before deciding — Salesforce Contact/Account, RCA and CoStar contact-slot counts are shown but settle nothing on their own; a company IS sometimes filed as a Salesforce "Contact". Some cards also BLOCK an OWN-T0e sponsor-family "same party" merge — that is named on the card. Retype writes entity_type = organization via ONE reversible RPC (rpc/lcc_retype_entity, undo rpc/lcc_unretype_entity) and stamps a reason; Keep as person is terminal for this card; Research spawns a task.' },
   npi_dedup_autoapprove: { title: 'NPI duplicates → approve',
     intro: 'W5.2. A dia duplicate-NPI cluster the deterministic gate scored auto-resolvable — a proposed survivor is shown. A human APPROVES the deterministic survivor (fill-blanks / never-guess applies to destructive dedup too), or rejects it. Approval spawns the reconcile task; the actual merge stays human/worker-driven — NEVER a silent auto-collapse.' },
 };
@@ -780,6 +782,27 @@ function _fedCardHTML(it, i, isNext) {
     actions = '<button class="q-action primary" onclick="dcTier0Attach(' + i + ')">Attach as owner contact</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject — not this owner’s firm</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'entity_type_review') {
+    // C13g-min-lane. A single-entity card -- no picker, generic dcFed verdicts.
+    const badges = '<div class="q-item-badges">'
+      + (Number(c.current_rent) > 0 ? '<span class="q-badge pri-high">' + _fedMoney(c.current_rent) + ' rent</span>' : '')
+      + '<span class="q-badge">' + esc(String(c.current_facts || 0)) + ' current fact' + (Number(c.current_facts) === 1 ? '' : 's') + '</span>'
+      + (c.blocks_own_t0e_sponsor_id ? '<span class="q-badge type" title="Retyping this entity unblocks an OWN-T0e sponsor-family same-party merge.">⚠ blocks OWN-T0e (' + esc(String(c.blocks_own_t0e_token || '')) + ')</span>' : '')
+      + (c.has_org_marker ? '<span class="q-badge">org marker</span>' : '')
+      + (c.looks_like_person_warning ? '<span class="q-badge" title="Name-shape check flags this as a person -- documented unreliable on this population.">name-check: person-shaped</span>' : '')
+      + '</div>';
+    const evLine = '<div class="q-item-meta">Evidence: '
+      + 'SF Contact ' + (c.has_salesforce_contact ? 'yes' : 'no')
+      + ' · SF Account ' + (c.has_salesforce_account ? 'yes' : 'no')
+      + ' · RCA contact ids ' + esc(String(c.n_rca_contact_ids || 0))
+      + ' · CoStar contact ids ' + esc(String(c.n_costar_contact_ids || 0))
+      + ' · relationships ' + esc(String(c.relationship_count || 0))
+      + ' · resolved owner of ' + esc(String(c.resolved_owner_of || 0)) + ' propert' + (Number(c.resolved_owner_of) === 1 ? 'y' : 'ies')
+      + '</div>';
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(String(c.name || 'entity')) + '</span>' + badges + '</div>' + evLine;
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'retype_organization\')">Retype as organization</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'keep_person\')">Keep as person</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   } else if (_dcFedType === 'sponsor_family_confirm') {
     // OWN-T0e. Three things the card must make impossible to miss: WHICH word
     // linked the names (and how many entities carry it), whether the "SPE" is
@@ -1387,6 +1410,10 @@ async function dcFed(i, verdict, payload) {
     } else if (nx && nx.action === 'merge_lane') {
       // OWN-T0e same_party: the pair is an entity-merge question, worked there.
       fwd = ' <button class="q-action primary" onclick="renderFederatedLane(\'merge_duplicate_entities\')">Open duplicate-entities lane →</button>';
+    } else if (nx && nx.action === 'sponsor_family_lane') {
+      // C13g-min-lane retype_organization: this retype unblocked an OWN-T0e
+      // sponsor-family card -- send the operator straight there.
+      fwd = ' <button class="q-action primary" onclick="renderFederatedLane(\'sponsor_family_confirm\')">Open sponsor-family lane →</button>';
     }
     if (typeof showToast === 'function') showToast('Recorded', 'success');
     if (row) {

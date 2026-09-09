@@ -37,6 +37,31 @@ on the unpatched file** (2 failures) and green after. Full suite 5,545 / 0 / 6 s
 👤 **Scott:** move the exported flow zip from Downloads to
 `private\power-automate\exports\production\2026-09-09\` (git-ignored), then redeploy v27 and re-ping;
 report `via` + `open_tasks` only.
+## 2026-09-09 — C13g-min-lane SHIPPED: the `entity_type_review` Decision Center lane over C13g-min's retype write
+
+**Built.** All four registries (`api/admin.js` `FEDERATED_DECISION_TYPES`+`federatedSubjectRef` =
+`etype:<entity_id>`, `ops.js` `_DC_FEDERATED`+tile, `dc-lanes.js` `_DC_FED_META`+card+`sponsor_family_lane`
+forward, `review-shared.js` lane `entity_merge`); pure planner `api/_shared/entity-retype-planner.js`
+(`retype_organization` → `rpc/lcc_retype_entity`, `keep_person` record-only, `research`); the card is
+re-read from `v_lcc_entity_retype_candidates` AT VERDICT TIME (P188). Guard `test/c13g-min-lane.test.mjs`,
+16 tests, full suite 5,555 pass / 0 fail after.
+
+**⚠️ Inserting after `sponsor_family_confirm` broke that lane's own guard** — its structural tests anchor on
+`'sponsor_family_confirm',\n]);` in `ops.js` and a block-extraction in `api/admin.js` that runs from its
+verdict branch to the shared `unsupported_decision_type` line; appending after it shifted both boundaries.
+Fixed by reordering `entity_type_review` to sit immediately BEFORE `sponsor_family_confirm` in both
+registries, re-verified `test/own-t0e-sponsor-family-lane.test.mjs` green.
+
+**Live census (real DB, not extrapolated):** lane population re-measured at **19 rows**, not the 18 the DB
+half shipped with — the view is a re-derivable projection, not a snapshot. Full rolled-back positive control
+on Gardner-Tanenbaum: `person` → `lcc_retype_entity` → `organization` → `lcc_merge_entity` (loser=Gardner,
+winner=sponsor) → `lcc_unmerge_entity` → `lcc_unretype_entity` → `person`, **0 residue**. `merge_candidates`
+5,205→5,204 and `auto_mergeable` 3,012→3,011 moved only on the merge step, not the retype (predicted and
+confirmed); the broader Gardner+sponsor `unclassified_rival` conflict-row count moved 65→47. Neither Gardner
+nor MassMutual Life carries `has_salesforce_contact`/`has_salesforce_account`, so retyping either moves
+nothing on the Tier 0 bench. **Not re-measured this pass:** `v_lcc_entity_role_ambiguity`, the 14-co-claimed
+"−4" figure from §9e (stands, unrefuted), a full mutation pass on every guard assertion (one spot-checked).
+Canonical: owner-role-classification.md **§9f**; backlog `C13g-min-lane` ✅.
 
 ## 2026-09-09 — C13g-min reconciled (PR #2196): the retype WRITE is live and proven; the lane that asks for it was cut and is filed
 

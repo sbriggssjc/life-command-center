@@ -79,6 +79,10 @@ var LCC_DECISION_LANE_MAP = {
   // OWN-T0e: "are these two current owner candidates one sponsor family?" is an
   // OWNERSHIP question — it settles which recorded facts describe the same asset.
   sponsor_family_confirm:        { lane: 'ownership',     merges: false },
+  // C13g-min-lane: "is this recorded person really an organization?" is an
+  // identity/dedup question -- it unblocks OWN-T0e-b merges the type guard
+  // correctly refuses today, but the retype itself never merges an entity.
+  entity_type_review:            { lane: 'entity_merge',  merges: false },
   implausible_value:             { lane: 'automation',    merges: false },
   llc_research_dead:             { lane: 'automation',    merges: false },
   availability_checker_botblock: { lane: 'automation',    merges: false },
