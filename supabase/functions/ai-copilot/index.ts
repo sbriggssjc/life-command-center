@@ -3,6 +3,7 @@ import { handleHealth, handleSearchProperty, handleEnrich, handleChat, handleSyn
 import { handleLogToSF, handleContactLookup, handleSyncSFTasks, handleGetSFTasks, handleGetSFActivities } from "./handlers-b1.ts";
 import { handleSyncFlaggedEmails, handleGetFlaggedEmails, handleSyncCalendarEvents, handleGetCalendarEvents, handleBDRouteTask, handleBDDailyProgress, handleBDGenerateEmail, handleBDAutoReschedule, handleBDLogCompletion, handleBDConfig, handleBDConfigUpdate } from "./handlers-b2.ts";
 import { authenticateWebhook } from "../_shared/auth.ts";
+import { parseKnownIps, uaClass as callerUaClass, ipClass as callerIpClass, requestIp as callerRequestIp } from "../_shared/caller-class.ts";
 
 // ── COPILOT-OPEN-gate ────────────────────────────────────────────────────────
 // v79 shipped `verify_jwt:false` with no authenticateWebhook() call anywhere
@@ -26,37 +27,24 @@ const COPILOT_AUTH_MODE = (Deno.env.get("COPILOT_AUTH_MODE") || "log").toLowerCa
 // sets from the caller inventory, e.g.
 //   COPILOT_KNOWN_IPS=railway:152.55.,railway:162.220.232.,scott:<home-ip-prefix>
 // Never hardcode an address in source — this file only knows the FORMAT.
-const COPILOT_KNOWN_IPS: Array<{ cls: string; prefix: string }> = (Deno.env.get("COPILOT_KNOWN_IPS") || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean)
-  .map((entry) => {
-    const idx = entry.indexOf(":");
-    return idx === -1 ? { cls: "other", prefix: entry } : { cls: entry.slice(0, idx), prefix: entry.slice(idx + 1) };
-  });
+const COPILOT_KNOWN_IPS = parseKnownIps(Deno.env.get("COPILOT_KNOWN_IPS"));
 
+// SFENRICH-gate: the three classifier helpers used to be defined here as
+// copilotUaClass/copilotIpClass/copilotRequestIp. Factored out to
+// ../_shared/caller-class.ts (2026-09-09) so salesforce-enrichment's identical
+// log-only gate does not grow a second copy — the normaliser-drift class this
+// repo warns about repeatedly. Thin wrappers kept so the call sites below are
+// unchanged.
 function copilotUaClass(ua: string): string {
-  if (!ua) return "other";
-  if (/azure-logic-apps/i.test(ua)) return "logic-apps";
-  if (/^node(\/|$)|node-fetch|undici/i.test(ua)) return "node";
-  if (/Mozilla\/|Chrome\/|Safari\/|Firefox\//i.test(ua)) return "browser";
-  return "other";
+  return callerUaClass(ua);
 }
 
 function copilotIpClass(ip: string): string {
-  if (!ip) return "other";
-  for (const { cls, prefix } of COPILOT_KNOWN_IPS) {
-    if (prefix && ip.startsWith(prefix)) return cls;
-  }
-  return "other";
+  return callerIpClass(ip, COPILOT_KNOWN_IPS);
 }
 
 function copilotRequestIp(req: Request): string {
-  return (
-    req.headers.get("cf-connecting-ip") ||
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    ""
-  );
+  return callerRequestIp(req);
 }
 
 Deno.serve(async (req: Request) => {

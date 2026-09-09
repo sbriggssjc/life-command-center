@@ -400,3 +400,48 @@ new `soql` operation reuses `SF_LOOKUP_WEBHOOK_URL`, now also set on Dialysis_DB
 `AI-SURFACES-OPERATIONAL-REFERENCE.md`). Deploy: `intake-salesforce` v25 → v26. 👤 Scott: build the
 flow's `soql` case per `docs/architecture/flows/http-switch-salesforce-lookup.md`, re-export, set the
 secret, deploy, then run `sf-ping` — record the returned `open_tasks` count and `via` value only.
+
+## 2026-09-09 — SFENRICH-gate: `salesforce-enrichment` body committed verbatim, gated log-only (v26 → v27)
+
+`salesforce-enrichment` (dia) was the second sourceless-and-open function named alongside
+`ai-copilot` in DRIFT1-sfenrich: deployed `verify_jwt:false` with no `authenticateWebhook()` call
+anywhere in the body, and — unlike `ai-copilot` — **never committed to this repo at all**. Fetched
+verbatim via `get_edge_function` (`ezbr_sha256 8d993301…`, version 26) and committed as
+`supabase/functions/salesforce-enrichment/index.ts` in its own commit, no edits, before touching it
+— the `sf-test` lesson (capture the body before you change or delete anything).
+
+The gate is the same COPILOT-OPEN-gate pattern, not a redesign: `authenticateWebhook()` before
+dispatch, `SFENRICH_AUTH_MODE` (`log` default / `enforce`), a `DENY-WOULD` log line naming the UA
+and IP class. Two differences from `ai-copilot`'s gate:
+
+- **No `/health` exemption.** This function's only GET route is `/diagnostics`, and `/diagnostics`
+  itself leaks row and gap counts — it is the leak, not a health probe. Every route is gated.
+- **The UA/IP classifier is now a shared module, `_shared/caller-class.ts`**, factored out of
+  `ai-copilot/index.ts` (which used to define `copilotUaClass`/`copilotIpClass`/`copilotRequestIp`
+  inline) so a second gated function does not grow a second copy of the same regexes. Both
+  functions keep their own `*_KNOWN_IPS` env var (their caller sets are not asserted identical,
+  only the classifier code); `ai-copilot`'s wrapper functions are kept for call-site compatibility
+  and delegate to the shared module. `test/salesforce-enrichment-auth-gate.test.mjs` proves the
+  classifier's output is byte-identical after the move on a fixed set of UA/IP pairs.
+
+**Confirmed before shipping the gate:** `dry_run` and the path are the ONLY request-derived values
+the function reads — every one of the 15 step queries is a fixed template literal with no `${...}`
+interpolation of request data (asserted by the guard, with a positive control). No SQL-injection
+surface, no widening of scope.
+
+**Not fixed here, filed as their own PLANNED-BACKLOG lines under DRIFT1-sfenrich:** steps 3 and 8B
+decide identity by bare name equality (`lower(trim(name)) = lower(trim(...))`, the technique this
+repo bans for identity writes onto `true_owners.sf_company_id` / `contacts.true_owner_id`), and the
+function writes curated BD columns (`contact_email`, `contact_1_name`/`_2_name`, `is_prospect`) with
+no `field_source_priority` ladder entry. Both are data-quality findings independent of the auth gate
+and need the CONTACT1 provenance machinery, not a gate, to close.
+
+`SFENRICH_AUTH_MODE` ships `log`. Zero callers were seen in `function_edge_logs` over the prior 24h,
+which per DRIFT1-sfenrich's own note is a reason to read a longer window before enforcing, not a
+reason to skip logging — an unauthenticated caller pattern that only fires monthly is invisible in
+one day and would be silently unblocked by shipping straight to `enforce`.
+
+Deploy: 👤 Scott, `supabase functions deploy salesforce-enrichment --project-ref
+zqzrriwuavgrquhisnoa --no-verify-jwt` → v27. Verify with one `curl POST .../salesforce-enrichment/run?dry_run=true`
+with no header (expect the dry-run body plus a `DENY-WOULD` line in the function log) and one with
+`X-PA-Webhook-Secret` set (expect no `DENY-WOULD` line).

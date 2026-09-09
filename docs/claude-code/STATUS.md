@@ -16,6 +16,30 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — SFENRICH-gate: `salesforce-enrichment`'s deployed body committed verbatim for the first time, then gated log-only (COPILOT-OPEN-gate pattern)
+
+DRIFT1-sfenrich closed to 🟡. `salesforce-enrichment` (dia, v26) was open — `verify_jwt:false`, no
+`authenticateWebhook()` anywhere in the body, `POST /run` executes a 15-step write pipeline with no
+credential — and, unlike `ai-copilot`, its source had never once been in this repo. Fetched verbatim
+via `get_edge_function` (`ezbr_sha256 8d993301…`) and committed with **no edits** as
+`supabase/functions/salesforce-enrichment/index.ts` in its own commit, before touching anything —
+the `sf-test` lesson (capture the body before you change or delete anything). The gate landed second:
+`authenticateWebhook()` before dispatch on EVERY route (no `/health`-equivalent bypass — this
+function's only GET route, `/diagnostics`, is itself the leak), `SFENRICH_AUTH_MODE=log` default
+logs `[sfenrich-auth] DENY-WOULD ...` and lets the request through unchanged, `enforce` 401s.
+`verify_jwt=false` pinned in `config.toml`. The UA/IP classifier is now the shared
+`_shared/caller-class.ts` module `ai-copilot` also uses (factored out of `ai-copilot/index.ts`'s
+inline copy in the same change) rather than a second copy of the same regexes; a test proves the
+classifier's output is unchanged after the move on a fixed UA/IP set. Confirmed before shipping:
+`dry_run` and the path are the ONLY request-derived values reaching the function — all 15 step
+queries are static template literals, no interpolation — so the auth gap was the whole exposure, not
+a SQL-injection path. The two data-quality findings (name-equality identity writes in steps 3/8B;
+curated BD columns written with no provenance ladder) are named in the same backlog row and left
+open — they need the CONTACT1 ladder machinery, not a gate. Ships log-only: the pre-gate caller
+inventory saw zero calls in 24h, which per DRIFT1-sfenrich's own note is a reason to read a longer
+window before enforcing, not a reason to skip logging. `npm test` green (5,587 pass), 0 live calls.
+👤 Scott: deploy v26→v27, read the DENY-WOULD log for longer than 24h, then flip `enforce`.
+
 ## 2026-09-09 — Read the 17 flow exports before RAILWAY-PA-SECRET lands: no PA flow sends `X-PA-Webhook-Secret` to Railway — they use `x-lcc-key` or `Authorization` — so setting the variable is safe only because of the fallback, and one flow has a header-less call that would break
 
 **Method:** every `definition.json` in `private/power-automate/exports/production/2026-08-11/` (17 zips), every
