@@ -296,6 +296,28 @@ must keep working, and the browser cannot be handed a secret — its reads go th
 
 ---
 
+## 2026-09-09 — NGP Group merged into NGP Capital on the recorded verdict; the OWN-T0e-c residue is now ONE property; the sponsor-family arc's operator pass is complete
+
+Ran `lcc_merge_entity(loser := NGP Group 67ed0011…, winner := NGP Capital 21db64c7…)` directly (Cowork,
+service role) on Scott's recorded `same_party` verdict, because the lane it routed to had no card (previous
+entry). Read back: NGP Group tombstoned → NGP Capital; NGP Capital current facts **31 → 40** (9 repointed,
+5 xids, 25 relationships); merge log **150 → 151**, `reversible = true`; undo is
+`select lcc_unmerge_entity('67ed0011-77b6-4ab6-8f93-3913958cacb6')`. Store: `unclassified_rival` **1,502 →
+1,501**, `sponsor_family_confirmed` **102 → 104** — NGP Group's two SPE-pair properties are now covered by the
+existing `ngp` family confirm, which is the designed outcome. **OWN-T0e-c residue: 1 property** —
+`National Government Properties (NGP)` still classified `sponsor_family_confirmed` beside NGP Capital; no
+verdict was given on it, so it stays. ⚠️ The NGP Group card still sits in the 4-hourly cache but is excluded
+from the lane by its decision — expect it to vanish on the 00:27 UTC refresh, not before.
+
+**Where the arc stands after today's operator pass:** registry 8 · 3 confirm-lane merges today (Gardner,
+MassMutual, NGP Group) + 3 earlier (GWU, RMR, Salus) · retype ledger 13 · `unclassified_rival` 1,617 (design)
+→ **1,501** · `sponsor_family_confirmed` 64 → **104**. **Next, in order:** (1) Scott works the 12
+byte-identical merge groups the retypes surfaced on "Duplicate entities — merge" (UIRC ×3, Global Net Lease
+×3, Blackstone, Foulger Pratt, SMBC, American Infrastructure Funds, Sansome Pacific, Davis (MN), UrbanAmerica LP,
+Capital MassMutual Life, SMBC Leasing And Finance Inc); (2) the two leftover retype cards — `Kvalitena AB`
+(retype) and `Research In Progress` (a placeholder: Keep as person is WRONG and Retype is wrong; it belongs on
+`junk_entity_review` — filed); (3) build: **C13g-min-lane-mutation** (prompt drafted).
+
 ## 2026-09-09 — the two type-blocked merges ran and the store moved by exactly the predicted −14; NGP Group's `same_party` landed on a lane with no card (design §7's own gap)
 
 **Read back 20:46 UTC.** `lcc_entity_merge_log` **148 → 150**: `Gardner-Tanenbaum → Gardner Tanenbaum Holdings`
