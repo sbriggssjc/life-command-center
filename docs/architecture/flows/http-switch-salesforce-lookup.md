@@ -183,4 +183,10 @@ entry: add a `notes:` line naming the new `soql` operation and the export date, 
   min(int(triggerBody()?['max_rows']), 500))`, not `empty(...)` — the first live run failed on this.
 - **Connector latency: 48.9 s** for a 5-row Task query on the first live run (`Server-Timing`
   `x-ms-igw-upstream-headers;dur=48941.8`, no retry). The gateway helper's timeout was raised 20 s → 60 s
-  (`SF_GATEWAY_TIMEOUT_MS`). Re-measure on the next pings before treating 49 s as the steady state.
+  (`SF_GATEWAY_TIMEOUT_MS`). ~~Re-measure on the next pings before treating 49 s as the steady state.~~
+  **Re-measured after the timeout fix: 47,716 ms and 49,341 ms end to end (`open_tasks: 5` both) — this IS the
+  steady state.** Design consequence (backlog SF-GW-LATENCY): callers budget ≥ 60 s and run out of band; the
+  `soql` operation is not for interactive use.
+- **Secure Inputs/Outputs:** the 2026-09-09 export shows `secureData` on the HTTP trigger only. The spec wants it
+  on `Execute_a_SOQL_query_1` too (otherwise run history keeps record bodies). One checkbox in the action's
+  Settings, then re-export and bump the registry.
