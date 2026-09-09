@@ -58,3 +58,9 @@ verify_jwt = false
 # Pinned 2026-09-09 ahead of the DRIFT1-routing-gap redeploy (v23 -> v24).
 [functions.intake-salesforce]
 verify_jwt = false
+
+# ai-copilot has run verify_jwt = false since v1 (browser + PA callers, no Supabase JWT).
+# Pinned 2026-09-09 ahead of the COPILOT-OPEN-gate redeploy (v79 -> v80) so a plain
+# `supabase functions deploy` cannot silently flip it — same trap as the two above.
+[functions.ai-copilot]
+verify_jwt = false
