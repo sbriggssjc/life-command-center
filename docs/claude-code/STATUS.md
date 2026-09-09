@@ -106,6 +106,31 @@ must keep working, and the browser cannot be handed a secret — its reads go th
 
 ---
 
+## 2026-09-09 — the retype lane worked for real: 16 verdicts in two minutes, 13 retypes ledgered, and the merge detector woke up on 12 groups it had been blind to
+
+**Read back live at 19:57 UTC.** `lcc_entity_retype_log` = **13** rows (Gardner-Tanenbaum, MassMutual Life,
+Foulger Pratt, UIRC, Global Net Lease, SMBC Leasing and Finance, SMFG, SMBC, American Infrastructure Funds,
+Blackstone, Davis (MN), Sansome Pacific, UrbanAmerica), every one `person → organization` with its
+`lcc_decisions` id on the row, `reverted_at` null; **3 `keep_person`** (Patrick R. Luther, William S Stuart Jr,
+Rafael A — the tail the prompt named). Lane visible **18 → 2** (`Kvalitena AB`, `Research In Progress`).
+**The OWN-T0e guard inputs now agree** — both Gardner entities read `organization`, live — but **no sponsor
+verdict and no merge has been run yet** (`lcc_entity_merge_log` 148, registry 8, `unclassified_rival` 1,516
+unchanged): the merges are the next click, not a fact.
+
+**⚠️ Second-order yield nobody predicted: 12 merge-candidate groups appeared.** `v_lcc_merge_candidates`
+filters `entity_type = 'organization'`, so a person-typed duplicate was structurally invisible to it (the
+P189 class, one filter over). Retyping surfaced **byte-identical** groups — `UIRC` ×3, `Blackstone` ×2,
+`Foulger Pratt` ×2, `Global Net Lease` ×3, `American Infrastructure Funds` ×2, `Sansome Pacific` ×2, `SMBC` ×2,
+`Davis (MN)` ×2 — plus `Gardner Tanenbaum Holdings ← Gardner-Tanenbaum`, `UrbanAmerica ← UrbanAmerica LP`,
+`MassMutual Life ← Capital MassMutual Life`, `SMBC Leasing and Finance ← … Inc`. `auto_mergeable` **3,011 → 3,015**
+— `lcc_apply_fuzzy_merges` is still unwired (P189/P198), so nothing merges by itself. They are on the
+"Duplicate entities — merge" lane now, human-confirm as always. **A retype is a visibility change for every
+consumer that filters on type; count what it reveals, not only what it unblocks.**
+
+**Next click (operator):** OWN-T0e lane → Gardner Tanenbaum Holdings card → pick `Gardner-Tanenbaum` → Merge
+duplicate now; MassMutual the same; NGP Group `same_party`. Then the 12 merge groups above. Then tell me the
+numbers: expect merge log 148 → 150+, `unclassified_rival` −4 (Gardner) / −10 (MassMutual).
+
 ## 2026-09-09 — first real retype verdict failed: `p_decision_id uuid` vs `lcc_decisions.id bigint` — fixed live, function only
 
 Scott clicked **Retype as organization** on Gardner-Tanenbaum → toast `entity_type_review: retype_failed`.
