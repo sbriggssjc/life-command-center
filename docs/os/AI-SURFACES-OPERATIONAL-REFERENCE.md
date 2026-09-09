@@ -151,6 +151,21 @@ Full state + the flip procedure: `docs/architecture/edge-function-deploy-drift.m
 §"`ai-copilot` (dia) — v79 shipped with NO authentication". Callers that need the header:
 `docs/architecture/flows/ai-copilot-sync-callers.md` (four PA flows, 👤 Scott).
 
+`salesforce-enrichment` (dia) got the identical gate (SFENRICH-gate, v27), and its UA/IP classifier
+is now the SAME shared module `ai-copilot` uses (`supabase/functions/_shared/caller-class.ts`) — the
+two functions' env vars are named per-function (`SFENRICH_AUTH_MODE`/`SFENRICH_KNOWN_IPS`, same
+format as the `COPILOT_*` pair above) because their caller sets are not asserted identical, only the
+classifier code:
+
+| var | default | meaning |
+|---|---|---|
+| `SFENRICH_AUTH_MODE` | `log` | same semantics as `COPILOT_AUTH_MODE` |
+| `SFENRICH_KNOWN_IPS` | unset | same `class:ip-prefix` format as `COPILOT_KNOWN_IPS` |
+
+This function has no `/health`-equivalent bypass — its only GET route, `/diagnostics`, is itself the
+leak, so every route is gated. Full state: `docs/architecture/edge-function-deploy-drift.md`
+§"SFENRICH-gate".
+
 ## 5. The bigger architecture (pointers)
 - Request-understanding layer (why plain-language handling is a cross-tool gap): `docs/architecture/request-
   understanding-and-consistency-layer.md` + the audit `docs/architecture/intent-resolution-audit-2026-08-03.md`.

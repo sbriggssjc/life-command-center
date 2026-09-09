@@ -64,3 +64,13 @@ verify_jwt = false
 # `supabase functions deploy` cannot silently flip it — same trap as the two above.
 [functions.ai-copilot]
 verify_jwt = false
+
+# salesforce-enrichment has run verify_jwt = false since v1 — deployed
+# verify_jwt = false, v26 live 2026-09-09 (confirmed via get_edge_function).
+# Its body was never in this repo until SFENRICH-gate committed it verbatim
+# and put the same log-only authenticateWebhook() door on it that
+# COPILOT-OPEN-gate put on ai-copilot. Pinned 2026-09-09 ahead of the
+# SFENRICH-gate redeploy (v26 -> v27) so a plain `supabase functions deploy`
+# cannot silently flip it — same trap as intake-salesforce and ai-copilot.
+[functions.salesforce-enrichment]
+verify_jwt = false
