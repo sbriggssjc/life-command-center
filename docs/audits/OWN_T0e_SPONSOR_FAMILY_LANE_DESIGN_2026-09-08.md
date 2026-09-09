@@ -95,7 +95,7 @@ the card shows the SPE list, not a count.
   Savlan Capital`, `Velocity Capital ~ Velocity US Properties Inc`). The card must ask the operator
   which side is the sponsor rather than infer it.
 
-## 4. The lane — design (NOT built)
+## 4. The lane — design (✅ BUILT 2026-09-09 — §6 records what shipped and where it departs from this section)
 
 **Decision type** `sponsor_family_confirm` (federated; registered in `FEDERATED_DECISION_TYPES`,
 `_DC_FEDERATED`, `_DC_FED_META`, `review-shared.js` — all four or the P139/UX-T1c registry-drift
@@ -141,3 +141,74 @@ The 1,300 `unclassified_rival` properties the gate does not reach; the 2,097-vs-
 question (OWN-T0h); whether the 87 zero-fact "SPE" claims (resolver/mirror-only) are real owners or
 stale resolver output; and the hedge-phrase entities (OWN-T0i). None of these is made worse by the
 lane; none is fixed by it.
+
+## 6. Build record (2026-09-09) — what shipped, what was measured on the way, what departs from §4
+
+**Shipped** (branch `build/own-t0e-sponsor-family-lane`): decision type `sponsor_family_confirm` in all four
+registries (`api/admin.js` `FEDERATED_DECISION_TYPES` + `federatedSubjectRef`; `ops.js` `_DC_FEDERATED` +
+sublane tile; `dc-lanes.js` `_DC_FED_META` + card + `dcSponsorFamilyConfirm`; `review-shared.js` → lane
+`ownership`), the pure planner `api/_shared/sponsor-family-planner.js` (subject refs, card, verdict gate,
+ordering), the fetch branch and the verdict branch in `api/admin.js`, migration
+`20260909120000_lcc_own_t0e_proposals_member_ids.sql` (applied live), guard
+`test/own-t0e-sponsor-family-lane.test.mjs` (13 tests, **19/19 mutations RED**, comments stripped; two
+assertions were re-anchored during the mutation pass because a view COMMENT names `lcc_merge_entity` and
+"INSERT into lcc_ownership_sponsor_family" in prose — OCR1c: the deliverable is the string, so the guard reads
+the STATEMENT shape). Verdicts exactly as §4: `confirm_family` is the one write (INSERT, `notes` carries
+`decision:<id>` + `token_is_generic_word` + `token_entities_fleetwide`); `same_party` records and forwards
+to `merge_duplicate_entities`; `not_family` record-only; `research` a task. A generic-word token confirms
+without an explicit acknowledgement (the design's default, left for Scott to tighten).
+
+**Three departures from §4, each forced by a measurement:**
+
+1. **⚠️ The dry-run view was NOT a request path — 64.3 s.** `EXPLAIN ANALYZE` on the 2026-09-08 body:
+   the `cur a join cur b` self-join was planned as a nested loop with the join keys in the FILTER (the CTE
+   estimated 1 row) — 11.3M rows removed by join filter, ~20 s; and `token_entities_fleetwide` ran a
+   `regexp_replace` over all 69k entities **once per group** (SubPlan, loops=182, ~43 s). service_role's
+   `statement_timeout` is **30 s**, so the lane would have 500'd on every open and, worse,
+   `/api/decisions?summary=1` calls every federated source on page load. Rewritten (per-property
+   `array_agg` + `generate_subscripts` pair walk; one token pass over `entities`) to **19.8 s**, with md5
+   over the 21 pre-existing columns identical before and after (`ce0a83c9…`, 182 rows) — and the
+   remaining ~15 s is reading `v_lcc_property_ownership_reconciled` for the whole population, a view built
+   for panel point-queries (OWN-T0's `not materialized` lesson, from the other side). **So the lane reads a
+   CACHE**: `lcc_ownt0e_sponsor_family_proposals_cache`, refreshed by `lcc_ownt0e_refresh_proposals()` on
+   cron `lcc-ownt0e-proposals-refresh` (`27 */4 * * *`, after `lcc-portfolio-sync-finalize`) — the
+   `lcc_priority_queue_resolved` pattern. `already_confirmed` is re-derived LIVE from the registry in the
+   fetch, and both guards that can refuse the write (registry membership, tombstone) are read live at
+   verdict time; only display columns can lag. Cache locked to `service_role` (Supabase's default grants
+   had given `anon` SELECT — measured, revoked, asserted).
+2. **A tied group needs the operator to NAME the sponsor, and the view had no ids.** Appended
+   `member_ids uuid[]`, `spe_ids uuid[]`, `member_names text[]` (aligned with `member_ids`, both ordered
+   by id). ⚠️ `tied_pair` names ONE pair; a tied group holds up to **9** members (`NGP ~ …`, measured), so
+   labelling a picker from `tied_pair` by position would have mislabelled the pick — caught on the first
+   live read, not by a test. The subject_ref keeps its `tied` form after a confirm: the ref names the
+   QUESTION, the payload names the answer.
+3. **`properties` in the view COUNTS PAIRS.** Rolled-back positive control on the top card (NGP Capital,
+   `ngp`, 30 "properties"): inserting the registry row took the group's `unclassified_rival` count
+   **35 → 7** and `sponsor_family_confirmed` **0 → 28** — 28 distinct properties, not 30, because a
+   property with three candidates carries two pairs. The card says "covers N owner pairs (≤ that many
+   properties)"; the design's 317 "props" is 317 pairs. §4's verification rule stands (the confirmed
+   group's rows flip, the lane's total falls by one) with that unit corrected.
+
+**Read on the first live cards:** the top three by rent are **NGP Capital / `ngp` / $43.2M** (29 SPEs,
+two of which — `NGP Group`, `National Government Properties (NGP)` — are duplicate entities of the
+sponsor riding inside the family), **George Washington University / `george` / $23.4M** (a pure
+duplicate: `George Washington University (The)`), **RMR / `rmr` / $11.5M** (a pure duplicate: `RMR Group`).
+The `same_party` verdict exists for exactly the second and third. The first is MIXED — a `confirm_family`
+is correct for the 27 SPEs and leaves the two duplicates classified as family, which is the
+"papers over a merge" case §3a warned about at group grain. Stated, not solved: a group can need both
+verdicts, and the lane offers one per card (backlog **OWN-T0e-c**).
+
+**⚠️ `same_party` forwards to a lane that cannot always show the pair.** Of the 13 duplicate-suspect groups
+(`spe_props_max ≥ 2`), **8** have a member on `v_lcc_merge_candidates` and **5 do not** — `Four Springs
+Capital`, `Gardner Tanenbaum Holdings`, `Incommercial Property Group`, `NGP Group`, `Truist Bank` — because
+the merge detector groups on a canonical-name key these variants do not share (`Gardner Tanenbaum Holdings`
+vs `Gardner-Tanenbaum`). For those the forward lands on a lane with no matching card. Filed **OWN-T0e-b**:
+a direct pair-merge effect on `same_party` (through `lcc_merge_entity`, reversible), gated on a second
+confirm. Until then the operator merges from the entity panel.
+
+**Verify (after the Railway deploy — DB half is live now, JS half is not: merged is not running):**
+`select conflict_class, count(*) from v_lcc_property_ownership_reconciled where is_current and
+property_state='conflict' group by 1` before/after each confirm; `select count(*) from
+lcc_ownership_sponsor_family` = 6 + confirms; the lane's `parts` (`breadth` 131 / `tied` 51 /
+`duplicate_entity_suspect` 13 at build) and `total` 182 falling by one per verdict. Read
+`cache_refreshed_at` on the lane before quoting a count.

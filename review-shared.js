@@ -76,6 +76,9 @@ var LCC_DECISION_LANE_MAP = {
   // Prompt 188: "do the people at this email domain work for this owner?" is the
   // same LINKAGE question, asked from the other direction.
   tier0_owner_contact:           { lane: 'linkage',       merges: false },
+  // OWN-T0e: "are these two current owner candidates one sponsor family?" is an
+  // OWNERSHIP question — it settles which recorded facts describe the same asset.
+  sponsor_family_confirm:        { lane: 'ownership',     merges: false },
   implausible_value:             { lane: 'automation',    merges: false },
   llc_research_dead:             { lane: 'automation',    merges: false },
   availability_checker_botblock: { lane: 'automation',    merges: false },

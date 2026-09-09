@@ -1924,6 +1924,12 @@ var _DC_FEDERATED = new Set([
   // Keep in sync with admin.js FEDERATED_DECISION_TYPES
   // (test/decision-center-partition.test.mjs).
   'tier0_owner_contact',
+  // OWN-T0e (2026-09-09): sponsor-family confirm over the OWN-T0 unclassified_rival
+  // conflict store. Source = lcc_ownt0e_sponsor_family_proposals_cache; verdicts
+  // confirm_family (INSERT lcc_ownership_sponsor_family, reversible by DELETE) /
+  // same_party (-> merge lane) / not_family / research. Keep in sync with
+  // admin.js FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
+  'sponsor_family_confirm',
 ]);
 function _dcIsVerdictLane(dt) { return !_DC_FEDERATED.has(dt); }
 
@@ -2052,6 +2058,7 @@ async function renderReviewConsolePage() {
     { dt: 'comms_owner_attribution_review', label: 'Correspondence → owner attribution', open: "renderFederatedLane('comms_owner_attribution_review')" },
     { dt: 'owner_contact_attach_review', label: 'Owner contacts — attach or reject', open: "renderFederatedLane('owner_contact_attach_review')" },
     { dt: 'tier0_owner_contact', label: 'Tier 0 — confirm the owner’s firm domain', open: "renderFederatedLane('tier0_owner_contact')" },
+    { dt: 'sponsor_family_confirm', label: 'Sponsor ↔ SPE families — confirm', open: "renderFederatedLane('sponsor_family_confirm')" },
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
     { dt: 'property_twin', label: 'Property address twins (dia)', open: "renderFederatedLane('property_twin')" },
     { dt: 'provenance_conflict', label: 'Data conflicts & provenance', open: "renderFederatedLane('provenance_conflict')" },

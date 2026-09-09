@@ -165,8 +165,10 @@ describe('lane rationalization map', () => {
     //         + 2 more added since (map grew to 25 on main; the count was stale)
     //         + property_twin (property_merge lane, 2026-08-14)
     //         + Prompt 114 owner_contact_attach_review (linkage lane, 2026-08-15)
-    //         + P188 tier0_owner_contact (linkage lane, 2026-08-26).
-    assert.equal(Object.keys(LCC_DECISION_LANE_MAP).length, 28);
+    //         + P188 tier0_owner_contact (linkage lane, 2026-08-26)
+    //         + OWN-T0e sponsor_family_confirm (ownership lane, 2026-09-09).
+    assert.equal(Object.keys(LCC_DECISION_LANE_MAP).length, 29);
+    assert.equal(laneForDecisionType('sponsor_family_confirm'), 'ownership');
     // R43: cap-rate review + bad-rent leases group under the provenance lane.
     assert.equal(laneForDecisionType('caprate_review'), 'provenance');
     assert.equal(laneForDecisionType('bad_rent_lease'), 'provenance');

@@ -113,6 +113,16 @@ const ALLOWLIST = [
       'IS the regression check (DRIFT1-routing-gap).',
     reMeasure: '2026-10-08',
   },
+  {
+    path: 'docs/os/RUNBOOK_vercel_teardown.md',
+    id: 'life-command-center-nine.vercel.app',
+    reason: 'The runbook for TEARING DOWN that host (J13-teardown, PR #2185). Naming the host is ' +
+      'the deliverable; it is a live operator document, not a historical record, so a ' +
+      'STALE/RETIRED banner would be a lie. Remove this entry when the teardown is done and ' +
+      'the runbook moves to docs/history/. ⚠️ It merged red on main through the docs-only CI ' +
+      'path, which runs only the conflict-marker guard (backlog J13a-ci-docs-only).',
+    reMeasure: '2026-10-09',
+  },
 ];
 const ALLOWLIST_KEYS = new Set(ALLOWLIST.map((r) => `${r.path} ${r.id}`));
 
