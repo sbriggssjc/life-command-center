@@ -16,6 +16,35 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — C13g-min prompt drafted (entity retype behind a human verdict); SF-DIRECT response reconciled
+
+Next step after the OWN-T0e after-state (PR #2193 merged): **C13g-min**, prompt at
+`docs/claude-code/prompts/C13g-min-entity-retype-verdict.md`. Measured before writing it: **2 OWN-T0e cards
+are type-blocked** (`Gardner-Tanenbaum` 18 facts / 14 co-claimed props / $6.17M; `MassMutual Life` 14 / 14 /
+$5.25M — both `person`, both invisible to P149 because neither name carries an org marker); the population a
+per-row verdict serves is **18 live person-typed entities with ≥2 current facts, $69.4M**, companies at the
+head and real people (Luther, Stuart) in the tail — 0 org markers, 7 fail the name test, so it is a human
+verdict, not a rule. ⚠️ **Retype + merge clears 4, not 14, of Gardner's conflict properties** — 10 carry a
+third current claimant, the firm's own RTD/TEP SPEs, which share no brand token and are the "gate does not
+reach" class. ⚠️ Sizing trap: a join to `external_identities` tripled the fact count (54 / 67 entities /
+$205M) — the honest figure uses `EXISTS`. Options weighed: bolt `retype_first` onto `same_party` (2 rows) vs
+a small standalone lane (18 rows, type is a fact about the entity) — the prompt takes the lane. Also
+reconciled **SF-DIRECT** (PR #2192, merge `0a6603f8`): `salesforce-soap.ts` + `sf-ping` shipped, tests 13/13;
+👤 deploy `intake-salesforce` v25 + first `sf-ping` run is Scott's step; response and prompt moved to `done/`.
+
+## 2026-09-09 — OWN-T0e live after-state: 5 cards worked, predictions reconciled exactly; one denominator drift recorded, not adjudicated
+
+`/version` = `87b631e8` (PR #2189 merge; PR #2187 = OWN-T0e). Scott worked 5 `sponsor_family_confirm` cards
+14:19–14:20 UTC: 2 `confirm_family` (`ngp`, `uirc`) + 3 `same_party` with `merge_now` (GWU (The)→GWU,
+RMR Group→RMR, "Salus Grovernment Properites"→Salus Gov't Properties, all `reversible=true`). Ledgers read
+back: registry **6→8**, `lcc_decisions` **5**, `lcc_entity_merge_log` **145→148**,
+`sponsor_family_confirmed` **64→102** = NGP Capital 28 (the §6 control's number) + UIRC 10 — **exact**.
+⚠️ `unclassified_rival` read 1,575 (Scott, ~14:21) then 1,516 (14:34); `duplicate_entity` 416 → 412 —
+no LCC write in between (facts/claims/merge-log/registry identical), so most likely a query-shape
+difference, filed under OWN-T0h, not adjudicated. Measured for the follow-ups: the NGP mixed-group residue
+(OWN-T0e-c) is **2 properties**, not 30; Gardner-Tanenbaum (C13g) co-claims **14 properties / $6.17M**
+blocked by one `entity_type='person'`; no generic-token confirm happened, so that question has no live
+instance yet. Design doc §8; canonical page § OWN-T0 pointer updated. Docs-only.
 ## 2026-09-09 — SF-DIRECT reconciled (PR #2192): the capability `sf-test` proved is back in the repo as an authenticated helper — deploy pending; and the teardown's day-1 12:30 check was not clean, as expected
 
 **Verified.** `supabase/functions/_shared/salesforce-soap.ts` (192 lines): SOAP `login` envelope to
