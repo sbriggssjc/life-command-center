@@ -16,6 +16,27 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — v80 deploy failed on a four-month-old `deno.json`: `{"imports":{"./":"./"}}` remaps every `./` import — including `_shared/auth.ts`'s `./supabase-client.ts` — into the function's own directory
+
+`supabase functions deploy ai-copilot` (CLI 2.101) → `WARN: failed to read file: open
+supabase\functions\ai-copilot\supabase-client.ts` then bundle error `Module not found
+…/_shared/supabase-client.ts at _shared/auth.ts:13`. Cause is not the CLI and not `auth.ts`: `ai-copilot/deno.json`
+holds a single import-map entry `"./": "./"`, added incidentally in the May calendar-fix commit (`b5428847`) and
+never load-bearing — the function's own imports are plain relative paths that resolve identically without it. An
+import map is resolved against the map's location, so the moment `index.ts` gained `../_shared/auth.ts` (v80), the
+shared module's `./supabase-client.ts` was rewritten to `ai-copilot/supabase-client.ts`, which does not exist.
+`intake-salesforce` has no `deno.json` and has imported `_shared/auth.ts` since v25 without incident — the
+control that names the cause.
+
+**Fix:** delete `supabase/functions/ai-copilot/deno.json` (the deployed function's `import_map:true` flips to
+false, which is what every other function in the project has). No source change. → redeploy.
+
+Also: `COPILOT_KNOWN_IPS` was set with the literal placeholder `scott:<your home IP prefix>` — harmless
+(classification only; that entry never matches) but the browser class will log as `other` until it is re-set with
+the real prefix. Re-set alongside the redeploy.
+
+---
+
 ## 2026-09-09 — COPILOT-OPEN-gate reconciled (PR #2214): the door is in the right place; nothing is live yet — three operator steps, in a safe order
 
 **Verified against the merged tree, not the response:**
