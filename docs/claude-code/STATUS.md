@@ -16,6 +16,25 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — SF-DIRECT-b reconciled (PR #2199): the SSO workaround is coded and tested; the last mile is a Switch case in Power Automate
+
+**Verified.** `_shared/salesforce-gateway.ts` reads `SF_LOOKUP_WEBHOOK_URL` at one site and never puts it in an
+error; the SELECT-only / no-`;` guard is client-side too; `sf-ping` falls back to the gateway on **exactly**
+`INVALID_SSO_GATEWAY_URL` / `INVALID_LOGIN` (`index.ts:107`) and reports `via` + `soap_fault_code`; 42/42
+targeted tests here, full suite 5,543/0 per CC; `grep sig=` finds no literal signature. The flow spec in
+`docs/architecture/flows/http-switch-salesforce-lookup.md` § "soql operation" is build-precise: case value,
+request contract, guards, **Execute a SOQL Query** on the existing `shared_salesforce` connection, both response
+shapes, Secure I/O. **Live `intake-salesforce` is still v25** — v26 is Scott's deploy, after the flow case exists.
+
+**What this is, plainly:** the platform's own Salesforce path (the PA proxy in `api/_shared/salesforce.js`,
+built for SSO + no-Connected-App) made general and reachable from edge functions. The SOAP path stays as the
+exhibit for the IT conversation Scott will have with the product in hand.
+
+👤 **Scott, in order:** build the `soql` Switch case → re-export the flow → `supabase secrets set
+SF_LOOKUP_WEBHOOK_URL … --project-ref zqzrriwuavgrquhisnoa` → `supabase functions deploy intake-salesforce
+--project-ref zqzrriwuavgrquhisnoa --no-verify-jwt` (v26) → `sf-ping` → report the `open_tasks` count only.
+Cowork walks the PA build step by step in chat.
+
 ## 2026-09-09 — SF-DIRECT deployed (v25) and proven to Salesforce's door — then blocked by the org's SSO policy, not by code
 
 Scott deployed `intake-salesforce` **v25** (`--no-verify-jwt`; Cowork confirmed `verify_jwt=false` from
