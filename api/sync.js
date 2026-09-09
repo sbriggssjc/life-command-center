@@ -130,7 +130,65 @@ function connectorHeaders(connector) {
   if (connector.config?.tenant_id) {
     headers['X-LCC-Tenant-Id'] = connector.config.tenant_id;
   }
+  // COPILOT-OPEN-gate: the ai-copilot edge function now checks
+  // X-PA-Webhook-Secret on every non-/health route (see supabase/functions/
+  // ai-copilot/index.ts). Railway is one of the two legitimate callers named
+  // in that gate's design, so every request THIS server sends to the edge
+  // function must carry it, or Railway's own calls start failing the moment
+  // COPILOT_AUTH_MODE flips from log to enforce. Omitted when the secret
+  // isn't configured — the edge function's own transitional-mode fallback
+  // (no secret set ⇒ allow all) covers that case identically.
+  if (PA_WEBHOOK_SECRET) {
+    headers['X-PA-Webhook-Secret'] = PA_WEBHOOK_SECRET;
+  }
   return headers;
+}
+
+// ============================================================================
+// COPILOT-READ PROXY — user-authenticated browser reads of ai-copilot GETs
+// ============================================================================
+// app.js/detail.js used to call the edge function's URL directly with no
+// credential (a browser cannot hold PA_WEBHOOK_SECRET — P194 doctrine). This
+// is the Railway-side stand-in: same three GET routes the front end actually
+// uses (`health`, `sf-activities`, `calendar-events`), gated on a real user
+// session, forwarding the query string verbatim and adding the secret header.
+const COPILOT_READ_ROUTES = {
+  health: '/health',
+  'sf-activities': '/sync/sf-activities',
+  'calendar-events': '/sync/calendar-events',
+};
+
+async function handleCopilotRead(req, res) {
+  const what = String(req.query.what || '');
+  const edgePath = COPILOT_READ_ROUTES[what];
+  if (!edgePath) {
+    return res.status(400).json({
+      error: `Unknown what=${what}. Must be one of: ${Object.keys(COPILOT_READ_ROUTES).join(', ')}`,
+    });
+  }
+  const forwarded = new URLSearchParams();
+  for (const [k, v] of Object.entries(req.query)) {
+    if (k === '_route' || k === 'what') continue;
+    if (v !== undefined && v !== null) forwarded.set(k, String(v));
+  }
+  const qs = forwarded.toString();
+  const target = `${EDGE_FN_URL}${edgePath}${qs ? `?${qs}` : ''}`;
+  try {
+    const edgeRes = await fetchWithTimeout(
+      target,
+      { headers: PA_WEBHOOK_SECRET ? { 'X-PA-Webhook-Secret': PA_WEBHOOK_SECRET } : {} },
+      10000
+    );
+    const text = await edgeRes.text();
+    res.status(edgeRes.status);
+    try {
+      return res.json(JSON.parse(text));
+    } catch (_) {
+      return res.send(text);
+    }
+  } catch (e) {
+    return res.status(502).json({ error: 'copilot-read proxy failed', details: e.message });
+  }
 }
 
 // NOTE: Connector CRUD moved to admin.js (Phase 4b). Constants removed in Phase 6a.
@@ -216,6 +274,17 @@ export default withErrorHandler(async function handler(req, res) {
   // Dispatch to cross-domain contact matcher (nightly batch job)
   if (req.query._route === 'cross-domain-match' || req.query.action === 'cross-domain-match') {
     return handleCrossDomainMatch(req, res);
+  }
+
+  // Dispatch to the copilot-read proxy (COPILOT-OPEN-gate, Unit 2) — the browser
+  // reads sf-activities/calendar-events/health straight off the ai-copilot edge
+  // URL with no credential (a browser can never hold PA_WEBHOOK_SECRET). This
+  // route forwards the same GET with the secret header, behind a real user
+  // session, so app.js/detail.js can stop calling the edge function directly.
+  if (req.query._route === 'copilot-read') {
+    const user = await authenticate(req, res);
+    if (!user) return; // authenticate() already responded 401
+    return handleCopilotRead(req, res);
   }
 
   const user = await authenticate(req, res);
