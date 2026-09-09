@@ -16,6 +16,42 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — J13 teardown, day 1 walked live: the 12:30 caller was a forgotten v1 flow, and two red herrings shared its schedule
+
+Walked the runbook's step 1 with Scott in chat, one step at a time, measuring at each step instead of
+trusting the candidate list.
+
+1. **Cowork desktop task `daily-briefing-cache`** — config read verbatim: 06:30 CT weekdays, GET
+   `…vercel.app/api/activities?_route=daily-briefing` + POST `…/api/operations?_route=draft&action=health`.
+   Logs at 11:30 UTC show nothing from the frozen build → the task is inert (its Claude has been declining
+   to fire — 09-01 ops-log). **Recommended OFF, not repointed:** the first path is swallowed on Railway
+   (`server.js:277` overwrites `_route`), the cache job is redundant with the 10:00 edge cron + 10:18 Railway
+   cron, and a re-fire at 11:30 UTC would land after the Analyst's Take write (V4 hazard).
+2. **"LCC Morning Briefing v2"** (export read) — Mon–Fri 12:30 UTC, already POSTs Railway
+   `/api/briefing-email`; handler makes no outbound call. **Not the caller.**
+3. **"LCC - Daily Briefing to Teams"** (export read) — daily 12:30 UTC, already GETs Railway
+   `/api/daily-briefing?action=snapshot&role_view=broker`; all 14 card-binding fields exist in the live edge
+   fn; Railway forwards `x-lcc-key`/`x-lcc-workspace`. **Not the caller.** ⚠️ Export carries the API key in
+   plaintext → Secure Inputs hygiene item; keep the zip under `private/`.
+4. **Timing closed the last door:** the edge fn booted 12:30:00.88 and returned 12:30:01.61; the AWS `node`
+   burst starts 12:30:01.84 — *after* the function finished, so not a hop inside it either. The burst's
+   table set is the OLD composite `/api/daily-briefing` handler. An independent caller, hitting Vercel
+   directly. The edge fn was also invoked three times in 90 s (12:29:53, 12:30:01, 12:31:14).
+5. **Scott's My-flows search for "briefing": four rows** — the two v2 flows, **"LCC Daily Briefing to
+   Teams" (no hyphen, modified 3 mo ago)**, and an Instant "Send webhook alerts to Daily Briefing". The
+   no-hyphen row is the May-2026 v1. **Scott opened it: ON, pointed at the Vercel host, successful run
+   history. Turned OFF 2026-09-09.** That is the caller. Two near-identical names, one repointed in July,
+   one forgotten — and it was in neither the registry nor `retired_flows` (PA5, wider than it read).
+
+**Registry:** `retired-daily-briefing-teams-v1` added to `retired_flows` (OFF, not deleted, reason
+recorded); `briefing-daily-teams-v2` and `briefing-morning-email-v2` added as baseline rows with GUIDs
+from the exports; `retired-morning-briefing-v1` recorded as not-seen. YAML parses.
+
+**Proof, tomorrow:** first weekday 12:30 UTC with no non-Railway `node` burst and no `v_my_work` 400
+from the AWS pool → the ≥ 8-day observation window (runbook step 2) starts. **Still open on day 1:**
+desktop task OFF (👤 confirm), Copilot Studio connector host, extension build, the Instant webhook flow's
+target, the mobile-share Shortcut (blocked: no route), **and the Railway dashboard check for I16b.**
+
 ## 2026-09-09 — OWN-T0e BUILT: the `sponsor_family_confirm` lane, a cache because the view was 64 s, and "properties" that were pairs
 
 **Cowork, branch `build/own-t0e-sponsor-family-lane`.** The lane designed on 2026-09-08 is built per
