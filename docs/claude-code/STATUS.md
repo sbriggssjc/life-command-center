@@ -16,6 +16,53 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — Dialysis_DB is being ground down by one writer: a Python job on Railway re-inserting every clinic's financial estimates ~3× a week instead of once a month — 7,547 statement timeouts in 24 h, cron jobs failing to start, the app's own reads 500ing
+
+**Chain of measurements (each one led to the next):**
+
+1. COPILOT-SYNC-500 (filed earlier today): the browser's `GET /sync/sf-activities` 500s 30 % of the time. Both
+   browsers, both routes, identical query strings, no time-of-day pattern, no correlation with the PA POSTs → server
+   side. The handler's only 500 is `Failed to fetch SF activities` with PostgREST's `error.message`.
+2. `postgres_logs`, 24 h (2026-09-08 20:00 → 09-09 20:00 UTC): **7,547 × `canceling statement due to statement
+   timeout`**, plus ~260 × `cron job N job startup timeout` across jobs 8, 9, 17, 25, 28, 39, 43, 50, 64 and
+   29 × `REFRESH MATERIALIZED VIEW CONCURRENTLY v_crm_client_rollup` timed out. `salesforce_activities` reads are 59
+   of the 7,547 — the 500s are collateral.
+3. **6,273 of the 7,547 (83 %) are two statements against `clinic_financial_estimates`:** `SELECT * … LIMIT 1
+   OFFSET 0` and `SELECT created_at … LIMIT 1` — each wrapped in PostgREST's `pgrst_source_count`, i.e. an **exact
+   count over the whole table on every call**. The table is **1,243,401 rows / 771 MB**; the count cannot finish
+   inside the 8 s statement timeout.
+4. `edge_logs` names the caller: **one address, `162.220.232.128` (Railway block), UA `python-httpx/0.28.1`**,
+   ~50,000 requests to `/rest/v1/clinic_financial_estimates` in 24 h: 16,335 `POST` (201) inserts, 16,349 keyed
+   lookups, and **16,341 `?select=*&limit=1` probes of which 3,429 were 500** (+ 2,859 more on the `created_at`
+   variant). Per hour it runs at ~3,300 inserts when the probe succeeds (18:00–20:00 UTC) and ~200 when the probe is
+   timing out at ~300/h — **the only thing throttling it is the damage it does.**
+5. The table itself (read-only SQL): **537,925 rows inserted in the last 7 days**; 6,902 distinct clinics in the
+   last 24 h. Weekly history is the tell — `2026-05-11` 144k, `06-08` 143k, `07-20` 142k (one full pass ≈ 8.2k
+   clinics × ~17 estimate variants, **monthly**), then `08-24` 189k, **`08-31` 421k**, `09-07` 161k so far. **The
+   monthly recompute became a continuous loop on or about 2026-08-24.** The `is_latest` flag is still maintained
+   (36,538 rows, the same figure QA16 recorded in May) — the *current* estimates are fine; it is the history that is
+   piling up and the count-probe that is choking the database.
+
+**What is Not on file:** the writer. Nothing in this repo speaks `python-httpx` to `clinic_financial_estimates`
+(`resolver/` uses httpx for its own corpus only). It is a Railway service outside `life-command-center` — the
+dialysis financial-estimates pipeline — and only Scott's Railway dashboard can name it. The most likely mechanism,
+stated as a hypothesis to test rather than a fact: the job's count-probe 500s → the process exits non-zero →
+Railway restarts it → it begins the full pass again. That would explain a monthly job producing three passes a
+week and the `08-28 → 09-01` gap in the daily counts (nothing written for four days, then 421k in a week).
+
+**Consequences already visible:** COPILOT-SYNC-500 (dashboard tiles blank a third of the time), the cron
+startup failures (which jobs 8/9/17/25/28/43/50/64 are is Not on file here — read `cron.job` before assuming),
+the matview refresh timeouts, and `UX34a`'s "`v_cms_data` still 5.7 s against 8 s" — measured while this writer
+was running, so that number may be load, not the view.
+
+**Filed:** backlog **CFE-RUNAWAY** 🔴 👤 — Scott identifies and pauses the service; then the job needs (a) no
+count on its probe (`Prefer: count=none`, or `HEAD` with `count=planned`), (b) a run-once schedule with a
+completion marker so a restart does not restart the pass, (c) a retention decision on 1.2 M history rows.
+COPILOT-SYNC-500 and CAL-RECONCILE-STUCK re-measure **after** the writer is paused — no code change on either
+until then.
+
+---
+
 ## 2026-09-09 — TEST-NET-LEAK reconciled (PR #2209/#2210): 0 live calls, suite time halved — and the caller inventory for `ai-copilot` shows the whole function is open, not just `/chat`
 
 **TEST-NET-LEAK, re-measured from `origin/main` under the same `fetch`-logging shim as yesterday's 14:**
