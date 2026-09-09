@@ -36,6 +36,7 @@ import { authenticateWebhook } from "../_shared/auth.ts";
 import { queryParams, parseBody, isoNow } from "../_shared/utils.ts";
 import { OBJECT_CONFIG, resolveObjectKey, mapRecord, routeVertical, normalizeAddress, type Vertical } from "./sf-config.ts";
 import { sfLogin, sfQuery, SfAuthError } from "../_shared/salesforce-soap.ts";
+import { sfGatewayQuery, SfGatewayError } from "../_shared/salesforce-gateway.ts";
 const PAYLOAD_VERSION = "sf-2026-05-v8";
 const MAX_RETRY = 5;
 function dbEnv(vertical: Vertical): { url: string; key: string } | null { const map: Record<Vertical, [string, string]> = { ops: ["OPS_SUPABASE_URL", "OPS_SUPABASE_SERVICE_KEY"], gov: ["GOV_SUPABASE_URL", "GOV_SUPABASE_KEY"], dia: ["DIA_SUPABASE_URL", "DIA_SUPABASE_KEY"] }; const [u, k] = map[vertical]; const url = Deno.env.get(u), key = Deno.env.get(k); return url && key ? { url, key } : null; }
@@ -88,19 +89,32 @@ async function handleRetry(req: Request, body: Record<string, unknown> | null): 
 async function handleDeadLetter(req: Request, body: Record<string, unknown> | null): Promise<Response> { const ids = Array.isArray(body?.sync_ids) ? body!.sync_ids as string[] : []; if (!ids.length) return errorResponse(req, "sync_ids[] is required", 400); const inList = ids.map((i) => `\"${i}\"`).join(","); const res = await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=in.(${inList})`, { status: "dead", retried_at: isoNow() }); return jsonResponse(req, { ok: res.ok, dead_lettered: res.ok ? ids.length : 0 }); }
 
 // ============================================================================
-// sf-ping — authenticated diagnostic: SOAP login + a tiny SOQL query.
-// SF-DIRECT (2026-09-09). Rebuilds what the deleted `sf-test` function proved,
-// behind the SAME authenticateWebhook() gate as every other action here —
+// sf-ping — authenticated diagnostic: SOAP login + a tiny SOQL query, falling
+// back to the PA gateway's `soql` operation when SOAP is refused by the org's
+// SSO policy. SF-DIRECT (2026-09-09) / SF-DIRECT-b (2026-09-09 fallback).
+// Behind the SAME authenticateWebhook() gate as every other action here —
 // never a standalone unauthenticated endpoint. No record bodies, no session
-// id, no credentials in the response.
+// id, no credentials, no webhook URL in the response.
+//
+// FALLBACK RULE: only on the two named SOAP fault codes that mean "SOAP
+// itself is refused by org policy or config, not that Salesforce is down" —
+// INVALID_SSO_GATEWAY_URL (delegated-auth profile, password API login
+// refused) and INVALID_LOGIN (bad/stale credentials). Any other SfAuthError
+// (network failure, malformed response, missing env) is reported as-is —
+// falling back on those would mask a real infrastructure problem behind a
+// gateway that "worked" for an unrelated reason.
 // ============================================================================
+const SF_PING_FALLBACK_FAULT_CODES = new Set(["INVALID_SSO_GATEWAY_URL", "INVALID_LOGIN"]);
+
 async function handleSfPing(req: Request): Promise<Response> {
   const startedAt = Date.now();
+  let soapFault: SfAuthError | null = null;
   try {
     const session = await sfLogin();
     const result = await sfQuery(session, "SELECT Id, Subject, Status FROM Task WHERE IsClosed = false LIMIT 5");
     return jsonResponse(req, {
       ok: true,
+      via: "soap",
       api_version: Deno.env.get("SF_API_VERSION") || "61.0",
       instance_host: (() => { try { return new URL(session.instanceUrl).host; } catch { return null; } })(),
       user_id_suffix: session.userId ? session.userId.slice(-4) : null,
@@ -108,12 +122,39 @@ async function handleSfPing(req: Request): Promise<Response> {
       elapsed_ms: Date.now() - startedAt,
     });
   } catch (err) {
-    const isAuth = err instanceof SfAuthError;
+    if (err instanceof SfAuthError) soapFault = err;
+    if (!(err instanceof SfAuthError) || !SF_PING_FALLBACK_FAULT_CODES.has(err.faultCode)) {
+      const isAuth = err instanceof SfAuthError;
+      return jsonResponse(req, {
+        ok: false,
+        via: "soap",
+        error: isAuth ? err.message : "sf-ping failed",
+        fault_code: isAuth ? err.faultCode : "UNKNOWN",
+        elapsed_ms: Date.now() - startedAt,
+      }, isAuth ? 502 : 500);
+    }
+  }
+
+  // SOAP was refused for a reason the PA gateway (already authenticated
+  // under the org's SSO) is not affected by — fall back.
+  try {
+    const result = await sfGatewayQuery("SELECT Id, Subject, Status FROM Task WHERE IsClosed = false LIMIT 5", { maxRows: 5 });
+    return jsonResponse(req, {
+      ok: true,
+      via: "pa_gateway",
+      soap_fault_code: soapFault?.faultCode ?? null,
+      open_tasks: result.total_size,
+      elapsed_ms: Date.now() - startedAt,
+    });
+  } catch (err) {
+    const isGateway = err instanceof SfGatewayError;
     return jsonResponse(req, {
       ok: false,
-      error: isAuth ? err.message : "sf-ping failed",
-      fault_code: isAuth ? err.faultCode : "UNKNOWN",
+      via: "pa_gateway",
+      soap_fault_code: soapFault?.faultCode ?? null,
+      error: isGateway ? err.message : "sf-ping fallback failed",
+      reason: isGateway ? err.reason : "unknown",
       elapsed_ms: Date.now() - startedAt,
-    }, isAuth ? 502 : 500);
+    }, 502);
   }
 }

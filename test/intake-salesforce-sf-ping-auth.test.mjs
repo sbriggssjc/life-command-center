@@ -42,9 +42,58 @@ describe('sf-ping is registered and gated the same as every other action', () =>
     const src = await fs.readFile(SRC_URL, 'utf8');
     const start = src.indexOf('async function handleSfPing');
     assert.ok(start >= 0, 'handleSfPing must exist');
-    const body = src.slice(start, start + 1500);
+    const body = src.slice(start, start + 2500);
     assert.doesNotMatch(body, /SF_PASSWORD/);
     assert.doesNotMatch(body, /SF_SECURITY_TOKEN/);
     assert.doesNotMatch(body, /sessionId/);
+  });
+});
+
+// SF-DIRECT-b — sf-ping falls back to the PA gateway's `soql` operation when
+// SOAP is refused by the org's SSO policy, and ONLY then. These are
+// structural checks for the same reason the block above is: `_shared/
+// auth.ts` cannot be imported under plain `node --test`, so the fallback's
+// gating (auth first; SOAP first; only the two named fault codes trigger the
+// fallback) is asserted from source rather than by invoking the handler.
+describe('sf-ping falls back to the PA gateway only on a named SOAP-refusal fault, after the auth gate', () => {
+  it('imports sfGatewayQuery / SfGatewayError from the gateway helper', async () => {
+    const src = await fs.readFile(SRC_URL, 'utf8');
+    assert.match(src, /import\s*\{\s*sfGatewayQuery,\s*SfGatewayError\s*\}\s*from\s*"\.\.\/_shared\/salesforce-gateway\.ts"/);
+  });
+
+  it('the fallback fault-code set contains exactly INVALID_SSO_GATEWAY_URL and INVALID_LOGIN', async () => {
+    const src = await fs.readFile(SRC_URL, 'utf8');
+    const m = src.match(/SF_PING_FALLBACK_FAULT_CODES\s*=\s*new Set\(\[([^\]]*)\]\)/);
+    assert.ok(m, 'SF_PING_FALLBACK_FAULT_CODES must be defined as a Set literal');
+    const codes = m[1].split(',').map((s) => s.trim().replace(/^"|"$/g, '').replace(/^'|'$/g, '')).filter(Boolean);
+    assert.deepEqual(codes.sort(), ['INVALID_LOGIN', 'INVALID_SSO_GATEWAY_URL'].sort());
+  });
+
+  it('the gateway call is reached only inside handleSfPing, after the SOAP try/catch has already run', async () => {
+    const src = await fs.readFile(SRC_URL, 'utf8');
+    const start = src.indexOf('async function handleSfPing');
+    assert.ok(start >= 0);
+    const body = src.slice(start, start + 3500);
+    const soapCallIdx = body.indexOf('await sfLogin()');
+    const gatewayCallIdx = body.indexOf('await sfGatewayQuery(');
+    assert.ok(soapCallIdx >= 0, 'handleSfPing must still attempt sfLogin() first');
+    assert.ok(gatewayCallIdx > soapCallIdx, 'the gateway fallback must be reached only after the SOAP attempt');
+  });
+
+  it('success/failure responses from the fallback path are tagged via: "pa_gateway" and never omit soap_fault_code', async () => {
+    const src = await fs.readFile(SRC_URL, 'utf8');
+    const start = src.indexOf('async function handleSfPing');
+    const body = src.slice(start, start + 3500);
+    const matches = body.match(/via:\s*"pa_gateway"/g) || [];
+    assert.ok(matches.length >= 2, 'both the fallback success and failure branches must tag via: "pa_gateway"');
+    assert.match(body, /soap_fault_code:\s*soapFault\?\.faultCode\s*\?\?\s*null/);
+  });
+
+  it('handleSfPing never returns SF_LOOKUP_WEBHOOK_URL or a raw record body from the fallback path', async () => {
+    const src = await fs.readFile(SRC_URL, 'utf8');
+    const start = src.indexOf('async function handleSfPing');
+    const body = src.slice(start, start + 3500);
+    assert.doesNotMatch(body, /SF_LOOKUP_WEBHOOK_URL/);
+    assert.doesNotMatch(body, /result\.records/);
   });
 });

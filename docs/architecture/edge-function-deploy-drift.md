@@ -346,3 +346,18 @@ toggle) plus `intake-salesforce?action=sf-ping`, an authenticated GET diagnostic
 unauthenticated endpoint, and no new function slug (`intake-salesforce` v24 → v25). Read-only:
 `SELECT Id, Subject, Status FROM Task WHERE IsClosed = false LIMIT 5`. The `SF_*` secrets now have
 a consumer again — `DRIFT1-retire-secrets` closes as "kept, and used."
+
+## 2026-09-09 — SF-DIRECT-b: `sf-ping` gains a PA-gateway fallback (`intake-salesforce` v25 → v26)
+
+SOAP login was proven at v25 to be refused at the org's door (`INVALID_SSO_GATEWAY_URL` — the
+integration user's Salesforce profile is under corporate SSO). Rather than wait on an IT change,
+`sf-ping` now falls back to the already-working PA gateway ("HTTP Switch Salesforce Lookup",
+`sf-http-switch-lookup`) via `supabase/functions/_shared/salesforce-gateway.ts::sfGatewayQuery`, on
+exactly two named SOAP fault codes (`INVALID_SSO_GATEWAY_URL`, `INVALID_LOGIN`) — any other SOAP
+failure (network, malformed response, missing env) is reported as-is, never masked by a fallback
+that happened to work for an unrelated reason. Response gains `via: "soap" | "pa_gateway"` and, on
+fallback, `soap_fault_code`. Same auth gate, same function slug, no new secret shape — the flow's
+new `soql` operation reuses `SF_LOOKUP_WEBHOOK_URL`, now also set on Dialysis_DB (see
+`AI-SURFACES-OPERATIONAL-REFERENCE.md`). Deploy: `intake-salesforce` v25 → v26. 👤 Scott: build the
+flow's `soql` case per `docs/architecture/flows/http-switch-salesforce-lookup.md`, re-export, set the
+secret, deploy, then run `sf-ping` — record the returned `open_tasks` count and `via` value only.

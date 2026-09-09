@@ -72,6 +72,16 @@ concatenated) + the optional `SF_LOGIN_HOST` (defaults `login.salesforce.com`; s
 same three secrets `sf-test` held before its 2026-09-09 deletion — kept by decision, now consumed by
 `intake-salesforce?action=sf-ping`.
 
+- ⚠️ **`SF_LOOKUP_WEBHOOK_URL` is now needed on Dialysis_DB too (SF-DIRECT-b, 2026-09-09).** Until
+  now it lived only in the Railway env, read by `api/_shared/salesforce.js` (Node). SOAP login was
+  proven to fail at the org's door (`INVALID_SSO_GATEWAY_URL` — the integration user's Salesforce
+  profile is under corporate SSO), so `sf-ping` falls back to the same PA gateway flow ("HTTP Switch
+  Salesforce Lookup", `sf-http-switch-lookup`) via `supabase/functions/_shared/salesforce-gateway.ts`
+  — same signed URL, same secret value, set a second time on the Supabase project:
+  `supabase secrets set SF_LOOKUP_WEBHOOK_URL="<the flow's HTTP POST URL>" --project-ref zqzrriwuavgrquhisnoa`.
+  The URL carries a `?sig=...` signature — never log it, never put it in a doc; treat both copies
+  (Railway env var, Supabase secret) identically as secrets.
+
 ## 3. Comps engine — operational reference (`mcp/comps-tools.js`)
 - **Data is NOT the problem.** Dialysis_DB (`zqzrriwuavgrquhisnoa`) holds **3,022 live sold dialysis comps
   (1985–2026, 48 states, 100+ FL)** in `sales_transactions` (`transaction_state='live'`); `v_sales_comps` is built
