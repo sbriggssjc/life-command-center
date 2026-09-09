@@ -85,3 +85,16 @@ recorded).
 
 ---
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
+## Cowork reconcile — deploy + first live run (2026-09-09)
+
+Deployed v25 (`verify_jwt=false` confirmed). Live: no header → 401; real secret → 200 and the handler ran;
+first call `sf:LOGIN_MUST_USE_SECURITY_TOKEN` (token stale after seven idle months — reset and re-set);
+second call **`sf:INVALID_SSO_GATEWAY_URL`** — the integration user's profile is under delegated
+authentication (corporate SSO), so Salesforce refuses password API login by policy. **Code and deploy are
+complete and proven to Salesforce's door; the remaining step is a Salesforce-admin profile change (backlog
+SF-DIRECT, 👤).** Counts not recorded because no query ran. The May audit's description of `sf-test` as having
+"queried 5 open tasks" is not corroborated by any recorded success; treat the rebuilt path as the first
+end-to-end measurement.

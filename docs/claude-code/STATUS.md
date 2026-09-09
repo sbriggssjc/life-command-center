@@ -16,6 +16,33 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — SF-DIRECT deployed (v25) and proven to Salesforce's door — then blocked by the org's SSO policy, not by code
+
+Scott deployed `intake-salesforce` **v25** (`--no-verify-jwt`; Cowork confirmed `verify_jwt=false` from
+`list_edge_functions`). Live sequence, each step measured:
+
+1. `GET ?action=sf-ping` with no header → **401**. With the literal placeholder → 401. With the real
+   `PA_WEBHOOK_SECRET` (read from the Object Sync flow's HTTP header) → **200**, the handler ran. *The gate works.*
+2. First real call → `sf:LOGIN_MUST_USE_SECURITY_TOKEN` in 443 ms. The SOAP envelope reached Salesforce and the
+   username/password pair was accepted; the appended token was stale — Salesforce regenerates it on every
+   password change and `sf-test` had sat idle since March. `supabase secrets list` showed `SF_SECURITY_TOKEN`
+   present; Scott reset the token in Salesforce and `supabase secrets set` it (no redeploy needed).
+3. Second call → **`sf:INVALID_SSO_GATEWAY_URL`** in 615 ms. That fault means the integration user's profile has
+   **"Is Single Sign-On Enabled" (delegated authentication)**: a username/password API login is not validated by
+   Salesforce but handed to the org's SSO gateway, whose URL is invalid for this path. Northmarq runs corporate
+   SSO. **No credential value gets past this; it is a Salesforce-admin setting.**
+
+**Verdict:** the capability is built, deployed, authenticated and proven to Salesforce's front door. It is
+blocked one profile setting short of working. 👤 **Scott → Northmarq Salesforce admin:** either clear *Is Single
+Sign-On Enabled* on the integration user's profile (API-only user is the standard pattern), or provide a
+dedicated API-only integration user outside SSO. Until then SF-DIRECT stays 🟡 with a named external blocker,
+and every outbound Salesforce lane stays on the Power Automate connector as designed.
+
+⚠️ **Honest correction to the record:** the May audit's line that `sf-test` "tests SF credentials and queries 5
+open tasks" described what the code *tried* to do. Nothing on file records it ever returning a successful
+result, and the org's SSO policy predates the rebuild — so the capability `sf-test` "proved" may never have
+worked past login. What it proved is the *design*; today is the first time the path was measured end to end.
+
 ## 2026-09-09 — C13g-min prompt drafted (entity retype behind a human verdict); SF-DIRECT response reconciled
 
 Next step after the OWN-T0e after-state (PR #2193 merged): **C13g-min**, prompt at
