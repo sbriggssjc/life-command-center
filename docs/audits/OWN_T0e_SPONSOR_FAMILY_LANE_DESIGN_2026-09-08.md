@@ -317,8 +317,12 @@ P149-shaped metadata stamp) and `v_lcc_entity_retype_candidates` (18 rows). Beca
 `entities.entity_type` LIVE at verdict time, a retype followed by `same_party` + `merge_now` on the sponsor's
 card works in the same minute; only the card's display lags the 4-hourly cache.
 
-**Not built:** the `entity_type_review` Decision Center lane — the human verdict still has no card
-(backlog `C13g-min-lane`). Until it ships the operator path is an RPC call with `p_reason`. ⚠️ **Predict the
+~~**Not built:** the `entity_type_review` Decision Center lane — the human verdict still has no card
+(backlog `C13g-min-lane`). Until it ships the operator path is an RPC call with `p_reason`.~~ ✅ **The lane
+SHIPPED the same day (PR #2202, `d00d5bbd`) and is DEPLOYED — `/version` = `3cd0e782`, `merge-base` confirms
+both the migration and the lane commit are in it.** The operator path is the `entity_type_review` card
+(Decision Center → merges/dupes), which re-reads the candidate view at verdict time and, on
+`retype_organization`, points at the sponsor card to finish with `same_party` + `merge_now`. ⚠️ **Predict the
 merge's yield from the third claimants, not the pair count:** 10 of Gardner's 14 and 4 of MassMutual's 14
 co-claimed properties carry the firm's own SPEs as a third current owner (no shared token), so
 `unclassified_rival` moves **−4 / −10**, not −14 / −14; the residue is §3's un-reachable class. Canonical
