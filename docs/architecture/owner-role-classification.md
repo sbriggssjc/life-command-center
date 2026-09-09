@@ -938,6 +938,11 @@ and are the OWN-T0e design §3 "gate does not reach" class. MassMutual Life: 4 o
 > `v_lcc_ownt0e_sponsor_family_proposals` (the ~20–35 s view) were repointed at
 > `lcc_ownt0e_sponsor_family_proposals_cache` — migration `20261101130000` — 34.7 s → 58 ms, output md5-identical.
 > The OWN-T0e design §6 rule this re-learned: **never read the proposals view at request time; read the cache.**
+>
+> ⚠️ **HOTFIX 2 (same day): the first real verdict failed 22P02** — `lcc_retype_entity(p_decision_id uuid)` against
+> `lcc_decisions.id` **bigint**. Migration `20261101140000`: ledger column + parameter → bigint, old signature
+> DROPPED, privileges re-asserted, apply-time type assertion. **A positive control must pass the caller's real
+> argument shape** — the shipped control nulled the decision id and so proved nothing about it.
 
 
 **Built:** decision type `entity_type_review` in all four registries — `api/admin.js` `FEDERATED_DECISION_TYPES`
