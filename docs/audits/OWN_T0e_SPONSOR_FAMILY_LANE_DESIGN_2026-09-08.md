@@ -212,3 +212,38 @@ property_state='conflict' group by 1` before/after each confirm; `select count(*
 lcc_ownership_sponsor_family` = 6 + confirms; the lane's `parts` (`breadth` 131 / `tied` 51 /
 `duplicate_entity_suspect` 13 at build) and `total` 182 falling by one per verdict. Read
 `cache_refreshed_at` on the lane before quoting a count.
+
+## 7. OWN-T0e-b (2026-09-09) — `same_party` can merge the pair here; and what the first live read of the 5 unreachable pairs said
+
+**Deploy of §6 verified first** (`/version` = `d264a7fb`, the merge commit; lane answers 182 / breadth 131 /
+tied 51 / top card NGP Capital $43.2M; the cache cron ran unattended at 12:27 UTC). ⚠️ Correction to §6:
+`parts.duplicate_entity_suspect` reads **19, not 13** — §3a counted breadth groups only; six tied groups
+also have both sides holding ≥2.
+
+**Shipped:** `same_party` with `payload.merge_now: true` + `duplicate_entity_id` merges the named duplicate
+INTO the sponsor through `lcc_merge_entity` (P196: snapshot + `lcc_entity_merge_log`, reverse with
+`lcc_unmerge_entity(loser)`), then the same two cache refreshes the merge lane issues. ONE loser per verdict;
+the rest of a group stays on the card. Guards, all read LIVE at verdict time: both ids are members; loser ≠
+winner; on a tied group the operator names the survivor (must be a member); neither is a tombstone; **the
+two carry the same recorded `entity_type`** (A2a: a name-shape guess would hold six real companies; the
+recorded type is the fact — merging a person into an organisation is the P167 error). Without `merge_now`
+the verdict is byte-identical to §6 (record + forward). Client: a duplicate picker over the non-sponsor
+members and a "Merge duplicate now (reversible)" button behind a `window.confirm`. Guard grew to 16 tests,
+**13/13 new mutations RED**. Positive control, rolled back, on `InCommercial, Inc.` → `Incommercial
+Property Group`: `lcc_entity_merge_log` 145 → 146 → 145, loser tombstoned to the winner inside the
+transaction and live again after, `v_lcc_entity_merge_reversibility.reversible = true`.
+
+**⚠️ The first read of the 5 "unreachable" pairs changes what OWN-T0e-b is for:**
+
+| pair (sponsor ← duplicate) | recorded types | reading |
+|---|---|---|
+| `Gardner Tanenbaum Holdings` ← `Gardner-Tanenbaum` | organization ← **person** | a genuine duplicate the same-type guard will REFUSE until `Gardner-Tanenbaum` is retyped — the C13c `entity_type` class (P198 already found this firm's 240 relationships split across two entities). The refusal names the real blocker. |
+| `Incommercial Property Group` ← `InCommercial, Inc.` | org ← org | duplicate; merge_now applies |
+| `Four Springs Capital` ← `Four Springs Cap Trust` | org ← org | plausible duplicate (abbreviated legal form) — human call |
+| `Truist Bank` ← `Truist Financial Corporation` | org ← org | **parent ↔ subsidiary, not a duplicate** — `not_family`/leave, or a family confirm if the bank holds title for the parent; a merge would be wrong |
+| `NGP Group` (sponsor on its own card) | — | this "sponsor" is itself a duplicate of `NGP Capital`; the fix is the NGP Capital card's `same_party`, not this one |
+
+So of the five, two are clean merges, one needs a retype first, one is not a duplicate at all, and one is
+the wrong card. **`spe_props_max ≥ 2` is a signal that something other than a family is going on, not a
+duplicate detector** — read the pair before choosing the verdict. Not built: an entity retype from this
+lane (backlog **C13g** owns `entity_type` repair); the guard's refusal message says "retype first".

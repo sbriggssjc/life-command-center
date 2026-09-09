@@ -139,12 +139,40 @@ export function validateSponsorFamilyVerdict(card, verdict, payload, live) {
   }
 
   if (v === 'same_party') {
-    // Optional: the operator may name which member is the duplicate. Validated
-    // against the group; the write itself happens on merge_duplicate_entities.
+    // Two shapes. Without `merge_now` (the OWN-T0e default): record + forward to
+    // merge_duplicate_entities, no write; a named duplicate is validated only.
+    // With `merge_now: true` (OWN-T0e-b): the pair is merged HERE through
+    // lcc_merge_entity (reversible, P196) — because 5 of the 13 duplicate-suspect
+    // groups have no card on the merge lane (its canonical key does not group
+    // `Gardner Tanenbaum Holdings` with `Gardner-Tanenbaum`). The winner is the
+    // sponsor (breadth: the card's; tied: the operator's pick), the loser the
+    // operator-named duplicate; both must be members, distinct, live, and of the
+    // SAME recorded entity_type (A2a: a name-shape guess would hold six real
+    // companies; the recorded type is the fact — and merging a person into an org
+    // is the P167 error). Never inferred, never more than one loser per verdict.
     const dup = p.duplicate_entity_id ? String(p.duplicate_entity_id) : null;
     if (dup && !members.has(dup)) return { ok: false, error: 'duplicate_entity_id is not a member of this group' };
-    return { ok: true, verdict: v, sponsor_entity_id: card.sponsor_id ? String(card.sponsor_id) : null,
-      sponsor_token: tok, duplicate_entity_id: dup };
+    const mergeNow = p.merge_now === true;
+    let winner = card.sponsor_id ? String(card.sponsor_id) : null;
+    if (mergeNow) {
+      if (!dup) return { ok: false, error: 'merge_now requires duplicate_entity_id' };
+      if (card.sponsor_side === 'tied') {
+        winner = p.sponsor_entity_id ? String(p.sponsor_entity_id) : null;
+        if (!winner) return { ok: false, error: 'tied group: sponsor_entity_id required — name the survivor' };
+        if (!members.has(winner)) return { ok: false, error: 'sponsor_entity_id is not a member of this group' };
+      } else if (p.sponsor_entity_id && String(p.sponsor_entity_id) !== winner) {
+        return { ok: false, error: 'sponsor_entity_id does not match the card\'s sponsor' };
+      }
+      if (!winner) return { ok: false, error: 'no survivor to merge into' };
+      if (winner === dup) return { ok: false, error: 'duplicate_entity_id is the sponsor itself' };
+      if (lv.sponsor_is_tombstone === true) return { ok: false, error: 'sponsor entity is merged away — resolve through lcc_entity_survivor first' };
+      if (lv.duplicate_is_tombstone === true) return { ok: false, error: 'duplicate entity is already merged away' };
+      if (lv.sponsor_type && lv.duplicate_type && lv.sponsor_type !== lv.duplicate_type) {
+        return { ok: false, error: 'entity_type differs (' + lv.sponsor_type + ' vs ' + lv.duplicate_type + ') — not a duplicate, retype first' };
+      }
+    }
+    return { ok: true, verdict: v, sponsor_entity_id: winner, sponsor_token: tok,
+      duplicate_entity_id: dup, merge_now: mergeNow };
   }
 
   return { ok: true, verdict: v, sponsor_entity_id: card.sponsor_id ? String(card.sponsor_id) : null, sponsor_token: tok };

@@ -13030,18 +13030,28 @@ async function handleDecisionVerdict(req, res) {
       // both facts for whichever id the planner will name.
       const candidateSponsor = tied ? (payload.sponsor_entity_id ? String(payload.sponsor_entity_id) : null)
         : (card.sponsor_id ? String(card.sponsor_id) : null);
+      const mergeNow = verdict === 'same_party' && payload.merge_now === true;
+      const candidateDup = mergeNow && payload.duplicate_entity_id ? String(payload.duplicate_entity_id) : null;
       let live = { registry_has: false, sponsor_is_tombstone: false };
-      if (verdict === 'confirm_family' && candidateSponsor) {
-        const [regR, entR] = await Promise.all([
+      if ((verdict === 'confirm_family' || mergeNow) && candidateSponsor) {
+        const [regR, entR, dupR] = await Promise.all([
           opsQuery('GET', SPONSOR_FAMILY_REGISTRY_TABLE + '?select=sponsor_entity_id'
             + '&sponsor_entity_id=eq.' + pgFilterVal(candidateSponsor) + '&sponsor_token=eq.' + pgFilterVal(tok) + '&limit=1'),
-          opsQuery('GET', 'entities?select=id,merged_into_entity_id&id=eq.' + pgFilterVal(candidateSponsor) + '&limit=1'),
+          opsQuery('GET', 'entities?select=id,merged_into_entity_id,entity_type&id=eq.' + pgFilterVal(candidateSponsor) + '&limit=1'),
+          candidateDup
+            ? opsQuery('GET', 'entities?select=id,merged_into_entity_id,entity_type&id=eq.' + pgFilterVal(candidateDup) + '&limit=1')
+            : Promise.resolve({ ok: true, data: [] }),
         ]);
         const ent = (entR.ok && Array.isArray(entR.data)) ? entR.data[0] : null;
+        const dupEnt = (dupR.ok && Array.isArray(dupR.data)) ? dupR.data[0] : null;
         live = {
           registry_has: !!(regR.ok && Array.isArray(regR.data) && regR.data[0]),
           // an entity we cannot read is treated as a tombstone: fail CLOSED on a write
           sponsor_is_tombstone: !ent || ent.merged_into_entity_id != null,
+          sponsor_type: ent ? (ent.entity_type || null) : null,
+          // OWN-T0e-b: the loser of a merge_now must be live and the same recorded type
+          duplicate_is_tombstone: candidateDup ? (!dupEnt || dupEnt.merged_into_entity_id != null) : false,
+          duplicate_type: dupEnt ? (dupEnt.entity_type || null) : null,
         };
       }
       const gate = validateSponsorFamilyVerdict(card, verdict, payload, live);
@@ -13060,13 +13070,34 @@ async function handleDecisionVerdict(req, res) {
         if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
         return res.status(200).json({ ok: true, verdict: 'not_family', sponsor_token: tok });
       }
-      if (action === 'same_party') {
+      if (action === 'same_party' && !gate.merge_now) {
         const rr = await record('same_party', 'decided',
           Object.assign({}, verdictCtx, { duplicate_entity_id: gate.duplicate_entity_id || null }),
           { sponsor_family: 'routed_to_merge', merge_lane: 'merge_duplicate_entities' });
         if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
         return res.status(200).json({ ok: true, verdict: 'same_party', sponsor_token: tok,
           next: { action: 'merge_lane', winner_id: gate.sponsor_entity_id, duplicate_entity_id: gate.duplicate_entity_id || null } });
+      }
+      if (action === 'same_party' && gate.merge_now) {
+        // OWN-T0e-b: ONE reversible merge — the operator-named duplicate INTO the
+        // sponsor — through the single merge writer (lcc_merge_entity, snapshot +
+        // lcc_entity_merge_log since P196; reverse with lcc_unmerge_entity(loser)).
+        // Same refresh set as the merge_duplicate_entities verdict. Never more than
+        // one loser per verdict; the rest of a group stays on the card.
+        const mr = await opsQuery('POST', 'rpc/lcc_merge_entity', { p_loser: gate.duplicate_entity_id, p_winner: gate.sponsor_entity_id });
+        if (!mr.ok) {
+          await recordEffectFailure({ merge: false, error: mr.data });
+          return res.status(502).json({ error: 'sponsor_family_confirm: merge_failed', detail: mr.data });
+        }
+        try { await opsQuery('POST', 'rpc/lcc_refresh_buyer_spe_resolved', {}); } catch (_e) { /* soft */ }
+        try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+        const rr = await record('same_party', 'decided',
+          Object.assign({}, verdictCtx, { duplicate_entity_id: gate.duplicate_entity_id, merge_now: true }),
+          { sponsor_family: 'merged', lcc_merge_entity: 'merged', winner_id: gate.sponsor_entity_id, loser_id: gate.duplicate_entity_id,
+            reverse: 'select lcc_unmerge_entity(<loser_id>)' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'same_party', merged: 1, sponsor_token: tok,
+          winner_id: gate.sponsor_entity_id, loser_id: gate.duplicate_entity_id });
       }
       if (action === 'research') {
         const rt = await createResearchTask({
