@@ -934,6 +934,12 @@ and are the OWN-T0e design §3 "gate does not reach" class. MassMutual Life: 4 o
 
 ## 9f. ✅ C13g-min-lane SHIPPED 2026-09-09 — the `entity_type_review` Decision Center lane over the retype write
 
+> ⚠️ **HOTFIX 2026-09-09 (same day): the candidate view 502'd the lane on first open.** Both of its references to
+> `v_lcc_ownt0e_sponsor_family_proposals` (the ~20–35 s view) were repointed at
+> `lcc_ownt0e_sponsor_family_proposals_cache` — migration `20261101130000` — 34.7 s → 58 ms, output md5-identical.
+> The OWN-T0e design §6 rule this re-learned: **never read the proposals view at request time; read the cache.**
+
+
 **Built:** decision type `entity_type_review` in all four registries — `api/admin.js` `FEDERATED_DECISION_TYPES`
 + `federatedSubjectRef` (`etype:<entity_id>`), `ops.js` `_DC_FEDERATED` + the lane tile, `dc-lanes.js`
 `_DC_FED_META` + the card renderer + the `sponsor_family_lane` forward, `review-shared.js` (lane `entity_merge`,

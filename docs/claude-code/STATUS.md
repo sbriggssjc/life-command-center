@@ -59,6 +59,21 @@ on the unpatched file** (2 failures) and green after. Full suite 5,545 / 0 / 6 s
 👤 **Scott:** move the exported flow zip from Downloads to
 `private\power-automate\exports\production\2026-09-09\` (git-ignored), then redeploy v27 and re-ping;
 report `via` + `open_tasks` only.
+## 2026-09-09 — C13g-min-lane 502'd on first open: the candidate view read the 35 s PROPOSALS VIEW, not the OWN-T0e cache — fixed live, view-only
+
+Scott opened "Entity type — person or organization?" and got **HTTP 502 `federated_list_failed`**. Reproduced
+from the DB side (`net.http_get` with the vault key): body `"This operation was aborted"` = `opsQuery`'s **8 s**
+fetch abort. `EXPLAIN ANALYZE` on `v_lcc_entity_retype_candidates`: **34.7 s** — both its `own_t0e_blocked` CTE
+and its per-row LATERAL referenced `v_lcc_ownt0e_sponsor_family_proposals`, the view OWN-T0e design §6 measured
+at 64 → 20 s and deliberately put behind `lcc_ownt0e_sponsor_family_proposals_cache` *because a view built for
+point-queries is not a population source*. The C13g-min migration re-committed that exact footgun, and its own
+"18 rows" check could not see it — the SQL editor's statement timeout is longer than the app's fetch. ⚠️ **"The
+view returns the right rows" is not "the lane loads"; measure the read the HANDLER makes, at the HANDLER's
+timeout.** Migration `20261101130000_lcc_c13g_min_lane_view_reads_cache.sql` (whole view restated, both refs →
+the cache): **58 ms**, output **md5-identical** (18 rows, same two blocked cards), and the live endpoint now
+answers **200 / total 18** with Gardner-Tanenbaum first. No JS changed, no deploy. Trade: the blocker column can
+lag the 4-hourly cache — the same lag the sponsor lane shows; the write-gating facts are still read live.
+
 ## 2026-09-09 — C13g-min-lane reconciled (PR #2202) and DEPLOYED: the retype verdict has a card; the next step is Scott working it
 
 **Deploy verified**: `/version` = `3cd0e782` (read via `net.http_get` from LCC Opps); `git merge-base --is-ancestor`
