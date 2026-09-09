@@ -17,6 +17,15 @@ Concrete new URLs must come from `server.js`'s actual mounted routes (grepped, n
   (`app.all('/api/daily-briefing', ...)` → `_route=edge-brief&action=snapshot` via `adminHandler`).
   👤 Scott: open the Cowork desktop task **"daily-briefing-cache"** and change its configured host from
   `life-command-center-nine.vercel.app` to the Railway host.
+  ✅ **RESOLVED 2026-09-09 (walked in Cowork).** The caller was NOT the desktop task and NOT either v2
+  flow. It was the **May-2026 Power Automate flow "LCC Daily Briefing to Teams"** (no hyphen — the July
+  replacement is "LCC - Daily Briefing to Teams"), still ON, GETting the Vercel host every weekday at
+  12:30 UTC with a successful run history. **Turned OFF by Scott 2026-09-09, not deleted.** Registered in
+  `FLOW-REGISTRY.yaml` as `retired-daily-briefing-teams-v1`; the two v2 flows registered as
+  `briefing-daily-teams-v2` / `briefing-morning-email-v2` (both already on Railway). The desktop task
+  `daily-briefing-cache` (06:30 CT, `/api/activities?_route=daily-briefing` — a path Railway swallows) was
+  inert and redundant with the 10:00/10:18 crons → 👤 disable it rather than repoint (repointing would
+  re-fire the snapshot after the 10:18 Analyst's Take write — the V4 hazard).
   **Proof:** re-run the preflight's §2c query for the *next weekday* 12:30 UTC and confirm the 17-request
   `node` burst is gone from the AWS pool and no `v_my_work` 400 appears — ~~confirm the writing IP falls in the Railway block~~ (there is no Vercel-side write to move; the repointed task will hit Railway's `/api/daily-briefing`, whose reads come from the Railway block (`152.55.176.x` / `152.55.177.x` / `162.220.232.x`),
   not the AWS ephemeral pool.

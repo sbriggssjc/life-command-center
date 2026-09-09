@@ -321,3 +321,15 @@ level inside one already-synced repo, not at the deploy boundary.
   Salesforce rows that route to `null` and get silently skipped leaves no row in either domain's
   staging tables — a re-route replay of what IS staged cannot see what never arrived, exactly as
   the Limitation above says a repo-side check cannot see a deployment it was never told about.
+
+## 2026-09-09 — DRIFT1-retire executed; intake-salesforce v24 deployed with the routing fix
+
+Scott ran the four deletions and the redeploy from the Supabase CLI; Cowork verified live (both function
+lists re-read, gateway `NOT_FOUND` for the deleted slugs, `intake-salesforce` v24 `verify_jwt=false`, bare
+GET answering `sf-2026-05-v8`). Two things worth keeping from the pre-flight: (1) the redeploy was safe only
+because the repo file was the 2026-09-07 sync of the live body and `git log` showed no touch since — re-diff
+with `get_edge_function` before any future redeploy, exactly as this page's runbook says; (2)
+**`intake-salesforce` was never pinned in `supabase/config.toml`** — a bare `functions deploy` would have
+re-enabled the gateway JWT check and 401'd the hourly Object Sync, the trap `intake-salesforce-files` and
+`lead-ingest` already fell into. Pinned the same day. The `SF_*` secrets `sf-test` used now have no consumer
+(backlog `DRIFT1-retire-secrets`).

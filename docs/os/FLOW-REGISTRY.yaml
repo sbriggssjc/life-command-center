@@ -307,6 +307,41 @@ flows:
     sha256: dc6c0785aa18924fa135fd0d99ab29767045a76bb8d984f1efcd1b8429336708
     runbook: docs/architecture/flows/http-switch-salesforce-lookup.md
 
+  - logical_id: briefing-daily-teams-v2
+    display_name: "LCC - Daily Briefing to Teams"
+    flow_guid: cfd7f087-e50d-4e15-8b63-9d74a19817de
+    group: briefing
+    priority: B
+    state: verified_from_export
+    trigger: recurrence
+    connectors: [teams]
+    endpoint_families: [railway-daily-briefing-snapshot]
+    exported_at: "2026-09-09T12:25:33Z"
+    package_path: private/power-automate/exports/production/2026-09-09/briefing/LCCDailyBriefingtoTeams_20260909122533.zip
+    runbook: docs/architecture/flows/lcc-daily-briefing.md
+    notes: >-
+      Created 2026-07-16 as the replacement for the v1 Teams flow. Daily 12:30 UTC recurrence with an
+      in-flow Condition; GET https://tranquil-delight-production-633f.up.railway.app/api/daily-briefing
+      ?action=snapshot&role_view=broker with x-lcc-key / x-lcc-workspace; card links also on Railway.
+      ⚠️ The export carries the API key in plaintext in the HTTP header — set Secure Inputs on that action
+      (hygiene item, 2026-09-09) and keep the zip under private/, never in docs/.
+  - logical_id: briefing-morning-email-v2
+    display_name: "LCC Morning Briefing v2"
+    flow_guid: 63156e98-82c2-421a-97c2-c4049f8668b6
+    group: briefing
+    priority: B
+    state: verified_from_export
+    trigger: recurrence
+    connectors: [office365, teams]
+    endpoint_families: [railway-briefing-email, lcc-flow-failure-ledger]
+    exported_at: "2026-09-09T12:02:31Z"
+    package_path: private/power-automate/exports/production/2026-09-09/briefing/LCCMorningBriefingv2_20260909120231.zip
+    runbook: docs/architecture/flows/lcc-weekday-briefing-email.md
+    notes: >-
+      Mon-Fri 12:30 UTC. Gets calendar (V4) + To Do tasks, POSTs to
+      https://tranquil-delight-production-633f.up.railway.app/api/briefing-email, sends the email;
+      on failure posts a dead-letter row via lcc_record_flow_failure (p_flow_name "LCC Weekday Briefing
+      Email"). Already on Railway — NOT the J13 caller, despite sharing its schedule.
 retired_flows:
   - logical_id: retired-todo-lcc-sync
     display_name: "To Do - Life Command Center Sync"
@@ -316,3 +351,25 @@ retired_flows:
     display_name: "Unflag Completed Email Tasks"
     flow_guid: null
     state: retired
+  - logical_id: retired-daily-briefing-teams-v1
+    display_name: "LCC Daily Briefing to Teams"
+    flow_guid: null
+    state: retired
+    retired_at: "2026-09-09"
+    retired_by: scott
+    reason: >-
+      May-2026 original (no hyphen in the name). Still ON and still GETting the RETIRED Vercel host
+      /api/daily-briefing?action=snapshot&role_view=broker every weekday at 12:30 UTC — the caller
+      behind the J13 preflight's AWS `node` burst with 3 x 400 (v_my_work, mv_user_work_counts,
+      action_items). Superseded by briefing-daily-teams-v2 (2026-07-16), which already targets
+      Railway. Turned OFF 2026-09-09 (not deleted; run history kept as evidence). Never in this
+      registry until now — the PA5 gap. Was exported 2026-05-11 as LCCDailyBriefing_20260511215104.zip.
+  - logical_id: retired-morning-briefing-v1
+    display_name: "LCC Morning Briefing"
+    flow_guid: null
+    state: unknown_not_seen
+    reason: >-
+      May-2026 weekly email flow documented in docs/architecture/flows/lcc-morning-briefing.md as
+      GETting the retired Vercel /api/briefing-email. Not present in the 2026-09-09 "briefing" search of
+      My flows (four results: the two v2 flows, the v1 Teams flow above, and the Instant webhook
+      flow) — presumably already deleted. Recorded so nobody goes looking for it again.
