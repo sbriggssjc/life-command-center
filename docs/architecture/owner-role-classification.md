@@ -802,6 +802,10 @@ producers, read by other consumers — **size it and file it**), and touch `inve
 
 ### 9b. The `entities.entity_type` size — C13g, filed not started
 
+> ⚠️ **SUPERSEDED IN PART 2026-09-09 — §9e.** The size below stands; "not started" does not. C13g-min shipped the
+> per-row retype write (RPC + ledger + candidate view, live on LCC Opps, PR #2196). The capture-path fix and the
+> operator lane are still unbuilt.
+
 **Non-lexical floor, both directions: 414 of 56,192 live entities (0.74%).** 338 typed `person`
 carrying a `salesforce/Account` ($0 current rent — none holds a portfolio fact); **76 typed
 `organization` carrying a `salesforce/Contact`, $181.8M**. `works_at` produces **zero**
@@ -889,3 +893,41 @@ one arm's evidence and nothing else.
 **The count deliberately did not fall.** 142 → 13 would have discarded `Maslow Robert C & Michele C`
 and every genuine individual simply absent from Salesforce; the split preserves them while ending the
 assertion that a $22.8M institutional manager is a one-off individual investor.
+
+## 9e. ✅ C13g-min DB half SHIPPED 2026-09-09 (PR #2196, `bd2e556f`) — a single-row retype behind a human verdict; the lane is NOT built
+
+**What is live on LCC Opps** (migration `20261101120000_lcc_c13g_min_entity_retype.sql`, applied; verified by
+`has_function_privilege` read-back, not by the migration text):
+
+- **`lcc_retype_entity(p_entity, p_to, p_decision_id, p_reason, …)`** — the ONE writer. `SECURITY DEFINER`,
+  **`anon` and `authenticated` EXECUTE = false** on both it and `lcc_unretype_entity(uuid)` (SEC1 stanza in
+  the same file). Refuses any `p_to` other than `organization`, a tombstone, or a non-`person` source.
+  Writes **`lcc_entity_retype_log`** (`from_type`, `to_type`, `decision_id`, `reason`, `retyped_at`,
+  `reverted_at`) AND stamps `metadata.c13g_prior_entity_type` — the P149 reversal shape, so one
+  `update … where metadata ? …` covers both sweeps. `lcc_unretype_entity` restores from the log.
+- **`v_lcc_entity_retype_candidates`** — live `person`-typed entities holding ≥2 current portfolio facts,
+  UNION any person-typed member of an OWN-T0e `spe_props_max ≥ 2` group whose sponsor is an organization.
+  **18 rows / $69,427,930** — the prompt's predicted 18 / $69.4M exactly. Every recorded corroboration is on
+  the row (`has_salesforce_contact`, `has_salesforce_account`, `n_rca_contact_ids`, `n_costar_contact_ids`,
+  `looks_like_person_warning`, `has_org_marker`, `relationship_count`, `resolved_owner_of`,
+  `blocks_own_t0e_sponsor_id` / `_token`). The view is anon-SELECTable by Supabase's default grant;
+  **nothing new leaks** — `entities` itself is anon-readable — noted, not changed.
+- **Positive control, rolled back, on the real row**: `Gardner-Tanenbaum` (4dac1df8…) person →
+  organization → `lcc_unretype_entity` → byte-identical (`entity_type='person'`, metadata key cleared).
+  `lcc_entity_retype_log` reads **0** after; nothing has been retyped for real.
+- Guard `test/c13g-min-entity-retype.test.mjs` — **10 source-shape tests, no mutation pass yet.**
+
+**Two footguns paid for on the way in, both already in this repo's invariants:** `entity_type` is an ENUM,
+not text (`::entity_type` casts); and the unretype function hit `#variable_conflict use_column`.
+
+**What is NOT built — deliberately cut by the builder for scope, and now backlog `C13g-min-lane`:** the
+Decision Center lane `entity_type_review` (all four registries, card, planner, verdict branch), the
+mutation-verified guard, the §3 consumer census (the builder confirmed only that a retyped row becomes
+ELIGIBLE for `v_lcc_merge_candidates`; the Tier 0 `people`-bench delta and `v_lcc_entity_role_ambiguity`
+were not measured), and the 18-row named dry-run read. **The RPC is callable today** (`rpc/lcc_retype_entity`
+with the service key), so the two type-blocked OWN-T0e cards can be unblocked by an operator RPC call with
+`p_reason` and a null `p_decision_id` before the lane exists — the ledger still records it.
+
+**⚠️ Retype + merge on Gardner clears 4 conflict properties, not 14** — 10 of the 14 co-claimed properties
+carry a THIRD current claimant, the firm's own RTD/TEP SPEs, which share no brand token with the sponsor
+and are the OWN-T0e design §3 "gate does not reach" class. MassMutual Life: 4 of 14. Predict −4 / −10.

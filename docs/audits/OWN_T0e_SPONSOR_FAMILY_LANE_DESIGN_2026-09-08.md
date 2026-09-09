@@ -304,3 +304,22 @@ held on every card. Filed with **OWN-T0h**, which already owns the two-denominat
 
 **Reverse, if ever needed**: `DELETE from lcc_ownership_sponsor_family where sponsor_token in ('ngp','uirc')`
 (the decision id is in `notes`); `select lcc_unmerge_entity(loser_id)` for each of the three merge-log rows.
+
+## 9. C13g-min (2026-09-09, PR #2196) — the type guard's refusal now has an answer; the lane that asks it is not built
+
+§7's guard refuses `same_party` + `merge_now` when the recorded `entity_type` differs, and named
+`Gardner-Tanenbaum` (person) as the live case. Measured before building: **exactly two cards are type-blocked**
+(`Gardner-Tanenbaum` 18 facts / 14 co-claimed properties / $6.17M; `MassMutual Life` 14 / 14 / $5.25M), and a
+per-row retype serves **18 live person-typed multi-property owners, $69.4M** (companies at the head — UIRC,
+Global Net Lease, SMBC Leasing — and real people in the tail who must NOT be retyped). Live now on LCC Opps:
+`lcc_retype_entity` / `lcc_unretype_entity` (service_role-only, ledgered in `lcc_entity_retype_log`,
+P149-shaped metadata stamp) and `v_lcc_entity_retype_candidates` (18 rows). Because this lane reads
+`entities.entity_type` LIVE at verdict time, a retype followed by `same_party` + `merge_now` on the sponsor's
+card works in the same minute; only the card's display lags the 4-hourly cache.
+
+**Not built:** the `entity_type_review` Decision Center lane — the human verdict still has no card
+(backlog `C13g-min-lane`). Until it ships the operator path is an RPC call with `p_reason`. ⚠️ **Predict the
+merge's yield from the third claimants, not the pair count:** 10 of Gardner's 14 and 4 of MassMutual's 14
+co-claimed properties carry the firm's own SPEs as a third current owner (no shared token), so
+`unclassified_rival` moves **−4 / −10**, not −14 / −14; the residue is §3's un-reachable class. Canonical
+record: `docs/architecture/owner-role-classification.md` §9e.
