@@ -105,6 +105,14 @@ async function handleDeadLetter(req: Request, body: Record<string, unknown> | nu
 // gateway that "worked" for an unrelated reason.
 // ============================================================================
 const SF_PING_FALLBACK_FAULT_CODES = new Set(["INVALID_SSO_GATEWAY_URL", "INVALID_LOGIN"]);
+// Salesforce returns SOAP fault codes namespaced (`sf:INVALID_SSO_GATEWAY_URL`,
+// `sf:INVALID_LOGIN`); parseLoginResponse keeps the raw text. Compare on the
+// bare code so the gate matches what Salesforce actually sends. Measured live
+// 2026-09-09: v26 answered `via:"soap", fault_code:"sf:INVALID_SSO_GATEWAY_URL"`
+// without falling back — the Set held bare names, the fault carried the prefix.
+export function bareFaultCode(code: unknown): string {
+  return String(code ?? "").trim().replace(/^[A-Za-z0-9_-]+:/, "");
+}
 
 async function handleSfPing(req: Request): Promise<Response> {
   const startedAt = Date.now();
@@ -123,7 +131,7 @@ async function handleSfPing(req: Request): Promise<Response> {
     });
   } catch (err) {
     if (err instanceof SfAuthError) soapFault = err;
-    if (!(err instanceof SfAuthError) || !SF_PING_FALLBACK_FAULT_CODES.has(err.faultCode)) {
+    if (!(err instanceof SfAuthError) || !SF_PING_FALLBACK_FAULT_CODES.has(bareFaultCode(err.faultCode))) {
       const isAuth = err instanceof SfAuthError;
       return jsonResponse(req, {
         ok: false,
