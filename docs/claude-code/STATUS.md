@@ -49,8 +49,16 @@ from the exports; `retired-morning-briefing-v1` recorded as not-seen. YAML parse
 
 **Proof, tomorrow:** first weekday 12:30 UTC with no non-Railway `node` burst and no `v_my_work` 400
 from the AWS pool → the ≥ 8-day observation window (runbook step 2) starts. **Still open on day 1:**
-desktop task OFF (👤 confirm), Copilot Studio connector host, extension build, the Instant webhook flow's
-target, the mobile-share Shortcut (blocked: no route), **and the Railway dashboard check for I16b.**
+~~desktop task OFF (👤 confirm)~~ ✅ desktop task disabled by Scott, Copilot Studio connector host, extension build, the Instant webhook flow's
+target, the mobile-share Shortcut (blocked: no route), ~~**and the Railway dashboard check for I16b.**~~
+
+**Step 4 ✅ — Railway dashboard (project `handsome-luck`), read with Scott: I16/I16b RETRACTED.** Four web
+services, none dormant: `tranquil-delight` (web app, :8080) · **`life-command-center` = the standalone MCP
+server, `life-command-center-production.up.railway.app`, :3100 (`mcp/server.js` default)** · `pacific-love`
+(BOV generator) · **`gracious-radiance`** — a service the ops reference never named: the record-linkage
+resolver (`/health` → 0.1.0, splink/libpostal/gliner, `no_db_writes: true`), cited in four architecture docs.
+Five cron services beside them. **The backlog's instruction to delete the "dormant `life-command-center`
+service" would have deleted the MCP connector.** Ops reference now names all four domains.
 
 ## 2026-09-09 — OWN-T0e BUILT: the `sponsor_family_confirm` lane, a cache because the view was 64 s, and "properties" that were pairs
 

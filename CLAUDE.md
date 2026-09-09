@@ -1560,6 +1560,9 @@ All three converge on `api/_shared/intake-om-pipeline.js::stageOmIntake`:
         (I16b)" — both struck. Whether it is the same Railway *service* I16b wants deleted is a **Conflict**
         only the Railway dashboard resolves; until then **I16/I16b's "delete it" is frozen** (see backlog
         I16b). CC was right to refuse seeding it as retired — measure before you retire.
+        ✅ **RESOLVED 2026-09-09 — read off the Railway dashboard with Scott: service `life-command-center` IS
+        the MCP server (port 3100).** There is no dormant Railway service; I16/I16b retracted. **A "dormant"
+        label that nobody has probed is a hypothesis that can delete production.**
   - **Diagnose it from Supabase `edge_logs`, not app logs.** Every PostgREST write carries the
     calling server's `request.headers.cf_connecting_ip`. Railway is a small set of STABLE
     addresses (`152.55.x`, `162.220.232.x`) carrying tens of thousands of requests; a serverless

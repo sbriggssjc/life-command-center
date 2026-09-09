@@ -43,6 +43,14 @@ There are **two Railway deployments from this repo** (`docs/architecture/mcp-ser
   `/api/*` 404 at `server.js:559`). This is the URL ChatGPT (`/api/*`) and Copilot Studio MCP (`/mcp`) use.
 - **A separate standalone MCP service** (`mcp/server.js`) = what the personal-Claude connector AND this Cowork
   session's `mcp__LCC__*` tools talk to.
+  **Railway service `life-command-center` → `https://life-command-center-production.up.railway.app` (port 3100).**
+  *(Named here 2026-09-09 after backlog I16/I16b had this service marked "dormant — delete": it is the MCP.
+  `/health` → `lcc-mcp-server`. It also mounts the engine routes the six `api/*.js` `GOV_API_URL` fallbacks call.)*
+- **`gracious-radiance-production-eeaf.up.railway.app`** = the **record-linkage resolver** (splink / libpostal /
+  gliner; models `owner_sf`, `owner_owner`, `contact`; `no_db_writes: true`) — the w44 retrain stack. Referenced in
+  `docs/architecture/comps-data-integrity-and-canonical-record.md`; recorded here 2026-09-09 so the full Railway
+  service map is in one place: **four web services + five cron services** (`cms-ingestion`, `county-ingest`,
+  `public-record-ingest`, `government-lease`, `Dialysis`) in project `handsome-luck`.
 - **`pacific-love-production-f6b9.up.railway.app`** = BOV Generator (hosts `/generate-comps`, `/generate-bov`).
   The workbook export (`/api/comps` → proxies it) needs `BOV_API_KEY` (distinct from `LCC_API_KEY`) on
   tranquil-delight.
