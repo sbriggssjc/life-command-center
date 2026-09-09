@@ -16,6 +16,20 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — C13g-min-lane-mutation: guard is now 14 tests / 46 mutations RED / 46; both §9f gaps closed
+
+`test/c13g-min-lane.test.mjs` mutation-passed end to end (comments stripped first). Two assertions
+survived their first mutation and were rewritten (the ordering test's rows sorted the same way
+alphabetically as by rent; the registry-membership regex matched an unrelated `research_type:`
+literal instead of the `FEDERATED_DECISION_TYPES` entry). Two assertions added for the same-day
+hotfixes' repo-side twins (cache-vs-slow-view; `p_decision_id` bigint matching `lcc_decisions.id`).
+`v_lcc_entity_role_ambiguity` before/after and the Tier 0 bench delta both measured in a rolled-back
+round trip: the ambiguity view didn't move for the tested entity; the Tier 0 bench gained 10 cards
+across 3 of the 11 non-tombstoned retyped entities (UIRC 7, Global Net Lease 2, Foulger Pratt 1) —
+§9f's Gardner/MassMutual-only check was right for those two, incomplete as a claim about the lane.
+Full writeup: `docs/architecture/owner-role-classification.md` §9g; backlog `C13g-min-lane-mutation`
+✅. Not done: the placeholder-guard unit (`C13g-min-lane-placeholder`, unchanged).
+
 ## 2026-09-09 — Read the 17 flow exports before RAILWAY-PA-SECRET lands: no PA flow sends `X-PA-Webhook-Secret` to Railway — they use `x-lcc-key` or `Authorization` — so setting the variable is safe only because of the fallback, and one flow has a header-less call that would break
 
 **Method:** every `definition.json` in `private/power-automate/exports/production/2026-08-11/` (17 zips), every
