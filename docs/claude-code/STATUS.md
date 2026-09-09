@@ -16,6 +16,7 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+<<<<<<< Updated upstream
 ## 2026-09-09 — OWN-T0e live after-state: 5 cards worked, predictions reconciled exactly; one denominator drift recorded, not adjudicated
 
 `/version` = `87b631e8` (PR #2189 merge; PR #2187 = OWN-T0e). Scott worked 5 `sponsor_family_confirm` cards
@@ -29,6 +30,35 @@ difference, filed under OWN-T0h, not adjudicated. Measured for the follow-ups: t
 (OWN-T0e-c) is **2 properties**, not 30; Gardner-Tanenbaum (C13g) co-claims **14 properties / $6.17M**
 blocked by one `entity_type='person'`; no generic-token confirm happened, so that question has no live
 instance yet. Design doc §8; canonical page § OWN-T0 pointer updated. Docs-only.
+=======
+## 2026-09-09 — SF-DIRECT reconciled (PR #2192): the capability `sf-test` proved is back in the repo as an authenticated helper — deploy pending; and the teardown's day-1 12:30 check was not clean, as expected
+
+**Verified.** `supabase/functions/_shared/salesforce-soap.ts` (192 lines): SOAP `login` envelope to
+`https://${SF_LOGIN_HOST}/services/Soap/u/${SF_API_VERSION}` (defaults `login.salesforce.com` / `61.0`),
+password + security token concatenated, session id reused as a Bearer token against the REST Query API;
+`SfAuthError` carries the fault **code** only. `SF_PASSWORD` / `SF_SECURITY_TOKEN` are read at exactly one site
+(`salesforce-soap.ts:135–136`) and **no `console.*` call exists in the helper.** `intake-salesforce?action=sf-ping`
+dispatches at char 1004 of the router line, **after** the single unconditional `authenticateWebhook(req)` gate at
+632 (the earlier "sf-ping" at 431 is the name in the unauthenticated service listing — correct). Error path
+returns `err.message` only for `SfAuthError` (fault code), a fixed string otherwise. Tests: **13/13 pass here**
+(no network); the auth test is a structural source check because `_shared/auth.ts` transitively imports an
+`esm.sh` URL Node cannot load — an honest limitation, stated in the response. **Live: `intake-salesforce` is
+still v24 with no `sf-ping` in the deployed body** — the deploy is the operator step the response says it is.
+
+👤 **Operator step (Scott):** `supabase functions deploy intake-salesforce --project-ref zqzrriwuavgrquhisnoa
+--no-verify-jwt` (pinned in `config.toml` too), then GET `…/intake-salesforce?action=sf-ping` with the
+`X-PA-Webhook-Secret` header → expect 200 with an `open_tasks` count; without the header → 401. Record the
+count only. Cowork will confirm v25 / `verify_jwt=false` / gateway 401 from here.
+
+**Teardown observation, day 1 — NOT clean, and expected:** the frozen build's fingerprint fired again at
+12:30:00 UTC (`44.205.19.44`, UA `node`, 17 requests, 3 × 400). Scott exported the v1 Teams flow at 12:25:33 UTC
+and turned it off after the analysis, i.e. **after** its 12:30:00 trigger had already fired. The v1 flow's
+run history should show today's 07:30 CT run as its last entry — 👤 confirm. **First real test: 2026-09-10
+12:30 UTC.** The window does not start until a clean weekday.
+
+**Docs this turn:** this entry · `PLANNED-BACKLOG.md` (SF-DIRECT 🟡 verified, deploy pending; J13-teardown day-1
+note) · prompt + response → `done/`.
+>>>>>>> Stashed changes
 
 ## 2026-09-09 — OWN-T0e verified live + OWN-T0e-b: `same_party` can merge the pair, and the type guard found a mistyped entity
 
