@@ -16,6 +16,28 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — SF-DIRECT-b: the gateway path works end to end (5 open Tasks came back from Salesforce) — the connector took 49 s and our 20 s abort hid it
+
+Three pings, three different layers, each measured from the Power Automate run rather than guessed:
+
+1. **v26** → `via:"soap"` with `sf:INVALID_SSO_GATEWAY_URL` and no fallback — the namespaced-fault-code gate bug,
+   fixed (v27, PR merged, red-then-green positive control).
+2. **v27** → `via:"pa_gateway"`, `flow_unreachable` at 20.4 s. Run history: the flow's success Response failed on
+   `empty(triggerBody()?['max_rows'])` — `empty()` rejects integers and the helper sends `max_rows: 200`. Fixed in
+   the flow (`equals(…, null)`).
+3. **v27 again** → `flow_unreachable` at 20.5 s. Run history: **`Execute_a_SOQL_query_1` succeeded — HTTP 200,
+   `totalSize: 5`, five real open Tasks — but took 12:05:22 → 12:06:11, 48.9 s by the connector's own
+   `Server-Timing` header, no retry.** The Response then failed `ActionResponseTimedOut` because our 20 s abort had
+   already closed the connection. **The path works; the budget was wrong.**
+
+**Fix (this branch):** `salesforce-gateway.ts` default timeout 20 s → **60 s**, overridable via
+`SF_GATEWAY_TIMEOUT_MS` (1–120 s). A diagnostic read path should wait for the connector and report what it did, not
+manufacture a phantom "unreachable". → **v28 deploy**, then two pings to see whether the 49 s was a cold first call
+or the org's steady state; record `elapsed_ms` for both.
+
+**Also learned about the designer:** the SOQL action's name gets a `_1` suffix; a Response may only reference
+actions on its run-after path; `empty()` is not null-safe for numbers. All three are now in the flow doc.
+
 ## 2026-09-09 — SF-DIRECT-b live: the flow's `soql` case is built, v26 deployed — and the first ping exposed a one-line gate bug (namespaced fault codes), fixed with a red-then-green test
 
 Walked the Power Automate build in five steps (case → SELECT-only Condition → two Responses → Secure I/O →
@@ -37,6 +59,25 @@ on the unpatched file** (2 failures) and green after. Full suite 5,545 / 0 / 6 s
 👤 **Scott:** move the exported flow zip from Downloads to
 `private\power-automate\exports\production\2026-09-09\` (git-ignored), then redeploy v27 and re-ping;
 report `via` + `open_tasks` only.
+## 2026-09-09 — C13g-min-lane reconciled (PR #2202) and DEPLOYED: the retype verdict has a card; the next step is Scott working it
+
+**Deploy verified**: `/version` = `3cd0e782` (read via `net.http_get` from LCC Opps); `git merge-base --is-ancestor`
+confirms both `d00d5bbd` (the lane) and `bd2e556f` (the migration) are in it — the lane is running, not merely
+merged. Guards re-run on `main`: `c13g-min-lane` + `own-t0e-sponsor-family-lane` + `review-shared` = 50/50.
+All four registries carry `entity_type_review` (admin.js 12 hits, ops.js 2, dc-lanes.js 2, review-shared.js 1).
+**Two corrections to the builder's write-up, measured:** the candidate view reads **18 rows, not 19** — the 19
+was a transient inside its own control transaction; and `auto_mergeable` DID move (3,012 → 3,011) on the MERGE
+step, where the prompt predicted "must not move" — benign and explained (Gardner leaves the group its retype
+made it eligible for), but the prompt's prediction was wrong and the builder's "as predicted" is generous.
+`lcc_entity_retype_log` = 0: nothing retyped for real yet. **Filed:** `C13g-min-lane-mutation` (16 tests, one
+spot-checked; `v_lcc_entity_role_ambiguity` and the −4 property figure unmeasured). Prompt + response → `done/`.
+**Next step is an operator sequence, not a build:** Decision Center → `entity_type_review` card
+`Gardner-Tanenbaum` → `retype_organization` → OWN-T0e card `Gardner Tanenbaum Holdings` → `same_party` +
+merge now → `MassMutual Life` the same → `NGP Group` card `same_party` → then re-measure `sponsor_family_confirm`
+parts and the 19 `duplicate_entity_suspect` groups before deciding whether OWN-T0e-c needs UI. Predicted
+`unclassified_rival` after the two merges: **−4 (Gardner) / −10 (MassMutual)** — the RTD/TEP third claimants
+stay.
+
 ## 2026-09-09 — C13g-min-lane SHIPPED: the `entity_type_review` Decision Center lane over C13g-min's retype write
 
 **Built.** All four registries (`api/admin.js` `FEDERATED_DECISION_TYPES`+`federatedSubjectRef` =

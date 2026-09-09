@@ -29,7 +29,18 @@
 
 const DEFAULT_MAX_ROWS = 200;
 const HARD_MAX_ROWS = 500;
-const REQUEST_TIMEOUT_MS = 20000;
+// Measured live 2026-09-09 (run 08584126333641636843959025809CU20): the PA
+// Salesforce connector's "Execute a SOQL query" took 48.9 s for a 5-row Task
+// query (Server-Timing x-ms-igw-upstream-headers;dur=48941.8, no retry) and the
+// flow's Response then found the caller gone — our 20 s abort had fired. The
+// gateway is a diagnostic/read path, so wait for the connector rather than
+// report a phantom `flow_unreachable`. Override with SF_GATEWAY_TIMEOUT_MS.
+const DEFAULT_REQUEST_TIMEOUT_MS = 60000;
+function requestTimeoutMs(): number {
+  const raw = Number(Deno.env.get("SF_GATEWAY_TIMEOUT_MS"));
+  return Number.isFinite(raw) && raw >= 1000 && raw <= 120000 ? raw : DEFAULT_REQUEST_TIMEOUT_MS;
+}
+const REQUEST_TIMEOUT_MS = requestTimeoutMs();
 
 export interface SfGatewayQueryResult {
   ok: true;
