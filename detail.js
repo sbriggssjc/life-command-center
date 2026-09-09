@@ -11093,8 +11093,6 @@ async function _udSubmitLogCall(sfContactId, sfCompanyId) {
     return;
   }
 
-  const API = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
-
   try {
     // ── GENERIC SF PAYLOAD ──
     // Salesforce gets only a generic activity description — no deal-specific

@@ -10,6 +10,45 @@
 > properties while three separate investigations read the stale committed
 > file and correctly-but-wrongly concluded there was no write path.
 
+## ⚠️ `ai-copilot` (dia) — v79 shipped with NO authentication, gated v80 (COPILOT-OPEN-gate, 2026-09-09)
+
+The census below lists `ai-copilot` (v77 at the time) as "committed, not in scope" — correct on
+drift, wrong on safety. Re-read from the **deployed body** (not the repo) on 2026-09-09: `verify_jwt:
+false` and **zero** calls to `authenticateWebhook()` anywhere in the six source files. All 25 routes
+— including the write routes `/sync/activities`, `/sync/accounts`, `/sync/log-to-sf`,
+`/sync/sf-tasks`, `/sync/flagged-emails`, `/sync/calendar-events`, `/enrich`, `/bd/*` — were reachable
+with no credential of any kind, CORS `*`. Found by accident: CI runners hit `POST /chat` 798 times in
+24h with no key (TEST-NET-LEAK). Full caller inventory + backlog row: `docs/os/PLANNED-BACKLOG.md`
+**COPILOT-OPEN**.
+
+- **v80 adds the SAME door `intake-salesforce` already sits behind** —
+  `authenticateWebhook()` from `../_shared/auth.ts` (`X-PA-Webhook-Secret` against
+  `PA_WEBHOOK_SECRET`), gating every route except `GET /health`.
+- **Shipped in LOG-ONLY mode** — `COPILOT_AUTH_MODE=log` (the default; unset behaves identically).
+  An unauthenticated non-`/health` request is logged as `[copilot-auth] DENY-WOULD <method> <path>
+  <ua_class> <ip_class>` in `function_logs` and allowed through unchanged. `COPILOT_AUTH_MODE=enforce`
+  is the flip that actually refuses — 401, no body detail beyond `{"error":"unauthorized"}` — and it
+  is deliberately NOT flipped in this change.
+- **Env vars this version reads (new):** `COPILOT_AUTH_MODE` (`log` default / `enforce`),
+  `COPILOT_KNOWN_IPS` (comma list of `class:ip-prefix` pairs, e.g.
+  `railway:152.55.,railway:162.220.232.,scott:<home-ip-prefix>` — Scott sets this from the caller
+  inventory; the log line's `ip_class` is only as good as this list). `PA_WEBHOOK_SECRET` was already
+  present on this project (used by `intake-salesforce`) — confirmed via `supabase secrets list`
+  (names only), not re-created.
+- **Three legitimate callers, per the 24h inventory:** the browser (`app.js`/`detail.js`, now routed
+  through Railway's `/api/sync?_route=copilot-read` proxy instead of the edge URL directly — see
+  `api/sync.js::handleCopilotRead` and `connectorHeaders()`, which now sends the secret on every
+  Railway→edge call); four Power Automate flows (`docs/architecture/flows/ai-copilot-sync-callers.md`
+  — none carry the header yet, 👤 Scott); Railway itself (0 calls seen in the 24h window, now
+  patched regardless so it doesn't silently start failing at the enforce flip).
+- **Flip procedure:** after ≥3 days with zero `DENY-WOULD` lines from anything but the browser class
+  (which no longer reaches the edge function at all post-Unit-2) — i.e. genuinely zero unknown
+  callers — Scott sets `COPILOT_AUTH_MODE=enforce`. Do not flip on a shorter window; the whole point
+  of log-only is to let a caller nobody named show up before it is refused.
+- **Out of scope for this change:** `salesforce-enrichment` (DRIFT1-sfenrich) needs the identical
+  gate pattern later, deliberately not touched here; `AI_EXTRACTION_PRIMARY` on Railway is unread —
+  👤 Scott to report whether it's set.
+
 ## Unit 1 — Census (as of 2026-09-07)
 
 | project | slug | version | updated_at | committed_dir_exists | source_drift | writes_db | live | verdict | reason |
