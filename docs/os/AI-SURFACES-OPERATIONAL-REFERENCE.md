@@ -143,7 +143,7 @@ route but `GET /health` since v80. It now reads two new env vars on top of the e
 
 | var | default | meaning |
 |---|---|---|
-| `PA_WEBHOOK_SECRET` | (already set) | the shared secret; `X-PA-Webhook-Secret` must match |
+| `PA_WEBHOOK_SECRET` | ~~(already set)~~ set on **Supabase** Dialysis_DB (that is what `secrets list` confirmed); **on Railway it appears UNSET as of 2026-09-09 — RAILWAY-PA-SECRET** | the shared secret; `X-PA-Webhook-Secret` must match. Two environments, one value: Supabase (edge functions check it) and Railway (`api/sync.js` checks it AND sends it) |
 | `COPILOT_AUTH_MODE` | `log` | `log` = an unauthenticated request is logged as `DENY-WOULD` and allowed through; `enforce` = 401 |
 | `COPILOT_KNOWN_IPS` | unset | comma list of `class:ip-prefix` pairs for the DENY-WOULD log's `ip_class` field, e.g. `railway:152.55.,railway:162.220.232.,scott:<prefix>` |
 
