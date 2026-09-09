@@ -16,21 +16,6 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
-<<<<<<< Updated upstream
-## 2026-09-09 — OWN-T0e live after-state: 5 cards worked, predictions reconciled exactly; one denominator drift recorded, not adjudicated
-
-`/version` = `87b631e8` (PR #2189 merge; PR #2187 = OWN-T0e). Scott worked 5 `sponsor_family_confirm` cards
-14:19–14:20 UTC: 2 `confirm_family` (`ngp`, `uirc`) + 3 `same_party` with `merge_now` (GWU (The)→GWU,
-RMR Group→RMR, "Salus Grovernment Properites"→Salus Gov't Properties, all `reversible=true`). Ledgers read
-back: registry **6→8**, `lcc_decisions` **5**, `lcc_entity_merge_log` **145→148**,
-`sponsor_family_confirmed` **64→102** = NGP Capital 28 (the §6 control's number) + UIRC 10 — **exact**.
-⚠️ `unclassified_rival` read 1,575 (Scott, ~14:21) then 1,516 (14:34); `duplicate_entity` 416 → 412 —
-no LCC write in between (facts/claims/merge-log/registry identical), so most likely a query-shape
-difference, filed under OWN-T0h, not adjudicated. Measured for the follow-ups: the NGP mixed-group residue
-(OWN-T0e-c) is **2 properties**, not 30; Gardner-Tanenbaum (C13g) co-claims **14 properties / $6.17M**
-blocked by one `entity_type='person'`; no generic-token confirm happened, so that question has no live
-instance yet. Design doc §8; canonical page § OWN-T0 pointer updated. Docs-only.
-=======
 ## 2026-09-09 — SF-DIRECT reconciled (PR #2192): the capability `sf-test` proved is back in the repo as an authenticated helper — deploy pending; and the teardown's day-1 12:30 check was not clean, as expected
 
 **Verified.** `supabase/functions/_shared/salesforce-soap.ts` (192 lines): SOAP `login` envelope to
@@ -58,7 +43,6 @@ run history should show today's 07:30 CT run as its last entry — 👤 confirm.
 
 **Docs this turn:** this entry · `PLANNED-BACKLOG.md` (SF-DIRECT 🟡 verified, deploy pending; J13-teardown day-1
 note) · prompt + response → `done/`.
->>>>>>> Stashed changes
 
 ## 2026-09-09 — OWN-T0e verified live + OWN-T0e-b: `same_party` can merge the pair, and the type guard found a mistyped entity
 
