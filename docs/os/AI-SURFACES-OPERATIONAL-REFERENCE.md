@@ -166,6 +166,34 @@ This function has no `/health`-equivalent bypass — its only GET route, `/diagn
 leak, so every route is gated. Full state: `docs/architecture/edge-function-deploy-drift.md`
 §"SFENRICH-gate".
 
+### 4a-Railway. `api/sync.js` webhook door — auth gate env vars (RAILWAY-PA-SECRET-log, 2026-09-09)
+
+Supabase and Railway are **two separate environments holding one value** — `PA_WEBHOOK_SECRET` is
+confirmed set on Supabase Dialysis_DB (§4a above) and, as of 2026-09-09, **unset on Railway**
+(`tranquil-delight`), which is why every Railway→`ai-copilot` call logs `DENY-WOULD` on the edge
+side (`connectorHeaders()` only attaches `X-PA-Webhook-Secret` when the variable is present). The
+COPILOT-OPEN-gate shape now exists on Railway's OWN webhook door too — the eight `api/sync.js`
+routes shaped `if (!authenticateWebhook(req)) { fall back to authenticate()+requireRole }` all
+dispatch through one helper, `webhookAuth()`, log-only by default:
+
+| var | default | meaning |
+|---|---|---|
+| `PA_WEBHOOK_SECRET` | unset on Railway (2026-09-09) — **to set** | the shared secret; `X-PA-Webhook-Secret` must match. Setting it here is what makes `authenticateWebhook()` (and every fallback below it) start actually gating instead of allowing all |
+| `PA_WEBHOOK_AUTH_MODE` | `log` | `log` = a caller with no secret AND no `X-LCC-Key`/Bearer is logged as `[pa-webhook] DENY-WOULD <route> none <ua_class> <ip_class>` and allowed through, byte-identical to today's behaviour; `enforce` = the existing `authenticate()` fallback's own 401/403 stands |
+| `PA_WEBHOOK_KNOWN_IPS` | unset | comma list of `class:ip-prefix` pairs for the DENY-WOULD line's ip_class, same format as `COPILOT_KNOWN_IPS` above (e.g. `railway:152.55.,railway:162.220.232.`) |
+
+**A caller sending `X-LCC-Key` or a Bearer JWT is unaffected by any of this** — it always falls
+through to the existing `authenticate()` + role check, in both modes. Only the population sending
+*neither* header is what `log` mode surfaces and `enforce` mode would refuse. Reading all 17 PA
+flow exports found **no PA flow sends this secret to Railway** (they send `x-lcc-key` or a bearer),
+so setting the variable in `log` mode changes nothing for any known caller; the DENY-WOULD lines are
+what tell you whether that measurement still holds. Operator sequence: merge → redeploy Railway →
+set `PA_WEBHOOK_SECRET` (+ `PA_WEBHOOK_KNOWN_IPS`) → read `[pa-webhook] DENY-WOULD` for a few days →
+fix each `none` caller (the To Do Completion Poll flow's second, header-less call is the one known
+one; the three unexported PA5 flows — RCM Email Watcher, LoopNet, Personal Calendar Sync — are the
+unknowns) → flip to `enforce`. Full design: `docs/claude-code/prompts/RAILWAY-PA-SECRET-log.md`;
+guard `test/pa-webhook-auth-mode.test.mjs`.
+
 ## 5. The bigger architecture (pointers)
 - Request-understanding layer (why plain-language handling is a cross-tool gap): `docs/architecture/request-
   understanding-and-consistency-layer.md` + the audit `docs/architecture/intent-resolution-audit-2026-08-03.md`.

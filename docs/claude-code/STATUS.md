@@ -16,6 +16,31 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — RAILWAY-PA-SECRET-log: the COPILOT-OPEN-gate shape, ported to Railway's own PA webhook door
+
+`api/sync.js`'s seven `authenticateWebhook(req)` call sites (`rcm-ingest`, `rcm-backfill`,
+`loopnet-ingest`, `listing-webhook`, `processing-complete`, `todo-completion-poll`,
+`cross-domain-match`) now dispatch through one helper, `webhookAuth(req, res, routeName, opts)`.
+`PA_WEBHOOK_SECRET` is still unset on Railway today, so nothing changes for any caller in this
+change alone — the point is to make the population visible BEFORE it is refused, exactly like the
+edge-side COPILOT-OPEN-gate/SFENRICH-gate. `PA_WEBHOOK_AUTH_MODE` defaults to `log`: a caller
+sending neither the secret nor `X-LCC-Key`/a Bearer logs
+`[pa-webhook] DENY-WOULD <route> none <ua_class> <ip_class>` and is still allowed through, byte-
+identical to today; `enforce` lets the existing `authenticate()` fallback's own 401/403 stand. A
+caller carrying an api-key or JWT is unaffected in either mode. Guard:
+`test/pa-webhook-auth-mode.test.mjs` (11 tests) — the enforce-mode 401 assertion runs in a spawned
+child process because `api/_shared/auth.js`'s own `LCC_ENV` const is frozen at THIS PROCESS'S first
+import of it, and Node resolves a relative `./_shared/auth.js` import back to the identical cached
+module regardless of a cache-busting query string on the importer's own URL — a same-process
+re-import trick only refreshes the top-level consts of the module you cache-bust, not its
+dependency graph.
+
+Docs: `docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md` §4a-Railway (the new env-var table);
+`docs/os/PLANNED-BACKLOG.md` RAILWAY-PA-SECRET (🔴 → 🟡, this unit's scope closed, the operator
+sequence stated). **Not done here, deliberately:** setting any Railway variable, the To Do
+Completion Poll flow's designer fix, exporting the three PA5 flows, or flipping to `enforce` —
+all 👤 Scott, in the order stated on the backlog row.
+
 ## 2026-09-09 — SFENRICH-gate: `salesforce-enrichment`'s deployed body committed verbatim for the first time, then gated log-only (COPILOT-OPEN-gate pattern)
 
 DRIFT1-sfenrich closed to 🟡. `salesforce-enrichment` (dia, v26) was open — `verify_jwt:false`, no

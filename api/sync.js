@@ -84,6 +84,90 @@ function authenticateWebhook(req) {
   return mismatch === 0;
 }
 
+// ── RAILWAY-PA-SECRET-log ────────────────────────────────────────────────────
+// The COPILOT-OPEN-gate shape, on Railway's own webhook door. `authenticate()`
+// already distinguishes an X-LCC-Key hit from a Bearer JWT; this only ADDS a
+// log line, in `log` mode, for the caller shape a real PA_WEBHOOK_SECRET would
+// refuse under `enforce` — never changes behavior when the secret is unset
+// (today, on Railway — see docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md §4a).
+const PA_WEBHOOK_AUTH_MODE = String(process.env.PA_WEBHOOK_AUTH_MODE || 'log').toLowerCase();
+// Format: "class:ipPrefix,class:ipPrefix,..." — e.g. "railway:152.55.,railway:162.220.232."
+// Never a literal single address in source; this is an allowlist of PREFIXES.
+const PA_WEBHOOK_KNOWN_IPS = String(process.env.PA_WEBHOOK_KNOWN_IPS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+  .map((entry) => {
+    const idx = entry.indexOf(':');
+    return idx === -1 ? { cls: 'known', prefix: entry } : { cls: entry.slice(0, idx), prefix: entry.slice(idx + 1) };
+  });
+
+function classifyCallerIp(req) {
+  const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const ip = fwd || String(req.socket?.remoteAddress || '');
+  if (!ip) return 'unknown';
+  for (const { cls, prefix } of PA_WEBHOOK_KNOWN_IPS) {
+    if (prefix && ip.startsWith(prefix)) return cls;
+  }
+  return 'unclassified';
+}
+
+function classifyCallerUa(req) {
+  const ua = String(req.headers['user-agent'] || '');
+  if (!ua) return 'none';
+  if (/node/i.test(ua)) return 'node';
+  if (/power ?automate|logic ?apps|microsoft/i.test(ua)) return 'pa';
+  return 'other';
+}
+
+// Route a webhook handler's auth through this instead of calling
+// authenticateWebhook(req) + the fallback block directly. In `log` mode
+// (default, PA_WEBHOOK_AUTH_MODE unset) this is BEHAVIOR-IDENTICAL to today
+// for every caller that carries no X-LCC-Key/Bearer either — it still allows
+// the request, exactly as `authenticateWebhook` did while PA_WEBHOOK_SECRET
+// was unset — and logs one line naming what `enforce` would refuse. A caller
+// carrying an api-key or JWT is unaffected in either mode: it always falls
+// through to the existing `authenticate()` + optional role check.
+// Returns { ok, user } — `user` is null on the secret path and on a
+// log-mode allow with no credential; callers that need the authenticated
+// user object (e.g. to resolve a workspace) read it off the result.
+async function webhookAuth(req, res, routeName, opts = {}) {
+  if (authenticateWebhook(req)) return { ok: true, user: null };
+
+  const apiKey = req.headers['x-lcc-key'] || '';
+  const authHeader = req.headers['authorization'] || req.headers['Authorization'] || '';
+  const hasBearer = /^Bearer\s+\S+/i.test(String(authHeader));
+  const fallbackPath = apiKey ? 'api-key' : (hasBearer ? 'jwt' : 'none');
+
+  if (PA_WEBHOOK_SECRET && fallbackPath === 'none') {
+    try {
+      console.warn(`[pa-webhook] DENY-WOULD ${routeName} ${fallbackPath} ${classifyCallerUa(req)} ${classifyCallerIp(req)}`);
+    } catch (_) { /* logging must never break the request */ }
+    if (PA_WEBHOOK_AUTH_MODE !== 'enforce') {
+      // log mode: allow — this is the caller population the operator reads
+      // from the DENY-WOULD lines before ever flipping to enforce.
+      return { ok: true, user: null };
+    }
+    // enforce mode: fall through to authenticate(), which 401s with nothing
+    // to authenticate — the fallback's own status stands.
+  }
+
+  const user = await authenticate(req, res);
+  if (!user) return { ok: false, user: null }; // authenticate() already responded
+  if (opts.role) {
+    const ws = primaryWorkspace(user);
+    if (!ws || !requireRole(user, opts.role, ws.workspace_id)) {
+      res.status(403).json({ error: 'Operator role required' });
+      return { ok: false, user };
+    }
+  }
+  return { ok: true, user };
+}
+
+// Test-only named exports (the default export is the whole router; these let
+// test/pa-webhook-auth-mode.test.mjs exercise the helper directly).
+export { webhookAuth, authenticateWebhook, classifyCallerIp, classifyCallerUa };
+
 // ── Edge Function Proxy for Lead Ingest ────────────────────────────────────
 const LEAD_INGEST_EDGE_URL = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/lead-ingest';
 
@@ -1658,15 +1742,7 @@ async function handleRcmIngest(req, res) {
   }
 
   // Webhook endpoints accept PA_WEBHOOK_SECRET instead of user auth
-  if (!authenticateWebhook(req)) {
-    // Fall back to standard user auth (allows browser-based testing)
-    const user = await authenticate(req, res);
-    if (!user) return;
-    const ws = primaryWorkspace(user);
-    if (!ws || !requireRole(user, 'operator', ws.workspace_id)) {
-      return res.status(403).json({ error: 'Operator role required' });
-    }
-  }
+  if (!(await webhookAuth(req, res, 'rcm-ingest', { role: 'operator' })).ok) return;
 
   if (!DIA_SUPABASE_URL || !DIA_SUPABASE_KEY) {
     return res.status(500).json({ error: 'DIA Supabase not configured' });
@@ -1892,14 +1968,7 @@ async function handleRcmBackfill(req, res) {
   }
 
   // Webhook endpoints accept PA_WEBHOOK_SECRET instead of user auth
-  if (!authenticateWebhook(req)) {
-    const user = await authenticate(req, res);
-    if (!user) return;
-    const ws = primaryWorkspace(user);
-    if (!ws || !requireRole(user, 'operator', ws.workspace_id)) {
-      return res.status(403).json({ error: 'Operator role required' });
-    }
-  }
+  if (!(await webhookAuth(req, res, 'rcm-backfill', { role: 'operator' })).ok) return;
 
   if (!DIA_SUPABASE_URL || !DIA_SUPABASE_KEY) {
     return res.status(500).json({ error: 'DIA Supabase not configured' });
@@ -2172,14 +2241,7 @@ async function handleLoopNetIngest(req, res) {
   }
 
   // Webhook auth (same as RCM)
-  if (!authenticateWebhook(req)) {
-    const user = await authenticate(req, res);
-    if (!user) return;
-    const ws = primaryWorkspace(user);
-    if (!ws || !requireRole(user, 'operator', ws.workspace_id)) {
-      return res.status(403).json({ error: 'Operator role required' });
-    }
-  }
+  if (!(await webhookAuth(req, res, 'loopnet-ingest', { role: 'operator' })).ok) return;
 
   if (!DIA_SUPABASE_URL || !DIA_SUPABASE_KEY) {
     return res.status(500).json({ error: 'DIA Supabase not configured' });
@@ -2484,11 +2546,7 @@ async function handleProcessingComplete(req, res) {
   }
 
   // Auth: PA webhook secret OR an authenticated user (mirrors the listing webhook).
-  const isWebhook = authenticateWebhook(req);
-  if (!isWebhook) {
-    const user = await authenticate(req, res);
-    if (!user) return; // authenticate() already responded 401
-  }
+  if (!(await webhookAuth(req, res, 'processing-complete')).ok) return;
 
   const body = req.body || {};
   const internetMessageId = body.internet_message_id;
@@ -2611,11 +2669,7 @@ async function handleProcessingComplete(req, res) {
 // ============================================================================
 async function handleTodoCompletionPoll(req, res) {
   // Auth: PA webhook secret OR an authenticated user (mirrors the other webhooks).
-  const isWebhook = authenticateWebhook(req);
-  if (!isWebhook) {
-    const user = await authenticate(req, res);
-    if (!user) return; // authenticate() already responded 401
-  }
+  if (!(await webhookAuth(req, res, 'todo-completion-poll')).ok) return;
 
   const {
     buildStagedWorklist,
@@ -2747,13 +2801,9 @@ async function handleListingWebhook(req, res) {
   }
 
   // Auth: either PA webhook secret OR authenticated user
-  let user = null;
-  const isWebhook = authenticateWebhook(req);
-
-  if (!isWebhook) {
-    user = await authenticate(req, res);
-    if (!user) return;
-  }
+  const listingWebhookAuth = await webhookAuth(req, res, 'listing-webhook');
+  if (!listingWebhookAuth.ok) return;
+  const user = listingWebhookAuth.user;
 
   const {
     deal_id, deal_name, deal_status, deal_owner,
@@ -3057,10 +3107,7 @@ async function handleCrossDomainMatch(req, res) {
   }
 
   // Authenticate — this is a scheduled job, uses standard auth or webhook secret
-  if (!authenticateWebhook(req)) {
-    const user = await authenticate(req, res);
-    if (!user) return;
-  }
+  if (!(await webhookAuth(req, res, 'cross-domain-match')).ok) return;
 
   // Resolve workspace — from header, body, or default
   const workspaceId = req.headers['x-lcc-workspace']
