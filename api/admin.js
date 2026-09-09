@@ -55,6 +55,10 @@ import {
   sponsorFamilySubjectRef, buildSponsorFamilyCard, validateSponsorFamilyVerdict, orderSponsorFamilyRows,
 } from './_shared/sponsor-family-planner.js';
 import {
+  ENTITY_RETYPE_SOURCE_VIEW,
+  entityRetypeSubjectRef, buildEntityRetypeCard, validateEntityRetypeVerdict, orderEntityRetypeRows,
+} from './_shared/entity-retype-planner.js';
+import {
   applyTier0Attach, tier0BatchTag, TIER0_SOURCE_CONFIRM,
 } from './_shared/tier0-attach-effect.js';
 import {
@@ -7405,6 +7409,15 @@ const FEDERATED_DECISION_TYPES = new Set([
   // ever decides (A3: 3 of 74 on GSA SPEs; P198: 7%). Nothing here writes a
   // portfolio fact, end-dates a row, or touches gov/dia owner tables.
   'sponsor_family_confirm',
+  // C13g-min-lane (2026-09-09): the human verdict over C13g-min's retype write
+  // (lcc_retype_entity, service_role-only, migration 20261101120000). Source =
+  // v_lcc_entity_retype_candidates -- live person-typed entities holding >=2
+  // current portfolio facts, plus any person-typed OWN-T0e spe_props_max>=2
+  // member whose sponsor is an organization. Both name-shape instruments are
+  // documented useless on this population (owner-role-classification.md
+  // sec 9b) -- retype_organization is the ONE write, keep_person is
+  // record-only, research spawns a task. Reverse: rpc/lcc_unretype_entity.
+  'entity_type_review',
   'intake_disposition', 'property_merge', 'provenance_conflict',
   // dia geospatial "address twin" review (2026-08-14). The dia_merge_twins engine
   // auto-merges only blank-operator husks; every twin with a competing clinical
@@ -7579,6 +7592,8 @@ function federatedSubjectRef(type, s) {
     // group under a chosen sponsor keeps its `tied` ref: the ref names the
     // question, the verdict payload names the answer.
     case 'sponsor_family_confirm': return sponsorFamilySubjectRef(s);
+    // C13g-min-lane: etype:<entity_id> -- the question is scoped to one entity.
+    case 'entity_type_review': return entityRetypeSubjectRef(s);
   }
   return null;
 }
@@ -8969,6 +8984,36 @@ async function fetchFederatedSource(type, cap, opts) {
         subject_domain: null, subject_property_id: null,
         subject_entity_id: card.sponsor_id || card.group_key_id,
         rank_value: card.annual_rent,
+        context: card,
+      };
+    });
+    out.complete = out.items.length === ordered.length;
+    return out;
+  }
+
+  // ---- entity_type_review (C13g-min-lane, 2026-09-09) -----------------------
+  // Reads v_lcc_entity_retype_candidates live -- 18 rows at build, far under
+  // any pagination concern, so no cache is needed (unlike sponsor_family_confirm,
+  // which reads a ~20s view). lcc_decisions exclusion works the same as every
+  // other federated lane (already-decided subject_refs are filtered upstream).
+  if (type === 'entity_type_review') {
+    const vr = await opsQuery('GET', ENTITY_RETYPE_SOURCE_VIEW + '?select=*&limit=1000');
+    const rows = (vr.ok && Array.isArray(vr.data)) ? vr.data : [];
+    const ordered = orderEntityRetypeRows(rows);
+    out.total = ordered.length;
+    out.parts = {
+      blocks_own_t0e: ordered.filter((r) => r.blocks_own_t0e_sponsor_id).length,
+      has_salesforce_contact: ordered.filter((r) => r.has_salesforce_contact === true).length,
+      fetch_failed: !vr.ok,
+      truncated: rows.length >= 1000,
+    };
+    out.items = ordered.slice(0, cap).map((row) => {
+      const card = buildEntityRetypeCard(row);
+      return {
+        subject_ref: entityRetypeSubjectRef(row),
+        subject_domain: null, subject_property_id: null,
+        subject_entity_id: card.entity_id,
+        rank_value: card.current_rent,
         context: card,
       };
     });
@@ -12979,6 +13024,87 @@ async function handleDecisionVerdict(req, res) {
         person_entity_id: person.person_id, person_name: person.person_name,
         relationship: eff.relationship,
         log_id: logId, batch_tag: batchTag,
+      });
+    }
+
+    // ---- entity_type_review (C13g-min-lane, 2026-09-09) ---------------------
+    // The human verdict on a single person-typed entity. THE CARD IS RE-READ
+    // FROM v_lcc_entity_retype_candidates AT VERDICT TIME, never trusted from
+    // the request (P188); the write goes through rpc/lcc_retype_entity, the
+    // single writer -- this branch never PATCHes `entities` itself.
+    if (decision.decision_type === 'entity_type_review') {
+      const entityId = decision.subject_entity_id || (decision.context && decision.context.entity_id) || null;
+      if (!entityId) return res.status(400).json({ error: 'entity_type_review: entity_id required' });
+      const rowR = await opsQuery('GET', ENTITY_RETYPE_SOURCE_VIEW + '?select=*&entity_id=eq.' + pgFilterVal(entityId) + '&limit=1');
+      const row = (rowR.ok && Array.isArray(rowR.data)) ? rowR.data[0] : null;
+      // A card that has left the candidate view (already retyped, or its facts
+      // dropped below 2) is still closeable for keep_person / research, but
+      // retype_organization needs the live row to build the card from.
+      const ctxFallback = decision.context || {};
+      const card = buildEntityRetypeCard(row || { entity_id: entityId, name: ctxFallback.name });
+
+      let live = { not_found: false, is_tombstone: false, recorded_type: null };
+      if (verdict === 'retype_organization') {
+        const entR = await opsQuery('GET', 'entities?select=id,merged_into_entity_id,entity_type&id=eq.' + pgFilterVal(entityId) + '&limit=1');
+        const ent = (entR.ok && Array.isArray(entR.data)) ? entR.data[0] : null;
+        live = {
+          not_found: !ent,
+          is_tombstone: !!(ent && ent.merged_into_entity_id != null),
+          recorded_type: ent ? (ent.entity_type || null) : null,
+        };
+      }
+      const gate = validateEntityRetypeVerdict(card, verdict, payload, live);
+      if (!gate.ok) return res.status(400).json({ error: 'entity_type_review: ' + gate.error, entity_id: entityId });
+      const action = gate.verdict;
+      const verdictCtx = {
+        entity_id: entityId, name: card.name, current_facts: card.current_facts, current_rent: card.current_rent,
+        blocks_own_t0e_sponsor_id: card.blocks_own_t0e_sponsor_id, blocks_own_t0e_token: card.blocks_own_t0e_token,
+      };
+
+      if (action === 'keep_person') {
+        const rr = await record('keep_person', 'decided', verdictCtx, { entity_type_review: 'kept_person' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'keep_person', entity_id: entityId });
+      }
+      if (action === 'research') {
+        const rt = await createResearchTask({
+          research_type: 'entity_type_review',
+          title: 'Is "' + (card.name || entityId) + '" really an organization?',
+          instructions: 'Decision Center: person-typed entity ' + (card.name || entityId)
+            + ' holds ' + card.current_facts + ' current portfolio fact(s), $' + (card.current_rent || 0) + ' current rent'
+            + (card.blocks_own_t0e_token ? ('; it also blocks an OWN-T0e sponsor-family confirm on token "' + card.blocks_own_t0e_token + '"') : '')
+            + '. Confirm whether it should be retyped organization.',
+        });
+        if (!rt.ok) {
+          await recordEffectFailure({ research_task: false, error: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data });
+        }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        const rr = await record('research', 'decided', verdictCtx, { research_task: true, research_task_id: rid });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+
+      // ---- retype_organization: the one write -------------------------------
+      const rt2 = await opsQuery('POST', 'rpc/lcc_retype_entity', {
+        p_entity: entityId, p_to: 'organization', p_decision_id: decisionId,
+        p_reason: gate.reason, p_actor: String(user.email || user.id || 'decision-center'),
+      });
+      const rt2row = (rt2.ok && Array.isArray(rt2.data)) ? rt2.data[0] : null;
+      if (!rt2.ok || !rt2row || rt2row.ok !== true) {
+        await recordEffectFailure({ retype: false, error: (rt2row && rt2row.error) || rt2.data });
+        return res.status(502).json({ error: 'entity_type_review: retype_failed', detail: (rt2row && rt2row.error) || rt2.data });
+      }
+      const rr = await record('retype_organization', 'decided', verdictCtx, {
+        entity_type_review: 'retyped_organization', log_id: rt2row.log_id,
+        reverse: 'select lcc_unretype_entity(\'' + entityId + '\')',
+      });
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({
+        ok: true, verdict: 'retype_organization', entity_id: entityId, log_id: rt2row.log_id,
+        next: card.blocks_own_t0e_sponsor_id
+          ? { action: 'sponsor_family_lane', sponsor_entity_id: card.blocks_own_t0e_sponsor_id, sponsor_token: card.blocks_own_t0e_token }
+          : undefined,
       });
     }
 

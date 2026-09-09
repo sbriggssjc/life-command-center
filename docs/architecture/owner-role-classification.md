@@ -931,3 +931,52 @@ with the service key), so the two type-blocked OWN-T0e cards can be unblocked by
 **⚠️ Retype + merge on Gardner clears 4 conflict properties, not 14** — 10 of the 14 co-claimed properties
 carry a THIRD current claimant, the firm's own RTD/TEP SPEs, which share no brand token with the sponsor
 and are the OWN-T0e design §3 "gate does not reach" class. MassMutual Life: 4 of 14. Predict −4 / −10.
+
+## 9f. ✅ C13g-min-lane SHIPPED 2026-09-09 — the `entity_type_review` Decision Center lane over the retype write
+
+**Built:** decision type `entity_type_review` in all four registries — `api/admin.js` `FEDERATED_DECISION_TYPES`
++ `federatedSubjectRef` (`etype:<entity_id>`), `ops.js` `_DC_FEDERATED` + the lane tile, `dc-lanes.js`
+`_DC_FED_META` + the card renderer + the `sponsor_family_lane` forward, `review-shared.js` (lane `entity_merge`,
+`merges: false` — the retype itself never merges an entity). Pure planner
+`api/_shared/entity-retype-planner.js` (`buildEntityRetypeCard`, `validateEntityRetypeVerdict`,
+`orderEntityRetypeRows`): three verdicts — `retype_organization` (the ONE write, `rpc/lcc_retype_entity`,
+never a direct PATCH on `entities`), `keep_person` (record-only, excluded from the lane), `research`
+(`research_task`). The card is re-read from `v_lcc_entity_retype_candidates` AT VERDICT TIME (P188); a
+successful retype whose card carried `blocks_own_t0e_sponsor_id` forwards the operator straight to the
+`sponsor_family_confirm` lane. Guard `test/c13g-min-lane.test.mjs` (16 tests, planner behaviour +
+four-registry structural checks + the migration's write/reversal/privilege stanza; one assertion mutation-
+sampled by hand and confirmed RED — a fuller mutation pass was not run against every assertion, unlike the
+sponsor-family lane's 9-mutation suite).
+
+**⚠️ Ordering matters, and it broke the sponsor-family lane's own guard on first attempt.** The obvious
+placement — new registrations AFTER `sponsor_family_confirm` everywhere — shifted the boundary the
+sponsor-family lane's structural tests anchor on (`'sponsor_family_confirm',\n]);` in `ops.js`; a
+`block(admin, startNeedle, endRe)` extraction that runs from the sponsor_family_confirm verdict branch to
+the shared `unsupported_decision_type` terminator). Both live registries were reordered — `entity_type_review`
+now sits immediately BEFORE `sponsor_family_confirm` in `_DC_FEDERATED` and before its verdict block in
+`api/admin.js` — and `test/own-t0e-sponsor-family-lane.test.mjs` was re-run green before and after to confirm
+no collateral break. **Two adjacent federated lanes sharing one array/switch are coupled at the position their
+older guard's block-extraction depends on — insert relative to what the existing guard anchors on, not just
+at the end.**
+
+**Live census, read on the DB (2026-09-09), predicted vs actual:**
+
+| check | predicted (§9e) | measured |
+|---|---:|---:|
+| lane population | 18 rows / $69.4M | **19 rows / re-derivable** (population moves — the view is a live derivation, not a snapshot; re-measured population carries one more row than the PR #2196 read) |
+| `v_lcc_merge_candidates` after Gardner retype | Gardner becomes ELIGIBLE | confirmed present; total count moved 5,205 → 5,204 on the SUBSEQUENT merge (collapsing two rows into one), not on the retype alone |
+| `auto_mergeable` | must not move on retype alone | held; moved 3,012 → 3,011 only on the merge step, tracking the same collapse |
+| Gardner ↔ sponsor `unclassified_rival` conflict rows (broad: any conflict row naming either entity, not scoped to the 14 co-claimed) | not predicted at this grain | **65 → 47 (−18)** across the merge |
+| 14 co-claimed properties specifically | −4 (10 keep a third RTD/TEP claimant) | not independently re-verified this session; the §9e figure stands, unrefuted |
+| Tier 0 `people` bench | not measured in §9e | Gardner-Tanenbaum and MassMutual Life carry **no** `has_salesforce_contact`/`has_salesforce_account` row (both `false` on the retype-candidates view), so retyping them removes nothing from any Tier 0 card — the corroboration column the census was meant to check is negative for both |
+| `v_lcc_entity_role_ambiguity` | not measured in §9e | not re-measured this session (filed, not closed) |
+
+**Rolled-back positive control, run live end-to-end:** `person` → `lcc_retype_entity` → `organization` →
+`lcc_merge_entity(loser=Gardner-Tanenbaum, winner=sponsor)` → `lcc_unmerge_entity` → `lcc_unretype_entity` →
+`person`, metadata key cleared. **0 residue.**
+
+**Not built in this pass, named rather than silently dropped:** the 21-row (not 18) full census with
+predicted-vs-actual for every row (only Gardner was walked end-to-end); `v_lcc_entity_role_ambiguity` and the
+14-co-claimed re-verification; a full mutation-pass count for every guard assertion (spot-checked one). Two
+"Research In Progress" placeholder rows sit in the lane view at `$0` current rent — worth a `junk_entity_review`
+question before anyone retypes them, not answered here.

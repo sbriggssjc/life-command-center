@@ -1924,6 +1924,12 @@ var _DC_FEDERATED = new Set([
   // Keep in sync with admin.js FEDERATED_DECISION_TYPES
   // (test/decision-center-partition.test.mjs).
   'tier0_owner_contact',
+  // C13g-min-lane (2026-09-09): the human verdict over C13g-min's retype write.
+  // Source = v_lcc_entity_retype_candidates; verdicts retype_organization
+  // (rpc/lcc_retype_entity, reversible via rpc/lcc_unretype_entity) /
+  // keep_person (record-only) / research. Keep in sync with admin.js
+  // FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
+  'entity_type_review',
   // OWN-T0e (2026-09-09): sponsor-family confirm over the OWN-T0 unclassified_rival
   // conflict store. Source = lcc_ownt0e_sponsor_family_proposals_cache; verdicts
   // confirm_family (INSERT lcc_ownership_sponsor_family, reversible by DELETE) /
@@ -2059,6 +2065,7 @@ async function renderReviewConsolePage() {
     { dt: 'owner_contact_attach_review', label: 'Owner contacts — attach or reject', open: "renderFederatedLane('owner_contact_attach_review')" },
     { dt: 'tier0_owner_contact', label: 'Tier 0 — confirm the owner’s firm domain', open: "renderFederatedLane('tier0_owner_contact')" },
     { dt: 'sponsor_family_confirm', label: 'Sponsor ↔ SPE families — confirm', open: "renderFederatedLane('sponsor_family_confirm')" },
+    { dt: 'entity_type_review', label: 'Entity type — person or organization?', open: "renderFederatedLane('entity_type_review')" },
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
     { dt: 'property_twin', label: 'Property address twins (dia)', open: "renderFederatedLane('property_twin')" },
     { dt: 'provenance_conflict', label: 'Data conflicts & provenance', open: "renderFederatedLane('provenance_conflict')" },
