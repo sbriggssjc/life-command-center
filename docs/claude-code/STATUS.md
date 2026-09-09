@@ -33,7 +33,13 @@ Scott deployed `intake-salesforce` **v25** (`--no-verify-jwt`; Cowork confirmed 
    SSO. **No credential value gets past this; it is a Salesforce-admin setting.**
 
 **Verdict:** the capability is built, deployed, authenticated and proven to Salesforce's front door. It is
-blocked one profile setting short of working. 👤 **Scott → Northmarq Salesforce admin:** either clear *Is Single
+blocked one profile setting short of working.
+**Scott's decision (same day): do not ask IT yet — build the workaround, pitch with the product in hand.** And
+the workaround is already the platform's own design: `api/_shared/salesforce.js` is a Power Automate proxy built
+*because* of SSO + no Connected App, talking to the flow "HTTP Switch Salesforce Lookup" through
+`SF_LOOKUP_WEBHOOK_URL`, seven typed operations, live. SF-DIRECT's SOAP path added no capability the app lacked;
+it adds the exhibit. Filed **SF-DIRECT-b** (prompt drafted): a guarded read-only `soql` case on that flow, an edge
+sibling of the proxy, and `sf-ping` falling back to it. 👤 **Scott → Northmarq Salesforce admin:** either clear *Is Single
 Sign-On Enabled* on the integration user's profile (API-only user is the standard pattern), or provide a
 dedicated API-only integration user outside SSO. Until then SF-DIRECT stays 🟡 with a named external blocker,
 and every outbound Salesforce lane stays on the Power Automate connector as designed.
