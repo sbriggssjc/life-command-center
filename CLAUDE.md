@@ -1931,6 +1931,19 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
 
 ## Known footguns (read before the matching change)
 
+- **⚠️ A TEST THAT "EXPECTS THE AI TO THROW" MAY BE PROVING THE NETWORK IS UP — the suite is
+  hermetic by guard since 2026-09-09 (TEST-NET-LEAK).** `test/lease-extractor.test.mjs` and
+  `test/dossier-generator.test.mjs` assumed *"no AI key in the test env → the extractor throws"*,
+  but `invokeChatProvider`'s default `edge` route needs no key — it POSTs straight to the live
+  `ai-copilot/chat` edge function on Dialysis_DB, gets a 400, and the fallback chain swallows it
+  before the assertion sees a difference. Measured: **14 live calls per `npm test` run**, matching
+  `function_edge_logs` bursts from GitHub-hosted CI runners. `npm test` now loads
+  `test/_helpers/net-guard.mjs` (`--import`, wraps `fetch`, throws on any non-loopback host) and
+  `api/_shared/ai.js::invokeChatProvider` refuses the edge route before fetching under
+  `NODE_TEST_CONTEXT`/`LCC_HERMETIC_TESTS`. **A NEW test that reaches a real host fails loudly
+  (`net-guard`) instead of silently phoning production** — stub `fetch` (the `marketing-reassign`
+  pattern) rather than relying on "there's no key so it'll fail." Guard:
+  `test/hermetic-suite.test.mjs`.
 - **Disk-full on LCC Opps = total sign-in lockout.** Auth (GoTrue) lives here; a full disk forces the DB
   read-only, so GoTrue can't INSERT session rows (`SQLSTATE 25006`) and *only sign-in appears broken* while
   reads work. Bloat is source-fixed + retention-pruned + autovacuum-hardened; `lcc_check_disk_health` +

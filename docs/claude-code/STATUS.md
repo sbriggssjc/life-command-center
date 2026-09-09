@@ -45,6 +45,20 @@ the fallback chain throws the expected error; the network round trip is invisibl
 Next CC prompt is TEST-NET-LEAK (small, testable, no deploy). COPILOT-CHAT-OPEN needs the caller inventory first
 (app.js / detail.js browser clients call it directly with no key — gating it is an app change, not a one-liner).
 
+## 2026-09-09 — TEST-NET-LEAK SHIPPED: `npm test` is hermetic
+
+`test/_helpers/net-guard.mjs` (wraps `fetch`, throws on any non-loopback host, `--import`ed ahead
+of every test file in `package.json`'s `test` script) + `api/_shared/ai.js::invokeChatProvider`
+refusing the `edge` route before any fetch under `NODE_TEST_CONTEXT`/`LCC_HERMETIC_TESTS`. Neither
+leaking test file was rewritten — their assertions already describe *provider failure*, which the
+seam now returns deterministically instead of a real (or guard-thrown) network error. Guard:
+`test/hermetic-suite.test.mjs`. **Full suite re-run: 5,563 tests / 5,557 pass / 0 fail / 6 skipped
+(unchanged), 0 live calls (positive-controlled: a red run with the guard alone, before the `ai.js`
+seam, failed exactly the 4 `lease-extractor.test.mjs` cases predicted and nothing else) — 67s,
+faster than before (no more 35s backoff sleeps against a dead edge route).** Response:
+`docs/claude-code/responses/TEST-NET-LEAK-hermetic-suite.response.md`; backlog row flipped to ✅ in
+`docs/os/PLANNED-BACKLOG.md`. COPILOT-CHAT-OPEN unchanged — still needs the caller inventory.
+
 **Also noted, honestly:** only ONE of Scott's two `sf-ping` 200s is visible in `function_edge_logs` (17:57:52 UTC)
 as of 18:10 UTC; the second is not there. Log lag or drop — not re-queried, not explained.
 
