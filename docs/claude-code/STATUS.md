@@ -60,6 +60,26 @@ resolver (`/health` → 0.1.0, splink/libpostal/gliner, `no_db_writes: true`), c
 Five cron services beside them. **The backlog's instruction to delete the "dormant `life-command-center`
 service" would have deleted the MCP connector.** Ops reference now names all four domains.
 
+**Step 5 ✅ — remaining Vercel callers cleared:** "Send webhook alerts to Daily Briefing" (export read) is an
+inbound Teams-webhook trigger that posts cards — no outbound HTTP at all; the LCC extension on Scott's machine
+is **1.0.52** (the P194-fixed manifest); the Copilot Studio "LCC Deal Intelligence" connector host is
+**tranquil-delight**. Only the iPhone Shortcut remains, and it has no Railway route to point at
+(`_route=mobile-share` not mounted) — 👤 delete the Shortcut or file a route request.
+
+**Step 6 ✅ — Supabase side, run by Scott from the CLI and verified live from Cowork:**
+- **`intake-salesforce` v23 → v24, `verify_jwt: false`** (`--no-verify-jwt` was mandatory: the function was
+  never pinned in `supabase/config.toml`; pinned on this branch). Pre-flight diff: the repo's `index.ts` is the
+  2026-09-07 sync of live v23 and untouched since; the only delta is `sf-config.ts` importing the canonical
+  `GOV_SIGNALS` (DRIFT1-routing-gap). The GOVDUP1-a dedupe is a DB trigger, not function code, so nothing
+  regressed. Bare GET still returns the service JSON (`sf-2026-05-v8`). **The `GOV_SIGNALS` routing fix is now
+  in production** — first proof is the next hourly Object Sync run and a `gov_tenant_kw` reason on a state-agency
+  record.
+- **DRIFT1-retire ✅ — all four deleted:** `sf-test` (held live `SF_USERNAME`/`SF_PASSWORD`/`SF_SECURITY_TOKEN`,
+  callable unauthenticated for four months), `test-function`, `ai-copilot-v2` (Dialysis_DB) and `docai-diag`
+  (LCC Opps). Both function lists re-read; the gateway returns `NOT_FOUND` for `sf-test` and `docai-diag`.
+  👤 **Residue: the three `SF_*` project secrets now have no consumer** — no repo function and neither deployed
+  SF function reads them — `supabase secrets unset` them, and consider rotating that Salesforce password.
+
 ## 2026-09-09 — OWN-T0e BUILT: the `sponsor_family_confirm` lane, a cache because the view was 64 s, and "properties" that were pairs
 
 **Cowork, branch `build/own-t0e-sponsor-family-lane`.** The lane designed on 2026-09-08 is built per
