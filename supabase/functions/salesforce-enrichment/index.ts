@@ -1,5 +1,39 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { authenticateWebhook } from "../_shared/auth.ts";
+import { parseKnownIps, uaClass, ipClass, requestIp } from "../_shared/caller-class.ts";
+
+// ── SFENRICH-gate ────────────────────────────────────────────────────────────
+// This function shipped `verify_jwt:false` with no authenticateWebhook() call
+// anywhere in the body — a bare POST /run executes a 15-step write pipeline
+// against contacts/true_owners/salesforce_activities/contact_links/
+// touchpoint_schedule with no credential of any kind, and GET /diagnostics
+// leaks row and gap counts (see docs/os/PLANNED-BACKLOG.md DRIFT1-sfenrich).
+// This is the SAME door COPILOT-OPEN-gate put on ai-copilot — copied, not
+// redesigned, and the two functions now share one caller-classifier module
+// (../_shared/caller-class.ts) instead of growing two copies.
+//
+// There is no /health (or any other) read route worth exempting — the only
+// GET route this function has is /diagnostics, which is itself a leak, not a
+// health probe — so every route is gated.
+//
+// SFENRICH_AUTH_MODE:
+//   "log"     (default) — an unauthenticated request is logged as DENY-WOULD
+//             and allowed through unchanged. Ships in this mode because a
+//             24h function_edge_logs read found ZERO callers — a window this
+//             short cannot rule out a monthly or ad-hoc caller, so log mode
+//             (not silence) is how that caller inventory gets confirmed
+//             before anything is refused.
+//   "enforce" — the same request gets a 401 instead of reaching a handler.
+// Any other value behaves as "log".
+const SFENRICH_AUTH_MODE = (Deno.env.get("SFENRICH_AUTH_MODE") || "log").toLowerCase();
+
+// SFENRICH_KNOWN_IPS — reuses the SAME `class:ip-prefix` format as
+// COPILOT_KNOWN_IPS (never hardcode an address in source — this file only
+// knows the FORMAT). Kept as its own env var (not a shared one) because the
+// two functions' caller sets are not asserted to be identical, only their
+// classifier code.
+const SFENRICH_KNOWN_IPS = parseKnownIps(Deno.env.get("SFENRICH_KNOWN_IPS"));
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -700,6 +734,16 @@ Deno.serve(async (req: Request) => {
 
   const url = new URL(req.url);
   const path = url.pathname.replace(/^\/salesforce-enrichment/, "");
+
+  // The gate runs BEFORE dispatch, for every route — see SFENRICH-gate above.
+  if (!authenticateWebhook(req)) {
+    const uc = uaClass(req.headers.get("user-agent") || "");
+    const ic = ipClass(requestIp(req), SFENRICH_KNOWN_IPS);
+    console.log(`[sfenrich-auth] DENY-WOULD ${req.method} ${path} ${uc} ${ic}`);
+    if (SFENRICH_AUTH_MODE === "enforce") {
+      return jsonResponse({ error: "unauthorized" }, 401);
+    }
+  }
 
   try {
     if (path === "/diagnostics" || path === "/diagnostics/") {
