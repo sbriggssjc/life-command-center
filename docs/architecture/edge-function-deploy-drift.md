@@ -333,3 +333,16 @@ with `get_edge_function` before any future redeploy, exactly as this page's runb
 re-enabled the gateway JWT check and 401'd the hourly Object Sync, the trap `intake-salesforce-files` and
 `lead-ingest` already fell into. Pinned the same day. The `SF_*` secrets `sf-test` used now have no consumer
 (backlog `DRIFT1-retire-secrets`).
+
+## 2026-09-09 — SF-DIRECT: `sf-test`'s SOAP-login capability rebuilt as an authenticated helper
+
+`sf-test` was deleted the same day (above) with its ~40-line body unrecovered (the 2026-05 audit's
+"source is on record in git history" claim was false — nothing had ever committed it). Scott's rule
+that no planned or built capability is lost applies: the capability it proved — SOAP login to
+Salesforce with `SF_USERNAME`/`SF_PASSWORD`+`SF_SECURITY_TOKEN`, no Connected App — is rebuilt as
+`supabase/functions/_shared/salesforce-soap.ts` (`sfLogin`/`sfQuery`, `SF_LOGIN_HOST` sandbox
+toggle) plus `intake-salesforce?action=sf-ping`, an authenticated GET diagnostic behind the same
+`authenticateWebhook()` gate every other action in that function uses — **never** a standalone
+unauthenticated endpoint, and no new function slug (`intake-salesforce` v24 → v25). Read-only:
+`SELECT Id, Subject, Status FROM Task WHERE IsClosed = false LIMIT 5`. The `SF_*` secrets now have
+a consumer again — `DRIFT1-retire-secrets` closes as "kept, and used."
