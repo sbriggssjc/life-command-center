@@ -16,6 +16,30 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — J13-teardown-preflight: the retired Vercel host is still writing, not just answering — one live scheduled caller found, runbook shipped
+
+**Read-only.** No code, DB writes, migrations, or deploys. Queried Supabase `edge_logs` on LCC Opps
+(24h window, `2026-09-08T01:22Z → 2026-09-09T01:21Z` — `query_logs` caps at 24h/call; this is one
+day's sample, **not** 14 days, stated plainly). Split the IP population by P194's Railway-stable vs.
+AWS-ephemeral-pool classes: a rotating AWS pool exists, but most of it looks like ordinary broad
+multi-table app traffic, not the narrow single-path fingerprint P194's W53 audit describes for the
+intake channel. One real signal did match that shape: `18.208.213.136` **POSTed** an upsert
+(`on_conflict=as_of_date,workspace_id`) to `briefing_intel_snapshot` at 10:00:27 UTC → HTTP 201, 18
+minutes before Railway's own cron-240 read+PATCH of the same row, and `18.209.20.81` fired an 18-call
+composite dashboard-render burst at 12:30:01 UTC — matching the "daily-briefing-cache" desktop task
+pattern named in `docs/ops-logs/daily-briefing-cache-2026-09-01.md`. Confirmed the Cowork 21:43–21:44
+UTC read-probe did not persist a snapshot (excluded from every count). Confirmed
+`/api/intake?_route=mobile-share` is **not mounted** in `server.js` — the iPhone Shortcut has no live
+Railway route to repoint to, a blocker rather than a routine fix. Confirmed
+`extension/background.js::pickIntakeHost()` is Railway-first (shipped manifest `1.0.52`); confirmed
+`docs/os/FLOW-REGISTRY.yaml` and the sampled 2026-08-11 PA export zips carry 0 Vercel hits; named
+(did not identify) the pre-existing "3 flows outside the registry and `retired_flows`" boundary.
+Shipped `docs/audits/J13_TEARDOWN_PREFLIGHT_2026-09-09.md` (every query run, exact window read) and
+`docs/os/RUNBOOK_vercel_teardown.md` (5 ordered steps + proofs + a rollback-signature table per
+caller class). Split `docs/os/PLANNED-BACKLOG.md` J13 into **J13-preflight** (✅, this unit) and
+**J13-teardown** (👤 Scott, the runbook). **Does not tear anything down, rotate any key, or repoint any
+caller** — those stay Scott's, per the runbook.
+
 ## 2026-09-08 — J13a-guard reconciled (PR #2181): the guard is real, and it had a hole the size of the defect it was built for — closed, positive-controlled, suite 5473/0
 
 **Verified.** Ran `test/retired-identifiers-guard.test.mjs` locally on `main`: 6/6, `tracked=4486 scanned=4403
