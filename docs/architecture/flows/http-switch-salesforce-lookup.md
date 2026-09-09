@@ -173,3 +173,14 @@ entry: add a `notes:` line naming the new `soql` operation and the export date, 
 `exported_at` / `package_path` / `sha256` to the new export under
 `private/power-automate/exports/production/<date>/`.
 
+### Build notes from the first live build (2026-09-09, walked in Cowork)
+
+- The designer named the connector action **`Execute_a_SOQL_query_1`** (a prior attempt existed); every expression
+  must use the real name — `InvalidTemplate` on save otherwise.
+- A `Response` may only reference actions on its own run-after path: both Responses live **inside If yes, after**
+  the SOQL action; the failure Response has run-after = *has failed* + *has timed out*.
+- **`empty()` rejects integers.** The `max_rows` default must be `if(equals(triggerBody()?['max_rows'], null), 200,
+  min(int(triggerBody()?['max_rows']), 500))`, not `empty(...)` — the first live run failed on this.
+- **Connector latency: 48.9 s** for a 5-row Task query on the first live run (`Server-Timing`
+  `x-ms-igw-upstream-headers;dur=48941.8`, no retry). The gateway helper's timeout was raised 20 s → 60 s
+  (`SF_GATEWAY_TIMEOUT_MS`). Re-measure on the next pings before treating 49 s as the steady state.

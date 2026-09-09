@@ -16,6 +16,28 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — SF-DIRECT-b: the gateway path works end to end (5 open Tasks came back from Salesforce) — the connector took 49 s and our 20 s abort hid it
+
+Three pings, three different layers, each measured from the Power Automate run rather than guessed:
+
+1. **v26** → `via:"soap"` with `sf:INVALID_SSO_GATEWAY_URL` and no fallback — the namespaced-fault-code gate bug,
+   fixed (v27, PR merged, red-then-green positive control).
+2. **v27** → `via:"pa_gateway"`, `flow_unreachable` at 20.4 s. Run history: the flow's success Response failed on
+   `empty(triggerBody()?['max_rows'])` — `empty()` rejects integers and the helper sends `max_rows: 200`. Fixed in
+   the flow (`equals(…, null)`).
+3. **v27 again** → `flow_unreachable` at 20.5 s. Run history: **`Execute_a_SOQL_query_1` succeeded — HTTP 200,
+   `totalSize: 5`, five real open Tasks — but took 12:05:22 → 12:06:11, 48.9 s by the connector's own
+   `Server-Timing` header, no retry.** The Response then failed `ActionResponseTimedOut` because our 20 s abort had
+   already closed the connection. **The path works; the budget was wrong.**
+
+**Fix (this branch):** `salesforce-gateway.ts` default timeout 20 s → **60 s**, overridable via
+`SF_GATEWAY_TIMEOUT_MS` (1–120 s). A diagnostic read path should wait for the connector and report what it did, not
+manufacture a phantom "unreachable". → **v28 deploy**, then two pings to see whether the 49 s was a cold first call
+or the org's steady state; record `elapsed_ms` for both.
+
+**Also learned about the designer:** the SOQL action's name gets a `_1` suffix; a Response may only reference
+actions on its run-after path; `empty()` is not null-safe for numbers. All three are now in the flow doc.
+
 ## 2026-09-09 — SF-DIRECT-b live: the flow's `soql` case is built, v26 deployed — and the first ping exposed a one-line gate bug (namespaced fault codes), fixed with a red-then-green test
 
 Walked the Power Automate build in five steps (case → SELECT-only Condition → two Responses → Secure I/O →
