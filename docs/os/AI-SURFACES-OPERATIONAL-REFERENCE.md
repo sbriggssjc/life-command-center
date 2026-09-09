@@ -64,6 +64,14 @@ service + every connector or auth 401s.
 **A "deploy" of engine changes = redeploy tranquil-delight AND the standalone MCP service** (both build from `main`).
 Instruction/canon changes do NOT need a deploy — they're paste/upload.
 
+**Env on Dialysis_DB (`zqzrriwuavgrquhisnoa`) edge functions** (Supabase secrets, not Railway): the
+`intake-salesforce` function reads `SF_USERNAME` / `SF_PASSWORD` / `SF_SECURITY_TOKEN` (SF-DIRECT,
+2026-09-09 — `_shared/salesforce-soap.ts`'s SOAP login, password = `SF_PASSWORD`+`SF_SECURITY_TOKEN`
+concatenated) + the optional `SF_LOGIN_HOST` (defaults `login.salesforce.com`; set to
+`test.salesforce.com` to point at a sandbox) and `SF_API_VERSION` (defaults `61.0`). These are the
+same three secrets `sf-test` held before its 2026-09-09 deletion — kept by decision, now consumed by
+`intake-salesforce?action=sf-ping`.
+
 ## 3. Comps engine — operational reference (`mcp/comps-tools.js`)
 - **Data is NOT the problem.** Dialysis_DB (`zqzrriwuavgrquhisnoa`) holds **3,022 live sold dialysis comps
   (1985–2026, 48 states, 100+ FL)** in `sales_transactions` (`transaction_state='live'`); `v_sales_comps` is built
