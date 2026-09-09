@@ -302,10 +302,20 @@ flows:
     trigger: request
     connectors: [salesforce]
     endpoint_families: [lcc-flow-failure-ledger]
-    exported_at: "2026-08-11T03:16:18Z"
-    package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-http-switch-lookup__HTTP-Switch-Salesforce-Lookup__c3744e93-5e95-4b6f-a839-d4308389d21f__2026-08-11.zip
-    sha256: dc6c0785aa18924fa135fd0d99ab29767045a76bb8d984f1efcd1b8429336708
+    exported_at: "2026-09-09T16:36:00Z"
+    package_path: private/power-automate/exports/production/2026-09-09/sf-http-switch-lookup__HTTP-Switch-Salesforce-Lookup__2026-09-09.zip
+    sha256: c461ff8e79c961dc0defdca2075124bd43e73a45875f98e135b95c9e8790d530
+    previous_exports:
+      - exported_at: "2026-08-11T03:16:18Z"
+        package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-http-switch-lookup__HTTP-Switch-Salesforce-Lookup__c3744e93-5e95-4b6f-a839-d4308389d21f__2026-08-11.zip
+        sha256: dc6c0785aa18924fa135fd0d99ab29767045a76bb8d984f1efcd1b8429336708
     runbook: docs/architecture/flows/http-switch-salesforce-lookup.md
+    notes: >-
+      2026-09-09 (SF-DIRECT-b): added read-only `soql` Switch case (SELECT-only + no ';' guard, max_rows
+      clamped to 500, Execute_a_SOQL_query_1, 200/400 Responses). Consumers: api/_shared/salesforce.js
+      (Railway) and supabase/functions/_shared/salesforce-gateway.ts (Dialysis_DB edge, via SF_LOOKUP_WEBHOOK_URL).
+      Measured connector latency 48-49 s per call at steady state (SF-GW-LATENCY). Residual: Secure
+      Inputs/Outputs is on the trigger only, not yet on the SOQL action - re-export after that checkbox.
 
   - logical_id: briefing-daily-teams-v2
     display_name: "LCC - Daily Briefing to Teams"

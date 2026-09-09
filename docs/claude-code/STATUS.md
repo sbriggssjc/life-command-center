@@ -16,6 +16,74 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — Found while verifying the pings: `npm test` makes 14 live calls to the production `ai-copilot/chat` edge function per run — from CI and from Scott's desk — and every one is a 400
+
+**How it surfaced.** Reading `function_edge_logs` on Dialysis_DB for the two `sf-ping` 200s, the neighbouring rows
+were bursts of `POST | 400 | …/functions/v1/ai-copilot/chat`. Grouped over 24 h (2026-09-08 18:10 → 09-09 18:10
+UTC): **19 bursts of exactly 14 calls in a 3-minute window, each from a different Azure address**
+(`20.x`, `52.x`, `4.x`, `172.18x.x`, `40.x`, `48.x`, `51.8.x`, `74.x`, `104.x`, `135.x`, `64.236.x` — GitHub-hosted
+runners live on Azure), plus **71 calls from one stable residential address, UA `node`** — the same shape, from a
+developer machine running the suite. Burst times match today's PR CI runs (17:56–17:59 = the #2205 merge).
+
+**Reproduced locally, not inferred:** ran the full suite with a `fetch` shim that logs any call to a real host.
+5,563 tests, 0 failures, 376 s — and exactly **14 live calls**: `test/lease-extractor.test.mjs` → 8,
+`test/dossier-generator.test.mjs` → 6, all to `https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot/chat`.
+Both files assume "no AI key in the test env → the extractor throws"; but `api/_shared/ai.js` `invokeChatProvider`
+defaults `AI_EXTRACTION_PRIMARY` to `edge`, and the edge path needs **no key** — it POSTs to the live function with
+no `Authorization` header at all (workspace/user-id headers only). The tests pass because the 400 is caught and
+the fallback chain throws the expected error; the network round trip is invisible to the assertion.
+
+**Two facts, two rows:**
+1. **TEST-NET-LEAK** — the suite is not hermetic: CI reaches production on every run, and a green depends on a
+   production endpoint answering (any way). Fix is in the tests/`ai.js` seam, not the function.
+2. **COPILOT-CHAT-OPEN** — `ai-copilot` (v79, `verify_jwt:false`) accepts `POST /chat` with **no credential** —
+   the same shape as DRIFT1-sfenrich, on the function the app's own chat and extraction paths use. Prompt 61 #4
+   already recorded "it 400s on every extraction call in production (measured)" and shipped the
+   `AI_EXTRACTION_PRIMARY=openai` switch — default left at `edge`; nothing on file says the Railway env has the
+   switch set. So the 400 the tests hit is the same 400 production extraction pays first on every OM.
+
+Next CC prompt is TEST-NET-LEAK (small, testable, no deploy). COPILOT-CHAT-OPEN needs the caller inventory first
+(app.js / detail.js browser clients call it directly with no key — gating it is an app change, not a one-liner).
+
+**Also noted, honestly:** only ONE of Scott's two `sf-ping` 200s is visible in `function_edge_logs` (17:57:52 UTC)
+as of 18:10 UTC; the second is not there. Log lag or drop — not re-queried, not explained.
+
+---
+
+## 2026-09-09 — SF-DIRECT-b ✅ CLOSED: two live `sf-ping` runs via the PA gateway, `open_tasks: 5` both times — and 48–49 s is the org's steady state, not a cold start
+
+**Measured (Scott, after PR #2205 merged and `intake-salesforce` redeployed):**
+
+| ping | via | ok | open_tasks | elapsed_ms |
+|---|---|---|---|---|
+| 1 | `pa_gateway` | true | 5 | 47,716 |
+| 2 | `pa_gateway` | true | 5 | 49,341 |
+
+Second call is no faster than the first, so the 48.9 s seen in the run history yesterday is the **Salesforce
+connector's steady-state latency for this org**, not warm-up. That is a design constraint, recorded in the flow
+doc and the backlog row: **the gateway read path is fine for anything batch or briefing-shaped; it is not usable
+inside a chat turn or an interactive request.** The SOAP path (SF-DIRECT) would be sub-second and stays 🟡 as the
+exhibit for the IT conversation Scott will have with the working product in hand.
+
+**Live function version is v30** by `list_edge_functions` (I had written "v28" as the expected next number; the
+counter advanced further than the deploys I recorded — the number in these notes is the dashboard's, not a
+derived one). Fault-prefix fix, `equals(…, null)` flow fix and the 60 s timeout are all in the live build (two
+successful pings prove all three).
+
+**Flow export filed:** `private/power-automate/exports/production/2026-09-09/sf-http-switch-lookup__HTTP-Switch-Salesforce-Lookup__2026-09-09.zip`
+(5,579 bytes, sha256 `c461ff8e…8790d530`, git-ignored). Read from the zip before registering it: the `soql` case and
+`Execute_a_SOQL_query_1` are present, no `sig=` literal, no retired host. **One residual against the spec:** Secure
+Inputs/Outputs is set on the HTTP trigger only — the SOQL action carries no `secureData`, so run history still
+retains Task record bodies (that is how yesterday's run detail could show `totalSize: 5`). 👤 One checkbox in the
+designer on `Execute_a_SOQL_query_1` → Settings → Secure Inputs + Secure Outputs, then re-export. Not blocking;
+filed on the SF-DIRECT-b row as the only open item. `FLOW-REGISTRY.yaml` `sf-http-switch-lookup` bumped to the
+2026-09-09 export.
+
+**Backlog:** SF-DIRECT-b → ✅. SF-DIRECT stays 🟡👤 (external SSO blocker; code complete). New row **SF-GW-LATENCY**
+so the 49 s does not get rediscovered: any consumer of `sfGatewayQuery` must budget ≥ 60 s and run out of band.
+
+---
+
 ## 2026-09-09 — SF-DIRECT-b: the gateway path works end to end (5 open Tasks came back from Salesforce) — the connector took 49 s and our 20 s abort hid it
 
 Three pings, three different layers, each measured from the Power Automate run rather than guessed:
@@ -59,21 +127,6 @@ on the unpatched file** (2 failures) and green after. Full suite 5,545 / 0 / 6 s
 👤 **Scott:** move the exported flow zip from Downloads to
 `private\power-automate\exports\production\2026-09-09\` (git-ignored), then redeploy v27 and re-ping;
 report `via` + `open_tasks` only.
-## 2026-09-09 — C13g-min-lane 502'd on first open: the candidate view read the 35 s PROPOSALS VIEW, not the OWN-T0e cache — fixed live, view-only
-
-Scott opened "Entity type — person or organization?" and got **HTTP 502 `federated_list_failed`**. Reproduced
-from the DB side (`net.http_get` with the vault key): body `"This operation was aborted"` = `opsQuery`'s **8 s**
-fetch abort. `EXPLAIN ANALYZE` on `v_lcc_entity_retype_candidates`: **34.7 s** — both its `own_t0e_blocked` CTE
-and its per-row LATERAL referenced `v_lcc_ownt0e_sponsor_family_proposals`, the view OWN-T0e design §6 measured
-at 64 → 20 s and deliberately put behind `lcc_ownt0e_sponsor_family_proposals_cache` *because a view built for
-point-queries is not a population source*. The C13g-min migration re-committed that exact footgun, and its own
-"18 rows" check could not see it — the SQL editor's statement timeout is longer than the app's fetch. ⚠️ **"The
-view returns the right rows" is not "the lane loads"; measure the read the HANDLER makes, at the HANDLER's
-timeout.** Migration `20261101130000_lcc_c13g_min_lane_view_reads_cache.sql` (whole view restated, both refs →
-the cache): **58 ms**, output **md5-identical** (18 rows, same two blocked cards), and the live endpoint now
-answers **200 / total 18** with Gardner-Tanenbaum first. No JS changed, no deploy. Trade: the blocker column can
-lag the 4-hourly cache — the same lag the sponsor lane shows; the write-gating facts are still read live.
-
 ## 2026-09-09 — C13g-min-lane reconciled (PR #2202) and DEPLOYED: the retype verdict has a card; the next step is Scott working it
 
 **Deploy verified**: `/version` = `3cd0e782` (read via `net.http_get` from LCC Opps); `git merge-base --is-ancestor`
