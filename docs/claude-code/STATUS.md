@@ -16,6 +16,49 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — TEST-NET-LEAK reconciled (PR #2209/#2210): 0 live calls, suite time halved — and the caller inventory for `ai-copilot` shows the whole function is open, not just `/chat`
+
+**TEST-NET-LEAK, re-measured from `origin/main` under the same `fetch`-logging shim as yesterday's 14:**
+5,568 tests / 5,562 pass / 0 fail / 6 skipped / **0 live calls** / **181 s (was 376 s)**. The response's "5,563 /
+67 s" was measured before its own five guard tests landed and on a faster box — the counts here are from the merged
+tree. The time halved because the 35 s backoff sleeps against a dead edge route are skipped under the seam, which
+also shortens every `npm test` CI check from here on. Read the shipped guard: blocklist + a general non-loopback
+rule with `pa.test.local` allowlisted; `hermeticTestsActive()` keys off `NODE_TEST_CONTEXT` (node's own `--test`
+child marker) or `LCC_HERMETIC_TESTS` — neither is set on Railway, so production behaviour is unchanged. Row ✅.
+
+**COPILOT-CHAT-OPEN → widened to COPILOT-OPEN, by reading the DEPLOYED body, not the repo.** Fetched `ai-copilot`
+v79 from Dialysis_DB (six files, 81 KB): **25 routes, one service-role client, and zero authentication of any kind
+anywhere** — no `authenticateWebhook`, no bearer, no `apikey` check, no `401` path; CORS `*`. With
+`verify_jwt:false` the gateway forwards anything. The open **write** routes: `POST /sync/activities`,
+`/sync/accounts`, `/sync/log-to-sf`, `/sync/sf-tasks`, `/sync/flagged-emails`, `/sync/calendar-events` (upsert +
+reconcile-delete), `/enrich`, `/bd/config`, `/bd/log-completion`, `/bd/auto-reschedule`, `/bd/route-task`. This is
+the DRIFT1-sfenrich shape on the function that fronts the model *and* the calendar/activity ledgers, and its writes
+are not fill-blanks-idempotent the way `salesforce-enrichment`'s are.
+
+**Caller inventory, 24 h (2026-09-08 19:45 → 09-09 19:45 UTC, `function_edge_logs`), grouped by path × UA × IP class:**
+
+| caller class | routes | count | status | note |
+|---|---|---|---|---|
+| CI runners (60 Azure IPs, UA `node`) + Scott's machine | `POST /chat` | 743 + 55 | all 400 | TEST-NET-LEAK — gone from the next run onward |
+| Browser at Scott's address (Edge + Chrome) | `GET /health`, `/sync/sf-activities`, `/sync/calendar-events` | 179 / 194 / 195 | 200 — **but 58 of 194 and 29 of 195 are 500** | `app.js` calls the edge URL directly, no key (the front-end cannot hold one) |
+| Power Automate (UA `azure-logic-apps/1.0 (workflow <id>)`) | `POST /sync/calendar-events` 24, `/sync/activities` 6, `/sync/sf-tasks` 4, `/sync/flagged-emails` 1 | 35 | 200 | four workflow ids — **none match a `flow_guid` in `FLOW-REGISTRY.yaml`**: `4eb7c46f…`, `5706ffc6…`, `e2598c91…`, `0216d3da…` (PA5's "three flows in neither list" may be these; Not on file which) |
+| Railway (`152.55.x`) | — | **0** | — | `api/sync.js` / `ai.js` did not call the edge in 24 h — so either `AI_EXTRACTION_PRIMARY=openai` is set on Railway or no extraction ran; still Not on file |
+
+**Two more findings from the same read, filed as rows:**
+- **COPILOT-SYNC-500** — the browser's `GET /sync/sf-activities` fails 30 % of the time and `/sync/calendar-events`
+  15 %, with **nothing in `function_logs`** for the failures (the router's catch logs `ROUTER ERROR:` — absent, so
+  the 500 is produced inside a handler that returns it silently). Measure the body before guessing.
+- **CAL-RECONCILE-STUCK** — 24 hourly `[calendar-reconcile] SKIP: candidate count 13–16 exceeds
+  MAX_RECONCILE_DELETES (10); likely a dropped calendar source` since at least 09-08 23:25. The guard is doing its
+  job; the consequence is that 13–16 calendar rows that no longer exist upstream are never removed, every hour.
+  Either a source really dropped (then the rows should go) or the window logic is wrong — decide from the rows.
+
+Next CC prompt: **COPILOT-OPEN-gate** (design from the inventory above; PA flows and browser are the two callers that
+must keep working, and the browser cannot be handed a secret — its reads go through Railway, which already proxies
+`/sync/*` in `api/sync.js` with user auth).
+
+---
+
 ## 2026-09-09 — first real retype verdict failed: `p_decision_id uuid` vs `lcc_decisions.id bigint` — fixed live, function only
 
 Scott clicked **Retype as organization** on Gardner-Tanenbaum → toast `entity_type_review: retype_failed`.
