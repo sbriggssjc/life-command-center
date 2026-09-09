@@ -247,3 +247,60 @@ So of the five, two are clean merges, one needs a retype first, one is not a dup
 the wrong card. **`spe_props_max ≥ 2` is a signal that something other than a family is going on, not a
 duplicate detector** — read the pair before choosing the verdict. Not built: an entity retype from this
 lane (backlog **C13g** owns `entity_type` repair); the guard's refusal message says "retype first".
+
+## 8. Live after-state (2026-09-09) — five cards worked in production, predictions reconciled exactly
+
+**Deploy verified first**: `/version` = `87b631e8` (the OWN-T0e-b merge, PR #2189; OWN-T0e itself PR #2187).
+Both halves running — JS and DB. Scott worked **5 cards** live in `sponsor_family_confirm` between
+14:19:07 and 14:20:25 UTC (decision timestamps).
+
+**Writes, read back from the ledgers (14:34 UTC):**
+
+| ledger | before | after | what |
+|---|---:|---:|---|
+| `lcc_ownership_sponsor_family` | 6 | **8** | `ngp` (NGP Capital) · `uirc` (UIRC), both `confirmed_by = sabriggs@northmarq.com`; the six hand-SQL rows untouched |
+| `lcc_decisions` (`sponsor_family_confirm`) | 0 | **5** | 2 × `confirm_family` (`t0e:…:ngp`, `t0e:…:uirc`) · 3 × `same_party` with `merge_now=true` (`george`, `rmr`, `salus`) |
+| `lcc_entity_merge_log` | 145 | **148** | `George Washington University (The)` → GWU (`portfolio_repointed 0`, xids 1) · `RMR Group` → RMR (`portfolio_repointed 8`, `er_from_repointed 26`) · `Salus Grovernment Properites` [sic] → Salus Gov't Properties (xids 1). All three `v_lcc_entity_merge_reversibility.reversible = true` |
+
+**Population** (`v_lcc_property_ownership_reconciled`, `is_current and property_state='conflict'`, distinct
+`asset_entity_id`):
+
+| conflict_class | 2026-09-08 design (§2) | Scott, ~14:21 UTC | re-read 14:34 UTC |
+|---|---:|---:|---:|
+| `sponsor_family_confirmed` | 64 | **102** | **102** ✅ |
+| `unclassified_rival` | 1,617 | 1,575 | 1,516 ⚠️ |
+| `duplicate_entity` | 416 | 416 | 412 ⚠️ |
+
+The prediction that does not depend on the disputed denominator reconciles **exactly**: `sponsor_family_confirmed`
++38 = NGP Capital **28** (the §6 rolled-back control said 28) + UIRC **10**. Registry rows = confirm count;
+merge-log rows = `merge_now` count; the lane's own `duplicate_entity` did not move on the confirms (as designed —
+a family confirm classifies, it does not merge).
+
+⚠️ **Two honest reads of `unclassified_rival` / `duplicate_entity` disagree by 59 / 4 properties thirteen minutes
+apart, and NO lane write separates them**: no `lcc_entity_portfolio_facts` row, no `lcc_property_owner` claim,
+and only 2 `entities` rows (one person, one asset) changed after 14:20:30; the merge log and the registry are
+identical in both reads. Crons that touch the same stores did run in the gap (`lcc-gov-buyer-sync` 14:20,
+`lcc-cre-owner-backfill` 14:22, `lcc-owner-reconcile-engine` 14:25) but left no LCC-side delta I can find.
+**Not adjudicated** — most likely a query-shape difference (rows vs distinct assets: the same read counts
+3,264 / 874 / 220 rows) rather than a data move. Recorded so nobody quotes either number as "the" after-state
+without the timestamp; the §4 verification rule (registry count = decision count, confirmed group's rows flip)
+held on every card. Filed with **OWN-T0h**, which already owns the two-denominator question.
+
+**What the five cards said about the open follow-ups (measured, not recalled):**
+
+- **OWN-T0e-c (mixed group).** After the `ngp` confirm, the two sponsor duplicates riding inside the family
+  are now classified `sponsor_family_confirmed` on **1 property each** (`NGP Group`, `National Government
+  Properties (NGP)`); `NGP Group` still holds its own card with 2 `unclassified_rival` properties. The
+  "papers over a merge" residue is real but small — **2 properties, not 30** — because the duplicates share
+  few assets with the sponsor. A per-member verdict would fix 2 rows; a `same_party` from the `NGP Group`
+  card would fix the same 2.
+- **C13g (Gardner-Tanenbaum).** `Gardner Tanenbaum Holdings` (organization, **47** conflict properties) and
+  `Gardner-Tanenbaum` (typed **person**, **18**) co-claim **14 properties / $6.17M rent**, all
+  `unclassified_rival`; the OWN-T0e-b type guard refuses the merge until the person row is retyped. This is
+  the largest single unlock left in the duplicate-suspect set and it is blocked by one `entity_type` value.
+- **Generic-word ack.** None of the five confirms was on a generic token (`ngp`, `uirc` are brand tokens;
+  `george` was a `same_party` merge, not a confirm). The question is still open and still has no live
+  instance to grade.
+
+**Reverse, if ever needed**: `DELETE from lcc_ownership_sponsor_family where sponsor_token in ('ngp','uirc')`
+(the decision id is in `notes`); `select lcc_unmerge_entity(loser_id)` for each of the three merge-log rows.
