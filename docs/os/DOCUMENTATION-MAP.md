@@ -41,7 +41,9 @@ bootstraps a fresh chat and points at them.
 
 > ✅ **`test/retired-identifiers-guard.test.mjs` (J13a-guard, 2026-09-08) now enforces this line**
 > instead of leaving it to the next manual grep — it fails CI on any tracked file (outside
-> `docs/history/`/`docs/archive/`/`docs/audits/`/a bannered doc) that still names
+> `docs/history/`/`docs/archive/`/`docs/audits/`/a bannered doc — *bannered* meaning a `> …STALE (DOCMAP`
+> or `> …RETIRED` **blockquote in a `.md` file**, tightened 2026-09-08 after the bare word "retired" was
+> found exempting live code) that still names
 > `docs/os/architecture/`, alongside the retired Vercel host and `GOV_STATE_SIGNALS`. Add a
 > newly-retired path/host/symbol to `test/fixtures/retired-identifiers.json`, not a fresh sweep.
 

@@ -64,10 +64,20 @@ const EXEMPT_FILES = new Set([
   'docs/architecture/lcc-microsoft-copilot-outlook-audit-2026-05-22.md',
   'docs/architecture/power-automate-api-html-triage-2026-08-11.md',
   'docs/architecture/edge-function-deploy-drift.md',
+  // Surfaced by the 2026-09-08 banner tightening (these three had been riding
+  // the bare word "retired" in their heads). All correctly framed:
+  // §5 "Old Vercel deployment — shut down safely" is a dated 2026-07-23 audit
+  // finding (belongs in docs/audits/; filed as a move candidate, not moved here).
+  'docs/architecture/INTAKE_TODO_FLOW_AUDIT_2026-07-23.md',
+  // Dated 2026-08-11 triage PROMPT: "references are presumptively stale".
+  'docs/architecture/POWER-AUTOMATE-API-HTML-TRIAGE-CODEX-PROMPT-2026-08-11.md',
   // Documents, in the past tense, the DOCMAP1 merge this fixture's own
   // "docs/os/architecture/" entry records ("was merged into ... in the same
   // change that built this index — there is no longer a second directory").
   'docs/os/DOCUMENTATION-MAP.md',
+  // The classification ledger for that same merge — names the old path as the
+  // thing that was merged. Same past-tense class.
+  'docs/os/DOCMAP1_CLASSIFICATION.md',
 ]);
 
 // The places that DOCUMENT a retirement, in prose, at the top level — these
@@ -109,10 +119,22 @@ const ALLOWLIST_KEYS = new Set(ALLOWLIST.map((r) => `${r.path} ${r.id}`));
 /** A `STALE (DOCMAP…` or `RETIRED` banner in the first 40 lines marks a
  * correctly-framed historical record — the artifact a future reader is meant
  * to trust as "this used to be true, here is why it changed", not a live
- * assertion. */
-function hasRetirementBanner(text) {
-  const head = text.split('\n').slice(0, 40).join('\n');
-  return /STALE \(DOCMAP|RETIRED/i.test(head);
+ * assertion.
+ *
+ * ⚠️ Tightened 2026-09-08 (Cowork J13a-guard reconcile). The first cut tested
+ * `/STALE \(DOCMAP|RETIRED/i` over the whole 40-line head, which exempted ANY
+ * file whose opening lines contained the word "retired" in any sense — 40+
+ * tracked files including live `api/_shared/*.js`, `dc-lanes.js` and four
+ * `.github/workflows/*.yml`. Positive-controlled: a hardcoded retired host
+ * appended to `api/_shared/share-extractor.js` left the suite GREEN — the exact
+ * P194 shape (a fallback URL in code) this guard exists to catch. Now: only a
+ * Markdown file can carry a banner (code never gets a prose pass), and the
+ * banner must be a blockquote line (`> … STALE (DOCMAP` / `> … RETIRED`), which
+ * is the DOCMAP1 convention every real banner in the repo follows. */
+function hasRetirementBanner(relPath, text) {
+  if (extOf(relPath) !== '.md') return false;
+  const head = text.split('\n').slice(0, 40);
+  return head.some((line) => /^>\s.*(STALE \(DOCMAP|RETIRED)/i.test(line));
 }
 
 function trackedFiles() {
@@ -152,7 +174,7 @@ function isExempt(relPath, text) {
   if (EXEMPT_FILES.has(relPath)) return true;
   if (EXEMPT_TOP_LEVEL_DOC_FILES.has(relPath)) return true;
   if (EXEMPT_DIR_PREFIXES.some((p) => relPath.startsWith(p))) return true;
-  if (hasRetirementBanner(text)) return true;
+  if (hasRetirementBanner(relPath, text)) return true;
   return false;
 }
 
@@ -235,6 +257,20 @@ describe('J13a-guard — retired identifiers stay retired', () => {
     const relPath = 'docs/architecture/some-live-doc.md';
     const text = `> STALE (DOCMAP1, 2026-09-08): this section named ${RETIRED[0].id} and has since moved.\n\nBody text.`;
     assert.equal(isExempt(relPath, text), true);
+  });
+
+  it('POSITIVE CONTROL (2026-09-08 tightening): the word "retired" in a CODE file is not a banner', () => {
+    // The P194 shape: a live fallback URL in an api/ module whose header happens
+    // to say "retired". Before the tightening this passed silently.
+    const relPath = 'api/_shared/synthetic-probe.js';
+    const text = `// The Vercel path was retired 2026-07-20.\nexport const HOST = 'https://${RETIRED[0].id}/api/x';\n`;
+    assert.equal(isExempt(relPath, text), false);
+  });
+
+  it('POSITIVE CONTROL (2026-09-08 tightening): a non-blockquote "retired" in a .md head is not a banner', () => {
+    const relPath = 'docs/architecture/some-live-doc.md';
+    const text = `# Flow\n\nThe retired flow is gone. POST to https://${RETIRED[0].id}/api/x.\n`;
+    assert.equal(isExempt(relPath, text), false);
   });
 
   it('an allowlist entry that no longer matches anything is itself a failure (no stale entries)', () => {

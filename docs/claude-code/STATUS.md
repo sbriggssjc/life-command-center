@@ -16,6 +16,69 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-08 — J13a-guard reconciled (PR #2181): the guard is real, and it had a hole the size of the defect it was built for — closed, positive-controlled, suite 5473/0
+
+**Verified.** Ran `test/retired-identifiers-guard.test.mjs` locally on `main`: 6/6, `tracked=4486 scanned=4403
+hits=0 exempt=86 allowlisted=2` (CC's 4482/4399/76 predate two later PRs — not a discrepancy). **My own RED run**
+— a synthetic tracked offender staged under `api/` — failed naming the file; a retired host in a JS *comment* is
+not flagged, by design. Every moved artifact's referrer sits in an exempt directory or under a banner;
+`scripts/build_canonical_connector.py` reads only the `openapi.json` siblings, which stayed. Live Railway
+`/version` = `dbf37d82` = the J13a merge — **this PR is already deployed.** CC's refusal to seed
+`life-command-center-production.up.railway.app` as retired was **correct, and the prompt's seed row was wrong**
+(struck in place in `prompts/done/J13a-retired-host-guard.md`).
+
+🚨 **Did not hold — found by trying the defect inside an exemption.** `hasRetirementBanner` tested
+`/STALE \(DOCMAP|RETIRED/i` over the first 40 lines of *any* file. Measured: **40+ tracked files rode the bare
+word "retired"** — live `api/_shared/junk-prescreen.js`, `share-extractor.js`, `todo-completion.js`,
+`dc-lanes.js`, four `.github/workflows/*.yml`, `AGENTS.md`, `WRITE_SURFACE_POLICY.md`, `docs/os/CURRENT-STATE.md`.
+Positive control: appended `export const __PROBE = "https://life-command-center-nine.vercel.app/api/intake"` to
+`api/_shared/share-extractor.js` → **suite GREEN, `hits=0`.** That is the P194 shape — a fallback URL in live
+code — walking through the guard built for it, on the day it shipped. The response's "seen RED" was real but on
+the wrong path (an allowlist removal). **Fixed on this branch:** the banner exemption is now `.md`-only and
+blockquote-only (`> … STALE (DOCMAP` / `> … RETIRED` — the DOCMAP1 convention every real banner follows); two
+positive controls pin it (8 tests); the same probe now fails naming the file; three correctly-framed docs the
+word had been carrying are exempted BY PATH with reasons — `INTAKE_TODO_FLOW_AUDIT_2026-07-23.md` (a dated audit
+that belongs in `docs/audits/`; move candidate), `POWER-AUTOMATE-API-HTML-TRIAGE-CODEX-PROMPT-2026-08-11.md`,
+`DOCMAP1_CLASSIFICATION.md`. Final `hits=0 exempt=86 allowlisted=2`. **Full suite (cloud clone of `main` +
+this file): 5479 tests / 5473 pass / 0 fail / 6 skipped.** Lesson filed in `CLAUDE.md`: *a word is not a banner —
+an exemption must be shaped like the artifact it excuses, and "seen red" on one path is not "seen red" on the
+path that matters.*
+
+**Live probes (`net.http_get` from LCC Opps, 21:43–21:44 UTC) — two facts corrected in the record:**
+1. **The retired Vercel host is executing today.** `/api/daily-briefing` → 200 with a briefing generated at
+   that instant; `/` → the SPA; `/version` → Vercel NOT_FOUND only because the route postdates the frozen build.
+   P194 re-measured, not carried. J13 👤 (teardown) stands and is the only real fix.
+2. **`life-command-center-production.up.railway.app` is NOT dormant.** `/health` →
+   `{"status":"ok","server":"lcc-mcp-server","version":"1.0.0","tools":[…]}`; `/` → "Life Command Center MCP
+   Server … /mcp, /health"; `/api/comps` GET → Express 404 (the route is POST — `mcp/server.js:2205`). **It is
+   the live standalone MCP server**, the second member of the pair `CURRENT-STATE.md` names, and what this
+   session's `mcp__lcc__*` tools talk to. Two lines in this file and my J13a prompt called it "the dormant Railway
+   service (I16b)" — **all struck in place.** ✅ **Not a defect:** the six `api/*.js` files that default
+   `GOV_API_URL`/`MCP_BASE` to it are calling routes `mcp/server.js` actually mounts (`/api/comps`,
+   `/api/query-comps`, `/api/comp-reviews`, `/api/metadata-backfill`) — that is the engine host by design.
+   ⚠️ **Conflict filed on I16b:** Railway's default domain shape for a service named `life-command-center` is
+   exactly `life-command-center-production.up.railway.app`. If the "dormant" service and the MCP server are the
+   same Railway service, **I16/I16b's "delete it" would kill the MCP connector** — frozen until Scott reads the
+   Railway dashboard (which service owns the domain). The registry's two roster flows posting
+   `/api/pipeline/ingest-deal-*` to this host get the Express 404 the registry already recorded; its remediation
+   (repoint to tranquil-delight) stands.
+
+**Also checked:** the four cloud scheduled tasks carry no retired host. The `daily-briefing-cache` "task file"
+that `docs/ops-logs/daily-briefing-cache-2026-09-01.md` says still targets Vercel is a Cowork **desktop** task
+(not listed by the cloud API) — 👤 Scott: edit it to the Railway host; until then it is a live caller the
+teardown would break.
+
+**Docs this turn:** this entry · 2 in-place strikes ("dormant") · `PLANNED-BACKLOG.md` (J13a-guard ✅ +
+verified/tightened; J13 re-probed; **I16b Conflict**) · `CLAUDE.md` (two footgun sub-bullets + P194 re-measure) ·
+`DOCUMENTATION-MAP.md` (what "bannered" means) · prompt (seed struck) + response (reconcile appended) + docx →
+`done/` · `test/retired-identifiers-guard.test.mjs` tightened (code change, suite green). **Next prompt drafted:
+`J13-teardown-preflight.md`** — enumerate every live caller of the retired host from `edge_logs` (P194's IP
+fingerprint) and the repo, then write the teardown runbook in the order that cannot strand a caller.
+
+**Operator items:** 🚨 **Railway dashboard: which service owns `life-command-center-production.up.railway.app`**
+(decides I16b) · the `daily-briefing-cache` desktop task → Railway host · Vercel teardown (after the preflight) ·
+DRIFT1-retire (`sf-test` first) · `intake-salesforce` redeploy · DRIFT1-sfenrich.
+
 ## 2026-09-08 — DOCMAP3 reconciled (PR #2178): 18 fixes verified, four numbers corrected in place — and the arc's next step is a guard, not a fourth sweep
 
 **First, the git state, because it changed what this turn had to do.** PR #2175 merged only the docx/handoff
@@ -195,8 +258,8 @@ non-`docs/history`/non-dated-audit set, 0 defects (every current doc correctly d
 name as now raising, per ADDR1b-merge); `docs/os/architecture/` (the DOCMAP1-merged path) — 6 file
 hits, all inside historical/reconcile narrative correctly describing the merge (e.g. "0 — merged
 into `docs/architecture/`"), confirming DOCMAP1's "0" claim reproduces once you read the 6 hits
-rather than just count them. `life-command-center-production.up.railway.app` (I16b, the dormant
-Railway service) — 16 file hits, count-only per the task's instruction (deliberately tracked in
+rather than just count them. `life-command-center-production.up.railway.app` (I16b, ~~the dormant
+Railway service~~ ⚠️ Cowork 2026-09-08: measured live as the standalone MCP server — see the J13a-guard reconcile entry) — 16 file hits, count-only per the task's instruction (deliberately tracked in
 FLOW-REGISTRY.yaml, not "fixed").
 
 **Unit C — deep-read named set: 3 repo-root files + 51 BUILD/PLAN/SPEC/ROADMAP/SETUP/CHECKLIST
@@ -361,7 +424,7 @@ text. `vercel.json` = 17 files / 0 defects recorded as a RESULT — correct, and
 **Not re-probed today:** whether `life-command-center-nine.vercel.app` still answers. P194 measured it
 2026-08-26/27; the fetch from this sandbox needed an approval that did not arrive. Recorded as *last measured
 P194*, not as current state. Also observed, not chased: `FLOW-REGISTRY.yaml` lines 130/148 record two roster
-flows' `exported_endpoint` on `life-command-center-production.up.railway.app` — the dormant Railway service
+flows' `exported_endpoint` on `life-command-center-production.up.railway.app` — ~~the dormant Railway service~~ ⚠️ struck 2026-09-08: it answers as the live standalone MCP server, see I16b
 (**I16b**) — with remediation notes; that is the registry's own tracked state, not a doc defect.
 
 **Unit 3 (repo-root) — each reason re-read and holds**: `LCC-OS.md` pointer stub (16 lines) ✓ ·
