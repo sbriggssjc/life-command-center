@@ -42,6 +42,45 @@ live; the JS half ships on the Railway redeploy.** Open for Scott: generic-word 
 warning only — tighten to an explicit ack?
 
 ## 2026-09-09 — J13-teardown-preflight: the retired Vercel host is still writing, not just answering — one live scheduled caller found, runbook shipped
+## 2026-09-09 — J13-preflight reconciled (PR #2185): the caller is real, the "Vercel writes" attribution was not — the user agent decides it
+
+**Held.** The preflight's method (P194's writer-IP classes over `edge_logs`), its 24 h window stated honestly,
+the six candidate-caller checks (`_route=mobile-share` is not mounted in `server.js` — a real blocker; the
+extension is Railway-first at manifest 1.0.52; `FLOW-REGISTRY.yaml` and all 17 retained PA exports carry 0 Vercel
+hits; the `outputs/daily-briefing-logs/` runner is a dead one-off), the five-step runbook, the J13 split.
+
+**Did not hold — the load-bearing attribution.** §2b called the 10:00:27 UTC upsert to `briefing_intel_snapshot`
+from `18.208.213.136` *"the retired Vercel deployment independently generating and persisting its own snapshot."*
+The column the pass never read refutes it: `request.headers.user_agent` = **`Deno/2.1.4 (variant;
+SupabaseEdgeRuntime/1.74.3)`** — that is the **`briefing-intel-snapshot` Supabase edge function** (backlog V4),
+which egresses from the same AWS pool. It recurred 2026-09-09 10:00 from `54.227.48.19`, same UA. **The frozen
+build does not write that table.** Struck in place in the audit (§2b, §4 table, §5), the runbook (step 1), and
+the entry below.
+
+**What IS the frozen build, confirmed:** the 12:30:00–12:30:02 UTC burst — UA **`node`**, 17–18 requests reading
+the dashboard views, and **three HTTP 400s** (`v_my_work`, `mv_user_work_counts`, `action_items`) — a build
+asking for columns the current schema no longer has, while the live `daily-briefing` edge function renders the
+same views in the same minute with 0 errors. **Recurrence** (one 24 h query per day): Thu 09-04 ✓
+(`18.212.144.204`) · Fri 09-05 ✗ · Sat 09-06 ✗ · Mon 09-07 ✓ (`54.209.9.254`) · Tue 09-08 ✓ (`18.209.20.81`) ·
+today's 12:30 not yet reached. Always 12:30:00 sharp = **07:30 CT**; read-only. A Power Automate weekday
+recurrence would not have skipped Friday; a task that fires only while Scott's PC is awake would — consistent
+with the **Cowork desktop task `daily-briefing-cache`** the 09-01 ops-log names. Not proven; the walkthrough
+opens that task first.
+
+**Also in the logs, named so nobody mistakes them for Vercel:** the heavy AWS `node` bursts (2,562 req/min at
+13:00 on 09-08 from `52.9.126.170`; 2,799/min at 12:30 on 09-05 from `52.53.39.135`; `unified_contacts` /
+`data_corrections` runs at 15:17–15:41) are app-shaped — `enrichment_jobs`, `processing_log`, `bridge_runs` — the
+signature of a Claude Code sandbox running the suite or a backfill against production (RO1/RO2 shipped that
+day). The preflight correctly called these "a different caller shape"; recording the likely identity so the
+next reader does not re-derive it. And one **live** defect surfaced on the way: Railway's own 10:18 cron
+(`152.55.177.164`) got a **400 on `v_my_work`** on 09-04 — the current build, not Vercel → filed **BRIEF-400**.
+
+**Docs this turn:** audit + runbook + CC's entry corrected in place (never deleted) · `PLANNED-BACKLOG.md`
+(J13-preflight ✅ verified-with-correction; J13-teardown 👤 with the corrected caller; V4 note; **BRIEF-400**
+new) · `CLAUDE.md` P194 bullet: *IP class alone is half a fingerprint — read the user agent; the Supabase edge
+runtime shares the AWS pool* · prompt + response + docx → `done/`. Then the manual steps, walked one at a time.
+
+## 2026-09-09 — J13-teardown-preflight: the retired Vercel host is ~~still writing, not just answering~~ still being CALLED daily at 12:30 UTC (it reads, and fails on 3 views) — one live scheduled caller found, runbook shipped *(headline corrected in place — see the reconcile entry above)*
 
 **Read-only.** No code, DB writes, migrations, or deploys. Queried Supabase `edge_logs` on LCC Opps
 (24h window, `2026-09-08T01:22Z → 2026-09-09T01:21Z` — `query_logs` caps at 24h/call; this is one

@@ -84,3 +84,20 @@ the five markdown files listed above.
 ## Push
 
 Committed to `claude/gallant-lovelace-e1b1jc` and pushed. No PR opened (not requested).
+
+---
+
+## Cowork reconcile (2026-09-09)
+
+**Held:** method, stated 24 h window, the six candidate checks (`_route=mobile-share` genuinely not mounted;
+extension Railway-first at 1.0.52; registry + 17 exports 0 hits; the log runner is dead), the runbook, the J13
+split.
+
+**Corrected in place:** the 10:00:27 upsert to `briefing_intel_snapshot` is **not** the Vercel build — its
+`user_agent` is `Deno/2.1.4 (variant; SupabaseEdgeRuntime/1.74.3)`, i.e. the `briefing-intel-snapshot` edge cron
+(V4), which shares the AWS egress pool. The frozen build is the **12:30:00 UTC `node` burst with three 400s**
+(`v_my_work`, `mv_user_work_counts`, `action_items`) — read-only — seen Thu 09-04, Mon 09-07, Tue 09-08, absent
+Fri 09-05 and Sat 09-06 (a desktop-awake pattern, not a PA weekday recurrence). The 10:00/12:30 "pair" was two
+different callers. **The column the pass did not read was the discriminator.**
+
+**Filed:** BRIEF-400 (Railway's own 10:18 cron 400s on `v_my_work` — a live defect, not Vercel's).

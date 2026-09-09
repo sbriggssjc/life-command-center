@@ -9,14 +9,16 @@
 
 Concrete new URLs must come from `server.js`'s actual mounted routes (grepped, never invented):
 
-- **Scheduled daily-briefing caller** (writes `briefing_intel_snapshot` at ~10:00 UTC, reads a
-  composite dashboard at ~12:30 UTC — preflight §2b/2c): repoint to
+- **Scheduled daily-briefing caller** (~~writes `briefing_intel_snapshot` at ~10:00 UTC,~~ reads a
+  composite dashboard at ~12:30 UTC — preflight §2c; ⚠️ *Cowork 2026-09-09: the 10:00 write is the
+  `briefing-intel-snapshot` Supabase edge cron, not this caller — do not go looking for a 10:00 writer to
+  repoint*): repoint to
   `https://<railway-host>/api/daily-briefing` — mounted at `server.js:184`
   (`app.all('/api/daily-briefing', ...)` → `_route=edge-brief&action=snapshot` via `adminHandler`).
   👤 Scott: open the Cowork desktop task **"daily-briefing-cache"** and change its configured host from
   `life-command-center-nine.vercel.app` to the Railway host.
-  **Proof:** re-run the preflight's §2b query for the *next* occurrence of the 10:00/12:30 pair and
-  confirm the writing IP falls in the Railway block (`152.55.176.x` / `152.55.177.x` / `162.220.232.x`),
+  **Proof:** re-run the preflight's §2c query for the *next weekday* 12:30 UTC and confirm the 17-request
+  `node` burst is gone from the AWS pool and no `v_my_work` 400 appears — ~~confirm the writing IP falls in the Railway block~~ (there is no Vercel-side write to move; the repointed task will hit Railway's `/api/daily-briefing`, whose reads come from the Railway block (`152.55.176.x` / `152.55.177.x` / `162.220.232.x`),
   not the AWS ephemeral pool.
 - **iPhone Shortcut "Send to LCC"**: **blocked, not a simple repoint.** The preflight found
   `/api/intake?_route=mobile-share` is **not mounted in `server.js`** — there is no live Railway route
