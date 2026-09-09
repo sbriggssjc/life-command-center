@@ -123,10 +123,10 @@ Result (all 6 rows in the 24h window):
 `briefing_intel_snapshot` at 10:00:27 UTC.** That is a real write from the ephemeral pool, not a read
 probe — and it landed **18 minutes before** Railway's own 10:18 read+PATCH of the same row (which
 matches CLAUDE.md's documented cron 240 schedule, `18 10 * * 1-5`, "between the 10:00 snapshot and the
-12:30 send"). **This is the retired Vercel deployment independently generating and persisting its own
+12:30 send"). ~~**This is the retired Vercel deployment independently generating and persisting its own
 daily-briefing snapshot into the same table Railway's cron writes, at a time that brackets Railway's own
 job** — the live second-writer collision CLAUDE.md's P194 note already asserts, now shown with a
-concrete row.
+concrete row.~~ ⚠️ **Struck by the Cowork reconcile, 2026-09-09.** The `user_agent` column — which this pass never read — refutes it: the 10:00:27 POST from `18.208.213.136` carries **`Deno/2.1.4 (variant; SupabaseEdgeRuntime/1.74.3)`**. That is a **Supabase edge function** (the `briefing-intel-snapshot` cron, backlog V4), which egresses from the same AWS pool — it recurred 2026-09-09 10:00 from `54.227.48.19` with the same UA. **The retired Vercel build does not write `briefing_intel_snapshot`.** What IS the frozen build is the 12:30:01 burst: UA **`node`**, 17–18 requests, and **three HTTP 400s** (`v_my_work`, `mv_user_work_counts`, `action_items`) — a build asking for columns the schema has moved past — while the live `daily-briefing` edge function renders the same views in the same minute with **0** errors. Recurrence: Thu 09-04 ✓ · Fri 09-05 ✗ · Sat 09-06 ✗ · Mon 09-07 ✓ (`54.209.9.254`, 17 req, 3×400) · Tue 09-08 ✓ — always 12:30:00 UTC (07:30 CT), read-only. **IP class alone is half a fingerprint; read the user agent.**
 
 **Neither of these two rows falls in the excluded Cowork-probe window (2026-09-08 21:43–21:44 UTC).**
 The 21:43–21:44 window was checked separately (§2d) and produced no `briefing_intel_snapshot` write —
@@ -148,7 +148,7 @@ order by ts
 `v_unassigned_work`, `sync_jobs`, `activity_events`, `connector_accounts`, `briefing_intel_snapshot`,
 `sync_errors`, `rpc/lcc_briefing_research_progress`, `staged_intake_promotions`, `action_items` (×2) —
 **a single composite "render the daily briefing / My Work dashboard" call, fired once, at exactly 12:30
-UTC**, the send-time CLAUDE.md names for the briefing email. **This is a narrow, single-burst, fixed-time
+UTC**, the send-time CLAUDE.md names for the briefing email. *(Cowork 2026-09-09: confirmed — this one IS the frozen build: UA `node`, 3 × 400 on views the current schema has changed; the live edge function's identical burst in the same minute has 0 errors.)* **This is a narrow, single-burst, fixed-time
 fingerprint — one IP, one minute, one composite call** — unlike the broad multi-hour AWS traffic in §1,
 and it is the caller class the runbook's step 1 needs to repoint.
 
@@ -200,7 +200,7 @@ gov traffic.
 
 | caller | observed in logs (24h) | identified | repointed already | still live | notes |
 |---|---|---|---|---|---|
-| **Scheduled daily-briefing caller (10:00 write / 12:30 read, matches Cowork "daily-briefing-cache" task pattern)** | **Yes — 1 write (201) + 1 composite read burst (18 calls)** | Pattern matches; exact process **Not on file** without Scott confirming the Cowork desktop task's configured target | No — still hitting `briefing_intel_snapshot` from the ephemeral pool at a fixed UTC time | **Yes** | See §2b/2c. 👤 Scott: open the Cowork desktop task "daily-briefing-cache" and read its configured URL verbatim (`docs/ops-logs/daily-briefing-cache-2026-09-01.md` §3 says it still names the Vercel host as of that date). |
+| **Scheduled daily-briefing caller (~~10:00 write /~~ 12:30 read, matches Cowork "daily-briefing-cache" task pattern)** | **Yes — ~~1 write (201) +~~ 1 composite read burst (18 calls, 3 × 400)** *(the 10:00 write is the Supabase edge cron, UA `SupabaseEdgeRuntime` — struck, Cowork 2026-09-09)* | Pattern matches; exact process **Not on file** without Scott confirming the Cowork desktop task's configured target | No — still hitting `briefing_intel_snapshot` from the ephemeral pool at a fixed UTC time | **Yes** | See §2b/2c. 👤 Scott: open the Cowork desktop task "daily-briefing-cache" and read its configured URL verbatim (`docs/ops-logs/daily-briefing-cache-2026-09-01.md` §3 says it still names the Vercel host as of that date). |
 | **iPhone Shortcut "Send to LCC"** | Not observed as a distinct fingerprint in this 24h window (no `/rest/v1/*` traffic correlates to a single-shot mobile-share POST pattern) | Repo side checked: **`/api/intake?_route=mobile-share` does NOT exist as a mounted route in `server.js`** (grepped `app.all/app.get/app.post` across the whole file — no `mobile-share` route). `docs/MOBILE_SHARE_INGESTION.md` (banner: STALE) names `POST /api/intake?_route=mobile-share` at `https://life-command-center-nine.vercel.app/...` as the configured target. | No | **Unknown — 👤 Scott must confirm** | Because Railway never mounted this route, if the Shortcut still points at Vercel it has **no live Railway target to repoint to today** — that route needs to be added to `server.js` (or the Shortcut retargeted to whatever route *does* exist) before step 1 of the runbook can "repoint" it. Flagging this as a blocker, not a routine repoint. |
 | **Chrome/Edge extension** | Not distinguishable in Supabase logs from ordinary browser/API traffic (extension calls hit Railway/Vercel `/api/intake*`, not Supabase directly) | `extension/background.js` `pickIntakeHost()` reads `cfg.LCC_RAILWAY_URL \|\| cfg.LCC_VERCEL_URL` with `LCC_RAILWAY_URL` preferred first (line 39-40) — **Railway-first by construction** since the P194 fix. `extension/manifest.json` shipped version: **1.0.52**. | Yes, in the shipped repo code | Shipped build only repoints if the installed extension was updated after the P194 commit; **whether Scott's actually-installed build predates that commit cannot be known from the repo** — state as an open risk, not a clear. | Grep for the exact P194 commit: not re-derived here (out of budget) — cite CLAUDE.md's own dating of "P194, 2026-08-27" as the fix date; any install older than that commit still carries the seven hardcoded Vercel fallbacks. 👤 Scott: check `chrome://extensions` installed version ≥ what shipped after that commit. |
 | **Copilot Studio / Teams agent (imported connector)** | Not observable from Supabase logs (Copilot Studio calls hit the connector's configured host directly, which may be Vercel, Railway, or the `ai-copilot` Dialysis edge function depending on which connector was imported) | Repo side: canonical connector file is **`copilot/lcc-deal-intelligence.connector.v4.swagger.json`** (v1 is superseded, at `_superseded/copilot/lcc-deal-intelligence.connector.v1.swagger.json`). Neither the v1 nor the v4 file's `host` field was present in a grep for a literal `"host"` key at repo root scope in this pass — **the connector's declared host needs to be read directly from the file before quoting it in the runbook** (see runbook step 1). | Unknown | **👤 Scott confirms in the Copilot Studio UI** | Per `docs/architecture/lcc-microsoft-copilot-outlook-audit-2026-05-22.md` cause #1 (cited in the prompt), the *imported* connector in Scott's tenant can carry a stale host independent of what the repo's canonical file says. |
@@ -219,9 +219,11 @@ returned no matches on the sampled 2026-08-11 export set (17 flows). Older/newer
 ## 5. Summary of what is and isn't proven here
 
 - **Proven, with a query and a row**: the retired Vercel deployment is still executing a scheduled
-  daily-briefing job against LCC Opps, writing to `briefing_intel_snapshot` at a fixed UTC time
-  (~10:00) and rendering a composite dashboard read at ~12:30, from the AWS ephemeral-IP pool — in a
-  single 24-hour sample.
+  daily-briefing job against LCC Opps, ~~writing to `briefing_intel_snapshot` at a fixed UTC time
+  (~10:00) and~~ rendering a composite dashboard read at ~12:30, from the AWS ephemeral-IP pool — ~~in a
+  single 24-hour sample~~ on 4 of the 5 days 09-04 → 09-08 (not Fri 09-05, not Sat 09-06). *(Cowork
+  2026-09-09: the 10:00 write is the `briefing-intel-snapshot` edge function — `user_agent`
+  `SupabaseEdgeRuntime` — not Vercel. The frozen build READS; it does not write. Its tell is the 3 × 400.)*
 - **Not proven / Not on file**: which physical caller (Cowork desktop task vs. some other scheduled
   process) issues that call — the pattern *matches* the "daily-briefing-cache" desktop task's known
   09-01 ops-log note, but this session cannot open Scott's desktop app to confirm the string. Marked

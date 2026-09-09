@@ -1564,7 +1564,12 @@ All three converge on `api/_shared/intake-om-pipeline.js::stageOmIntake`:
     calling server's `request.headers.cf_connecting_ip`. Railway is a small set of STABLE
     addresses (`152.55.x`, `162.220.232.x`) carrying tens of thousands of requests; a serverless
     stand-in is a rotating pool of ephemeral AWS IPs each appearing for 40–255 requests with one
-    narrow path fingerprint. Joining those log lines to `created_at` separated 25 of 25 rows on
+    narrow path fingerprint. ⚠️ **IP class alone is HALF a fingerprint — read `request.headers.user_agent`
+    too (J13 preflight, 2026-09-09).** The Supabase edge runtime egresses from the SAME AWS pool; a
+    10:00 UTC upsert to `briefing_intel_snapshot` was attributed to the frozen Vercel build until the UA
+    read `Deno/2.1.4 (SupabaseEdgeRuntime/1.74.3)` — the `briefing-intel-snapshot` cron. The frozen
+    build's real tell is UA `node` plus **400s on views the schema has moved past** (`v_my_work`,
+    `mv_user_work_counts`), at 12:30:00 UTC on weekdays the desktop is awake. Joining those log lines to `created_at` separated 25 of 25 rows on
     2026-08-26 with **zero crossovers** — including two same-hour pairs (14:09 email hardened vs
     14:30 sidebar bare; 21:33 vs 21:37), which kills deploy-timing, model-drift and
     rate-limit-fallback in one stroke. **This works for any "two behaviours, one table" puzzle.**
