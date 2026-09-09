@@ -16,6 +16,31 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — OWN-T0e BUILT: the `sponsor_family_confirm` lane, a cache because the view was 64 s, and "properties" that were pairs
+
+**Cowork, branch `build/own-t0e-sponsor-family-lane`.** The lane designed on 2026-09-08 is built per
+design §4 — four registries, planner `api/_shared/sponsor-family-planner.js`, fetch + verdict in
+`api/admin.js`, card in `dc-lanes.js`; ONE write (`INSERT lcc_ownership_sponsor_family`, reversible by
+DELETE); `same_party` records and forwards to `merge_duplicate_entities`; guard 13 tests / **19 of 19
+mutations RED**; full suite green in four chunks + `check:boot`. Design doc §6 is the build record.
+Three measured departures from the design: (1) **the dry-run view ran 64.3 s** — a nested-loop
+self-join (11.3M join-filter rejections) plus a per-group `regexp_replace` over all 69k entities —
+rewritten to 19.8 s with output byte-identical (md5 over 21 columns), **and the lane reads a 4-hourly
+cache** (`lcc_ownt0e_sponsor_family_proposals_cache`, cron `lcc-ownt0e-proposals-refresh` `27 */4`,
+the `lcc_priority_queue_resolved` pattern) with the two write-refusing guards read live; (2) tied
+groups hold up to **9** members, so `member_ids`/`member_names` were appended (a `tied_pair`-indexed
+picker would have mislabelled the sponsor); (3) **`properties` counts pairs** — rolled-back positive
+control on NGP Capital/`ngp`: 30 pairs → **28** properties flipped `unclassified_rival` →
+`sponsor_family_confirmed` (35 → 7 remaining). First live cards read: NGP Capital $43.2M (27 SPEs + 2
+duplicate entities riding inside), GWU $23.4M and RMR $11.5M (pure duplicates — `same_party`). **5 of
+13 duplicate-suspect pairs are absent from the merge lane the forward targets** → backlog
+**OWN-T0e-b**; a mixed group needs both verdicts → **OWN-T0e-c**. Also found: PR #2185's runbook merged
+with `retired-identifiers-guard` RED on `main` through the docs-only CI path → allowlisted by path
+here, fix filed as **J13a-ci-docs-only**; `review-shared.test.mjs`'s lane-map count pin 28 → 29.
+Cache locked to `service_role` (Supabase's default `anon` SELECT measured and revoked). **DB half is
+live; the JS half ships on the Railway redeploy.** Open for Scott: generic-word token confirms with a
+warning only — tighten to an explicit ack?
+
 ## 2026-09-09 — J13-teardown-preflight: the retired Vercel host is still writing, not just answering — one live scheduled caller found, runbook shipped
 
 **Read-only.** No code, DB writes, migrations, or deploys. Queried Supabase `edge_logs` on LCC Opps

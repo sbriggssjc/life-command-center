@@ -4806,7 +4806,14 @@ owner vs domain true_owner · **667 of 5,964 (11.2%)** resolved owner absent fro
   human-confirmed `lcc_ownership_sponsor_family` clears a pair — **64 properties today against
   ~1,550 unconfirmed**. An unconfirmed sponsor/SPE pair stays `unclassified_rival`, an honest
   non-answer, and **one confirm clears a whole family** (A3 measured `boyd` at 20 of 24) — that lane
-  is the highest-leverage follow-up (**OWN-T0e**).
+  is the highest-leverage follow-up (**OWN-T0e**). ✅ **BUILT 2026-09-09 — Decision Center lane
+  `sponsor_family_confirm`** (one write, `INSERT lcc_ownership_sponsor_family`; `same_party` routes a
+  duplicate entity to the merge lane). ⚠️ **Its source scans this whole view: 64 s as first written,
+  20 s rewritten, so the lane reads a 4-hourly CACHE** (`lcc_ownt0e_sponsor_family_proposals_cache`)
+  and re-reads the two write-refusing facts live — the `lcc_priority_queue_resolved` pattern. A view
+  built for point-queries is not a population source; measure the whole-population read before
+  putting a lane on it. And **its `properties` column counts PAIRS** (30 pairs → 28 properties
+  flipped on NGP Capital) — say which grain. Build record: OWN-T0e design doc §6.
 - **⚠️ `not materialized` IS LOAD-BEARING ON A VIEW A PANEL POINT-QUERIES.** Without it the 3-row
   query is **1,013.9 ms / 216,947 buffers**; with it **20.1 ms / 674** — a multiply-referenced CTE is
   ALWAYS materialized so the predicate cannot push down (C13b §7.7), and `fact` was aggregating all

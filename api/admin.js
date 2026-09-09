@@ -51,6 +51,10 @@ import {
   buildTier0Card, tier0SubjectRef, validateTier0Verdict, rentBand as tier0RentBand,
 } from './_shared/tier0-confirm-planner.js';
 import {
+  SPONSOR_FAMILY_CACHE_TABLE, SPONSOR_FAMILY_REGISTRY_TABLE,
+  sponsorFamilySubjectRef, buildSponsorFamilyCard, validateSponsorFamilyVerdict, orderSponsorFamilyRows,
+} from './_shared/sponsor-family-planner.js';
+import {
   applyTier0Attach, tier0BatchTag, TIER0_SOURCE_CONFIRM,
 } from './_shared/tier0-attach-effect.js';
 import {
@@ -7388,6 +7392,19 @@ const FEDERATED_DECISION_TYPES = new Set([
   // an owner. The server re-runs the pure shape gate (tier0-confirm-planner)
   // before writing and refuses a person that is not on the card.
   'tier0_owner_contact',
+  // OWN-T0e (2026-09-09): the sponsor-family confirm lane over the OWN-T0
+  // `unclassified_rival` conflict store. Source = lcc_ownt0e_sponsor_family_
+  // proposals_cache (a 4-hourly snapshot of the ~20 s proposals view), ONE card
+  // per (sponsor entity, brand token) — A3 measured `boyd` clearing 20 of 24
+  // chains on one confirm. Sponsor = the side holding MORE current properties (a
+  // recorded fact); a tied group makes the operator name the sponsor. Verdicts:
+  // confirm_family (the ONE write: an INSERT into lcc_ownership_sponsor_family,
+  // reversible by DELETE), same_party (record + forward to
+  // merge_duplicate_entities — a family row over a duplicate entity papers over
+  // the merge), not_family (record-only), research. No lexical sponsor guess
+  // ever decides (A3: 3 of 74 on GSA SPEs; P198: 7%). Nothing here writes a
+  // portfolio fact, end-dates a row, or touches gov/dia owner tables.
+  'sponsor_family_confirm',
   'intake_disposition', 'property_merge', 'provenance_conflict',
   // dia geospatial "address twin" review (2026-08-14). The dia_merge_twins engine
   // auto-merges only blank-operator husks; every twin with a competing clinical
@@ -7557,6 +7574,11 @@ function federatedSubjectRef(type, s) {
     // RMR at rmrgroupinc.com must not also close rmrgroup.com, which is a
     // different judgement about a different firm domain.
     case 'tier0_owner_contact': return tier0SubjectRef(s.owner_entity_id || s.owner_id, s.domain);
+    // OWN-T0e: keyed on the (sponsor, token) QUESTION — t0e:<sponsor_id>:<tok>,
+    // or t0e:tied:<group_key_id>:<tok> when no side is decided. Deciding a tied
+    // group under a chosen sponsor keeps its `tied` ref: the ref names the
+    // question, the verdict payload names the answer.
+    case 'sponsor_family_confirm': return sponsorFamilySubjectRef(s);
   }
   return null;
 }
@@ -8906,6 +8928,51 @@ async function fetchFederatedSource(type, cap, opts) {
       context: card,
     }));
     out.complete = out.items.length === cards.length;
+    return out;
+  }
+
+  // ---- sponsor_family_confirm (OWN-T0e, 2026-09-09) ------------------------
+  // Reads the CACHE, never the view: v_lcc_ownt0e_sponsor_family_proposals
+  // costs ~20 s (it scans the whole OWN-T0 reconciled store) and this function
+  // runs for every federated type on /api/decisions?summary=1. The cache is
+  // refreshed 4-hourly (cron lcc-ownt0e-proposals-refresh) — so
+  // `already_confirmed` is re-derived LIVE from the registry here, because a
+  // family confirmed five minutes ago must not be re-asked for four hours. The
+  // registry is tiny (6 rows at build); the whole thing is read.
+  //
+  // Universe is 182 rows at build, far under the PostgREST cap, but the read
+  // still asks for the cap and flags a full page (A5a: a returned count equal
+  // to the request window is a truncation, never a total).
+  if (type === 'sponsor_family_confirm') {
+    const [cr, rr] = await Promise.all([
+      opsQuery('GET', SPONSOR_FAMILY_CACHE_TABLE + '?select=*&limit=1000'),
+      opsQuery('GET', SPONSOR_FAMILY_REGISTRY_TABLE + '?select=sponsor_entity_id,sponsor_token&limit=1000'),
+    ]);
+    const rows = (cr.ok && Array.isArray(cr.data)) ? cr.data : [];
+    const reg = new Set(((rr.ok && Array.isArray(rr.data)) ? rr.data : [])
+      .map((f) => String(f.sponsor_entity_id) + ':' + String(f.sponsor_token)));
+    const live = rows.filter((r) => !(r.sponsor_id && reg.has(String(r.sponsor_id) + ':' + String(r.sponsor_token))));
+    const ordered = orderSponsorFamilyRows(live);
+    out.total = ordered.length;
+    out.parts = {
+      breadth: ordered.filter((r) => r.sponsor_side !== 'tied').length,
+      tied: ordered.filter((r) => r.sponsor_side === 'tied').length,
+      duplicate_entity_suspect: ordered.filter((r) => Number(r.spe_props_max) >= 2).length,
+      cache_refreshed_at: rows.length ? rows[0].refreshed_at : null,
+      cache_truncated: rows.length >= 1000,
+      cache_fetch_failed: !cr.ok,
+    };
+    out.items = ordered.slice(0, cap).map((row) => {
+      const card = buildSponsorFamilyCard(row);
+      return {
+        subject_ref: sponsorFamilySubjectRef(row),
+        subject_domain: null, subject_property_id: null,
+        subject_entity_id: card.sponsor_id || card.group_key_id,
+        rank_value: card.annual_rent,
+        context: card,
+      };
+    });
+    out.complete = out.items.length === ordered.length;
     return out;
   }
 
@@ -12912,6 +12979,141 @@ async function handleDecisionVerdict(req, res) {
         person_entity_id: person.person_id, person_name: person.person_name,
         relationship: eff.relationship,
         log_id: logId, batch_tag: batchTag,
+      });
+    }
+
+    // ---- sponsor_family_confirm (OWN-T0e, 2026-09-09) ----------------------
+    // The human verdict on a (sponsor entity, brand token) card.
+    //
+    //   confirm_family -> ONE write: INSERT lcc_ownership_sponsor_family
+    //                     (sponsor_entity_id, sponsor_token, confirmed_by, notes).
+    //                     v_lcc_property_ownership_reconciled reads the registry
+    //                     through lcc_ownership_sponsor_family_token, so every
+    //                     covered pair flips unclassified_rival ->
+    //                     sponsor_family_confirmed on the next read. Nothing is
+    //                     end-dated, merged or repointed. Reverse = DELETE the
+    //                     row (the registry IS the ledger; the decision id rides
+    //                     in `notes`).
+    //   same_party     -> no write. Recorded, and the operator is forwarded to the
+    //                     merge_duplicate_entities lane (lcc_merge_entity, reversible).
+    //   not_family     -> record-only, terminal for this subject_ref.
+    //   research       -> a research_task.
+    //
+    // THE CARD IS RE-READ FROM THE CACHE, NOT TRUSTED FROM THE REQUEST (P188), and
+    // the two facts that can refuse the write — registry membership and the
+    // sponsor being a tombstone — are read LIVE, never from the snapshot.
+    if (decision.decision_type === 'sponsor_family_confirm') {
+      const ctx = decision.context || {};
+      const tok = String(ctx.sponsor_token || '').trim().toLowerCase();
+      const tied = ctx.sponsor_side === 'tied';
+      const keyId = tied ? (ctx.group_key_id || null) : (ctx.sponsor_id || decision.subject_entity_id || null);
+      if (!tok || !keyId) {
+        return res.status(400).json({ error: 'sponsor_family_confirm: sponsor_token and ' + (tied ? 'group_key_id' : 'sponsor_id') + ' required' });
+      }
+      const rowR = await opsQuery('GET', SPONSOR_FAMILY_CACHE_TABLE + '?select=*'
+        + '&' + (tied ? 'group_key_id' : 'sponsor_id') + '=eq.' + pgFilterVal(keyId)
+        + '&sponsor_token=eq.' + pgFilterVal(tok)
+        + '&sponsor_side=eq.' + (tied ? 'tied' : 'breadth') + '&limit=1');
+      const row = (rowR.ok && Array.isArray(rowR.data)) ? rowR.data[0] : null;
+      // A vanished card (cache refreshed it away) must still be CLOSEABLE for the
+      // record-only verdicts; only confirm_family needs the live row.
+      const card = buildSponsorFamilyCard(row || {
+        group_key_id: ctx.group_key_id, sponsor_id: ctx.sponsor_id, sponsor_name: ctx.sponsor_name,
+        sponsor_side: ctx.sponsor_side, sponsor_token: tok, member_ids: [], spe_names: ctx.spe_names,
+      });
+      if (verdict === 'confirm_family' && !row) {
+        return res.status(404).json({ error: 'sponsor_family_confirm: card no longer in the proposal set', sponsor_token: tok });
+      }
+
+      // Live guard inputs. The sponsor to test is the card's for a breadth group,
+      // the operator's pick for a tied one — resolved by the planner, so read
+      // both facts for whichever id the planner will name.
+      const candidateSponsor = tied ? (payload.sponsor_entity_id ? String(payload.sponsor_entity_id) : null)
+        : (card.sponsor_id ? String(card.sponsor_id) : null);
+      let live = { registry_has: false, sponsor_is_tombstone: false };
+      if (verdict === 'confirm_family' && candidateSponsor) {
+        const [regR, entR] = await Promise.all([
+          opsQuery('GET', SPONSOR_FAMILY_REGISTRY_TABLE + '?select=sponsor_entity_id'
+            + '&sponsor_entity_id=eq.' + pgFilterVal(candidateSponsor) + '&sponsor_token=eq.' + pgFilterVal(tok) + '&limit=1'),
+          opsQuery('GET', 'entities?select=id,merged_into_entity_id&id=eq.' + pgFilterVal(candidateSponsor) + '&limit=1'),
+        ]);
+        const ent = (entR.ok && Array.isArray(entR.data)) ? entR.data[0] : null;
+        live = {
+          registry_has: !!(regR.ok && Array.isArray(regR.data) && regR.data[0]),
+          // an entity we cannot read is treated as a tombstone: fail CLOSED on a write
+          sponsor_is_tombstone: !ent || ent.merged_into_entity_id != null,
+        };
+      }
+      const gate = validateSponsorFamilyVerdict(card, verdict, payload, live);
+      if (!gate.ok) {
+        return res.status(400).json({ error: 'sponsor_family_confirm: ' + gate.error, sponsor_token: tok });
+      }
+      const action = gate.verdict;
+      const verdictCtx = {
+        sponsor_entity_id: gate.sponsor_entity_id, sponsor_token: tok, sponsor_side: card.sponsor_side,
+        properties: card.properties, token_is_generic_word: card.token_is_generic_word,
+        token_entities_fleetwide: card.token_entities_fleetwide,
+      };
+
+      if (action === 'not_family') {
+        const rr = await record('not_family', 'decided', verdictCtx, { sponsor_family: 'not_family' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'not_family', sponsor_token: tok });
+      }
+      if (action === 'same_party') {
+        const rr = await record('same_party', 'decided',
+          Object.assign({}, verdictCtx, { duplicate_entity_id: gate.duplicate_entity_id || null }),
+          { sponsor_family: 'routed_to_merge', merge_lane: 'merge_duplicate_entities' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'same_party', sponsor_token: tok,
+          next: { action: 'merge_lane', winner_id: gate.sponsor_entity_id, duplicate_entity_id: gate.duplicate_entity_id || null } });
+      }
+      if (action === 'research') {
+        const rt = await createResearchTask({
+          research_type: 'sponsor_family_confirm',
+          title: 'Is "' + tok + '" a sponsor family of ' + (card.sponsor_name || card.tied_pair || 'this owner') + '?',
+          instructions: 'Decision Center OWN-T0e: ' + (card.sponsor_name || card.tied_pair || '') + ' and '
+            + (card.spe_names || []).join('; ') + ' are both current owner candidates on ' + card.properties
+            + ' propert' + (card.properties === 1 ? 'y' : 'ies') + ', sharing the name token "' + tok + '"'
+            + (card.token_is_generic_word ? ' (a generic word — weak evidence)' : '')
+            + '. Confirm whether the SPE(s) are the sponsor\'s family, a duplicate entity, or unrelated.',
+        });
+        if (!rt.ok) {
+          await recordEffectFailure({ research_task: false, error: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data });
+        }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        const rr = await record('research', 'decided', verdictCtx, { research_task: true, research_task_id: rid });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+
+      // ---- confirm_family: the one write -----------------------------------
+      const confirmedBy = String(user.email || user.id || 'decision-center');
+      const notes = 'decision:' + decisionId + '; lane:sponsor_family_confirm; sponsor_side:' + card.sponsor_side
+        + '; properties:' + card.properties + '; token_is_generic_word:' + (card.token_is_generic_word ? 'true' : 'false')
+        + '; token_entities_fleetwide:' + card.token_entities_fleetwide;
+      const ins = await opsQuery('POST', SPONSOR_FAMILY_REGISTRY_TABLE, {
+        sponsor_entity_id: gate.sponsor_entity_id, sponsor_token: tok, confirmed_by: confirmedBy, notes,
+      });
+      if (!ins.ok) {
+        // A 409 here is a (sponsor, token) that landed between the live check and
+        // the insert — the family IS confirmed, so the decision closes as such.
+        const dup = ins.status === 409;
+        if (!dup) {
+          await recordEffectFailure({ registry_insert: false, error: ins.data });
+          return res.status(502).json({ error: 'sponsor_family_confirm: registry_insert_failed', detail: ins.data });
+        }
+      }
+      const rr = await record('confirm_family', 'decided', verdictCtx, {
+        sponsor_family: 'confirmed', registry_table: SPONSOR_FAMILY_REGISTRY_TABLE,
+        registry_row_created: ins.ok, confirmed_by: confirmedBy,
+        reverse: 'delete from ' + SPONSOR_FAMILY_REGISTRY_TABLE + ' where sponsor_entity_id = <id> and sponsor_token = <tok>',
+      });
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({
+        ok: true, verdict: 'confirm_family', sponsor_entity_id: gate.sponsor_entity_id, sponsor_token: tok,
+        registry_row_created: ins.ok, flips_unclassified_rival_pairs: card.flips_unclassified_rival_pairs,
       });
     }
 
