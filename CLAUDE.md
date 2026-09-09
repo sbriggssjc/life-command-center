@@ -1931,6 +1931,13 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
 
 ## Known footguns (read before the matching change)
 
+- **⚠️ `verify_jwt:false` + no `authenticateWebhook()` in the body = OPEN TO THE INTERNET — and the repo copy is not
+  the proof; the DEPLOYED body is.** Found 2026-09-09 on `ai-copilot` (Dialysis_DB v79): 25 routes, a service-role
+  client, zero auth, CORS `*` — reachable by CI runners with no key (TEST-NET-LEAK proved it by accident). Before
+  calling any edge function "gated", fetch its deployed body (`get_edge_function`) and grep it for the door;
+  before gating one, inventory its callers from `function_edge_logs` by path × user-agent × IP class and ship the
+  gate in log-only mode first (COPILOT-OPEN). A browser caller can never be given the secret — route it through
+  Railway (P194).
 - **⚠️ A TEST THAT "EXPECTS THE AI TO THROW" MAY BE PROVING THE NETWORK IS UP — the suite is
   hermetic by guard since 2026-09-09 (TEST-NET-LEAK).** `test/lease-extractor.test.mjs` and
   `test/dossier-generator.test.mjs` assumed *"no AI key in the test env → the extractor throws"*,
