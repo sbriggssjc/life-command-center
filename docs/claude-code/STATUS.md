@@ -90,8 +90,19 @@ is **1.0.52** (the P194-fixed manifest); the Copilot Studio "LCC Deal Intelligen
 - **DRIFT1-retire ✅ — all four deleted:** `sf-test` (held live `SF_USERNAME`/`SF_PASSWORD`/`SF_SECURITY_TOKEN`,
   callable unauthenticated for four months), `test-function`, `ai-copilot-v2` (Dialysis_DB) and `docai-diag`
   (LCC Opps). Both function lists re-read; the gateway returns `NOT_FOUND` for `sf-test` and `docai-diag`.
-  👤 **Residue: the three `SF_*` project secrets now have no consumer** — no repo function and neither deployed
-  SF function reads them — `supabase secrets unset` them, and consider rotating that Salesforce password.
+  ~~👤 **Residue: the three `SF_*` project secrets now have no consumer** — `supabase secrets unset` them~~
+  **DECIDED (Scott, same day): the secrets stay.** The rule is that no planned or built capability is lost, and
+  `sf-test` proved one: SOAP login + SOQL against Salesforce from an edge function, with no Connected App. Filed
+  **SF-DIRECT** (prompt drafted) to rebuild it as an authenticated helper. ⚠️ **Owned:** its body was never
+  committed, the May audit's "source on record" line was false, and I fetched the deployed bodies of the two
+  functions I kept but not of `sf-test` before recommending the delete — that body is gone. The pattern is
+  standard and re-creatable in one prompt; the lesson is filed in `CLAUDE.md` below.
+
+**Floating local work, checked:** 126 local branches on the desktop; exactly one carries commits not on
+`origin/main` — `publish-c868140` (two commits, 2026-08-26, 1,069 behind). Every line it added is on `main`:
+the 08-27 STATUS entry in the history archive, the 31 worklogs byte-identical, the A3 row superseded when A3
+shipped, the `PROMPT_22` lines present under the renamed path. Nothing to push → delete the branch. The
+untracked `Claude outputs/` folder at repo root holds only session scratch (a superseded patch, a prompt copy).
 
 ## 2026-09-09 — OWN-T0e BUILT: the `sponsor_family_confirm` lane, a cache because the view was 64 s, and "properties" that were pairs
 

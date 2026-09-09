@@ -1563,6 +1563,13 @@ All three converge on `api/_shared/intake-om-pipeline.js::stageOmIntake`:
         ✅ **RESOLVED 2026-09-09 — read off the Railway dashboard with Scott: service `life-command-center` IS
         the MCP server (port 3100).** There is no dormant Railway service; I16/I16b retracted. **A "dormant"
         label that nobody has probed is a hypothesis that can delete production.**
+      - ⚠️ **CAPTURE THE BODY BEFORE YOU DELETE A DEPLOYMENT — `get_edge_function` first, `functions delete`
+        second, every time (2026-09-09).** `sf-test` was deleted on a May "DELETE" verdict whose "source is on
+        record in git history" line was false; nothing had ever committed it. The two functions kept that day
+        had their bodies pulled first — the one deleted did not. A "scratch stub" can be the only working
+        instance of a capability (here: SOAP login to Salesforce with no Connected App). **Retire = commit the
+        body to `docs/archive/` + record the capability + then delete.** Secrets stay until the capability's
+        replacement consumes them.
   - **Diagnose it from Supabase `edge_logs`, not app logs.** Every PostgREST write carries the
     calling server's `request.headers.cf_connecting_ip`. Railway is a small set of STABLE
     addresses (`152.55.x`, `162.220.232.x`) carrying tens of thousands of requests; a serverless
