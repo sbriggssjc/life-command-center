@@ -16,6 +16,47 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — `ai-copilot` v80 LIVE (log-only) and Railway redeployed: the classifier works, the browser is off the edge URL — and the log's first ten minutes say Railway is not sending the secret
+
+**Read from `function_logs` 22:25–22:35 UTC, after the second (successful) deploy and the Railway redeploy:**
+
+| DENY-WOULD line | count |
+|---|---|
+| `GET /sync/calendar-events node railway` | 10 |
+| `GET /sync/sf-activities node railway` | 9 |
+| `POST /sync/calendar-events logic-apps other` | 1 (22:26:27 — the hourly PA calendar flow, `4eb7c46f…`) |
+| anything `browser` | **0** |
+
+Three facts from one table. **(1) The gate and classifier are live and correct:** the PA flow lands as
+`logic-apps other`, Railway's block as `railway`, and the log line carries no header value. **(2) The browser has
+left the edge URL:** zero `browser` lines, and the `calendar=personal` query variant — which only `app.js`
+requests — now arrives with UA `node`, i.e. through `handleCopilotRead` on Railway. The Railway redeploy is
+therefore live with the new `api/sync.js` and `app.js`. **(3) Railway is calling without `X-PA-Webhook-Secret`.**
+`connectorHeaders()` and `handleCopilotRead` both attach the header only `if (PA_WEBHOOK_SECRET)`. New code, no
+header ⇒ **`PA_WEBHOOK_SECRET` is not set in the tranquil-delight Railway environment** (Derived — confirm in
+Railway → Variables; nothing here can read that env).
+
+**Why that is a bigger fact than the copilot gate:** `api/sync.js::authenticateWebhook` line 76 is `if
+(!PA_WEBHOOK_SECRET) return true;` — *transitional: allow all*. It guards eight `_route` handlers on Railway
+(`rcm-ingest`, `rcm-backfill`, `loopnet-ingest`, `lead-ingest`, `live-ingest`, `listing-webhook`,
+`processing-complete`, `todo-completion-poll`). If the variable is absent, every one of those Power Automate
+webhook endpoints on the live app is open to the internet today, and has been since they were written — the
+COPILOT-OPEN shape on Railway rather than on an edge function. `AI-SURFACES-OPERATIONAL-REFERENCE.md` §4a says
+"`PA_WEBHOOK_SECRET` (already set)" — that line was confirmed against **Supabase** `secrets list`, not Railway; the
+two environments were conflated. Filed **RAILWAY-PA-SECRET** 🔴 👤.
+
+**Operator step (safe):** in Railway → tranquil-delight → Variables, add `PA_WEBHOOK_SECRET` = the exact value
+Dialysis_DB holds (the one the "SF -> LCC: Object Sync" flow sends). Consequences on redeploy, in order: Railway's
+edge calls start carrying the header (the `node railway` DENY-WOULD lines stop — the measurement that confirms
+it); **and** Railway's eight webhook routes start *enforcing* — so first confirm every PA flow that posts to
+Railway already sends the header (`FLOW-REGISTRY.yaml` `endpoint_families` → the flows on `lcc-*` families;
+the 2026-08-11 exports show which carry it). If any does not, that flow breaks the moment the variable lands.
+Check the exports before setting the variable, not after.
+
+Also noted: `GET /sync/sf-activities` still 500s from Railway (22:30:40) — CFE-RUNAWAY's load, unchanged.
+
+---
+
 ## 2026-09-09 — v80 deploy failed on a four-month-old `deno.json`: `{"imports":{"./":"./"}}` remaps every `./` import — including `_shared/auth.ts`'s `./supabase-client.ts` — into the function's own directory
 
 `supabase functions deploy ai-copilot` (CLI 2.101) → `WARN: failed to read file: open
