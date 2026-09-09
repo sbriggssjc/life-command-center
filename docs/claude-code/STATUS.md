@@ -16,6 +16,21 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — C13g-min reconciled (PR #2196): the retype WRITE is live and proven; the lane that asks for it was cut and is filed
+
+Claude Code (desktop) shipped the **DB half only** and said so: `lcc_retype_entity` / `lcc_unretype_entity`
+(SECURITY DEFINER, `anon`/`authenticated` EXECUTE **false** — read back with `has_function_privilege`, not
+from the file), `lcc_entity_retype_log`, and `v_lcc_entity_retype_candidates` = **18 rows / $69,427,930**
+(the prompt's prediction exactly). Positive control on Gardner-Tanenbaum rolled back clean; log reads 0 —
+nothing retyped for real. Two footguns hit that CLAUDE.md already documents (`entity_type` is an ENUM;
+`#variable_conflict use_column`). 10 source-shape tests pass; **no mutation pass**. No JS changed, so no
+Railway deploy is implied. **Cut:** the `entity_type_review` lane (all four registries), the mutation guard,
+the §3 consumer census beyond "eligible for merge candidates", the Tier 0 bench delta, and the 18-row named
+read — filed as **C13g-min-lane** with a prompt. The view is anon-SELECTable by default grant; `entities`
+already is, so nothing new leaks — noted, not changed. Canonical: owner-role-classification.md **§9e**
+(+ §9b banner), OWN-T0e design **§9**, CURRENT-STATE, backlog C13g / OWN-T0e-b. **Operator option now:**
+the two type-blocked OWN-T0e cards can be unblocked by an RPC call with `p_reason` before the lane exists.
+
 ## 2026-09-09 — SF-DIRECT-b reconciled (PR #2199): the SSO workaround is coded and tested; the last mile is a Switch case in Power Automate
 
 **Verified.** `_shared/salesforce-gateway.ts` reads `SF_LOOKUP_WEBHOOK_URL` at one site and never puts it in an
