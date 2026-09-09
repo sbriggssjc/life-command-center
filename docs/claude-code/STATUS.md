@@ -191,6 +191,29 @@ must keep working, and the browser cannot be handed a secret — its reads go th
 
 ---
 
+## 2026-09-09 — the two type-blocked merges ran and the store moved by exactly the predicted −14; NGP Group's `same_party` landed on a lane with no card (design §7's own gap)
+
+**Read back 20:46 UTC.** `lcc_entity_merge_log` **148 → 150**: `Gardner-Tanenbaum → Gardner Tanenbaum Holdings`
+(20:45, `reversible=true`, 3 xids + 299 relationships repointed) and `MassMutual Life → Massmutual` (20:45,
+`reversible=true`). Both `same_party` + `merge_now` verdicts recorded on the sponsor cards. **`unclassified_rival`
+1,516 → 1,502 = −14 — exactly the predicted −4 (Gardner) + −10 (MassMutual)**; `duplicate_entity` 412 and
+`sponsor_family_confirmed` 102 unmoved, registry 8 unmoved, as designed. ⚠️ One prediction detail was WRONG in
+a way that did not change the total: I expected the loser's facts on the co-claimed properties to dedup-DELETE
+on the PK; instead Gardner Holdings' current facts went **22 → 40 (+18, all repointed)** and Massmutual's
+24 → 38 (+14). The "co-claim" on those properties came from the resolver claim / domain mirror, not from a
+second portfolio fact — so there was no PK collision. *Co-claimed in the reconciled store ≠ two facts.* The
+Gardner group also left `v_lcc_merge_candidates` (its byte-identical duplicate is gone).
+
+**NGP Group: the verdict is recorded, the merge is not.** Scott clicked `same_party` (no `merge_now`) on the
+NGP Group card as instructed; `effects.merge_lane = merge_duplicate_entities` — and **the merge lane has no
+card containing `NGP Group`**: the P189 normalizer returns NULL for it and the `dc:` fallback does not group it
+with `NGP Capital`. This is precisely the design-§7 gap OWN-T0e-b was built for, on the one card where
+`merge_now` cannot be used (the card's sponsor IS the duplicate, so its picker offers only SPEs). `NGP Group`
+(67ed0011…, 9 current facts) stays live. **Resolution: one `lcc_merge_entity(loser := NGP Group, winner :=
+NGP Capital)` call, reversible, backed by the recorded human verdict — pending Scott's go.** Filed as the
+concrete instance under **OWN-T0e-c**: a card whose sponsor is itself the duplicate needs a "merge THIS sponsor
+into <other card's sponsor>" affordance, or the verdict routes to a lane that cannot show it.
+
 ## 2026-09-09 — the retype lane worked for real: 16 verdicts in two minutes, 13 retypes ledgered, and the merge detector woke up on 12 groups it had been blind to
 
 **Read back live at 19:57 UTC.** `lcc_entity_retype_log` = **13** rows (Gardner-Tanenbaum, MassMutual Life,

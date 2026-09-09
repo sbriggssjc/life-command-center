@@ -134,6 +134,23 @@ confirm `BOV_API_KEY` + the `pacific-love` BOV service for one-shot workbooks; C
 `lcc-openapi.yaml` on tool-shape changes. Still pending: **rotate `LCC_API_KEY`**; Census key (invalid) for
 prompt 19.
 
+## 4a. `ai-copilot` edge function (dia) — auth gate env vars (COPILOT-OPEN-gate, 2026-09-09)
+
+`ai-copilot` (Dialysis_DB `zqzrriwuavgrquhisnoa`) is gated behind `authenticateWebhook()` on every
+route but `GET /health` since v80. It now reads two new env vars on top of the existing
+`PA_WEBHOOK_SECRET` (already present — shared with `intake-salesforce`, confirmed via
+`supabase secrets list`, names only):
+
+| var | default | meaning |
+|---|---|---|
+| `PA_WEBHOOK_SECRET` | (already set) | the shared secret; `X-PA-Webhook-Secret` must match |
+| `COPILOT_AUTH_MODE` | `log` | `log` = an unauthenticated request is logged as `DENY-WOULD` and allowed through; `enforce` = 401 |
+| `COPILOT_KNOWN_IPS` | unset | comma list of `class:ip-prefix` pairs for the DENY-WOULD log's `ip_class` field, e.g. `railway:152.55.,railway:162.220.232.,scott:<prefix>` |
+
+Full state + the flip procedure: `docs/architecture/edge-function-deploy-drift.md`
+§"`ai-copilot` (dia) — v79 shipped with NO authentication". Callers that need the header:
+`docs/architecture/flows/ai-copilot-sync-callers.md` (four PA flows, 👤 Scott).
+
 ## 5. The bigger architecture (pointers)
 - Request-understanding layer (why plain-language handling is a cross-tool gap): `docs/architecture/request-
   understanding-and-consistency-layer.md` + the audit `docs/architecture/intent-resolution-audit-2026-08-03.md`.
