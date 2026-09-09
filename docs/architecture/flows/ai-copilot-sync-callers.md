@@ -2,13 +2,16 @@
 
 The 24h caller inventory behind **COPILOT-OPEN** (`docs/os/PLANNED-BACKLOG.md`) identified four live
 Power Automate flows POSTing to `ai-copilot` with **no credential at all**, distinguished only by
-their Logic-Apps workflow id in the User-Agent (`azure-logic-apps/1.0 (workflow <id>)`). None of the
-four ids matches any `flow_guid` in `docs/os/FLOW-REGISTRY.yaml`.
+their Logic-Apps workflow id in the User-Agent (`azure-logic-apps/1.0 (workflow <id>)`). ~~None of the
+four ids matches any `flow_guid` in `docs/os/FLOW-REGISTRY.yaml`.~~ **Corrected 2026-09-09 (Cowork):** the
+user-agent id is a runtime workflow id and matches neither the registry `flow_guid` nor the GUID folder inside
+an export package (Object Sync: `503d5519…` registry / `242f42cb…` export) — so "not in the registry" was a
+comparison of unlike ids. Identification is by route, from the 2026-08-11 exports.
 
 | workflow id | route called | volume/day | candidate flow |
 |---|---|---:|---|
-| `4eb7c46fdc244d4d949c1e5c6f85d41f` | `POST /sync/calendar-events` | 24 | Personal Calendar Sync |
-| `5706ffc6bd394b5b8bc9117121aebb8b` | `POST /sync/activities` | — | (unidentified — Scott to open) |
+| `4eb7c46fdc244d4d949c1e5c6f85d41f` | `POST /sync/calendar-events` | 24 | Personal Calendar Sync (PA5 — unexported; by route + hourly cadence) |
+| `5706ffc6bd394b5b8bc9117121aebb8b` | `POST /sync/activities` | 6 | **Sync SF Activities to Supabase** (`sf-activity-sync`, registered; its export's HTTP action targets this route with `Authorization`+`apikey`, not the PA secret) |
 | `e2598c91bad14348878447ba87c3629c` | `POST /sync/sf-tasks` | — | (unidentified — Scott to open) |
 | `0216d3da9ae1442d80715428587e04da` | `POST /sync/flagged-emails` | — | (unidentified — Scott to open) |
 

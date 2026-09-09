@@ -16,6 +16,49 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — Read the 17 flow exports before RAILWAY-PA-SECRET lands: no PA flow sends `X-PA-Webhook-Secret` to Railway — they use `x-lcc-key` or `Authorization` — so setting the variable is safe only because of the fallback, and one flow has a header-less call that would break
+
+**Method:** every `definition.json` in `private/power-automate/exports/production/2026-08-11/` (17 zips), every
+`Http` action, grouped by target host and whether `X-PA-Webhook-Secret` is among its headers. 51 HTTP actions.
+
+| target | flows | sends `X-PA-Webhook-Secret` | sends instead |
+|---|---|---|---|
+| Supabase edge functions (`intake-salesforce`, `intake-salesforce-files`, `sf-promotion-worker`) | Object Sync, On-demand Backfill, Daily Bulk File Backfill, On-demand File Backfill, Retry & Dead-letter, SF File Discovery | **yes, all 24 actions** | — |
+| Supabase `ai-copilot/sync/activities` | Sync SF Activities to Supabase | no | `Authorization` + `apikey` (Supabase keys — the gate ignores them) |
+| Supabase REST (`sf_sync_queue`, `lcc_record_flow_failure`) | Queue Drainer + 7 failure-ledger calls | no (not applicable — PostgREST) | `apikey`/`Authorization` |
+| **Railway** `/api/webhooks/processing-complete`, `/api/intake-outlook-message`, `/api/intake-summary` | Outlook Intake to Teams (Hardened) | **no** | `x-lcc-key` + `x-lcc-workspace` |
+| **Railway** `/api/webhooks/todo-completion-poll` ×2 | To Do Completion Poll | **no** | first call `x-lcc-key`; **second call sends NO headers at all** |
+| **Railway** `/api/intake?_route=outlook-message`, `/api/intake/prepare-upload` | Flagged Email Intake | no | `X-LCC-Key` |
+| **Railway** `/api/pipeline/ingest-*` ×3 | Deal → Opportunity Sync, Deal Contacts → Roster, Deal Team → Roster | no | `Authorization` (bearer) |
+
+**What this changes about RAILWAY-PA-SECRET:** the eight Railway webhook handlers are shaped `if
+(!authenticateWebhook(req)) { user = authenticate(req,res); requireRole(operator) }` — so with the variable **set**,
+a flow without the secret header falls through to the real user/API-key check rather than being refused. That is
+safer than today (today `authenticateWebhook` returns `true` for everyone and the fallback never runs). Setting
+the variable therefore breaks only a caller that sends **neither** the secret **nor** a valid `x-lcc-key`/bearer:
+from the exports, that is exactly one action — the To Do Completion Poll's second, header-less
+`todo-completion-poll` call — plus whatever the **unexported** flows do (PA5: RCM Email Watcher, LoopNet, Personal
+Calendar Sync post to `rcm-ingest`/`loopnet-ingest`/`lead-ingest`; those definitions are not on disk, so their
+headers are **Not on file**). Whether `LCC_API_KEY` is set on Railway and its key-user carries the operator role is
+also Not on file — every `x-lcc-key` flow has been passing through the open door, so the key path has never been
+exercised on these routes.
+
+**Decision recorded:** do not set the variable blind. Land a log-only mode on Railway first (`PA_WEBHOOK_AUTH_MODE=log`:
+with the secret configured, a webhook request lacking the header logs `[pa-webhook] DENY-WOULD <route> <auth-path>`
+and proceeds through the fallback as it would in enforce mode — so the log shows which flows would have been
+*refused by the fallback*, not merely which lack the header). Prompt **RAILWAY-PA-SECRET-log**. Then set the variable,
+read three days, fix the To Do poll's second call (👤 Scott, in the designer, re-export), and flip.
+
+**Correction to the ai-copilot caller doc (my own error, 2026-09-09 earlier):** the id in the `azure-logic-apps
+(workflow <id>)` user-agent is a third identifier — it matches neither the registry's `flow_guid` nor the
+folder GUID inside the export package (Object Sync is `503d5519…` in the registry, `242f42cb…` in its export). "None
+of the four ids is in the registry" was a comparison of unlike ids, not a finding. The `/sync/activities` caller
+is **"Sync SF Activities to Supabase"** (`sf-activity-sync`, registered, exported 2026-08-11 — its HTTP action
+targets exactly that route); the `/sync/calendar-events` caller is the Personal Calendar Sync (PA5, unexported);
+`/sync/sf-tasks` and `/sync/flagged-emails` remain Not on file. `ai-copilot-sync-callers.md` corrected in place.
+
+---
+
 ## 2026-09-09 — `ai-copilot` v80 LIVE (log-only) and Railway redeployed: the classifier works, the browser is off the edge URL — and the log's first ten minutes say Railway is not sending the secret
 
 **Read from `function_logs` 22:25–22:35 UTC, after the second (successful) deploy and the Railway redeploy:**
