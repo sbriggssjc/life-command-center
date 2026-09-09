@@ -16,6 +16,91 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — COPILOT-OPEN-gate reconciled (PR #2214): the door is in the right place; nothing is live yet — three operator steps, in a safe order
+
+**Verified against the merged tree, not the response:**
+- The gate runs before dispatch for every path except `/health`, via the same `authenticateWebhook()` as
+  `intake-salesforce` (constant-time compare; `return true` when `PA_WEBHOOK_SECRET` is unset — the transitional
+  clause, which on Dialysis_DB does not apply because `intake-salesforce` 401s today). `log` mode logs
+  `DENY-WOULD` and continues; only `enforce` returns 401. Gate test 11/11, hermetic-suite and retired-identifier
+  guards green (24/24 in the run here).
+- The browser path is sound: `app.js` now hits `/api/sync?_route=copilot-read&what=…`, which authenticates the
+  user **before** proxying (`authenticate()` then `handleCopilotRead`), and the front-end's `auth.js` patches
+  `window.fetch` to attach the Bearer token on `/api/` calls — so plain `fetch()` in `loadActivities()` carries a
+  session. `grep functions/v1/ai-copilot app.js detail.js extension/` → 0.
+- `connectorHeaders()` sends the secret on every existing Railway→edge call, so the eventual `enforce` flip does not
+  strand `ingest_calendar` / `ingest_sf_activities` / `outbound`.
+- **Live state: `ai-copilot` is still v79** (`list_edge_functions`, 20:40 UTC). Railway has not been redeployed
+  either. Until both happen the browser still calls the edge URL directly (old `app.js` in its cache) and the
+  edge still accepts it — nothing is broken, nothing is gated.
+- Added `[functions.ai-copilot] verify_jwt = false` to `supabase/config.toml` — it was not pinned, and the
+  `--no-verify-jwt` flag on the deploy line was the only thing standing between v80 and the
+  `intake-salesforce-files` trap.
+- Duplicate `TEST-NET-LEAK-hermetic-suite` prompt/response reappeared at the top level (CC's branch predated the
+  move to `done/`); removed — the `done/` copies are byte-identical.
+
+**Operator order (safe in this sequence; each step is independently reversible):**
+1. `supabase secrets set COPILOT_KNOWN_IPS="railway:152.55.,railway:162.220.232.,scott:<home-prefix>" --project-ref zqzrriwuavgrquhisnoa`
+   (classification only — it changes what the log line says, never what is allowed).
+2. `supabase functions deploy ai-copilot --project-ref zqzrriwuavgrquhisnoa --no-verify-jwt` → v80. Log-only;
+   every existing caller keeps working, including the browser on its cached `app.js`.
+3. Redeploy **both** Railway services (engine code changed: `api/sync.js`, `app.js`). After this the browser's
+   reads arrive at the edge from Railway with the header and the `DENY-WOULD browser` lines stop.
+4. The four PA flows get the header (`docs/architecture/flows/ai-copilot-sync-callers.md`), each re-exported and
+   registered — that is also PA5's answer for whichever of the four it turns out to be.
+5. ≥ 3 days of `function_logs` with zero `DENY-WOULD` from anything but a known class → `COPILOT_AUTH_MODE=enforce`.
+
+**Still Not on file:** `AI_EXTRACTION_PRIMARY` on Railway — the "Railway made 0 edge calls in 24 h" reading has two
+explanations and this is the only way to pick one.
+
+Next CC prompt: **SFENRICH-gate** — the same door on `salesforce-enrichment` (DRIFT1-sfenrich), with one wrinkle
+the COPILOT unit did not have: that function's body is **not in the repo** (deployed v23 only, `supabase/functions/`
+has no `salesforce-enrichment/`), so the unit starts by committing the fetched body verbatim — the lesson from
+`sf-test`.
+
+---
+
+## 2026-09-09 — COPILOT-OPEN-gate shipped (log-only): `ai-copilot` now sits behind `authenticateWebhook()`, browser reads moved off the edge URL
+
+**Prompt COPILOT-OPEN-gate.** `supabase/functions/ai-copilot/index.ts` v80 gates every route but
+`GET /health` behind `authenticateWebhook()` (`../_shared/auth.ts`, the same `X-PA-Webhook-Secret`
+door `intake-salesforce` already sits behind), driven by `COPILOT_AUTH_MODE` (`log` default —
+DENY-WOULD logged, request allowed through unchanged; `enforce` — 401). Shipped in `log` mode
+deliberately; the enforce flip is a separate, later operator step.
+
+- **Unit 1 (gate):** `[copilot-auth] DENY-WOULD <method> <path> <ua_class> <ip_class>` on any
+  unauthenticated non-`/health` request. `ua_class` ∈ `browser|logic-apps|node|other`, `ip_class`
+  read from `COPILOT_KNOWN_IPS` (new env var, comma list of `class:ip-prefix` pairs — 👤 Scott sets
+  it from the caller inventory; unset ⇒ everything reads `other`).
+- **Unit 2 (browser):** `app.js`/`detail.js` no longer call the edge URL directly (a browser cannot
+  hold the secret — P194 doctrine). They call `/api/sync?_route=copilot-read&what=health|sf-activities|
+  calendar-events` on Railway; `api/sync.js::handleCopilotRead` is a new user-authenticated proxy that
+  forwards the query string and adds the secret header. `connectorHeaders()` (used by every existing
+  Railway→edge call — flagged emails, calendar ingest, sf-activities ingest, the outbound command
+  dispatcher, the connector-verify probe) now sends the secret too, so Railway's own calls don't start
+  failing the moment `enforce` flips. `detail.js`'s `API` const was dead code (declared, never read) —
+  removed rather than repointed.
+- **Unit 3 (PA flows):** `docs/architecture/flows/ai-copilot-sync-callers.md` — the four unregistered
+  Logic-Apps workflow ids from the inventory, what header each needs, and the re-export/register
+  procedure. **Not done** — needs Scott to open each flow and add the header, then re-export + tell
+  CC the flow names so `FLOW-REGISTRY.yaml` can be updated (resolves PA5 for whichever of the four).
+- **Unit 4 (tests):** `test/ai-copilot-auth-gate.test.mjs` — structural (same reason
+  `test/intake-salesforce-sf-ping-auth.test.mjs` is structural: `_shared/auth.ts` can't load under
+  plain `node --test`), 8 assertions on the gate + 3 on the browser never holding the edge URL
+  (positive-controlled). `npm test`: **5573 pass / 0 fail** (full suite, unchanged elsewhere).
+- **Unit 5 (docs):** this entry; `docs/architecture/edge-function-deploy-drift.md` (dated section);
+  `docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md` §4a (new env vars); `PLANNED-BACKLOG.md` COPILOT-OPEN
+  → 🟡 (gate shipped, PA-flow header + the enforce flip still open).
+
+**Out of scope, named:** flipping to `enforce` (Scott's call, after the 3-day zero-unknown-caller
+read); COPILOT-SYNC-500 / CAL-RECONCILE-STUCK (separate rows, CFE-RUNAWAY-blocked); `salesforce-
+enrichment` (DRIFT1-sfenrich needs the identical gate pattern, not built here); whether
+`AI_EXTRACTION_PRIMARY` is set on Railway (still unread — 👤).
+
+**Verify:** deploy `ai-copilot` (`--no-verify-jwt`, v80); one `curl` with no header → 200 + a
+DENY-WOULD line in `function_logs` (no secret value in the line); one with the header → 200, no line;
+grep confirms zero `functions/v1/ai-copilot` occurrences outside `supabase/`, `api/`, `docs/`, `test/`.
+
 ## 2026-09-09 — Dialysis_DB is being ground down by one writer: a Python job on Railway re-inserting every clinic's financial estimates ~3× a week instead of once a month — 7,547 statement timeouts in 24 h, cron jobs failing to start, the app's own reads 500ing
 
 **Chain of measurements (each one led to the next):**
