@@ -16,6 +16,27 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — SF-DIRECT-b live: the flow's `soql` case is built, v26 deployed — and the first ping exposed a one-line gate bug (namespaced fault codes), fixed with a red-then-green test
+
+Walked the Power Automate build in five steps (case → SELECT-only Condition → two Responses → Secure I/O →
+export/secret/deploy). One designer detail worth keeping: the SOQL action's real name became
+**`Execute_a_SOQL_query_1`** (the designer suffixes), and the validator rejects any Response expression naming
+an action that is not on its run-after path — the first save failed with `InvalidTemplate` for exactly that.
+
+**First live ping (v26):** `{"ok":false,"via":"soap","fault_code":"sf:INVALID_SSO_GATEWAY_URL"}` — the SOAP
+attempt was refused as expected, **but the fallback did not fire.** Cause: Salesforce namespaces SOAP fault codes
+(`sf:INVALID_SSO_GATEWAY_URL`), `parseLoginResponse` keeps the raw text, and the gate did exact membership against
+bare names. The tests could not see it: the SOAP tests use a prefix-tolerant regex, and the gate test asserted the
+Set's *contents* rather than its behaviour on a real fault. **Fixed (Cowork, this branch):** `bareFaultCode()`
+strips the namespace before the membership check; a positive control feeds the prefixed forms and was **seen red
+on the unpatched file** (2 failures) and green after. Full suite 5,545 / 0 / 6 skipped. → **v27 deploy** (Scott).
+
+**Lesson filed:** a test that checks a configuration value (what is in the Set) is not a test of the behaviour
+(what happens when the real input arrives). Positive-control the input shape the world actually sends.
+
+👤 **Scott:** move the exported flow zip from Downloads to
+`private\power-automate\exports\production\2026-09-09\` (git-ignored), then redeploy v27 and re-ping;
+report `via` + `open_tasks` only.
 ## 2026-09-09 — C13g-min-lane SHIPPED: the `entity_type_review` Decision Center lane over C13g-min's retype write
 
 **Built.** All four registries (`api/admin.js` `FEDERATED_DECISION_TYPES`+`federatedSubjectRef` =

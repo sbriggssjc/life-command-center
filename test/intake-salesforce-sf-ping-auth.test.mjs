@@ -97,3 +97,25 @@ describe('sf-ping falls back to the PA gateway only on a named SOAP-refusal faul
     assert.doesNotMatch(body, /result\.records/);
   });
 });
+
+// 2026-09-09 (Cowork): the live v26 answered `fault_code:"sf:INVALID_SSO_GATEWAY_URL"`
+// without falling back — Salesforce namespaces SOAP fault codes and the gate compared
+// bare names. Guard the normaliser's BEHAVIOUR on the prefixed form, not the Set's contents.
+describe('sf-ping fallback gate — namespaced fault codes', () => {
+  let src;
+  let m;
+  it('bareFaultCode exists and the gate uses it', async () => {
+    src = await fs.readFile(new URL('../supabase/functions/intake-salesforce/index.ts', import.meta.url), 'utf8');
+    m = src.match(/export function bareFaultCode\([^)]*\): string \{([\s\S]*?)\n\}/);
+    assert.ok(m, 'bareFaultCode not found');
+    assert.match(src, /SF_PING_FALLBACK_FAULT_CODES\.has\(bareFaultCode\(err\.faultCode\)\)/);
+  });
+  it('POSITIVE CONTROL: "sf:INVALID_SSO_GATEWAY_URL" and "sf:INVALID_LOGIN" normalise to gate members', () => {
+    const bare = new Function('code', m[1]);
+    for (const raw of ['sf:INVALID_SSO_GATEWAY_URL', 'sf:INVALID_LOGIN', 'INVALID_LOGIN', '  sf:INVALID_SSO_GATEWAY_URL ']) {
+      assert.ok(['INVALID_SSO_GATEWAY_URL', 'INVALID_LOGIN'].includes(bare(raw)), raw);
+    }
+    assert.equal(bare('sf:LOGIN_MUST_USE_SECURITY_TOKEN'), 'LOGIN_MUST_USE_SECURITY_TOKEN');
+    assert.equal(bare(null), '');
+  });
+});
