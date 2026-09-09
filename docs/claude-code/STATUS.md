@@ -16,6 +16,19 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — OWN-T0e verified live + OWN-T0e-b: `same_party` can merge the pair, and the type guard found a mistyped entity
+
+**Deploy verified** (`/version` = `d264a7fb`, the OWN-T0e merge; lane answers 182 / 131 / 51, top card
+NGP Capital $43.2M; the cache cron fired unattended at 12:27 UTC). Correction: `duplicate_entity_suspect`
+is **19**, not 13 — §6 counted breadth groups only. **Built OWN-T0e-b** on
+`build/own-t0e-b-same-party-merge`: `same_party` + `merge_now` merges the named duplicate into the
+sponsor through `lcc_merge_entity` (one loser per verdict, live guards incl. same recorded
+`entity_type`, `window.confirm` on the client). 16 tests, 13/13 new mutations RED; rolled-back positive
+control on InCommercial (merge log 145 → 146 → 145, reversible). **Reading the 5 pairs the merge lane
+could not show: 2 clean merges, 1 refused by the type guard (`Gardner-Tanenbaum` is typed `person` —
+the C13c class, filed under C13g), 1 not a duplicate at all (Truist Bank ↔ Truist Financial is
+parent/subsidiary), 1 on the wrong card.** `spe_props_max ≥ 2` flags "not a family", not "a
+duplicate". Design doc §7. JS ships on the next Railway redeploy.
 ## 2026-09-09 — J13 teardown, day 1 walked live: the 12:30 caller was a forgotten v1 flow, and two red herrings shared its schedule
 
 Walked the runbook's step 1 with Scott in chat, one step at a time, measuring at each step instead of
