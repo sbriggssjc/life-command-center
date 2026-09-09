@@ -36,7 +36,10 @@ test('the guard names every live Supabase project ref', () => {
   // file) already covers these by construction; this test additionally
   // requires the pattern to name the `.supabase.co` suffix outright, so a
   // narrowing of that blanket rule can't quietly stop covering them.
-  assert.ok(src.includes('supabase.co'), 'must still block *.supabase.co outright');
+  // The source text is a regex literal (`\.supabase\.co$`), so the escaped
+  // dots break a naive `.includes('supabase.co')` substring check — match
+  // the literal escaped form instead.
+  assert.ok(src.includes('supabase\\.co'), 'must still block *.supabase.co outright');
   const refs = ['xengecqvemvfknjvbvrq', 'zqzrriwuavgrquhisnoa', 'scknotsqkcheojiaewwh'];
   for (const ref of refs) {
     // Not asserting the literal ref string appears (the guard is host-shape
