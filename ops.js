@@ -1854,6 +1854,13 @@ window.renderOpsHealthPage = renderOpsHealthPage;
 // VERDICT lane whose count drives the nav badge. Keep in sync with
 // FEDERATED_DECISION_TYPES in api/admin.js — the two define the same partition.
 var _DC_FEDERATED = new Set([
+  // PDR1 / P13#1 (2026-09-10): the needs_human half of the ambiguous-entity
+  // automerge lane. Source = `entities` rows carrying metadata.ambiguous_
+  // resolution whose planner score misses the auto-merge threshold; verdicts
+  // merge (rpc/reconcile_entity) / keep_new (rpc/reconcile_entity p_keep_new)
+  // / research. Keep in sync with admin.js FEDERATED_DECISION_TYPES
+  // (test/decision-center-partition.test.mjs).
+  'ambiguous_entity_resolution',
   'intake_disposition', 'property_merge', 'provenance_conflict', 'pending_update',
   // dia geospatial address-twin review (2026-08-14). Source = the pending slice of
   // dia_property_twin_review; merge rides the REVERSIBLE dia_merge_property_reversible.
@@ -2066,6 +2073,7 @@ async function renderReviewConsolePage() {
     { dt: 'tier0_owner_contact', label: 'Tier 0 — confirm the owner’s firm domain', open: "renderFederatedLane('tier0_owner_contact')" },
     { dt: 'sponsor_family_confirm', label: 'Sponsor ↔ SPE families — confirm', open: "renderFederatedLane('sponsor_family_confirm')" },
     { dt: 'entity_type_review', label: 'Entity type — person or organization?', open: "renderFederatedLane('entity_type_review')" },
+    { dt: 'ambiguous_entity_resolution', label: 'Ambiguous entities — pick the merge target', open: "renderFederatedLane('ambiguous_entity_resolution')" },
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
     { dt: 'property_twin', label: 'Property address twins (dia)', open: "renderFederatedLane('property_twin')" },
     { dt: 'provenance_conflict', label: 'Data conflicts & provenance', open: "renderFederatedLane('provenance_conflict')" },

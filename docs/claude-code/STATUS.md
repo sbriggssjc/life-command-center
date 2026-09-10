@@ -67,6 +67,82 @@ production-running-state unconfirmed) rather than ✅, for exactly that reason. 
 starts strictly AFTER that confirmation — checking run-start-time against merge-time this time, not just
 log content — to close out CFE-RUNAWAY / PROPREV1 / RATINGS2 / RATINGS3 together as a single verified
 state.
+## 2026-09-10 — PDR1-entity-reconcile-automerge BUILT — planner + auto-merge tick + DC lane; split UNKNOWN (no DB access this session)
+
+**⚠️ DB access was unavailable in this build session (sandboxed, no Supabase egress).** Everything
+below is CODE READY TO RUN, not a live-verified result. The auto-mergeable / needs_human split of
+the documented 189 `ambiguous_resolution` entities (PLANNED-BACKLOG.md §P17/§P13#1) is **UNKNOWN**
+until someone with live DB access runs `GET /api/ambiguous-entity-automerge-tick` (ungated dry run)
+against production. Do not read this entry as reporting a real number — it reports what the code
+does and how it was tested (fixtures + static/mutation guards only).
+
+**Built, per Scott's decision recorded in P13#1 ("auto-merge the clear cases, queue the rest"):**
+
+- **`api/_shared/ambiguous-entity-merge-planner.js`** — pure scoring planner. Rules (documented,
+  NOT measured against the live 189): +100 for any non-empty address, +50 more for a NORMALIZED
+  address, up to +40 for real relationship/portfolio/identity signal counts (tie-break only, capped
+  so it can never outweigh an address). **Auto-mergeable threshold, stated explicitly**: exactly one
+  candidate at score ≥100 (has an address) AND leading the runner-up by ≥50 points (one
+  "normalization step"). Below that → `needs_human`, reason named
+  (`no_candidate_clears_min_score` / `margin_too_close`). The DaVita/Donna-TX worked example
+  (`8d1fd46e-3524-476e-946e-eb33d683820d`) is a FIXTURE built to match the documented shape (bare
+  placeholder + un-normalized real address + normalized real address) — it is NOT a live read of
+  that entity's actual three candidates, and is labelled as such in the test file.
+- **`api/_handlers/ambiguous-entity-automerge-tick.js`** — GET is an ungated dry run scoring every
+  open `entities.metadata.ambiguous_resolution` row live; POST is gated behind a new flag
+  `AMBIGUOUS_ENTITY_AUTOMERGE` (seeded OFF). **No second merge writer**: both the tick and the new
+  Decision Center verdict call `rpc/reconcile_entity` directly via `opsQuery` — the SAME Postgres
+  function `mcp/entity-reconcile.js`'s `/api/pipeline/reconcile-entity` HTTP route calls (that route
+  lives on the separate MCP server process, `mcp/server.js`, not the Railway app this tick is
+  mounted into — routing through the RPC directly avoids an unnecessary cross-service HTTP call
+  while still reusing the one true merge writer). Mounted `/api/ambiguous-entity-automerge-tick` in
+  `server.js` → `api/admin.js`.
+- **New Decision Center lane `ambiguous_entity_resolution`** (`FEDERATED_DECISION_TYPES` in
+  `api/admin.js`, `_DC_FEDERATED` in `ops.js`, card renderer in `dc-lanes.js`, lane map entry in
+  `review-shared.js`). Verdicts `merge` (repoint to the human-picked candidate via
+  `rpc/reconcile_entity`), `keep_new` (`rpc/reconcile_entity`'s `p_keep_new` path), `research`. Card
+  re-reads the placeholder + re-enriches + re-scores live at verdict time — never trusts the
+  client's payload for the candidate list (the P188 "re-read from source" rule).
+- **Migration `supabase/migrations/20260910120000_lcc_pdr1_ambiguous_entity_automerge.sql`** —
+  additive: the tick's run-log table + the `AMBIGUOUS_ENTITY_AUTOMERGE` feature-flag seed row
+  (`state='off'`). **Not applied to any live database in this session** — no Supabase egress.
+- **No recurring cron** (per the task spec — the population is closed, nothing minted since
+  2026-08-04; a schedule is not justified until the Salesforce sync starts producing more).
+- **Enrichment note:** `entities.metadata.ambiguous_resolution` on the placeholder itself only ever
+  stores `{id, name}` per candidate (per `mcp/opportunity-sync.js`) — no address/signal data rides
+  on it. Both the tick and the DC lane fetch `address`/`normalized_address` for each candidate id
+  from `entities` at read time. Relationship/portfolio-fact/external-identity COUNTS are NOT
+  fetched in this pass (documented as an N+1 risk across the closed 189-entity population) — the
+  planner already supports them, so a follow-up enrichment pass can add them with no planner change.
+
+**⚠️ `reconcile_entity`'s reversibility is a soft tombstone (`metadata.merged_into`), not a
+snapshot/restore pair** like `lcc_merge_entity`/`lcc_unmerge_entity` elsewhere in this repo — there
+is no `unreconcile_entity` RPC. Confirming its real reversibility live (a rollback-tested positive
+control, per the task spec) is a **named follow-up for whoever runs this against the real DB**, not
+assumed here. The test suite proves the tick's HTTP contract with `rpc/reconcile_entity` via static
+source assertions (payload shape: `p_placeholder`/`p_canonical`/`p_keep_new`) — it does NOT execute
+a live merge+unmerge round trip, because no DB was reachable.
+
+**Tests:** `test/pdr1-ambiguous-entity-automerge.test.mjs` (24 tests) — planner fixtures for the four
+required cases (bare-placeholder never wins / non-normalized loses to normalized / threshold
+abstains on a close margin / the DaVita-Donna-TX fixture), plus static wiring checks (server.js
+mount, admin.js dispatch, FEDERATED_DECISION_TYPES/`_DC_FEDERATED` registration, the tick's payload
+shape to `rpc/reconcile_entity`, "no second merge writer" — no direct PATCH of
+`bd_opportunities`/`activity_events`/`entity_relationships`), and migration-shape checks. **Full
+suite run: 5,744 tests, 5,738 pass / 0 fail / 6 skipped** (one pre-existing count assertion in
+`test/review-shared.test.mjs` updated from 30 → 31 decision-lane-map entries to reflect the new
+lane — that is the only pre-existing test this touched).
+
+**PLANNED-BACKLOG.md updated in the same change**: P17/PDR1 and P13#1 marked "built, pending live
+verification" (corrected in place, not deleted, per doctrine); PDR2/3/4/6/7/9 (which depend on
+PDR1's merge resolving DaVita/Donna-TX) noted as still depending on a LIVE run of this code, since
+the merge has not actually happened yet.
+
+**Next step for whoever has live DB access:** run `GET /api/ambiguous-entity-automerge-tick`
+(ungated, no writes) against production, read the real auto-mergeable/needs_human split, apply the
+migration, and — only after reading that split — decide whether to flip `AMBIGUOUS_ENTITY_AUTOMERGE`
+on. Then specifically verify entity `8d1fd46e-3524-476e-946e-eb33d683820d` (DaVita/Donna-TX) lands
+where the planner says it should and that PDR2/3/4/6/7/9 actually resolve once merged.
 
 ## 2026-09-10 — PDR1's root cause traced to an existing decision fork (P13 #1); Scott decided; prompt drafted and sent
 
