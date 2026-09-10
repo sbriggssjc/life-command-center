@@ -16,6 +16,38 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — Verified `ACI-phase2-unitC`'s claims independently; filed the AC2-sf-context gap as its own row; moved prompt/response to done/
+
+Re-checked the shipped PR's claims against live data rather than taking the commit message at face
+value, per this session's standing discipline:
+
+- **Bench jsonb shape** — read a populated `owner_contact_pivot.bench` row live; matches the
+  documented shape (`name, role, source, n_props, authority, contact_entity_id,
+  is_named_individual`) exactly.
+- **Pulliam two-way signal** — `email_bodies` for `apulliam@easterlyreit.com`: **48 inbound / 3
+  outbound**, matching the shipped writeup exactly (independently queried, not re-quoted).
+- **Ledger migration not applied live** — confirmed: no `lcc_bench_rank_run_log`-shaped table exists
+  in `xengecqvemvfknjvbvrq` today. Confirmed a second way: `BENCH_RANK_WRITE` has no row in
+  `feature_flags_registry` — the flag isn't even registered yet, so the write path is unreachable
+  end to end until an operator does both. **Nothing writes today; this is still a design/build
+  artifact, not a live system.**
+- **Tests** — ran all three new test files independently (`bench-ranking-planner.test.mjs` 15/15,
+  `bench-role-inference-planner.test.mjs` 20/20, `bench-rank-tick.test.mjs` 12/12 — 47 tests total,
+  0 failures; the "67" in the commit message counts individual assertions, not test blocks, and both
+  numbers are internally consistent).
+
+**Doc fix:** the commit message said "filed AC2-sf-context" but no standalone backlog row existed for
+it — added one (`PLANNED-BACKLOG.md`), same pattern as RO2a/RO2b's inline-named-but-unfiled fix
+earlier this arc.
+
+Moved `ACI-phase2-unitC.md` to `prompts/done/`, response `.docx` + new `.response.md` transcript to
+`responses/done/`.
+
+**Next step — this is now purely an operator action, not a build task:** apply
+`20261010150000_lcc_bench_rank_run_log.sql` and register `BENCH_RANK_WRITE` in
+`feature_flags_registry` when ready to let the write path run for real; until then AC2/AC3 exist as
+correct, tested logic with no live effect. Separately, the property-reconciliation thread (P17/PDR1 —
+the DaVita/Donna-TX unresolved Salesforce-sync orphan) is still open and untouched since it was filed.
 ## 2026-09-10 — RATINGS2 fixed in `Dialysis` (not this repo): the partial-index upsert bug was worse than diagnosed (silently blacklisting the whole table), a second PROPREV1-shaped bug found in the quality-metrics path — but live verification could not happen on either side, this session's Supabase MCP token expired mid-arc too
 
 **The prompt.** `docs/claude-code/prompts/done/RATINGS2-partial-index-upsert-and-cqm-fulltable-probe.md`,
