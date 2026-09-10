@@ -47,9 +47,20 @@ describe('C13g — contactEntityType widened org-marker coverage', () => {
     assert.equal(contactEntityType({ name: 'Sarita Mutscher' }), 'person');
   });
 
-  it('an explicit vendor-supplied type still wins over the name heuristic', () => {
+  it('an explicit vendor-supplied organization type is never second-guessed', () => {
     assert.equal(contactEntityType({ name: 'Gary George', type: 'organization' }), 'organization');
-    assert.equal(contactEntityType({ name: 'ACME LLC', type: 'person' }), 'person');
+  });
+
+  it('an explicit vendor-supplied person type is a FLOOR, not absolute — a firm suffix overrides it', () => {
+    // C13g-costar-stoplist: CoStar's for-sale/for-lease scanner always stamps
+    // an explicit type, so hasFirmSuffix was never consulted on this path —
+    // and its own stoplist is missing terms hasFirmSuffix has (Bancorp,
+    // Investments, Development, Ptnrs, Cos, Fund, Mgmt), so it can stamp
+    // type:'person' on a real firm. That must not mint a person entity.
+    assert.equal(contactEntityType({ name: 'ACME LLC', type: 'person' }), 'organization');
+    assert.equal(contactEntityType({ name: 'Sentinel Bancorp', type: 'person' }), 'organization');
+    assert.equal(contactEntityType({ name: 'Meridian Investments', type: 'person' }), 'organization');
+    assert.equal(contactEntityType({ name: 'Ashford Development', type: 'person' }), 'organization');
   });
 
   it('the LLC/INC/CORP/LTD/LP/LLP-only shape stays covered (no regression)', () => {

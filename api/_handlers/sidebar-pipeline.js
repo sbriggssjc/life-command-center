@@ -1632,11 +1632,34 @@ async function domainPatch(domain, path, data, label) {
  * same person-vs-org judgement elsewhere (entity-link.js) — reuse it rather
  * than maintaining a second, narrower copy that drifts (the P189/A2/N15c
  * "hazard travels with the technique" class).
+ *
+ * C13g-costar-stoplist (2026-09-10): the CoStar for-sale/for-lease scanner
+ * (`extension/content/_forsale-contacts-parse.js::looksLikePerson`) always
+ * sets `contact.type` explicitly, so its verdict wins here and `hasFirmSuffix`
+ * is never consulted for that path — but that scanner's stoplist is NOT a
+ * superset of `hasFirmSuffix`'s: it carries brand names (newmark/cbre/jll/
+ * colliers) and a few terms `hasFirmSuffix` lacks, while it is MISSING
+ * `hasFirmSuffix` terms (Fund, Ptnrs, Cos, Property [singular], Development,
+ * Developers, Investments, Investors, Enterprises, Bancorp, Bank, Mgmt).
+ * A name like "Sentinel Bancorp" or "Meridian Investments" trips
+ * `hasFirmSuffix` but NOT the extension's list, so the extension stamps
+ * `type:'person'` and — before this fix — that verdict was trusted verbatim,
+ * silently minting the firm as a person. The safe direction is one-way: an
+ * explicit `type:'organization'`/`'entity'` is never second-guessed (nothing
+ * downgrades an org to a person on a name heuristic — that would repeat the
+ * P158a `&`-is-a-couple mistake), but an explicit `type:'person'` IS checked
+ * against `hasFirmSuffix` and overridden when it disagrees, because a firm
+ * suffix in the name is stronger, unambiguous evidence a vendor's own
+ * classifier can still miss. This does not create a second stoplist — it is
+ * the SAME shared guard already used for the no-type fallback, now also
+ * applied as a floor under an explicit but firm-suffixed 'person' verdict.
  */
 export function contactEntityType(contact) {
   if (contact.type === 'entity' || contact.type === 'organization') return 'organization';
-  if (contact.type === 'person') return 'person';
   const name = (contact.name || '').trim();
+  if (contact.type === 'person') {
+    return hasFirmSuffix(name) ? 'organization' : 'person';
+  }
   if (hasFirmSuffix(name)) return 'organization';
   return 'person';
 }
