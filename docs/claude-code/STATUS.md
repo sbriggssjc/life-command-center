@@ -51,6 +51,27 @@ across 3 of the 11 non-tombstoned retyped entities (UIRC 7, Global Net Lease 2, 
 §9f's Gardner/MassMutual-only check was right for those two, incomplete as a claim about the lane.
 Full writeup: `docs/architecture/owner-role-classification.md` §9g; backlog `C13g-min-lane-mutation`
 ✅. Not done: the placeholder-guard unit (`C13g-min-lane-placeholder`, unchanged).
+## 2026-09-10 — RAILWAY-PA-SECRET-log: the CC session finished, but its branch never reached GitHub and no PR was opened — nothing to reconcile yet
+
+Scott's transcript (`docs/claude-code/responses/RAILWAY surface response.docx`, untracked) shows the unit
+completed in the Claude Code session: `webhookAuth(req, res, routeName, opts)` fronting **seven** call sites
+(the session reports the prompt's "eight" was wrong — `lead-ingest` is a pure edge-function proxy with no local
+auth check and `live-ingest` uses plain `authenticate()`; `cross-domain-match` was missing from the list and is
+included), `PA_WEBHOOK_AUTH_MODE`/`PA_WEBHOOK_KNOWN_IPS`, `test/pa-webhook-auth-mode.test.mjs` 11/11, full suite
+5,598/0, docs and a response file — and ends with *"Pushed to claude/railway-pa-secret-log … I did not open a
+PR."* **On GitHub: no such branch, no PR, `api/sync.js` on `main` has no `webhookAuth`.** The push did not land
+(or landed somewhere other than `origin`). The work exists only inside that session's clone.
+
+**Recovery (👤 Scott, one line in that CC session):** *"Open the PR for `claude/railway-pa-secret-log`"* — the
+session will push the branch and create it. If the session is gone, re-run `prompts/RAILWAY-PA-SECRET-log.md`;
+it is deterministic enough to reproduce. Reconcile follows the merge, as usual: I will verify the seven-not-eight
+claim against `grep -n "authenticateWebhook(req)" api/sync.js` on the merged tree.
+
+Row RAILWAY-PA-SECRET stays 🔴; the prompt stays in `prompts/`. The four `*surface response.docx` transcripts in
+`responses/` are Scott's own record and untracked — left as is.
+
+---
+
 ## 2026-09-10 — Overnight read: both gates live and quiet; the first outside probes of `ai-copilot` are on record; a BOM in a commit subject
 
 **Live (`list_edge_functions`, 01:40 UTC):** `salesforce-enrichment` **v27** (sha `f0d6db0e…`, updated 01:12 UTC —
