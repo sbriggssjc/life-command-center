@@ -1038,3 +1038,47 @@ checked from the repo side rather than only at apply time.
 
 **Not done, deliberately (budget):** the placeholder-guard unit (`C13g-min-lane-placeholder`) — two
 "Research In Progress" rows still reach the lane where neither verdict fits; left as its own backlog row.
+
+## §9h — C13g: the capture-path producer fix (2026-09-10)
+
+C13c named the producer (`rca/contact` 115 of 142, `costar/contact` 32) but did not build the fix.
+Traced precisely: **`unpackContacts()`** in `api/_handlers/sidebar-pipeline.js` is the ONE code path
+both RCA and CoStar sidebar capture route through for a deal-party "contact" entry — they differ only
+in `metadata.source` (`rca` vs `costar`), which becomes the `external_identities` prefix. It calls
+`contactEntityType(contact)` → `ensureEntityLink({sourceType: entityType === 'person' ? 'contact' :
+'company', ...})`, and `entity-link.js`'s `inferEntityType('contact', ...)` treats `sourceType==='contact'`
+as an unconditional person signal (no further name check inside that function for this path).
+
+- **RCA's deed-party `owner` slot sends NO `contact.type` at all** (`extension/content/rca.js`:
+  `data.contacts.push({name: ownerName, role: 'owner', address: ...})`), so the backend's name-shape
+  FALLBACK was the sole signal for the 115-of-142 majority — and it was a narrow inline regex
+  (`LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|ASSOCIATES|ADVISORS`), missing Trust, Holdings, Properties,
+  Capital, Realty, Company/Co, REIT and every other real org marker present in this population.
+- **CoStar's own scanners mostly set `type` explicitly and correctly** — `Recorded Owner`/`Recorded
+  Seller`/`True Owner`/etc. push `type:'entity'`/`'organization'`. The 32-of-142 `costar/contact`
+  residue traces to the trailing-label "For-Sale/For-Lease Contacts panel" parser
+  (`extension/content/_forsale-contacts-parse.js`), whose own `looksLikePerson()` uses a MUCH BROADER
+  stoplist (`trust|holdings|properties|group|capital|ventures|management|realty|advisors|newmark|
+  cbre|jll|colliers`) than the backend fallback — so even where CoStar DOES set `type`, its scanner's
+  own classification could disagree with what the backend would have said on the same name.
+- **Fix:** `contactEntityType()` now routes its no-explicit-type fallback through the already-graded,
+  already-shared **`hasFirmSuffix()`** guard (`entity-link.js`) — the same org-marker list used for
+  the identical person-vs-org judgement everywhere else in the repo — instead of maintaining a second,
+  narrower, drifting copy. This is the P189/A2/N15c "hazard travels with the technique, not the name"
+  class applied to this specific producer: the hazard (a too-narrow org-marker list) had already been
+  documented and fixed once (`hasFirmSuffix` itself, and the P158a `&`-is-a-couple lesson baked into
+  it), and nobody had checked whether the sidebar contact-entry mint used the same list.
+- **RCA's client-side extension code was deliberately NOT touched.** Adding a second regex copy in
+  `extension/content/rca.js` to pre-classify the owner name would recreate exactly the drift this fix
+  removes on the backend — the backend fallback (now `hasFirmSuffix`) already covers the no-type case
+  for every capture source, RCA included.
+- **Scope: forward-mint only.** This does not bulk-retype the ~1,950-entity existing population C13c
+  sized — that population is (and stays) `entity_type_review` lane material, per the standing rule that
+  a repair must not silently sweep a lane's own review population (P176's *"clear the producer's seed
+  predicate, don't just close the items"* one direction; here, don't manufacture a second retype path
+  outside the lane in the other direction). New RCA/CoStar contact-slot mints going forward should stop
+  adding to the backlog.
+- Guard: `test/c13g-contact-entity-type.test.mjs` (10 tests) — pins the widened coverage on named rows
+  (Trust/Holdings/Properties/Capital/Realty/Company suffixes → organization; real two-token individual
+  names stay person; an explicit vendor `type` still wins), and asserts the function body calls
+  `hasFirmSuffix(` and can never again contain the narrow inline alternation.
