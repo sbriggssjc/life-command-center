@@ -16,6 +16,58 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — PDR1 EXECUTED: 19 of 22 ambiguous entities merged live (incl. DaVita/Donna-TX); found a real planner gap on 3 more; confirmed DaVita's actual downstream effect
+
+Scott approved running all 22 auto-mergeable entities. Before executing, re-scored the 22 winners
+individually and found something the population-level split didn't surface: **3 of the 22 (Kohl's /
+Hobby Lobby and Shops / 1522-1526 Meeting Blvd, all Rock Hill SC) have candidate lists that reference
+EACH OTHER as candidates**, not only real property records — a case the scoring planner's address/
+signal logic doesn't detect (a candidate that is itself another unresolved placeholder can still win on
+address quality). Merging these 3 could conflate separate deals into one asset. Held them back, ran the
+other **19**, and reported this to Scott as a real gap rather than silently narrowing the batch.
+
+**Executed via direct `rpc/reconcile_entity` calls** (this session has live Supabase access; the code
+isn't deployed to Railway yet, so calling the RPC directly — the same function the app's own endpoint
+would call — was the reliable path rather than waiting on a deploy). All 19 succeeded (`ok:true`),
+logged to the new `lcc_ambiguous_entity_automerge_run_log` (run id 1): CherCo NewCo–Victoria TX, DaVita–
+Daytona Beach FL, **DaVita–Donna TX**, DaVita Dialysis–Banning CA/Dearborn MI/Kenansville NC/Succasunna
+NJ, DaVita MOB–Tracy CA, Davita-Anchored Medical Office–Danville IL, Dialysis Clinic Inc–Opelousas LA,
+FBI–Champaign IL, Fresenius–Cleburne TX, GSA-SSA–Montrose CO, GSA-USDA–Sherwood AR, MPLX-Tesoro–
+Dickinson ND, Nexus Medical Consulting–Schertz TX, Pyramid Healthcare–Springfield MA, SSA–Warner Robins
+GA, VA/CBOC–Spirit Lake IA.
+
+**DaVita/Donna-TX's actual downstream effect, verified live (not assumed) via `get_property_context`
+against the canonical entity post-merge:**
+- **PDR4 (documents) — ✅ FIXED.** 3 documents now show (was 0): a CREXi OM plus two OM emails.
+- **PDR7 (activity log) — 🟡 IMPROVED, not fully fixed.** 6 events now (was 1) — OM intake events, the
+  original inbound email, listing-document-received events. Still no pre-2026 history.
+- **PDR2 (ownership) — ❌ NOT fixed, confirmed a separate real gap.** `true_owner_name` still reads
+  "DaVita Kidney Care" (the operator/tenant), `recorded_owner_name` still null. The entity merge does
+  not touch ownership resolution — this is its own pipeline defect, upstream of entity identity.
+- **PDR3 (deal history / 2017-18 sale) — ❌ NOT fixed, confirmed a separate real gap.** `transactions`
+  is still empty post-merge — the prior sale was never ingested under ANY of the 4 candidate entities,
+  not merely mis-attached. A real ingestion gap, not an identity problem.
+- **PDR6 (CMS auto-link) — ❌ NOT fixed, confirmed a separate real gap.** `linked_medicare_facility_id`
+  still null despite the property now having one clean, normalized address — the CMS auto-linker itself
+  needs its own look.
+
+This is exactly the outcome the prompt asked to verify rather than assume, and it came back mixed —
+one real fix (PDR4), one partial (PDR7), three confirmed-separate gaps (PDR2/PDR3/PDR6) that PDR1 was
+never going to touch. Filed the Rock Hill collision as **PDR12** (a real, small planner gap: detect a
+candidate that is itself another ambiguous-flagged entity, force `needs_human` regardless of score).
+
+**Docs updated:** `PLANNED-BACKLOG.md` PDR1 (executed), PDR2/PDR3/PDR6 (confirmed open, own prompts
+needed), PDR4 (fixed), PDR7 (improved), new PDR12 row. Run log id 1 carries the full detail JSON.
+
+**Next step.** Three follow-ups now queued, none urgent: (1) size and prompt PDR2 (ownership
+resolution treating operator as true owner), PDR3 (missing 2017-18 sale — may need Team Briggs shared
+folder or a Salesforce deal-history gap investigation), and PDR6 (CMS auto-linker) — likely one prompt
+covering all three since they're all "property tabs that don't self-resolve" in the same family; (2) a
+small planner fix for PDR12 before the Rock Hill 3 (or any future case like it) go through the
+Decision Center lane; (3) the 167 needs_human entities sit in the new `ambiguous_entity_resolution`
+lane whenever Scott wants to start working them — no urgency, they were already sitting unresolved
+before today.
+
 ## 2026-09-10 — PDR1 live-verified: the real auto-merge/needs_human split measured (22/167/0 of 189), migration applied, DaVita/Donna-TX confirmed resolvable
 
 `PDR1-entity-reconcile-automerge` came back well-built but explicitly flagged its own biggest unknown
