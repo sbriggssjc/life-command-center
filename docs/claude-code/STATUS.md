@@ -16,6 +16,54 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — RAILWAY-PA-SECRET-log shipped (re-run — a prior CC session finished this correctly and never pushed)
+
+`api/sync.js::webhookAuth()` is now the single gate for all **seven** PA webhook handlers
+(`rcm-ingest`, `rcm-backfill`, `loopnet-ingest`, `processing-complete`, `todo-completion-poll`,
+`listing-webhook`, `cross-domain-match`) — confirmed by grep before writing any code, not seven by
+memory of the earlier attempt. Each used to inline its own
+`if (!authenticateWebhook(req)) { authenticate() + requireRole('operator') }`; `lead-ingest` and
+`live-ingest` were never in this population (a pure edge-function proxy and a plain-`authenticate()`
+route respectively — see the prompt's Read-first note).
+
+**Why this is a re-run, not a continuation:** a prior Claude Code session completed this exact unit
+correctly earlier today, but its branch (`claude/railway-pa-secret-log`) never reached `origin` and
+no PR was opened — that work exists only in a now-closed session's local clone and is unrecoverable
+from here. Treat everything below as fresh work against `main`, not a resumption.
+
+**What shipped:** `PA_WEBHOOK_AUTH_MODE` defaults to `log`. With `PA_WEBHOOK_SECRET` unset (today's
+state on Railway), `authenticateWebhook()` still returns `true` for everyone and `webhookAuth()`
+never runs the fallback at all — byte-identical to before this unit. Once the secret is SET: a
+caller sending the correct `X-PA-Webhook-Secret` passes as before; a caller the fallback
+(`authenticate()` + `requireRole('operator')`, per-handler — three of the seven never required the
+operator role and keep not requiring it) would also deny is **logged, never refused**:
+`[pa-webhook] DENY-WOULD <route> <fallback-path> <ua_class> <ip_class>`, `fallback-path` ∈
+`jwt|api-key|none` from the headers, `ua_class`/`ip_class` mirroring
+`supabase/functions/_shared/caller-class.ts`'s classifier in plain JS (`PA_WEBHOOK_KNOWN_IPS`,
+same `class:prefix,...` format). `PA_WEBHOOK_AUTH_MODE=enforce` restores byte-identical-to-before
+behavior (the fallback's own 401/403 stands). The log line never carries the secret or the caller's
+API key — asserted directly, not just by omission.
+
+**Guard:** `test/pa-webhook-auth-mode.test.mjs` (9 tests) — structural (exactly 7
+`await webhookAuth(` dispatch sites, `authenticateWebhook(req)` appears nowhere but its own
+definition and the one call inside `webhookAuth()`, with a positive control proving a bypass would
+be caught) + behavioural (secret unset → nothing logged, nothing refused; log mode never 401s;
+enforce mode's 401 matches `authenticate()`'s real body; the correct secret always passes in both
+modes; the `requireOperatorRole:false` handlers never 403 a bare caller; the log line never
+contains the secret/API-key value; `PA_WEBHOOK_KNOWN_IPS` resolves the IP class). Full suite run
+before handing off: **5,603 pass / 0 fail / 6 skipped** (2,489 suites) — not just the new file.
+
+**Branch pushed and PR-worthy this time** (see the "Verify on" checklist in the prompt — confirmed
+`origin` carries the branch before ending this entry, not assumed).
+
+**Docs updated in the same change:** `docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md` §4a-Railway
+(new — the Railway-side env var table, distinct from the Supabase `COPILOT_*`/`SFENRICH_*` pair
+already documented there) and `docs/os/PLANNED-BACKLOG.md`'s `RAILWAY-PA-SECRET` row (🔴 → 🟡, this
+unit's completion recorded, the 👤 operator order restated with the secret-set/read/fix/flip
+sequence). **Out of scope, named as such:** actually setting `PA_WEBHOOK_SECRET` on Railway, the To
+Do Completion Poll flow's designer edit, exporting the three PA5 flows, and the edge-side gates
+(already shipped 2026-09-09) — all 👤 Scott's.
+
 ## 2026-09-10 — `fix/ext-host-refuse-retired-origin` failed CI on an unrelated pin, fixed; and the J13 12:30 UTC observation read is clean but IP-level confirmation is still Not on file
 
 **CI failure, diagnosed.** PR `fix/ext-host-refuse-retired-origin` failed `npm test`, but not from the EXT-HOST
