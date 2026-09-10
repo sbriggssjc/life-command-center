@@ -16,6 +16,34 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — ACI-phase0 reconciled (PR #2243): verified independently, live and deployed, docs were already accurate
+
+Confirmed, not taken on faith: `origin/main` at `13c258cd`; Railway `/version` reads `13c258cde59e` —
+exact match, live. Re-ran both new guards on `main` independently: `test/ac1b-university-scope.test.mjs`
++ `test/ac10-promote-linked-owner-contacts.test.mjs` — **16/16**.
+
+**Live DB re-checks, independent of the response transcript:** `v_lcc_ac10_promote_candidates` **0**
+remaining (was 251); `v_lcc_top_seller_prospects` university-named rows **1** (matches the claimed
+credit-union residual); the Pulliam merge is real — `entities.merged_into_entity_id` on the loser
+(`537ecdd2-…`) points at the winner (`d6b0d27e-…`), `lcc_entity_merge_log` id 170 shows the same
+loser/winner pair, `unmerged_at` null; cron `lcc-ac10-promote-linked-contacts` registered, schedule
+`12 6 * * *`, `active=true`; both new SECURITY DEFINER functions in the AC10 migration carry their
+REVOKE/`has_function_privilege` stanzas (9 hits, SEC1 doctrine intact).
+
+**No documentation corrections needed this round** — the builder's own reconciliation commit
+(`81a44646`) already updated `PLANNED-BACKLOG.md`'s three AC1b/AC7/AC10 rows, `STATUS.md`, and
+`account-based-contact-intelligence.md` §7b's stale-count flag with the real, re-measured numbers
+(251/$329.4M, not the August 11/$240.5M), correctly in the same PR rather than left for reconciliation
+to catch. Prompt and response moved to `prompts/done/` and `responses/done/` with a transcribed
+`.response.md` twin.
+
+**Next step.** Phase 0 of the owner-contact automation plan (`account-based-contact-intelligence.md`
+§7c) is fully closed. Phase 1 (finish Tier 0 deterministic linkage — `AC1d` remaining pieces, `AC1e`
+SPE-subsidiary inheritance) and Phase 2 (bench ranking + Ollama role inference — the REIT/fund
+"who's in charge" build Scott asked for by name) can now both build against an accurate, unstale
+picture. Phase 2 is the larger, more novel piece and the one Scott specifically named; drafting that
+prompt next.
+
 ## 2026-09-10 — RATINGS-INSERT-COLLISION fixed in `Dialysis` (not this repo) — the prompt's own hypothesis corrected, not just fixed; pushed to a branch, **not yet merged**
 
 **The prompt.** `docs/claude-code/prompts/done/RATINGS-INSERT-COLLISION-cms-ratings-upsert.md`, drafted
