@@ -355,3 +355,96 @@ and is growing (7a), correspondence and SF campaign membership are both already 
 **Sequencing note:** Phase 0 and Phase 2 are the two genuinely separate asks in Scott's message today
 (individual-owner automation vs. REIT/fund person-in-charge) — Phase 1 serves the first, Phase 2 the
 second. They can build in parallel once Phase 0 clears; Phase 2 does not depend on Phase 1 finishing.
+
+## 8. The recorded-owner → true-owner control-chain logic (2026-09-10, Scott's framing)
+
+Scott's direction, close to verbatim, because the design follows from it: most of the recorded-owner
+→ true-owner resolution is going to end up being logic and matching over addresses, names, emails,
+and phone numbers. **If a recorded-owner LLC has a member whose address is a residence, the assessor
+sends the tax bill to that same address, and that address is owned by another entity or directly by
+that member, that member is the true owner in control for our purposes.** One member (or one family)
+→ probably an individual owner, and the company and the contact are the same. Multiple members →
+probably a partnership/company, and the contact is whichever member's address demonstrates control
+(receives the tax bill, etc.). Ollama should review and improve this as the data works through the
+pipeline, and the human-in-the-loop footprint should shrink over time, not stay fixed.
+
+**This section formalizes that as a decision chain and states plainly what can run on data already
+held for free versus what needs a paid source not yet turned on** (Scott's call, 2026-09-10: build
+the logic now against free/existing data; accept it will under-cover the LLC-member scenario until
+real member/mailing-address data is added later — do not silently degrade the design to fit, name
+the gap instead).
+
+### 8a. What the chain needs, and what actually exists today
+
+| link in the chain | what it needs | what we hold, measured 2026-09-10 |
+|---|---|---|
+| Is the recorded owner an LLC/company or already a person? | `entities.entity_type` | Live — this is C13g's whole arc, now closed |
+| Who are the LLC's members/managers? | SOS filing officer/member list | **Effectively nothing.** `llc-research.js` (OpenCorporates) is coded and gated on `OPENCORPORATES_API_KEY`, unset. Direct SOS scraping (`sos-proxy`, a residential-IP proxy Scott already runs) is live infrastructure but bot-wall-blocked on FL/CA/TX/AZ (Cloudflare/Incapsula), honest-blocked not silently zero. `entity_relationships` has **no member/manager edge type today** (`owns, associated_with, brokers, deal_party, developed, finances, guaranteed_by, leases, purchases, sells` — nothing modeling "person is a member of this LLC"). |
+| Does a member's address match a residence? | a home address per member, classified residential-vs-registered-agent-service | `entities.address`/`normalized_address` exist as columns but are populated on **40 of 13,212 person entities (0.3%)** and **101 of 45,637 organizations (0.2%)** — the column exists, the data essentially doesn't. `true_owners.notice_address_1` is the one REAL, non-fabricated address field at scale (deed/SOS-derived, populated for the dia contactless population `address-reverse.js` was built against) and already has a built, tested classifier (`address-reverse.js::isRegisteredAgentServiceAddress`) that correctly excludes CSC/CT/Cogency/law-firm/PO-box addresses so a service address is never mistaken for a residence. |
+| Does the assessor's tax bill go to that same address? | real `tax_records.mailing_address` / `mailing_owner` | **Fabricated for all practical purposes.** `public-records-source-lane.md` §2: the model leg (25,334 of 25,621 dia tax rows) is GPT-4o inventing plausible county records, not a county fetch — confirmed, not suspected. The one real leg (CoStar sidebar capture, 287 rows) has never once carried a `tax_amount` — a **measured ceiling of zero**, not a gap. Regrid (`Dialysis/src/regrid_client.py`) is a complete, never-run vendor client gated on `REGRID_API_KEY`, unset. |
+| Does that address belong to another entity we already hold, or directly to the member? | cross-reference against `entities` | Buildable today wherever an address string exists on either side — but per the row above, the population to run it against is tiny until a real address source is wired. |
+
+**Honest summary: the chain's LOGIC is sound and partly already built (the residential-vs-agent-service
+classifier exists and is tested); the chain's DATA is not there yet for the specific mailing-address
+corroboration Scott described.** Two of five links (member list, tax-bill mailing address) are
+blocked on paid APIs or bot-walled scraping, per Scott's decision not pursued this round.
+
+### 8b. What can be built now, on free/existing data, and what it will actually resolve
+
+Per Scott's decision (build the logic now, free data only, accept under-coverage), Phase 1/2's build
+should add a **Tier 0.5 — the control-chain classifier**, sitting between Tier 0 (email-domain match)
+and Tier 1-2 (institutional bench + role inference), covering the individual/small-owner population
+Tier 0 alone does not resolve:
+
+1. **A new `entity_relationships` edge type is needed first — `llc_member`/`llc_manager`** (person →
+   owner LLC), because none exists. Without SOS/OpenCorporates, the only sources able to populate it
+   today are: (a) a human verdict recorded through the existing lane pattern (never a silent auto-mint
+   — an unverified member claim is worse than no claim); (b) whatever member names already surface
+   incidentally in correspondence, Salesforce, or deed grantor/grantee text and can be matched with
+   the same discipline `entity-link.js` already applies elsewhere. Size this population before
+   building — do not assume it is large.
+2. **The single-member/family inference runs on `one_off_owner` (C13b/C13c) as its starting signal**,
+   not a member count we cannot get for free — `one_off_owner` already exists as a classification and
+   is the closest thing this repo has to "probably not an institution." Corroborate, don't invent a
+   second classifier for the same question.
+3. **`address-reverse.js`'s residential-vs-agent-service classifier runs against `true_owners.notice_address_1`**
+   (the one real address field at scale) — where it resolves to a genuine residential address (not an
+   agent-service address), that is a real, free signal worth a real confidence weight; where the owner
+   has no `notice_address_1` or it resolves to an agent-service address, the chain stops there and says
+   so rather than guessing.
+4. **Cross-reference against `entities.address`/`normalized_address` wherever either side has a value**
+   — small population today (§8a), but free, and it grows for free every time another part of the
+   system (Tier 0, Outlook sync, a manual attach) fills in an address, so it should run as a standing
+   check, not a one-time sweep.
+5. **Everything this DOES resolve should be gated at the same confidence discipline as Tier 2 (P181)** —
+   a residential-address match with no corroborating link is weaker evidence than a residential-address
+   match PLUS an existing Tier-0 email-domain link to the same owner, and the two should not render
+   identically on a card.
+
+### 8c. Where Ollama fits, and the standing-improvement loop Scott asked for
+
+Scott: *"we can use Ollama to help review as we work the data through the pipeline"* and the process
+should improve over time with a shrinking human footprint — this is the same doctrine `account-based-
+contact-intelligence.md` §4 Tier 2/3 already committed to for the institutional side, and it applies
+here identically, not as a separate design:
+
+- Ollama's job is not to invent the member list or the mailing address — it has none of that data
+  either. Its job is **triage and rationale over what the deterministic chain above already produced**:
+  when 8b's steps disagree (e.g., the address chain suggests one person, Tier 0's email-domain match
+  suggests another), Ollama drafts the one-line "why these are/aren't the same control chain" the way
+  `L10` (owner-resolution rationale) already scopes for the ownership-history side, carrying a
+  confidence, never resolving silently.
+- Every verdict — human or Ollama-assisted — writes to a ledger the same way `lcc_tier0_confirm_log`
+  already does, so a reject demotes that signal for similar owners (the same living-loop mechanism
+  §4 Tier 3 specifies) and the system's precision compounds instead of resetting each time.
+- **The human-in-the-loop budget should be measured, not assumed** — the same `UX-process` doctrine
+  (`app-ux-review-2026-09-02.md` §3) already adopted elsewhere: track how many cards a human actually
+  had to touch per period and whether that count is falling as the ledger accumulates. If it isn't,
+  that's a build defect worth surfacing, not a shrug.
+
+### 8d. What this section does NOT change
+
+Tiers 0-4 of the institutional design (§§1-7) are unchanged — REITs and funds do not have "members"
+in this sense and stay on the role-taxonomy path. This section is additive, for the individual/
+small-owner majority of the linkage gap that Tier 0 alone (email-domain match) does not reach because
+no domain signal exists for a personal LLC with no public web presence.
