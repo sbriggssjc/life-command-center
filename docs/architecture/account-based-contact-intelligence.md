@@ -1,8 +1,10 @@
 # Account-Based Contact Intelligence — design brief
 
-> **Status:** design, not built. Written 2026-08-26 from Scott's doctrine statement plus the
-> live evidence that prompted it. Supersedes the narrower "pivot promoter" framing in
-> `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md` item 5d.
+> **Status:** Tier 0 partially built and live (`TIER0_AUTO_ATTACH` on since 2026-08-28); Tiers 1-4
+> still design, not built. Written 2026-08-26 from Scott's doctrine statement plus the live evidence
+> that prompted it. Supersedes the narrower "pivot promoter" framing in
+> `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md` item 5d. **Re-checked 2026-09-10, phased build plan added
+> — read §7 before building anything here; it corrects a stale claim in §5a.**
 
 ---
 
@@ -200,7 +202,7 @@ a buyer's rep, and where competitors are winning their business).
 Scott asked whether LinkedIn or similar public/social sources can be ingested. Honest answer,
 ranked by legitimacy and effort:
 
-### ⚠️ FIRST: Scott already syncs LinkedIn → Outlook contacts. **That data is NOT in the LCC.**
+### ⚠️ FIRST: Scott already syncs LinkedIn → Outlook contacts. **This data IS now flowing into the LCC — see §7a, corrected 2026-09-10. The rest of this subsection is the 08-26 measurement that prompted building it; read as history, not current state.**
 
 Scott (2026-08-26): *"I already sync LinkedIn with my contacts in Outlook so we should have
 that data already reflected in our Outlook connections."* The sync into Outlook is real; the
@@ -265,3 +267,77 @@ overwrites** a fact we hold from correspondence.
 4. **7 competitor-broker edges on Easterly wear role `prospecting_contact`** — real, wrong per
    doctrine, and not the cause of the suppression. Re-role, don't delete: they are the
    Tier-4 intelligence.
+
+## 7. Status check + phased build plan (2026-09-10, Cowork)
+
+Scott's direction 2026-09-10: automate owner→contact linkage end to end with minimal human-in-the-
+loop, split by owner type — individual/small-firm owners get deterministic linkage (Tier 0); large
+institutional buyers (REITs, funds) get the role-taxonomy treatment already designed in §3a (website +
+Salesforce + prior correspondence to find the person in charge of the *right function*, not just any
+person at the firm).
+
+**This section does not redesign anything below — Tiers 0–4 above are still the adopted shape.** It
+re-measures live state against the design (some of it has moved since 08-26/08-31, one claim below
+was flatly wrong and needs correcting), and lays out the build order.
+
+### 7a. Correction — §5a's "the receiver has never been fed" is now FALSE
+
+Re-measured live 2026-09-10: `unified_contacts.outlook_contact_id` is populated on **2,835 of 32,858**
+rows (was 0), `last_synced_outlook` ranges 2026-08-26 → **today**, and **2,829 rows synced in the last
+7 days** — a Power Automate flow is running and current, not the dormant gap §5a described. Whoever
+built this did not update this doc to say so; do not assume it is still 0, and do not re-propose
+building the flow §5a called for — it exists. `title` coverage moved with it: **1,723 of 32,858 (5.2%)**,
+up from 1.9%, but still the binding constraint on Tier 2 (§3a's role taxonomy needs a title to tell
+acquisitions from disposition from DD).
+
+### 7b. Live re-check of the open AC items
+
+- **`TIER0_AUTO_ATTACH`** — `state='on'` since 2026-08-28, owner Scott. Confirms live, not re-verified
+  further here (re-verify write counts before building on top of it).
+- **`owner_contact_pivot.active_contact_entity_id` populated** — **1,440** rows today (was near-zero at
+  the 08-27 "27 human attaches" measurement) — Tier 0 has been running and accumulating for two weeks.
+  **Re-measure AC10's 11-owner/$240.5M suppressed-and-invisible population before building its fix** —
+  the number is two weeks stale and pivot volume has grown 50×+ since it was taken.
+- **AC7 (Andrew Pulliam duplicate)** — still live: two `entities` rows named "Andrew Pulliam" exist
+  today. Not auto-resolved by anything since 08-26.
+
+### 7c. Phased build order
+
+**Phase 0 — small mechanical fixes that unblock or clean the rest (do first, cheap):**
+- `AC1b` — two-line scope-drift fix (universities leaking into two views via the wrong predicate).
+- `AC10` — promote an owner's already-linked person into `owner_contact_pivot` when one exists; re-measure
+  the suppressed population first (§7b).
+- `AC7` — merge the Andrew Pulliam duplicate through the existing reversible `lcc_merge_entity` path
+  (same machinery as the C13g/OWN-T0e arc just closed — no new merge path).
+
+**Phase 1 — finish Tier 0 (deterministic linkage, the individual/small-owner majority of the 87% gap):**
+- `AC1d` remaining pieces (b: un-park signals from correspondence/SF/title/sponsor map; c: learning
+  from `lcc_tier0_confirm_log` rejects) and `AC1e` (SPE-subsidiary inheritance — 19 of 107 cards are
+  one question asked three times).
+- This phase is what actually moves the 13%→higher owner-linkage number for the bulk of owners, since
+  most of the 5,633 unlinked owners are not REIT-scale accounts.
+
+**Phase 2 — the REIT/fund "who's in charge" treatment (Tiers 1–2, `AC2`/`AC3`):**
+This is what Scott asked for by name today — large institutional buyers need the *right person for
+the task*, not just any linked person. Now buildable where it wasn't in August: title coverage exists
+and is growing (7a), correspondence and SF campaign membership are both already live inputs. Build:
+- `AC2` — bench ranking (score each candidate person on correspondence volume, recency, two-way vs
+  one-way, seniority signal, inferred function; keep a bench, never collapse to one winner).
+- `AC3` — Ollama function/remit inference over subjects (+bodies where available), the four-bucket
+  taxonomy from §3a (acquisitions / disposition / transaction-DD / broker), confidence carried per
+  P181, gated surface.
+- Value-gate by owner rent per the existing P161/P180 doctrine (never per-task, per-owner).
+
+**Phase 3 — the standing loop + broker intelligence (`AC4`/`AC5`), plus the input-quality spin-offs
+(`AC6`/`AC8`/`AC9`) that would otherwise corrupt Phase 2's correspondence signal:**
+- `AC4` re-runs on new correspondence/transactions/replies; a reply redirect ("talk to X") is the
+  strongest signal and should update the bench directly.
+- `AC5` keeps broker relationships as Tier-4 market intelligence, never a pursuit target.
+- `AC6` (professional emails misfiled as personal — corrupts the Tier 2 input corpus), `AC8`
+  (`v_lcc_prospecting_edge_review` narrower than its name, returns false negatives on broker tests),
+  `AC9` (7 competitor-broker edges on Easterly still wear the wrong role) should land before or
+  alongside Phase 2/3, since they are measured defects in the exact signal Phase 2 depends on.
+
+**Sequencing note:** Phase 0 and Phase 2 are the two genuinely separate asks in Scott's message today
+(individual-owner automation vs. REIT/fund person-in-charge) — Phase 1 serves the first, Phase 2 the
+second. They can build in parallel once Phase 0 clears; Phase 2 does not depend on Phase 1 finishing.
