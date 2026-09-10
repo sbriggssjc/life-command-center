@@ -16,6 +16,45 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — CFE-RUNAWAY root-caused and fixed in `Dialysis` (PR #7398, not this repo) — the exact call site named, two adjacent defects decided, and a real-but-unconfirmed drop in live timeouts
+
+**The prompt.** `docs/claude-code/prompts/done/CFE-RUNAWAY-cms-financial-estimates-repair.md`, filed
+2026-09-10 for the `Dialysis` repo (this session cannot reach it directly — no GitHub credentials in
+this cloud environment, confirmed again today via a failed `WebFetch` on the PR URL, 404). Handed to
+Claude Code on Scott's desktop, where `Dialysis` is actually cloned.
+
+**The response**, recovered from Scott's saved transcript
+(`CFE Runaway clinic financial estimates surface response.docx`, untracked) the same way
+`RAILWAY-PA-SECRET-log` was recovered — full detail in
+`docs/claude-code/responses/done/CFE-RUNAWAY-cms-financial-estimates-repair.response.md`. In short:
+**`FinancialEstimateTracker._pk_column()` (`financial_estimate_tracker.py:463-472`) called
+`get_live_table_columns(TABLE_NAME, force_refresh=True)` once per clinic, and `force_refresh=True`
+was the exact cause of the two unfiltered per-record probes this session measured live on 09-10.**
+Fix: cache the PK column once per run, never `force_refresh`. Two adjacent defects (a silently-broken
+`properties.estimated_annual_revenue` propagation, and a warning that logged unconditionally even on
+success) were fixed alongside it, not left open. The five `facility_patient_counts` field drops were
+decided per-field (4 intentional, 1 a real gap with a migration filed for review). Retention
+deliberately not executed — proposal only, per the prompt's own scope limit.
+**`B6d-cms-restart` checked and reported as probably NOT the same crash mechanism** — worth carrying
+into that row's own next read, not assumed answered.
+
+**What this session could independently check, and what it could not.** `Dialysis`'s own diff, tests,
+and PR content are **entirely unverified by this session** — no repo access, so everything above is
+taken from the transcript, not re-read. What IS independently verifiable from here: Supabase's own
+logs. Read just now (2026-09-10 ~15:14 UTC): **postgres statement timeouts on Dialysis_DB dropped
+from the ~400/h rate measured this morning to 2 in a 20-minute window**, and **zero `python-httpx`
+requests of any kind to `clinic_financial_estimates` in the preceding 24 minutes** — both consistent
+with the fix being live, but **neither is proof of it**: the service could simply be paused (Scott was
+walked through pausing it earlier today) or idle between scheduled passes, and this session cannot
+tell those apart from Supabase logs alone. Backlog row moved 🔴 → 🟡, explicitly flagged as
+**not yet confirmed merged/deployed** — PR `sbriggssjc/Dialysis#7398`, branch
+`claude/cfe-runaway-financial-estimates-b913114d`. 👤 **Scott: confirm whether #7398 merged, and
+whether `cms-ingestion` was paused separately** — the STATUS row's ✅/🟡 depends on which one
+actually explains the drop.
+
+**Next, once confirmed live:** re-measure COPILOT-SYNC-500 (its row already names CFE-RUNAWAY as the
+blocking cause) and CAL-RECONCILE-STUCK; only then re-open UX34a's `v_cms_data` timing, which was
+measured under this load.
 ## 2026-09-10 — C13g-costar-stoplist reconciled (PR #2239): verified independently, live and deployed; the C13g capture-path arc is now fully closed, RCA and CoStar both
 
 Confirmed, not taken on faith: `origin/main` at `e4f71458` (the merge commit itself); Railway `/version`
