@@ -16,48 +16,6 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
-## 2026-09-10 — ACI-phase1-2 designed and sent: Tier 0 completion + REIT/fund role taxonomy + a new individual-owner control-chain classifier
-
-Scott's direction: build the individual-owner path and the institutional REIT/fund path side by side
-so nothing gets missed between them, plus formalize a third piece he described in detail — an LLC
-recorded-owner → member → residence-address → tax-bill-mailing-address chain that identifies who is
-actually in control (single member/family → treat as an individual owner; multiple members → the one
-whose address demonstrates control is the contact). He also asked for Ollama to review and improve
-this as data works through the pipeline, with a shrinking human-in-the-loop footprint over time.
-
-**Before designing anything, checked what the exact heuristic he described would actually run on —
-and it's mostly not there yet, on three independent fronts:** `entity_relationships` has no LLC
-member/manager edge type at all today; `entities.address`/`normalized_address` are populated on 0.3%
-of persons and 0.2% of organizations; and the assessor tax-bill data that would corroborate a mailing
-address is either GPT-4o fabricating plausible county records (25,334 of 25,621 dia tax rows) or, on
-the one real capture source, has never once carried a tax amount — a measured ceiling of zero, not a
-gap. Real member/mailing-address data exists behind OpenCorporates and Regrid, both coded, gated on
-API keys Scott hasn't provided.
-
-**Asked Scott directly rather than guessing which way to build** — get the paid keys, build free-data-
-only and accept under-coverage, or build the framework with stubs. He chose: build the logic now on
-free/existing data, accept the LLC-member scenario will be under-covered until real data is added
-later.
-
-**Added `account-based-contact-intelligence.md` §8**, the control-chain design scoped to that choice:
-uses `true_owners.notice_address_1` (the one real, non-fabricated address field at scale) through the
-already-built `address-reverse.js` residential-vs-agent-service classifier, `one_off_owner`
-(C13b/C13c) as the single-owner starting signal instead of a member count we can't get for free, and
-states plainly this will only resolve a small population until paid data lands — the prompt requires
-CC to measure and report that population rather than assume it's worth a lane.
-
-**Drafted and sent `docs/claude-code/prompts/ACI-phase1-2.md`** — four units in one PR, each
-independently guarded and revertible: Unit A (AC1d remaining pieces — un-park signals, reject
-learning), Unit B (AC1e — SPE subsidiary inheritance), Unit C (AC2/AC3 — bench ranking + Ollama role
-inference, gated on landing the AC6/AC8/AC9 input-quality spin-offs first or alongside), Unit D (the
-new control-chain classifier, sized before built). Backlog rows AC1d/AC1e/AC2/AC3/AC6/AC8/AC9
-annotated; new row AC11 filed for the control-chain classifier.
-
-**Next step.** Build: nothing to run until CC returns on `ACI-phase1-2`. This is the largest and most
-novel prompt of the whole owner-contact automation push — expect it to come back partial (Unit D in
-particular may report "population too small for a lane" rather than a working build, which is a valid
-and useful outcome per the prompt's own instruction, not a failure).
-
 ## 2026-09-10 — CFE-RUNAWAY and RATINGS-INSERT-COLLISION confirmed merged in `Dialysis`; a fresh test run shows both holding, but a new bug found: `properties.estimated_annual_revenue` propagation still fails 100% of the time — PROPREV1 prompt drafted and sent
 
 Scott confirmed both `Dialysis` branches merged. The test run in flight was cut short mid-run by that
