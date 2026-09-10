@@ -16,6 +16,38 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — C13g-OWN-T0e close-out reconciled (PRs #2229/#2231): verified independently, backlog deduped, the C13g/OWN-T0e arc's build side is now fully closed
+
+Both units confirmed live and deployed, not just claimed. `origin/main` at `83a6c1c9` (PR #2231, which
+folded in PR #2229's build commit `c4ae6901`); Railway `/version` reads `83a6c1c9c546` — deployed, no
+redeploy owed. `test/own-t0e-sponsor-family-lane.test.mjs` re-run on `main`: **23/23**. Live DB re-read
+independently of the response transcript: `v_lcc_entity_retype_candidates` **3** rows (was 5 at the
+start of this arc's operator work — placeholder excluded, Kvalitena AB retyped by Scott in between,
+retype log **13 → 14**), `junk_entity_review` review_id **386** exists, the new
+`v_lcc_entity_retype_placeholder_excluded` view exists. `unclassified_rival` **1,501 → 1,500**;
+`sponsor_family_confirmed` unchanged at 104; merge log unchanged at 151 — the 12 duplicate-entity merge
+groups are still open, unrelated to this unit.
+
+**Housekeeping found and fixed while reconciling:** the build commit added the ✅-closed row for both
+`C13g-min-lane-placeholder` and `OWN-T0e-c` without removing the stale open (🟢) row each was replacing
+— two backlog entries per item, one current and one dated, sitting next to each other. Removed both
+stale duplicates; the ✅ rows (which already carry the older rows' history inline) are now the only
+entry for each id. Corrected a third stale line while in the same file: the top-level `C13g` row still
+read "see `C13g-min-lane` for the unbuilt lane" — the lane, its mutation pass, and both close-out items
+are all shipped now; only the capture-path producer fix remains open under that id. Updated
+`CURRENT-STATE.md`'s owner-role-classification row and `ownership-truth-pipeline-state.md`'s Stage 3
+section to match (both had called the two close-out items unbuilt, written before they shipped).
+
+⚠️ **OWN-T0e-c's affordance is shipped but still unexercised in production** — worth remembering before
+calling this fully proven. The build itself flagged this plainly (no live instance existed to test
+against); nothing found in reconciliation changes that.
+
+**Next step, named.** Operator: unchanged — the 12 duplicate-entity merge groups on "Duplicate entities
+— merge" are the only outstanding piece of this arc, and they're pure app-UI work now, no build needed.
+Build: nothing left to prompt in this arc. The capture-path fix (`C13g` proper — the transaction-vendor
+producer that keeps writing new mistyped entities) is the one real open thread left standing behind
+this arc, sized at a ~1,950-entity floor; picking it up is a genuine next-arc decision, not a small
+follow-on, and is named as such in `ownership-truth-pipeline-state.md`.
 ## 2026-09-10 — RAILWAY-PA-SECRET-log reconciled: independently re-verified, no gaps found; the re-run this time reached `origin`
 
 The re-run of `RAILWAY-PA-SECRET-log.md` (issued after the prior session's identical work was lost to an

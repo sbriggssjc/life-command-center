@@ -73,10 +73,15 @@ depends on.
   reading a 4-hourly cache, both reversible through the single writer `lcc_merge_entity`.
 - **`[C13g-min]` / `[C13g-min-lane]`** ✅ shipped — a reversible per-row `entity_type` retype
   (`lcc_retype_entity`), unblocking type-guarded merges. 13 retypes worked live this arc.
-- **`[C13g-min-lane-placeholder]` / `[OWN-T0e-c]`** — the two small close-out items drafted this
-  session (`docs/claude-code/prompts/C13g-OWN-T0e-close-out.md`), unbuilt as of this writing.
+- **`[C13g-min-lane-placeholder]` / `[OWN-T0e-c]`** ✅ both shipped 2026-09-10 — placeholder
+  entities now route to `junk_entity_review` instead of the retype lane, and a card whose own
+  sponsor is a recognized duplicate can now merge into the correct target directly (`merge_into_sponsor`,
+  same `lcc_merge_entity` writer as every other verdict here). ⚠️ The sponsor-is-duplicate affordance
+  is unit-tested but has never fired against a live card — the one historical instance (NGP Group) was
+  already resolved by hand before it shipped; the next real case is its first live test.
 
-**Where it's not — and this is the largest open gap in the whole pipeline:**
+With both of those closed, **the largest open gap in Stage 3 — and in the whole pipeline — is the one below,
+which neither item touched:**
 - **`[C13g]`** 🟠 **the CAPTURE-PATH fix is still unbuilt.** C13g-min only lets a human fix one row at
   a time; the producer that *keeps writing* `entity_type='person'` for companies — the transaction
   vendors' "contact" party slot — has never been touched. Sized at a **non-lexical floor of 414 of
