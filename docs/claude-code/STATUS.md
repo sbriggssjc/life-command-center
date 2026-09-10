@@ -55,6 +55,89 @@ actually explains the drop.
 **Next, once confirmed live:** re-measure COPILOT-SYNC-500 (its row already names CFE-RUNAWAY as the
 blocking cause) and CAL-RECONCILE-STUCK; only then re-open UX34a's `v_cms_data` timing, which was
 measured under this load.
+## 2026-09-10 — C13g-costar-stoplist reconciled (PR #2239): verified independently, live and deployed; the C13g capture-path arc is now fully closed, RCA and CoStar both
+
+Confirmed, not taken on faith: `origin/main` at `e4f71458` (the merge commit itself); Railway `/version`
+reads `e4f71458f6a1` — an exact match, live with no redeploy owed. Re-ran
+`test/c13g-contact-entity-type.test.mjs` on `main` independently: **11/11**.
+
+**The finding matters more than the fix — read from the diff, not just the summary.** The prompt's own
+framing ("CoStar's stoplist is broader and never read back") was wrong, and the response said so plainly
+rather than building around it: `contactEntityType()` already checks `contact.type` first, and CoStar's
+scanner always stamps an explicit type, so its verdict was winning outright — `hasFirmSuffix()` was never
+consulted on this path at all. The real gap ran the OTHER direction: the extension's stoplist is missing
+terms `hasFirmSuffix()` already has (Bancorp, Investments, Development, Fund, Ptnrs, Cos, Property,
+Enterprises, Mgmt), so a real firm like "Sentinel Bancorp" got an explicit but wrong `type:'person'` stamp
+that was trusted verbatim. Fix: an explicit `type:'person'` is now a FLOOR, not an absolute —
+`hasFirmSuffix()` can still override it to `'organization'`, one-directional only (an explicit org verdict
+is never downgraded, holding the P158a discipline). No second stoplist, no extension code touched — same
+shared-guard precedent as the original C13g fix.
+
+**Housekeeping:** `PLANNED-BACKLOG.md`'s row cited `owner-role-classification.md §9h` — that section still
+carries the ORIGINAL, now-corrected "never reads it back" claim; the real finding is in the new §9i.
+Fixed the citation to point at §9i with a note that it corrects §9h. Updated
+`ownership-truth-pipeline-state.md`'s Stage 3 entry and both forward-references, and
+`CURRENT-STATE.md`'s owner-role-classification row, from "capture-path fix still has one open residue" to
+"C13g + C13g-costar-stoplist both shipped — the arc is fully closed." Prompt and response moved to
+`prompts/done/` and `responses/done/` with a transcribed `.response.md` twin.
+
+**Next step.** Build: nothing open under `C13g` at all now — first time this arc has been fully closed on
+every front (lane, mutation, placeholder, sponsor-merge, RCA capture, CoStar capture). Operator: unchanged
+— the 12 duplicate-entity merge groups on "Duplicate entities — merge" remain the only outstanding piece,
+pure app-UI work, no build needed. The next real build decision is a direction call, not a small
+follow-on: Stage 4's owner-to-person linkage (only 13% of 6,480 owners have any linked person — the
+biggest measured gap in the whole ownership-to-contact pipeline) versus Stage 1's `OWN-T0a` 43.4%
+government-source disagreement versus Stage 3's `OWN-T0b/c/d/f/g` 417-merge residue. Worth deciding with
+Scott before drafting the next prompt rather than picking one unprompted.
+
+## 2026-09-10 — C13g-costar-stoplist: traced and SHIPPED. Verdict (b) was ruled out, (c) was ruled out, the real cause was a case-(a) gap running the OPPOSITE direction from the row's own framing
+
+Traced the 32-row CoStar residue precisely before writing any fix, per the prompt's own instruction not
+to assume the prior "never read back" framing. Result: **`contactEntityType()` DOES check `contact.type`
+first** (verdict (b)/(c) — a dropped or renamed field — ruled out by reading the code: the extension's
+`contacts[]` snapshot array flows unmodified from `content/costar.js` through `entity.metadata.contacts`
+into `unpackContacts()`). CoStar's `_forsale-contacts-parse.js::looksLikePerson()` always stamps an
+explicit `type`, so its verdict was already winning outright before this fix — the backend's
+`hasFirmSuffix()` guard was never being consulted on this path at all.
+
+**The real gap (case (a), but inverted from how the backlog row framed it):** the two stoplists are not
+independently-drifting copies of one list — `hasFirmSuffix()` already covers nearly the entire extension
+list (Trust/Holdings/Properties/Capital/Realty/Ventures/Management/Company), missing only 4 brokerage
+brand names (newmark/cbre/jll/colliers) that never mattered for this residue. The load-bearing gap runs
+the OTHER way: the extension's list is **missing** terms `hasFirmSuffix()` has — Bancorp, Investments,
+Development/Developers, Fund, Ptnrs, Cos, Property (singular), Enterprises, Mgmt-abbrev — so a name like
+`Sentinel Bancorp` trips the backend's guard but not the extension's, and the extension's (trusted,
+explicit) `type:'person'` verdict was minting real firms as people.
+
+**Fix shipped:** `contactEntityType()` (`api/_handlers/sidebar-pipeline.js`) now treats an explicit
+`type:'person'` as a floor, not an absolute — `hasFirmSuffix(name)` overrides it to `'organization'` when
+they disagree, one-directional only (an explicit `'organization'`/`'entity'` type is never second-guessed
+by a name heuristic — downgrading would repeat the P158a false-org-positive mistake). No second stoplist
+created; no extension code touched, same precedent as RCA in the original C13g fix. Guard
+`test/c13g-contact-entity-type.test.mjs` — 11 tests, all pass; the old "explicit type wins" assertion
+(`ACME LLC` + `type:'person'` → `'person'`) was itself pinning the bug and is replaced with the floor
+assertion. Forward-mint only — existing mistyped entities stay `entity_type_review` lane population, not
+bulk-retyped here. Docs: `owner-role-classification.md` §9i (new); `PLANNED-BACKLOG.md` row
+`C13g-costar-stoplist` marked ✅.
+
+## 2026-09-10 (earlier) — C13g-costar-stoplist prompt drafted and sent; a self-caught stat inversion fixed in the pipeline page
+
+Prompt drafted at `docs/claude-code/prompts/C13g-costar-stoplist.md`, sent to CC, not yet run. It does
+NOT assume the prior response's "never read back" framing is correct — `contactEntityType()` actually
+does honor an explicit `contact.type` before falling back to `hasFirmSuffix()`, which the prior framing
+glossed over — so the prompt's first job is tracing the real 32-row CoStar residue to find which of three
+possible causes (wrong stoplist, dropped/renamed field, or type never sent) is actually true, rather than
+guessing and fixing the wrong layer. Backlog row `C13g-costar-stoplist` annotated with the draft/send
+date rather than left silent between "named" and "fixed."
+
+**Also fixed while re-reading the pipeline page for this:** `ownership-truth-pipeline-state.md`'s Stage 4
+section had the `UX-T1a-reach` owner-contact-linkage stat backwards — it read "847 of 6,480 owners have
+no linked person at all," when the source row in `PLANNED-BACKLOG.md` says the opposite: only 847 of
+6,480 (13%) **have** a linked person; 5,633 (87%) have none. Corrected in place — this was my own error,
+caught before it propagated into an answer to Scott, not something the builder produced.
+
+**Next step.** Build: nothing to run until CC returns on the stoplist prompt. Operator: unchanged — the
+12 duplicate-entity merge groups remain the only outstanding piece of the retype arc.
 
 ## 2026-09-10 — C13g capture-path fix reconciled (PR #2234): verified independently, live and deployed; one residual gap filed, not lost
 
