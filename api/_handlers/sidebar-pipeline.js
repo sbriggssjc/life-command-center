@@ -16,7 +16,7 @@
 //   - On-demand via POST /api/entities?action=process_sidebar_extraction
 // ============================================================================
 
-import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, canonicalEntityDomain, isJunkEntityName, normalizeEmail, isGenericInboxEmail, looksLikeContactPhone, recordContactFieldWrites } from '../_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, canonicalEntityDomain, isJunkEntityName, normalizeEmail, isGenericInboxEmail, looksLikeContactPhone, recordContactFieldWrites, hasFirmSuffix } from '../_shared/entity-link.js';
 import { isCompetitorBroker } from '../_shared/sf-nm-classifier.js';
 import { opsQuery, insertEntityRelationship, fetchWithTimeout } from '../_shared/ops-db.js';
 import { uploadArtifactToStorage } from '../_shared/artifact-storage.js';
@@ -1620,15 +1620,24 @@ async function domainPatch(domain, path, data, label) {
 
 /**
  * Infer entity_type for a contact entry from the sidebar metadata.
+ *
+ * C13g: the vendor-supplied `contact.type` is trusted when present (RCA/CoStar
+ * capture code that computes its own person/org classification, e.g. CoStar's
+ * `looksLikePerson()` in `_forsale-contacts-parse.js`, stamps `type` before
+ * this ever runs). Where no `type` arrives at all — RCA's deed-party `owner`
+ * slot never sets one — this is the SOLE signal, and a narrow LLC/INC/CORP-only
+ * regex was measured (C13c) to miss the majority of real org names in this
+ * population (Trust, Holdings, Properties, Capital, Realty, Company, REIT …).
+ * `hasFirmSuffix` is the shared, already-graded org-marker guard used for the
+ * same person-vs-org judgement elsewhere (entity-link.js) — reuse it rather
+ * than maintaining a second, narrower copy that drifts (the P189/A2/N15c
+ * "hazard travels with the technique" class).
  */
-function contactEntityType(contact) {
+export function contactEntityType(contact) {
   if (contact.type === 'entity' || contact.type === 'organization') return 'organization';
   if (contact.type === 'person') return 'person';
-  // Heuristic: if name looks like a company (all-caps, contains LLC/Inc, etc.)
   const name = (contact.name || '').trim();
-  if (/\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|ASSOCIATES|ADVISORS)\b/i.test(name)) {
-    return 'organization';
-  }
+  if (hasFirmSuffix(name)) return 'organization';
   return 'person';
 }
 
