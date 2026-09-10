@@ -16,6 +16,21 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — ASC multi-address parcels: candidate-scoped three-token rule implemented
+
+The restricted ASC sample exposed a parcel whose official facility location, assessor situs, and licensed
+property display use three different civic numbers. The matcher now has a distinct fail-closed reason code
+for this class. It requires the exact frozen and captured tokens, a distinct assessor token with the same
+city/state/postal components, exact parcel and CoStar record pins, exact CMS facility identity, an allow-listed
+operating tenant in the captured roster, both facility-registry and licensed-public-record evidence classes,
+authorization metadata, and mandatory second review. The 28-test focused suite is green, including rejection
+of wrong record, parcel, address, locality, tenant, source, assessor token, facility identity, review flag, and
+incomplete citations. No global normalization or canonical address write was introduced.
+
+**Next step, named.** Merge and deploy the guarded matcher before activating any candidate-scoped evidence
+entry; then verify the single pending candidate remains otherwise unchanged and retry the licensed-source
+capture for second review. F2 remains the longer-term extraction into the lane-neutral identity resolver.
+
 ## 2026-09-09 — C13g-min-lane-mutation reconciled (PR #2222): verified on `main`, tests-only so nothing to deploy; the retype arc's build side is closed
 
 Re-ran `test/c13g-min-lane.test.mjs` on `main` after the merge: **14/14**; the builder's 46/46 RED is its own
