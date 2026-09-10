@@ -16,6 +16,45 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — Owner-to-contact automation push started: account-based-contact-intelligence.md re-measured, a stale claim corrected, a phased build plan added, Phase 0 prompt sent
+
+Scott's direction: automate owner→contact linkage end to end, minimal human-in-the-loop, split by
+owner type — individual/small owners via deterministic linkage (Tier 0), large institutional buyers
+(REITs, funds) via the role-taxonomy treatment (Tiers 1-2) already designed in
+`account-based-contact-intelligence.md` §3a but never built. Reviewed existing machinery before
+building anything, per standing doctrine — this arc was already substantially designed, not started
+from scratch.
+
+**Correction found while re-checking, not assumed:** §5a's claim "Outlook contact sync has never been
+fed, no Power Automate flow exists" is now FALSE. Live 2026-09-10: `unified_contacts.outlook_contact_id`
+populated on 2,835 of 32,858 rows (was 0 in August), `last_synced_outlook` current to today, 2,829 rows
+synced in the last 7 days. Someone built and shipped this without updating the doc that called it the
+highest-leverage missing piece. `title` coverage moved with it (1.9% → 5.2%) but is still the binding
+constraint on Tier 2's role inference. Banners added in place; the doc's §5a "not fed" language is now
+marked as August history, not current state.
+
+**Also re-measured:** `TIER0_AUTO_ATTACH` confirmed still `on`; `owner_contact_pivot.active_contact_entity_id`
+populated rows grown ~50x since the design doc's baseline (1,440 vs ~27) — flagged that AC10's 11-owner/
+$240.5M suppressed count is stale and must be re-measured before it's fixed, not trusted from August;
+AC7's Andrew Pulliam duplicate confirmed still live and unfixed.
+
+**Added:** `account-based-contact-intelligence.md` §7, a phased build plan — Phase 0 (three small
+hygiene fixes: AC1b scope drift, AC7 duplicate merge, AC10 promotion counterpart) → Phase 1 (finish
+Tier 0 deterministic linkage — serves the individual/small-owner majority of the gap) → Phase 2 (Tiers
+1-2, bench ranking + Ollama role inference — this is the REIT/fund "who's in charge" ask specifically)
+→ Phase 3 (standing loop, broker intelligence, input-quality spin-offs that would otherwise corrupt
+Phase 2's correspondence signal). Phase 1 and Phase 2 can run in parallel once Phase 0 clears.
+
+**Shipped this turn:** `docs/claude-code/prompts/ACI-phase0.md` drafted and sent — the three Phase-0
+hygiene items, bundled because they're small, independent, and each would otherwise distort the
+numbers the next phase measures against. Backlog rows `AC1b`/`AC7`/`AC10` annotated with the send date
+and (for AC10) the staleness warning.
+
+**Next step.** Build: nothing to run until CC returns on `ACI-phase0`. Once that's confirmed live,
+Phase 1 (Tier 0 completion) and Phase 2 (the role-taxonomy build Scott actually asked for by name) are
+the next prompts — Phase 2 is the larger, more novel build and deserves its own careful prompt once
+Phase 0's AC10 re-measurement gives an accurate current picture to design against.
+
 ## 2026-09-10 — C13g-costar-stoplist reconciled (PR #2239): verified independently, live and deployed; the C13g capture-path arc is now fully closed, RCA and CoStar both
 
 Confirmed, not taken on faith: `origin/main` at `e4f71458` (the merge commit itself); Railway `/version`
