@@ -16,6 +16,39 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — Right-sized Unit C follow-up drafted and sent: `ACI-phase2-unitC.md` (AC2 bench ranking + AC3 Ollama role inference)
+
+Picking up the open thread from today's PR reconciliation: `ACI-phase1-2`'s Unit C (the REIT/fund
+role-taxonomy build Scott named by name across two turns) was bundled with three other units and
+explicitly not attempted, per its own commit message. Rather than re-bundle it, drafted a standalone
+prompt scoped to exactly AC2+AC3, nothing else — explicitly excludes AC1d(a/b), AC6, AC8, AC9, and any
+new value-gate/bench-shape invention, so it can actually be built and mutation-guarded in one pass.
+
+**Measured before drafting, per standing doctrine:** `owner_contact_pivot.bench` (the ranking column
+this needs) is already populated on **1,622 of 5,488 rows (29.6%)** — not a from-scratch build.
+Re-checked the doc's own worked example live: Andrew Pulliam (Easterly, 132 emails, last
+2023-02-27) has `title = NULL` in `unified_contacts` today — the volume signal is there, the title
+signal isn't; Ryan Shuler doesn't resolve by name in `unified_contacts` at all, flagged for the build
+to check email/alias before assuming his row is simply thin. Title coverage overall is still 5.2%
+(re-confirmed from §7a, unchanged) — named as the binding constraint AC3's confidence-gating has to
+account for honestly, not paper over.
+
+**Drafted and sent `docs/claude-code/prompts/ACI-phase2-unitC.md`.** AC2: rank (never collapse to one
+winner) on volume/recency/two-way/seniority/inferred function, write into the existing `bench` column,
+ship as a pure planner mirroring the `entity-parent-inheritance-planner.js` pattern already proven this
+arc. AC3: Ollama infers the four-bucket function (acquisitions/disposition/transaction-DD/broker),
+confidence carried per P181, surface gated on it — explicitly told to re-run the Pulliam/Shuler check
+live and report the real title-present vs. inferred-only confidence split rather than let the
+well-titled 5.2% set the tone for the rest. Value-gate by owner reusing the existing P161/P180
+mechanism, no new threshold invented.
+
+Backlog: AC2/AC3 rows updated from 🟢 (designed, not started) to 🟡 (prompt sent), both pointing at the
+new prompt file.
+
+**Next step.** Nothing to run until `ACI-phase2-unitC` comes back. The property-reconciliation thread
+(P17/PDR1 — the unresolved Salesforce-sync orphan blocking DaVita/Donna-TX) is still open and
+independent of this one; Scott's call on which to prompt next, or both can run in parallel.
+
 ## 2026-09-10 — Fresh test run (all three `Dialysis` fixes merged) shows RATINGS-INSERT-COLLISION's upsert doesn't actually work — a partial-index/PostgREST gotcha found — plus a new, much larger full-table probe on `clinic_quality_metrics`; RATINGS2 prompt drafted and sent
 
 CFE-RUNAWAY, RATINGS-INSERT-COLLISION, and PROPREV1 all confirmed merged in `Dialysis`. Scott triggered
