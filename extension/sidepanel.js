@@ -1006,6 +1006,16 @@ async function loadPropertyTab(opts) {
     return;
   }
 
+  // Public-records assessor/recorder scans (entity_type 'property' but there is
+  // no CRE-site property match to resolve — the scanner classified the page as
+  // 'assessor'/'recorder', not a CoStar/LoopNet/CREXi listing). These need an
+  // explicit operator-supplied LCC property before the capture can be saved
+  // (we do not auto-match a county page's address to a domain property here).
+  if (source.domain === 'public-records' && (siteType === 'assessor' || siteType === 'recorder')) {
+    loadPublicRecordPropertyView(source, domainLabel, siteType);
+    return;
+  }
+
   // Property entities (CRE sites, assessor, recorder, search results)
   const address = source.address || source.name || '';
   const city = source.city || '';
@@ -3989,20 +3999,35 @@ async function loadOrgView(source, domainLabel) {
     doSearch();
   });
 
+  // Backward-compat, no-worklist-target save. Previously this discarded
+  // everything the SOS scan captured except `name` — officers, registered
+  // agent and both addresses were thrown away. It now routes the full
+  // capture through applySosEntityCapture (api/_shared/public-records-
+  // writeback.js), which mints/resolves the org entity AND creates
+  // llc_member/llc_manager entity_relationships edges for named officers and
+  // the registered agent, gated by the same residential-vs-agent-service
+  // classifier the reachability worker uses (a CSC/registered-agent address
+  // is never recorded as a person's residence).
   const saveBtn = $('#saveOrgBtn');
   if (saveBtn) {
     saveBtn.addEventListener('click', async () => {
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving...';
-      const result = await apiCall('/api/entities', {
-        entity_type: 'organization',
-        name,
-        org_type: source.entity_type_detail || null,
-        description: `Imported from ${source.domain || 'public-records'}`,
+      const capture = {};
+      for (const [key] of SOS_CAPTURE_FIELDS) {
+        const v = $('#sosf_' + key)?.value;
+        if (v != null && String(v).trim() !== '') capture[key] = v.trim();
+      }
+      if (!capture.name) capture.name = name;
+      const result = await apiCall('/api/public-records-capture', {
+        site_type: 'sos',
+        source_url: source.page_url || null,
+        capture,
       });
-      if (result.ok) {
+      if (result.ok && result.data?.ok) {
+        const nEdges = Array.isArray(result.data.edges) ? result.data.edges.filter((e) => e.ok).length : 0;
         saveBtn.className = 'btn btn-sm btn-success';
-        saveBtn.textContent = 'Saved!';
+        saveBtn.textContent = `Saved!${nEdges ? ` (+${nEdges} contact${nEdges === 1 ? '' : 's'})` : ''}`;
       } else {
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save Failed — Retry';
@@ -4011,6 +4036,110 @@ async function loadOrgView(source, domainLabel) {
       }
     });
   }
+
+  $('#lastUpdated').textContent = `Entity: ${new Date().toLocaleTimeString()}`;
+}
+
+// ── Public-records assessor/recorder capture → real writers (PR-scanner, 2026-09-10) ─
+//
+// Until this, an assessor/recorder scan had NO save path at all — only the SOS
+// scan flow (loadOrgView) offered one, and even that fell back to a bare
+// "create an organization entity" write. This routes the scanner's structured
+// fields (assessed value, tax amount, deed parties/addresses) through real
+// domain writers (api/_shared/public-records-writeback.js), fill-blanks,
+// provenance-tagged, reversible by source tag + fetched_at. Human-triggered
+// only: the operator reviews the editable form and clicks Save.
+//
+// Requires the operator to name the domain property (address matching a county
+// page to a specific domain property row is out of scope here — never guess).
+const PR_ASSESSOR_FIELDS = [
+  ['parcel_number', 'Parcel / APN'], ['county', 'County'], ['state', 'State'],
+  ['owner_name', 'Owner (per county)'], ['mailing_address', 'Mailing Address'],
+  ['assessed_value', 'Assessed Value'], ['land_value', 'Land Value'],
+  ['improvement_value', 'Improvement Value'], ['tax_amount', 'Tax Amount'],
+  ['property_type', 'Property Type / Land Use'], ['year_built', 'Year Built'],
+  ['square_footage', 'Building SF'], ['lot_size', 'Lot Size'], ['zoning', 'Zoning'],
+];
+const PR_RECORDER_FIELDS = [
+  ['document_type', 'Document Type'], ['grantor', 'Grantor'], ['grantee', 'Grantee'],
+  ['sale_price', 'Sale Price / Consideration'], ['sale_date', 'Recording Date'],
+  ['book_page', 'Document / Instrument Number'], ['county', 'County'], ['state', 'State'],
+];
+
+function loadPublicRecordPropertyView(source, domainLabel, siteType) {
+  const header = $('#propertyHeader');
+  const body = $('#propertyBody');
+  const actions = $('#propertyActions');
+  const fields = siteType === 'recorder' ? PR_RECORDER_FIELDS : PR_ASSESSOR_FIELDS;
+
+  header.innerHTML = `
+    <div class="property-title">${escapeHtml(source.address || source.page_title || 'Public record')}</div>
+    <div class="property-source">${domainBadge(source.domain)} ${escapeHtml(domainLabel)} (${escapeHtml(siteType)})</div>
+  `;
+
+  const fieldHtml = fields.map(([key, label]) => {
+    const val = escapeHtml(source[key] != null ? String(source[key]) : '');
+    return `<div style="margin-bottom:6px;">
+      <label style="display:block;font-size:10px;color:var(--text-secondary);margin-bottom:2px;">${escapeHtml(label)}</label>
+      <input id="prf_${key}" type="text" class="sos-capture-input" value="${val}" style="width:100%;box-sizing:border-box;" />
+    </div>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div class="section-label">Save this capture to a specific property</div>
+    <div style="font-size:10px;color:var(--text-secondary);margin-bottom:6px;">
+      County pages aren't auto-matched to a property — enter the LCC domain property id
+      (open the property in the app to find it).
+    </div>
+    <div style="margin-bottom:6px;">
+      <label style="display:block;font-size:10px;color:var(--text-secondary);margin-bottom:2px;">Domain</label>
+      <select id="prf_domain" class="sos-capture-input" style="width:100%;box-sizing:border-box;">
+        <option value="government">Government</option>
+        <option value="dialysis">Dialysis</option>
+      </select>
+    </div>
+    <div style="margin-bottom:6px;">
+      <label style="display:block;font-size:10px;color:var(--text-secondary);margin-bottom:2px;">Property ID</label>
+      <input id="prf_property_id" type="text" class="sos-capture-input" style="width:100%;box-sizing:border-box;" />
+    </div>
+    <div class="section-label">${siteType === 'recorder' ? 'Deed / Recording Details' : 'Assessor Details'} (editable)</div>
+    ${fieldHtml}
+  `;
+
+  actions.innerHTML = `<button class="btn btn-sm btn-success" id="prfSaveBtn">Save to LCC</button>`;
+
+  $('#prfSaveBtn')?.addEventListener('click', async () => {
+    const btn = $('#prfSaveBtn');
+    const domain = $('#prf_domain')?.value;
+    const propertyId = $('#prf_property_id')?.value?.trim();
+    if (!propertyId) {
+      _sosToast('Enter the domain property id first.');
+      return;
+    }
+    const capture = {};
+    for (const [key] of fields) {
+      const v = $('#prf_' + key)?.value;
+      if (v != null && String(v).trim() !== '') capture[key] = v.trim();
+    }
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    const result = await apiCall('/api/public-records-capture', {
+      site_type: siteType,
+      domain,
+      property_id: propertyId,
+      source_url: source.page_url || null,
+      capture,
+    });
+    if (result.ok && result.data?.ok) {
+      btn.className = 'btn btn-sm btn-success';
+      btn.textContent = '✓ Saved';
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Save to LCC (retry)';
+      btn.className = 'btn btn-sm btn-danger';
+      _sosToast(toErrorMessage(result.error) || toErrorMessage(result.data?.error) || `HTTP ${result.status || 'error'}`);
+    }
+  });
 
   $('#lastUpdated').textContent = `Entity: ${new Date().toLocaleTimeString()}`;
 }
