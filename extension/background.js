@@ -36,8 +36,21 @@ self.addEventListener('unhandledrejection', (event) => {
 // a call site again — add it here.
 const DEFAULT_INTAKE_HOST = 'https://tranquil-delight-production-633f.up.railway.app';
 
+// EXT-HOST (2026-09-10): a stored value can itself be the retired host. Two
+// browser profiles on the same machine staged OMs the same day — one landed on
+// Railway, the other on the frozen Vercel build (writer IPs 3.94.187.179 /
+// 3.82.217.155 / 52.52.40.44 = AWS Lambda, not Railway) — because a profile
+// configured in the Vercel era still holds that origin in chrome.storage.sync
+// and 1.0.52 honoured whatever was stored. No *.vercel.app origin is a valid
+// LCC host any more (server.js on Railway mounts every /api/* route), so the
+// resolver refuses the whole platform rather than one hostname.
+function isRetiredIntakeOrigin(raw) {
+  try { return /\.vercel\.app$/i.test(new URL(String(raw)).hostname); } catch (_) { return false; }
+}
+
 function pickIntakeHost(cfg) {
-  const raw = (cfg && (cfg.LCC_RAILWAY_URL || cfg.LCC_VERCEL_URL)) || DEFAULT_INTAKE_HOST;
+  const stored = cfg && (cfg.LCC_RAILWAY_URL || cfg.LCC_VERCEL_URL);
+  const raw = (stored && !isRetiredIntakeOrigin(stored)) ? stored : DEFAULT_INTAKE_HOST;
   // Strip trailing slash(es) to avoid `host//api/...` 404s.
   return String(raw).trim().replace(/\/+$/, '') || DEFAULT_INTAKE_HOST;
 }
@@ -243,7 +256,8 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 
 async function callLCCApi(endpoint, body) {
   const config = await chrome.storage.sync.get(['LCC_RAILWAY_URL', 'LCC_API_KEY']);
-  const baseUrl = config.LCC_RAILWAY_URL;
+  // EXT-HOST: never trust a stored origin blindly — see pickIntakeHost.
+  const baseUrl = config.LCC_RAILWAY_URL ? pickIntakeHost(config) : config.LCC_RAILWAY_URL;
   const apiKey = config.LCC_API_KEY;
 
   if (!baseUrl) {
@@ -275,7 +289,8 @@ async function callLCCApi(endpoint, body) {
 
 async function testConnection() {
   const config = await chrome.storage.sync.get(['LCC_RAILWAY_URL', 'LCC_API_KEY']);
-  const baseUrl = config.LCC_RAILWAY_URL;
+  // EXT-HOST: never trust a stored origin blindly — see pickIntakeHost.
+  const baseUrl = config.LCC_RAILWAY_URL ? pickIntakeHost(config) : config.LCC_RAILWAY_URL;
   const apiKey = config.LCC_API_KEY;
 
   if (!baseUrl) {

@@ -1938,6 +1938,11 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   before gating one, inventory its callers from `function_edge_logs` by path × user-agent × IP class and ship the
   gate in log-only mode first (COPILOT-OPEN). A browser caller can never be given the secret — route it through
   Railway (P194).
+  **A "Railway-first" resolver is not a Railway-only resolver** — P194 made Railway the default when nothing
+  was stored; a profile that still stored the retired origin kept using it for six weeks (EXT-HOST,
+  2026-09-10, found by writer IP on `staged_intake_items`). When a host is retired, the resolver must
+  *refuse* it, not merely stop *preferring* it — and the proof is the writer IP of a real capture, never the
+  installed version number.
   **An edge function's `version` number is not its identity** — the counter moved +3 on every function in the
   project overnight with no deploy (2026-09-10). Compare `ezbr_sha256` and `updated_at`; quote the version only
   as the dashboard's label.
