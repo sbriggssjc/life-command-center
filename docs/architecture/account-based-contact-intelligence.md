@@ -358,6 +358,14 @@ second. They can build in parallel once Phase 0 clears; Phase 2 does not depend 
 
 ## 8. The recorded-owner → true-owner control-chain logic (2026-09-10, Scott's framing)
 
+> ⚠️ **CORRECTED THE SAME DAY — §8a below is too pessimistic.** Scott's full manual research workflow
+> (netronline → assessor → recorder → SOS → cross-reference) revealed that a free capture path for
+> most of this chain already exists in the extension, unwired — see
+> `public-records-source-lane.md` §7 for the finding. **Do not build the control chain on the "wait
+> for paid APIs" premise below; §7 there supersedes it.** Left in place as the dated record of what
+> was checked and why the correction matters, per this repo's own doctrine (never delete a wrong
+> verdict, correct it in place).
+
 Scott's direction, close to verbatim, because the design follows from it: most of the recorded-owner
 → true-owner resolution is going to end up being logic and matching over addresses, names, emails,
 and phone numbers. **If a recorded-owner LLC has a member whose address is a residence, the assessor
