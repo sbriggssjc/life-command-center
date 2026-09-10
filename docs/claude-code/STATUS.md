@@ -16,6 +16,52 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — C13g-min-lane-mutation: guard is now 14 tests / 46 mutations RED / 46; both §9f gaps closed
+
+`test/c13g-min-lane.test.mjs` mutation-passed end to end (comments stripped first). Two assertions
+survived their first mutation and were rewritten (the ordering test's rows sorted the same way
+alphabetically as by rent; the registry-membership regex matched an unrelated `research_type:`
+literal instead of the `FEDERATED_DECISION_TYPES` entry). Two assertions added for the same-day
+hotfixes' repo-side twins (cache-vs-slow-view; `p_decision_id` bigint matching `lcc_decisions.id`).
+`v_lcc_entity_role_ambiguity` before/after and the Tier 0 bench delta both measured in a rolled-back
+round trip: the ambiguity view didn't move for the tested entity; the Tier 0 bench gained 10 cards
+across 3 of the 11 non-tombstoned retyped entities (UIRC 7, Global Net Lease 2, Foulger Pratt 1) —
+§9f's Gardner/MassMutual-only check was right for those two, incomplete as a claim about the lane.
+Full writeup: `docs/architecture/owner-role-classification.md` §9g; backlog `C13g-min-lane-mutation`
+✅. Not done: the placeholder-guard unit (`C13g-min-lane-placeholder`, unchanged).
+## 2026-09-09 — SFENRICH-gate reconciled (PR #2221): body captured, gate correct, not yet deployed; RAILWAY-PA-SECRET-log is NOT on origin
+
+**Verified against the merged tree:**
+- Commit `4135d304` is the deployed body alone (733 lines, one file, no other change); `08fb72bf` adds the gate.
+  Live function re-read by MCP after the merge: `ezbr_sha256 8d993301…e23d` — identical to the value CC recorded
+  and to the value in this window's own earlier `list_edge_functions` read — and `updated_at` unchanged since
+  2026-03-07, so the deployed body has not moved between capture and now. ⚠️ Version number: this window's
+  earlier list read said **v23**, CC's `get_edge_function` and mine now say **v26** for the same `updated_at` and
+  the same sha. Both on file; the sha is the identity, the counter is not.
+- Gate: `authenticateWebhook` before dispatch on every route, **no `/health` carve-out** (the only GET is
+  `/diagnostics`, which is the leak); log mode never 401s; `SFENRICH_AUTH_MODE` read once; the DENY-WOULD line
+  cannot carry the secret. Classifier factored to `_shared/caller-class.ts`, `ai-copilot` now imports it — 25/25
+  across both gate test files, guards green.
+- Unit 3 confirmed by the test itself: every step query is a fixed template literal; the only request-derived
+  values that reach code are `dry_run` and the path.
+- **One deviation, fixed here in one line:** the prompt said reuse `COPILOT_KNOWN_IPS`; CC introduced
+  `SFENRICH_KNOWN_IPS`. Kept the name (CC's reason is fair — the caller sets are not asserted identical) but
+  added a fallback: `SFENRICH_KNOWN_IPS ?? COPILOT_KNOWN_IPS`, so the operator sets one list unless they
+  genuinely diverge. Tests unchanged, still 25/25.
+- **Not deployed:** live is still the ungated v26. Deploy is `supabase functions deploy salesforce-enrichment
+  --project-ref zqzrriwuavgrquhisnoa --no-verify-jwt` → v27, log-only, nothing refused.
+
+**RAILWAY-PA-SECRET-log: no response file, no branch, no commit on origin** (`api/sync.js` has no `webhookAuth`;
+no remote branch carries it). If the CC window finished, its branch was never pushed; the prompt stays in
+`prompts/` as queued. The row stays 🔴 and `PA_WEBHOOK_SECRET` stays unset on Railway until it lands.
+
+**Housekeeping, third time:** `COPILOT-OPEN-gate` and `TEST-NET-LEAK` prompt/response files reappeared at the
+top level — CC branches are cut from a `main` that predates each move to `done/`, and the merge resurrects the
+file. Removed again; the `done/` copies are the record. `C13g-min-lane-mutation.md` belongs to the other window
+and is left alone.
+
+---
+
 ## 2026-09-09 — SFENRICH-gate: `salesforce-enrichment`'s deployed body committed verbatim for the first time, then gated log-only (COPILOT-OPEN-gate pattern)
 
 DRIFT1-sfenrich closed to 🟡. `salesforce-enrichment` (dia, v26) was open — `verify_jwt:false`, no
