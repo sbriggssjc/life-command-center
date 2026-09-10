@@ -51,6 +51,36 @@ across 3 of the 11 non-tombstoned retyped entities (UIRC 7, Global Net Lease 2, 
 §9f's Gardner/MassMutual-only check was right for those two, incomplete as a claim about the lane.
 Full writeup: `docs/architecture/owner-role-classification.md` §9g; backlog `C13g-min-lane-mutation`
 ✅. Not done: the placeholder-guard unit (`C13g-min-lane-placeholder`, unchanged).
+## 2026-09-10 — Overnight read: both gates live and quiet; the first outside probes of `ai-copilot` are on record; a BOM in a commit subject
+
+**Live (`list_edge_functions`, 01:40 UTC):** `salesforce-enrichment` **v27** (sha `f0d6db0e…`, updated 01:12 UTC —
+the gate is deployed, log-only) and `ai-copilot` v84 (sha `5beebfe6…`). ⚠️ Every function's version counter moved
+by +3 since yesterday's read without a deploy (`health-check` 22→25, `npi-lookup` 15→18…), which settles the
+v23/v26 puzzle from the SFENRICH reconcile: **the counter is project-wide noise; only `ezbr_sha256` + `updated_at`
+identify a build.** Recorded in CLAUDE.md's edge-function footgun.
+
+**`[copilot-auth]` since the Railway redeploy (22:25 → 01:27 UTC):** `logic-apps other` ×4 (the hourly calendar
+flow at :26 past each hour, plus `/sync/activities` at 00:01 — `sf-activity-sync`'s daily run), `node railway`
+×19 all before 22:36 (they stopped when the browser tab closed — the proxy was the only Railway caller in the
+window, so this is **not** evidence that `PA_WEBHOOK_SECRET` landed; RAILWAY-PA-SECRET unchanged), and **three
+`GET  browser other`** — `GET /functions/v1/ai-copilot` (bare root, 404) from `98.91.77.46` ×2 and `23.23.253.54`,
+UA `Mozilla/5.0 (compatible)`, AWS addresses, 22:52–23:14 UTC. That user-agent string with no product token is a
+scanner's, not a person's. First measured outside probe of the function since the gate went in; harmless at the
+root path, and exactly the population `enforce` is for. Zero `[sfenrich-auth]` lines — consistent with the
+pre-gate 24 h read of zero callers; the ≥ 7-day window starts 01:12 UTC.
+
+**RAILWAY-PA-SECRET-log:** still not on origin. Queued.
+
+**Tooling:** commit `f6d4851f`'s subject begins with U+FEFF — `Set-Content -Encoding UTF8` on Windows PowerShell
+5 writes a BOM, and git keeps it. Harmless in history, ugly in `git log`. Message files are now written with
+`[IO.File]::WriteAllText` (UTF-8, no BOM).
+
+**Next, in order:** (1) 12:30 UTC today — first clean teardown-window read (J13). (2) RAILWAY-PA-SECRET-log in CC.
+(3) 👤 CFE-RUNAWAY — the Railway `python-httpx` service; still the most damaging open item and the one nothing
+here can touch.
+
+---
+
 ## 2026-09-09 — SFENRICH-gate reconciled (PR #2221): body captured, gate correct, not yet deployed; RAILWAY-PA-SECRET-log is NOT on origin
 
 **Verified against the merged tree:**

@@ -1938,6 +1938,9 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   before gating one, inventory its callers from `function_edge_logs` by path × user-agent × IP class and ship the
   gate in log-only mode first (COPILOT-OPEN). A browser caller can never be given the secret — route it through
   Railway (P194).
+  **An edge function's `version` number is not its identity** — the counter moved +3 on every function in the
+  project overnight with no deploy (2026-09-10). Compare `ezbr_sha256` and `updated_at`; quote the version only
+  as the dashboard's label.
 - **⚠️ A TEST THAT "EXPECTS THE AI TO THROW" MAY BE PROVING THE NETWORK IS UP — the suite is
   hermetic by guard since 2026-09-09 (TEST-NET-LEAK).** `test/lease-extractor.test.mjs` and
   `test/dossier-generator.test.mjs` assumed *"no AI key in the test env → the extractor throws"*,
