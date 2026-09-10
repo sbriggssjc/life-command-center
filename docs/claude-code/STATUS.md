@@ -16,6 +16,25 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — C13g-costar-stoplist prompt drafted and sent; a self-caught stat inversion fixed in the pipeline page
+
+Prompt drafted at `docs/claude-code/prompts/C13g-costar-stoplist.md`, sent to CC, not yet run. It does
+NOT assume the prior response's "never read back" framing is correct — `contactEntityType()` actually
+does honor an explicit `contact.type` before falling back to `hasFirmSuffix()`, which the prior framing
+glossed over — so the prompt's first job is tracing the real 32-row CoStar residue to find which of three
+possible causes (wrong stoplist, dropped/renamed field, or type never sent) is actually true, rather than
+guessing and fixing the wrong layer. Backlog row `C13g-costar-stoplist` annotated with the draft/send
+date rather than left silent between "named" and "fixed."
+
+**Also fixed while re-reading the pipeline page for this:** `ownership-truth-pipeline-state.md`'s Stage 4
+section had the `UX-T1a-reach` owner-contact-linkage stat backwards — it read "847 of 6,480 owners have
+no linked person at all," when the source row in `PLANNED-BACKLOG.md` says the opposite: only 847 of
+6,480 (13%) **have** a linked person; 5,633 (87%) have none. Corrected in place — this was my own error,
+caught before it propagated into an answer to Scott, not something the builder produced.
+
+**Next step.** Build: nothing to run until CC returns on the stoplist prompt. Operator: unchanged — the
+12 duplicate-entity merge groups remain the only outstanding piece of the retype arc.
+
 ## 2026-09-10 — C13g capture-path fix reconciled (PR #2234): verified independently, live and deployed; one residual gap filed, not lost
 
 Confirmed, not taken on faith: `origin/main` at `8459f95a` (the CFE-RUNAWAY docs PR, unrelated, which
