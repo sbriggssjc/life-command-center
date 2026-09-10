@@ -17,6 +17,64 @@
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
 ## 2026-09-10 — PROPREV1 fixed in `Dialysis` (not this repo): CFE-RUNAWAY's client-threading fix was correct but insufficient — the real bug was one layer downstream, in `column_exists()` itself; the responses folder consolidated (old Word transcripts archived to `responses/done/`)
+## 2026-09-10 — Reconciled ACI-phase1-2 + PR-scanner-writeback against what CC actually shipped; triaged Scott's DaVita/Donna-TX property walkthrough into P17
+
+**PR reconciliation.** Both PRs are merged and deployed (`/version` → `225ba9fa4e51`, one commit ahead
+via an unrelated concurrent-window PR). Read both response transcripts (now
+`docs/claude-code/responses/done/ACI-phase1-2.response.md` /
+`PR-scanner-writeback.response.md`) against the actual commits (`6f0cb946`, `831b8748`, `6b4f6598`,
+`20fb1ffe`, `2e7925d4`) rather than the prompts' asks. `PR-scanner-writeback` shipped honestly —
+Units 1-2 built and guarded (assessor/recorder → `parcel_records`/`tax_records`/`deed_records`, SOS
+→ new `llc_member`/`llc_manager` edges, both source-tagged distinctly from `costar_sidebar` and the
+gpt-4o leg; 12 tests, full suite 5649/0/6 unchanged), Units 3-4 correctly sized-not-built (no DB
+access that session to measure `county_records_needed`'s population; Salesforce write-back
+re-confirmed a read-only proxy, no Connected App). `ACI-phase1-2` shipped Unit A(c) (reject-demotion,
+deliberately unwired — 0 of 27 confirm-log rows are rejects) and Unit B (parent-inheritance planner,
+227 proposals re-measured, live call site not built) — **Unit C (AC2/AC3, the REIT/fund bench-ranking
++ Ollama role-inference build Scott specifically named across two turns) was explicitly NOT
+attempted**, named in the commit message as "a genuinely large surface... that could not be built and
+guarded to standard in the time available," not a silent drop. **Next step for Unit C: it needs its
+own right-sized prompt, not a unit inside a four-unit PR** — filed as the open item below, not
+guessed at or built blind this turn.
+
+**Doc hygiene found and fixed while reconciling:** the two PRs each corrected `PLANNED-BACKLOG.md`'s
+`AC11` row in place independently (on parallel branches, merged separately), producing two duplicate
+AC11 rows on `main` — one carrying the population=0 sizing detail, the other carrying the
+`llc_member`/`llc_manager`-shipped correction, neither carrying both. Merged into one row (both facts
+kept) — this is a real defect class worth naming: two Cowork/CC sessions correcting the same row on
+the same day, on different branches, merge cleanly at the git level but leave the DOCUMENT forked.
+Moved both prompts to `prompts/done/`, both responses (.docx + new `.response.md` transcripts) to
+`responses/done/`.
+
+**Property-reconciliation triage (Scott's separate, explicitly-parallel ask).** Read/viewed all 9
+screenshots + narrative in Scott's uploaded notes on the DaVita Kidney Care listing in Donna, TX (a
+property he personally sold in 2017-18). Investigated live rather than assumed: **found 5 unmerged
+`entities` rows for this one address** (`c94991a3…` bare city placeholder, `d90be440…` and `3c2dc7d3…`
+two differently-normalized address variants, `8d1fd46e…` the Salesforce-opportunity-sync orphan the
+app actually opens, `9e6ce72a…` Northmarq Chicago's own office address mistagged `city='Donna, TX'`).
+The orphan record's own `metadata` names the root cause: `orphan_flagged: true` +
+`ambiguous_resolution: [the 3 real candidates]`, minted by SF opportunity-sync on **2026-07-29**,
+never resolved in the 43 days since. A real, live, mounted reconciliation endpoint pair exists for
+exactly this (`GET/POST /api/pipeline/flagged-deals` + `reconcile-entity`) — it has simply never been
+run against this deal, and **nothing drains that queue on a schedule** (every prior clearance was a
+manual one-time sweep). Confirms BOTH of Scott's hypotheses at once, because they share one mechanism
+gap. Filed **`PLANNED-BACKLOG.md` §P17** (PDR1–PDR11, ranked by importance, PDR1 = the root-cause
+merge + the missing recurring drain; PDR2–PDR7 = the ownership/deal-history/documents/CMS-link/
+activity-log symptoms, expected to mostly self-resolve once PDR1's merge repoints the property, each
+flagged to re-check rather than assumed-fixed; PDR8 = the competitive-landscape rent/financials
+feature request; PDR9 = the self-flagged geocoding gap, catalogued per Scott's ask but not a defect;
+PDR10 = the Chicago-address mistagging found along the way; PDR11 = the systemic finding written
+plainly). Rent-roll accuracy (PDR5) needs the source lease from the Team Briggs shared folder, not
+reachable from this session — flagged, not guessed at.
+
+**Next step.** Two independent threads, per Scott's own "don't let this get us off our current
+track" framing: (1) a right-sized follow-up prompt for Unit C (REIT/fund role taxonomy) — smaller
+scope than the four-unit `ACI-phase1-2`, so it can actually be built and guarded in one pass; (2) PDR1
+itself — either a quick manual `reconcile-entity` call to unblock this one property now, or size the
+fleet-wide `ambiguous_resolution` population first and build the recurring drain in one prompt (same
+"measure before building a lane" discipline as PR-scanner-3/AC11). Scott's call on which goes first.
+
+## 2026-09-10 — `PR-scanner-writeback` shipped: assessor/recorder/SOS scans now write real tables; the SF write-back re-confirmed not buildable
 
 **The prompt.** `docs/claude-code/prompts/PROPREV1-estimated-annual-revenue-propagation-still-dropped.md`,
 filed for `Dialysis` after the post-merge test run showed `properties.estimated_annual_revenue`
