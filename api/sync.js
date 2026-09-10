@@ -84,6 +84,153 @@ function authenticateWebhook(req) {
   return mismatch === 0;
 }
 
+// ── PA_WEBHOOK_SECRET gate — RAILWAY-PA-SECRET-log (2026-09-10) ───────────
+// The single owner of every PA webhook handler's fallback auth below. Each
+// handler used to inline `if (!authenticateWebhook(req)) { user =
+// await authenticate(req,res); requireRole(...) }` — this factors that out
+// and adds a log-only mode so PA_WEBHOOK_SECRET can be SET on Railway
+// without refusing a caller nobody has audited yet (docs/os/
+// AI-SURFACES-OPERATIONAL-REFERENCE.md §4a). Never log the secret or the
+// API key — only the header-derived path name.
+
+// Which fallback channel a request carries, from the headers alone —
+// 'jwt' | 'api-key' | 'none'. Mirrors authenticate()'s own dispatch
+// (api/_shared/auth.js) without re-running it.
+function pawFallbackPathClass(req) {
+  const authHeader = req.headers['authorization'] || '';
+  const apiKey = req.headers['x-lcc-key'] || '';
+  if (/^Bearer\s+/i.test(authHeader)) return 'jwt';
+  if (apiKey) return 'api-key';
+  return 'none';
+}
+
+// Mirrors supabase/functions/_shared/caller-class.ts (the COPILOT-OPEN-gate /
+// SFENRICH-gate classifier). This service is plain Node on Railway, not
+// Deno, so the shape is reimplemented rather than imported — but the
+// classification rules and the KNOWN_IPS "class:prefix,..." env format are
+// identical on purpose, so the two logs read the same way.
+function pawUaClass(ua) {
+  if (!ua) return 'other';
+  if (/azure-logic-apps/i.test(ua)) return 'logic-apps';
+  if (/^node(\/|$)|node-fetch|undici/i.test(ua)) return 'node';
+  if (/Mozilla\/|Chrome\/|Safari\/|Firefox\//i.test(ua)) return 'browser';
+  return 'other';
+}
+
+function pawParseKnownIps(raw) {
+  return String(raw || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const idx = entry.indexOf(':');
+      return idx === -1
+        ? { cls: 'other', prefix: entry }
+        : { cls: entry.slice(0, idx), prefix: entry.slice(idx + 1) };
+    });
+}
+
+function pawIpClass(ip, knownIps) {
+  if (!ip) return 'other';
+  for (const { cls, prefix } of knownIps) {
+    if (prefix && ip.startsWith(prefix)) return cls;
+  }
+  return 'other';
+}
+
+function pawRequestIp(req) {
+  const h = req.headers || {};
+  return (
+    h['cf-connecting-ip']
+    || String(h['x-forwarded-for'] || '').split(',')[0].trim()
+    || (req.socket && req.socket.remoteAddress)
+    || ''
+  );
+}
+
+function pawLogDeny(routeName, fallbackPath, req) {
+  const ua = pawUaClass(req.headers['user-agent'] || '');
+  const ip = pawIpClass(pawRequestIp(req), pawParseKnownIps(process.env.PA_WEBHOOK_KNOWN_IPS));
+  console.log(`[pa-webhook] DENY-WOULD ${routeName} ${fallbackPath} ${ua} ${ip}`);
+}
+
+/**
+ * webhookAuth(req, res, routeName, opts) — the single gate for every PA
+ * webhook handler in this file. authenticateWebhook(req) (PA_WEBHOOK_SECRET)
+ * is tried first; on failure it falls back to standard user auth
+ * (authenticate + optionally requireRole('operator')) — same as each
+ * handler already did inline; `opts.requireOperatorRole` (default true)
+ * preserves the handful of handlers that only ever required a valid user,
+ * never the operator role.
+ *
+ * PA_WEBHOOK_AUTH_MODE ('log' default, or 'enforce'):
+ *   - 'enforce': the fallback's own 401/403 stands — byte-identical to the
+ *     code every handler carried before this unit.
+ *   - 'log' (default): the fallback still RUNS (so the logged path reflects
+ *     what it actually found) but its result can never refuse the request;
+ *     when it would have denied AND PA_WEBHOOK_SECRET is set, one line is
+ *     logged naming the route, the fallback path and a caller UA/IP class:
+ *       [pa-webhook] DENY-WOULD <route> <fallback-path> <ua_class> <ip_class>
+ *     This is what lets PA_WEBHOOK_SECRET be SET on Railway with nothing
+ *     changing for any caller — the log is read for three days before
+ *     anyone flips PA_WEBHOOK_AUTH_MODE to 'enforce'.
+ *   - With PA_WEBHOOK_SECRET unset (today's default), authenticateWebhook
+ *     always returns true, so neither mode's fallback path ever runs and
+ *     nothing is ever logged.
+ *
+ * Returns { ok, user }. ok:false means the fallback already wrote a real
+ * 401/403 to `res` (enforce mode only) — the caller must `return`
+ * immediately. In log mode ok is always true; `user` may be null (no
+ * caller-supplied credentials resolved) — callers that read `user`
+ * downstream already handle that via optional chaining.
+ */
+async function webhookAuth(req, res, routeName, opts = {}) {
+  const requireOperatorRole = opts.requireOperatorRole !== false;
+
+  if (authenticateWebhook(req)) {
+    return { ok: true, user: null };
+  }
+
+  const fallbackPath = pawFallbackPathClass(req);
+  const mode = (process.env.PA_WEBHOOK_AUTH_MODE || 'log').toLowerCase();
+  const secretConfigured = !!process.env.PA_WEBHOOK_SECRET;
+
+  if (mode === 'enforce') {
+    const user = await authenticate(req, res);
+    if (!user) {
+      if (secretConfigured) pawLogDeny(routeName, fallbackPath, req);
+      return { ok: false, user: null }; // authenticate() already wrote the response
+    }
+    if (requireOperatorRole) {
+      const ws = primaryWorkspace(user);
+      if (!ws || !requireRole(user, 'operator', ws.workspace_id)) {
+        if (secretConfigured) pawLogDeny(routeName, fallbackPath, req);
+        res.status(403).json({ error: 'Operator role required' });
+        return { ok: false, user: null };
+      }
+    }
+    return { ok: true, user };
+  }
+
+  // 'log' mode — probe the fallback WITHOUT ever writing to the real `res`
+  // (authenticate() can 401 by writing straight to res, which would double-
+  // send the response if we then let the request continue), so a would-be
+  // deny can be logged and the request still proceeds.
+  const probeRes = { status() { return this; }, json() { return this; }, setHeader() { return this; } };
+  let user = null;
+  try {
+    user = await authenticate(req, probeRes);
+    if (user && requireOperatorRole) {
+      const ws = primaryWorkspace(user);
+      if (!ws || !requireRole(user, 'operator', ws.workspace_id)) user = null;
+    }
+  } catch (_err) {
+    user = null;
+  }
+  if (!user && secretConfigured) pawLogDeny(routeName, fallbackPath, req);
+  return { ok: true, user };
+}
+
 // ── Edge Function Proxy for Lead Ingest ────────────────────────────────────
 const LEAD_INGEST_EDGE_URL = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/lead-ingest';
 
@@ -1658,15 +1805,8 @@ async function handleRcmIngest(req, res) {
   }
 
   // Webhook endpoints accept PA_WEBHOOK_SECRET instead of user auth
-  if (!authenticateWebhook(req)) {
-    // Fall back to standard user auth (allows browser-based testing)
-    const user = await authenticate(req, res);
-    if (!user) return;
-    const ws = primaryWorkspace(user);
-    if (!ws || !requireRole(user, 'operator', ws.workspace_id)) {
-      return res.status(403).json({ error: 'Operator role required' });
-    }
-  }
+  const { ok: webhookOk } = await webhookAuth(req, res, 'rcm-ingest');
+  if (!webhookOk) return;
 
   if (!DIA_SUPABASE_URL || !DIA_SUPABASE_KEY) {
     return res.status(500).json({ error: 'DIA Supabase not configured' });
@@ -1892,14 +2032,8 @@ async function handleRcmBackfill(req, res) {
   }
 
   // Webhook endpoints accept PA_WEBHOOK_SECRET instead of user auth
-  if (!authenticateWebhook(req)) {
-    const user = await authenticate(req, res);
-    if (!user) return;
-    const ws = primaryWorkspace(user);
-    if (!ws || !requireRole(user, 'operator', ws.workspace_id)) {
-      return res.status(403).json({ error: 'Operator role required' });
-    }
-  }
+  const { ok: webhookOk } = await webhookAuth(req, res, 'rcm-backfill');
+  if (!webhookOk) return;
 
   if (!DIA_SUPABASE_URL || !DIA_SUPABASE_KEY) {
     return res.status(500).json({ error: 'DIA Supabase not configured' });
@@ -2172,14 +2306,8 @@ async function handleLoopNetIngest(req, res) {
   }
 
   // Webhook auth (same as RCM)
-  if (!authenticateWebhook(req)) {
-    const user = await authenticate(req, res);
-    if (!user) return;
-    const ws = primaryWorkspace(user);
-    if (!ws || !requireRole(user, 'operator', ws.workspace_id)) {
-      return res.status(403).json({ error: 'Operator role required' });
-    }
-  }
+  const { ok: webhookOk } = await webhookAuth(req, res, 'loopnet-ingest');
+  if (!webhookOk) return;
 
   if (!DIA_SUPABASE_URL || !DIA_SUPABASE_KEY) {
     return res.status(500).json({ error: 'DIA Supabase not configured' });
@@ -2484,11 +2612,8 @@ async function handleProcessingComplete(req, res) {
   }
 
   // Auth: PA webhook secret OR an authenticated user (mirrors the listing webhook).
-  const isWebhook = authenticateWebhook(req);
-  if (!isWebhook) {
-    const user = await authenticate(req, res);
-    if (!user) return; // authenticate() already responded 401
-  }
+  const { ok: webhookOk } = await webhookAuth(req, res, 'processing-complete', { requireOperatorRole: false });
+  if (!webhookOk) return; // webhookAuth() already responded 401 (enforce mode only)
 
   const body = req.body || {};
   const internetMessageId = body.internet_message_id;
@@ -2611,11 +2736,8 @@ async function handleProcessingComplete(req, res) {
 // ============================================================================
 async function handleTodoCompletionPoll(req, res) {
   // Auth: PA webhook secret OR an authenticated user (mirrors the other webhooks).
-  const isWebhook = authenticateWebhook(req);
-  if (!isWebhook) {
-    const user = await authenticate(req, res);
-    if (!user) return; // authenticate() already responded 401
-  }
+  const { ok: webhookOk } = await webhookAuth(req, res, 'todo-completion-poll', { requireOperatorRole: false });
+  if (!webhookOk) return; // webhookAuth() already responded 401 (enforce mode only)
 
   const {
     buildStagedWorklist,
@@ -2747,13 +2869,8 @@ async function handleListingWebhook(req, res) {
   }
 
   // Auth: either PA webhook secret OR authenticated user
-  let user = null;
-  const isWebhook = authenticateWebhook(req);
-
-  if (!isWebhook) {
-    user = await authenticate(req, res);
-    if (!user) return;
-  }
+  const { ok: webhookOk, user } = await webhookAuth(req, res, 'listing-webhook', { requireOperatorRole: false });
+  if (!webhookOk) return; // webhookAuth() already responded 401 (enforce mode only)
 
   const {
     deal_id, deal_name, deal_status, deal_owner,
@@ -3057,10 +3174,8 @@ async function handleCrossDomainMatch(req, res) {
   }
 
   // Authenticate — this is a scheduled job, uses standard auth or webhook secret
-  if (!authenticateWebhook(req)) {
-    const user = await authenticate(req, res);
-    if (!user) return;
-  }
+  const { ok: webhookOk } = await webhookAuth(req, res, 'cross-domain-match', { requireOperatorRole: false });
+  if (!webhookOk) return; // webhookAuth() already responded 401 (enforce mode only)
 
   // Resolve workspace — from header, body, or default
   const workspaceId = req.headers['x-lcc-workspace']
