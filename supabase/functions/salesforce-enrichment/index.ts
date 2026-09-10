@@ -32,8 +32,12 @@ const SFENRICH_AUTH_MODE = (Deno.env.get("SFENRICH_AUTH_MODE") || "log").toLower
 // COPILOT_KNOWN_IPS (never hardcode an address in source — this file only
 // knows the FORMAT). Kept as its own env var (not a shared one) because the
 // two functions' caller sets are not asserted to be identical, only their
-// classifier code.
-const SFENRICH_KNOWN_IPS = parseKnownIps(Deno.env.get("SFENRICH_KNOWN_IPS"));
+// classifier code. Falls back to COPILOT_KNOWN_IPS (same project, same known
+// callers) so the operator sets one list unless the two genuinely diverge
+// (Cowork reconcile 2026-09-09).
+const SFENRICH_KNOWN_IPS = parseKnownIps(
+  Deno.env.get("SFENRICH_KNOWN_IPS") ?? Deno.env.get("COPILOT_KNOWN_IPS"),
+);
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

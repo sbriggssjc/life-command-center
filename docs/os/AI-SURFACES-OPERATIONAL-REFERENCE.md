@@ -160,7 +160,7 @@ classifier code:
 | var | default | meaning |
 |---|---|---|
 | `SFENRICH_AUTH_MODE` | `log` | same semantics as `COPILOT_AUTH_MODE` |
-| `SFENRICH_KNOWN_IPS` | unset | same `class:ip-prefix` format as `COPILOT_KNOWN_IPS` |
+| `SFENRICH_KNOWN_IPS` | unset → falls back to `COPILOT_KNOWN_IPS` | same `class:ip-prefix` format as `COPILOT_KNOWN_IPS`; set only if the two functions' known callers diverge |
 
 This function has no `/health`-equivalent bypass — its only GET route, `/diagnostics`, is itself the
 leak, so every route is gated. Full state: `docs/architecture/edge-function-deploy-drift.md`
