@@ -327,3 +327,50 @@ merge's yield from the third claimants, not the pair count:** 10 of Gardner's 14
 co-claimed properties carry the firm's own SPEs as a third current owner (no shared token), so
 `unclassified_rival` moves **−4 / −10**, not −14 / −14; the residue is §3's un-reachable class. Canonical
 record: `docs/architecture/owner-role-classification.md` §9e.
+
+## 10. OWN-T0e-c (2026-09-10) — the missing "sponsor is itself the duplicate" affordance, built
+
+§6/§8 named this gap and closed the one live instance (NGP Group → NGP Capital) by hand. §7's
+`same_party`+`merge_now` can only merge a member OF a group INTO that group's sponsor — it has no
+path for the reverse, where the CARD'S OWN sponsor is itself a recognised duplicate of a different
+sponsor's card. This unit builds that path, per the prompt's instruction to read §6 first and reuse
+the existing signal rather than invent a detector.
+
+**The field keyed on**: no new detector. `findSponsorDuplicateTarget(sponsorId, rows)`
+(`api/_shared/sponsor-family-planner.js`) scans the cache's OTHER breadth rows for one whose
+`spe_ids` (already computed, §3a) contains `sponsorId` and whose `spe_props_max >= 2` (the existing
+`duplicate_entity_suspect` flag). That is exactly the shape a design-time read of the cache showed
+for NGP Group: it sat in NGP Capital's `spe_ids` with `spe_props_max` at 2, while itself heading a
+second breadth card. `annotateSponsorDuplicates(rows)` runs this over the whole live population
+once (before ordering/paging, so the target is found regardless of which page a card lands on) and
+attaches `duplicate_of_sponsor_id/_token/_name` to the row whose sponsor is the duplicate.
+
+**The write**: a fifth verdict, `merge_into_sponsor` — loser = this card's own sponsor, winner = the
+target, through the SAME `lcc_merge_entity` writer, the SAME two soft refreshes
+(`lcc_refresh_buyer_spe_resolved`, `lcc_refresh_priority_queue_resolved`), and the SAME reversal
+(`lcc_unmerge_entity(loser)`) as OWN-T0e-b's `same_party`+`merge_now`. Guards mirror OWN-T0e-b's:
+tied groups refused (no single sponsor to be the loser), self-target refused, both sides must be
+live and carry the SAME recorded `entity_type` (A2a/OWN-T0e-b's rule, unchanged).
+
+**⚠️ The target is re-derived LIVE at verdict time, never trusted from the request or the cached
+card (P188).** `api/admin.js` re-runs the same query the annotator would, scoped to this card's own
+`sponsor_id`, via a PostgREST `spe_ids=cs.{<id>}` contains filter against the cache — the client
+payload for `merge_into_sponsor` carries nothing at all.
+
+**Card**: when `duplicate_of_sponsor_id` is set, the card shows a line naming the recognised
+duplicate-of target and a "Merge THIS sponsor into `<name>` (reversible)" button
+(`dcSponsorFamilyMergeIntoSponsor`, `dc-lanes.js`), behind a `window.confirm`, payload `{}`.
+
+**⚠️ Verified against live data, and the honest result is that nothing exercises it today.** The
+one historical case this affordance was built for (NGP Group ↔ NGP Capital) was already resolved by
+the direct manual merge recorded in §8/§9. A fresh query of the live cache
+(`sponsor_side='breadth' and spe_props_max >= 2`, checking whether any of those groups' `spe_ids`
+is ALSO a `sponsor_id` elsewhere) returns **zero rows** as of 2026-09-10. The affordance is built,
+unit-tested (`test/own-t0e-sponsor-family-lane.test.mjs`, 23 tests, three new assertions
+spot-mutation-verified RED — the tied refusal, the payload-cannot-redirect-target guard, and the
+branch's own existence), and has not yet had a live card to prove itself end to end. Say so rather
+than claiming a verification that did not happen; the next occurrence of this shape (a new sponsor
+duplicate surfacing as the arc's data keeps moving) is what will actually exercise it.
+
+Backlog: `OWN-T0e-c` marked ✅ built. Migration: none (JS-only; the cache/view schema was already
+in place from OWN-T0e/-b).

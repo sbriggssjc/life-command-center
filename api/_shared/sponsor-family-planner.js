@@ -9,7 +9,7 @@
 // LIVE facts a guard needs (registry membership, tombstone), and it returns the
 // decision. That split is what makes every refusal unit-testable.
 //
-// The four verdicts:
+// The five verdicts:
 //   confirm_family — INSERT (sponsor_entity_id, sponsor_token). On a tied group
 //                    the operator names the sponsor; it must be one of the
 //                    group's member_ids.
@@ -18,6 +18,16 @@
 //                    forwarded to merge_duplicate_entities (lcc_merge_entity is
 //                    reversible since P196). Never folded into confirm_family —
 //                    a family row over a duplicate papers over the merge.
+//   merge_into_sponsor — OWN-T0e-c: this card's OWN sponsor is itself a
+//                    recognised duplicate of a DIFFERENT sponsor's card (the
+//                    NGP Group -> NGP Capital shape). same_party/merge_now can
+//                    only merge a member OF THIS group into this card's
+//                    sponsor; this verdict is the missing other direction —
+//                    merge THIS card's sponsor into the other, already-canonical
+//                    sponsor named on `card.duplicate_of_sponsor_id`. That id is
+//                    computed server-side from the cache (annotateSponsorDuplicates)
+//                    and is never accepted from the request (P188) — the client
+//                    payload carries nothing for this verdict.
 //   not_family     — record-only; the subject_ref is excluded from the lane.
 //   research       — a research_task, existing machinery.
 //
@@ -26,7 +36,7 @@
 // grade can find it (design §4; Scott may tighten this to an explicit ack).
 
 export const SPONSOR_FAMILY_DECISION_TYPE = 'sponsor_family_confirm';
-export const SPONSOR_FAMILY_VERDICTS = Object.freeze(['confirm_family', 'same_party', 'not_family', 'research']);
+export const SPONSOR_FAMILY_VERDICTS = Object.freeze(['confirm_family', 'same_party', 'merge_into_sponsor', 'not_family', 'research']);
 export const SPONSOR_FAMILY_CACHE_TABLE = 'lcc_ownt0e_sponsor_family_proposals_cache';
 export const SPONSOR_FAMILY_REGISTRY_TABLE = 'lcc_ownership_sponsor_family';
 
@@ -57,6 +67,51 @@ export function parseSponsorFamilySubjectRef(ref) {
   m = /^t0e:([0-9a-f-]{36}):([a-z0-9]+)$/.exec(s);
   if (m) return { tied: false, sponsor_id: m[1], sponsor_token: m[2] };
   return null;
+}
+
+// OWN-T0e-c: is THIS row's own sponsor itself listed as an "SPE" (duplicate
+// suspect) member of some OTHER card? No new detector — this reads the exact
+// signal the design already computes per group: `spe_ids` (the non-sponsor
+// side of a group) and `spe_props_max` (>= 2 is the existing
+// duplicate_entity_suspect flag, §3a). A row's sponsor_id showing up inside
+// ANOTHER group's spe_ids, on a group whose spe_props_max already reads as a
+// duplicate suspect, is the same shape as NGP Group riding inside NGP
+// Capital's card. Breadth groups only (a tied group has no single sponsor_id
+// to test) and the match excludes the row's OWN group.
+export function findSponsorDuplicateTarget(sponsorId, rows) {
+  if (!sponsorId) return null;
+  const sid = String(sponsorId);
+  const all = Array.isArray(rows) ? rows : [];
+  for (const other of all) {
+    if (!other || other.sponsor_side === 'tied') continue;
+    if (!other.sponsor_id || String(other.sponsor_id) === sid) continue;
+    if (!(Number(other.spe_props_max) >= 2)) continue;
+    const speIds = Array.isArray(other.spe_ids) ? other.spe_ids.map(String) : [];
+    if (speIds.includes(sid)) {
+      return { sponsor_id: String(other.sponsor_id), sponsor_token: other.sponsor_token || null, sponsor_name: other.sponsor_name || null };
+    }
+  }
+  return null;
+}
+
+// Annotates the whole cache array with `duplicate_of_sponsor_id/_token/_name`
+// per row, computed once over the full population (O(n^2) but n ~= 200 —
+// the same population the fetch branch already loads whole). Pure; the fetch
+// branch calls this before building cards, and the verdict branch re-derives
+// the same fact from a fresh cache read at verdict time (never from a stale
+// annotation carried on the request — P188).
+export function annotateSponsorDuplicates(rows) {
+  const all = Array.isArray(rows) ? rows : [];
+  return all.map((r) => {
+    if (!r || r.sponsor_side === 'tied' || !r.sponsor_id) return r;
+    const dup = findSponsorDuplicateTarget(r.sponsor_id, all);
+    if (!dup) return r;
+    return Object.assign({}, r, {
+      duplicate_of_sponsor_id: dup.sponsor_id,
+      duplicate_of_sponsor_token: dup.sponsor_token,
+      duplicate_of_sponsor_name: dup.sponsor_name,
+    });
+  });
 }
 
 // The card the operator sees. Every column the design names is carried, and
@@ -91,6 +146,12 @@ export function buildSponsorFamilyCard(row) {
     same_party_pairs: Number(r.same_party_pairs) || 0,
     duplicate_entity_suspect: Number.isFinite(spePropsMax) && spePropsMax >= 2,
     already_confirmed: r.already_confirmed === true,
+    // OWN-T0e-c: set only when THIS card's own sponsor is itself recognised as
+    // a duplicate-suspect member of a DIFFERENT sponsor's card (annotated
+    // server-side by annotateSponsorDuplicates — never client-supplied).
+    duplicate_of_sponsor_id: r.duplicate_of_sponsor_id ? String(r.duplicate_of_sponsor_id) : null,
+    duplicate_of_sponsor_token: r.duplicate_of_sponsor_token || null,
+    duplicate_of_sponsor_name: r.duplicate_of_sponsor_name || null,
     // evidence about a DIFFERENT question (P188): the token is confirmed for
     // CONTACT matching in lcc_owner_sponsor_domain. It settles nothing here.
     also_confirmed_for_contacts: r.also_confirmed_for_contacts === true,
@@ -173,6 +234,27 @@ export function validateSponsorFamilyVerdict(card, verdict, payload, live) {
     }
     return { ok: true, verdict: v, sponsor_entity_id: winner, sponsor_token: tok,
       duplicate_entity_id: dup, merge_now: mergeNow };
+  }
+
+  if (v === 'merge_into_sponsor') {
+    // OWN-T0e-c: the reverse direction of same_party/merge_now — this card's
+    // OWN sponsor (the loser) merges INTO the target sponsor named on the
+    // card's duplicate_of_sponsor_id (the winner). Tied groups have no single
+    // sponsor_id to be the loser, so they are refused here (the operator names
+    // a sponsor via confirm_family/same_party first, which may then surface a
+    // NEW card for the resolved sponsor on a later refresh).
+    if (card.sponsor_side === 'tied') return { ok: false, error: 'tied group has no single sponsor to merge — name a sponsor first' };
+    const loser = card.sponsor_id ? String(card.sponsor_id) : null;
+    const winner = card.duplicate_of_sponsor_id ? String(card.duplicate_of_sponsor_id) : null;
+    if (!loser) return { ok: false, error: 'card has no sponsor_id' };
+    if (!winner) return { ok: false, error: 'this card carries no recognized duplicate-of target — nothing to merge into' };
+    if (winner === loser) return { ok: false, error: 'duplicate-of target is the card\'s own sponsor' };
+    if (lv.sponsor_is_tombstone === true) return { ok: false, error: 'sponsor entity is already merged away' };
+    if (lv.duplicate_is_tombstone === true) return { ok: false, error: 'duplicate-of target is merged away — resolve through lcc_entity_survivor first' };
+    if (lv.sponsor_type && lv.duplicate_type && lv.sponsor_type !== lv.duplicate_type) {
+      return { ok: false, error: 'entity_type differs (' + lv.sponsor_type + ' vs ' + lv.duplicate_type + ') — not a duplicate, retype first' };
+    }
+    return { ok: true, verdict: v, sponsor_entity_id: winner, sponsor_token: tok, duplicate_entity_id: loser, merge_now: true };
   }
 
   return { ok: true, verdict: v, sponsor_entity_id: card.sponsor_id ? String(card.sponsor_id) : null, sponsor_token: tok };
