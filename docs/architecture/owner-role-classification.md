@@ -991,3 +991,50 @@ predicted-vs-actual for every row (only Gardner was walked end-to-end); `v_lcc_e
 14-co-claimed re-verification; a full mutation-pass count for every guard assertion (spot-checked one). Two
 "Research In Progress" placeholder rows sit in the lane view at `$0` current rent — worth a `junk_entity_review`
 question before anyone retypes them, not answered here.
+
+## 9g. ✅ C13g-min-lane-mutation SHIPPED 2026-09-09 — the guard is now mutation-verified; the two §9f gaps closed
+
+`test/c13g-min-lane.test.mjs` is now **14 tests, 46/46 targeted mutations RED** (16 planner-behaviour
+mutations + 18 admin.js/ops.js/dc-lanes.js/review-shared.js structural mutations + 12 SQL-migration
+mutations, run with comments stripped first, per OCR1c order). Two assertions **survived their first
+mutation and were rewritten, not deleted**:
+
+- **The ordering test's own data was the defect.** The three no-block rows (`no-block-low`/`-high`/
+  `-null`) happened to sort in the SAME order alphabetically as by rent, so deleting the rent-desc
+  tiebreak from `orderEntityRetypeRows` left the test green. Renamed to `aaa-low-rent` / `mmm-null-rent`
+  / `zzz-high-rent` — anti-alphabetical to their rent rank — so a comparator that fell through to the
+  name compare produces a visibly different order.
+- **The registry-membership regex matched the WRONG occurrence.** `/'entity_type_review',/` also matches
+  the unrelated `research_type: 'entity_type_review',` literal inside the verdict branch's own
+  research-task payload, so renaming the actual `FEDERATED_DECISION_TYPES` entry to
+  `'entity_type_review_x'` left the assertion passing against the OTHER string — the exact "a guard that
+  matches a shape is defeated by a name that legitimately appears elsewhere" class this file cites for
+  OCR2/UXT0/UXT1a-gates. Re-anchored on `'sponsor_family_confirm',[\s\S]{0,400}'entity_type_review',`,
+  the same adjacency the registries-ordering note above already documents.
+
+Two new assertions cover the same-day hotfixes' repo-side twins: the candidate-view migration must
+reference `lcc_ownt0e_sponsor_family_proposals_cache` and never the bare (slow)
+`v_lcc_ownt0e_sponsor_family_proposals`; `lcc_retype_entity`'s `p_decision_id` must be `bigint` (matching
+`lcc_decisions.id`), with the old `uuid` overload DROPPED (N15d/B1: a defaulted overload left standing
+makes the old call shape 42725-ambiguous) — this is the migration's own apply-time DO block, now also
+checked from the repo side rather than only at apply time.
+
+**The two §9f-named measurements, done, rolled back:**
+
+- **`v_lcc_entity_role_ambiguity` before/after a retype:** round-tripped `Foulger Pratt`
+  (person → `lcc_unretype_entity` → person → `lcc_retype_entity` → organization, 0 residue). It carries
+  **0 rows for this entity in either state** — the ambiguity view's arms (`one_off_owner`
+  corroboration, `user_owner`) never fired on Foulger Pratt person-typed or organization-typed. Not
+  every retype moves that view; this one didn't.
+- **The Tier 0 `people` bench:** Foulger Pratt carried **1** Tier 0 candidate card as organization,
+  **0** as person (confirmed by the same round trip) — Tier 0 requires an `owner_id`/`person_id` match
+  against an organization-typed owner, so a person-typed row is structurally invisible to it. Read
+  across all 11 non-tombstoned retyped entities (2 of the 13 — Gardner-Tanenbaum, MassMutual Life —
+  have since been merged away via the OWN-T0e-b `same_party` lane and are excluded): **`UIRC` 7 cards,
+  `Global Net Lease` 2, `Foulger Pratt` 1, the other 8 zero — 10 Tier 0 cards total that could not have
+  existed before this arc's retypes.** §9f's builder measured only Gardner/MassMutual (both negative on
+  the corroboration column); the corroboration-column check was right for those two and incomplete as a
+  claim about the lane — the bench moved for three others.
+
+**Not done, deliberately (budget):** the placeholder-guard unit (`C13g-min-lane-placeholder`) — two
+"Research In Progress" rows still reach the lane where neither verdict fits; left as its own backlog row.

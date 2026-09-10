@@ -84,13 +84,17 @@ test('keep_person and research never consult the live entity facts', () => {
 });
 
 test('ordering: a card that blocks an OWN-T0e confirm sorts first, rent desc within, and a null rent sorts last', () => {
+  // Names are deliberately anti-alphabetical to their rent rank (aaa=$5, mmm=null,
+  // zzz=$999) so a comparator that dropped the rent tiebreak and fell through to
+  // the name compare would sort aaa/mmm/zzz -- a DIFFERENT order from zzz/aaa/mmm --
+  // instead of coincidentally reproducing the right answer.
   const rows = [
-    { name: 'no-block-low', current_rent: 5, blocks_own_t0e_sponsor_id: null },
-    { name: 'no-block-null', current_rent: null, blocks_own_t0e_sponsor_id: null },
+    { name: 'aaa-low-rent', current_rent: 5, blocks_own_t0e_sponsor_id: null },
+    { name: 'mmm-null-rent', current_rent: null, blocks_own_t0e_sponsor_id: null },
     { name: 'blocker-low', current_rent: 1, blocks_own_t0e_sponsor_id: B },
-    { name: 'no-block-high', current_rent: 999, blocks_own_t0e_sponsor_id: null },
+    { name: 'zzz-high-rent', current_rent: 999, blocks_own_t0e_sponsor_id: null },
   ];
-  assert.deepEqual(orderEntityRetypeRows(rows).map((r) => r.name), ['blocker-low', 'no-block-high', 'no-block-low', 'no-block-null']);
+  assert.deepEqual(orderEntityRetypeRows(rows).map((r) => r.name), ['blocker-low', 'zzz-high-rent', 'aaa-low-rent', 'mmm-null-rent']);
 });
 
 test('the verdict vocabulary is exactly three, closed', () => {
@@ -115,7 +119,11 @@ test('registered in all four registries (admin set, ops set, lane meta + tile, r
   const ops = strip(readFileSync(new URL('../ops.js', import.meta.url), 'utf8'));
   const dc = strip(readFileSync(new URL('../dc-lanes.js', import.meta.url), 'utf8'));
   const rs = strip(readFileSync(new URL('../review-shared.js', import.meta.url), 'utf8'));
-  assert.match(admin, /'entity_type_review',/);
+  // ⚠️ a bare `/'entity_type_review',/` also matches the UNRELATED
+  // `research_type: 'entity_type_review',` literal inside the verdict branch's
+  // own research-task payload -- anchor on the block that actually names the
+  // FEDERATED_DECISION_TYPES registry (`sponsor_family_confirm` precedes it there).
+  assert.match(admin, /'sponsor_family_confirm',[\s\S]{0,400}'entity_type_review',/);
   assert.match(admin, /case 'entity_type_review': return entityRetypeSubjectRef\(s\);/);
   assert.match(ops, /'entity_type_review',\s*'sponsor_family_confirm',\s*\]\);/, 'in _DC_FEDERATED');
   assert.match(ops, /\{ dt: 'entity_type_review', label: [^}]+renderFederatedLane\('entity_type_review'\)/);
@@ -171,4 +179,28 @@ test('the migration is the single source for the write, its reversal, and the pr
   assert.match(sql, /has_function_privilege\('anon', 'lcc_unretype_entity/);
   assert.match(sql, /if p_to is distinct from 'organization' then/, 'destination is a closed allowlist, not coerced');
   assert.match(sql, /if v_row\.entity_type::text is distinct from 'person' then/, 'source must be person');
+});
+
+// ── the two same-day hotfixes: repo-side twins of the DB-side positive controls ──
+test('the candidate view migration reads the OWN-T0e CACHE, never the ~20-35s proposals view', () => {
+  const sql = readFileSync(new URL('../supabase/migrations/20261101130000_lcc_c13g_min_lane_view_reads_cache.sql', import.meta.url), 'utf8')
+    .replace(/^\s*--.*$/gm, '');
+  assert.match(sql, /create or replace view v_lcc_entity_retype_candidates as/);
+  assert.match(sql, /lcc_ownt0e_sponsor_family_proposals_cache/, 'must read the cache table');
+  assert.doesNotMatch(sql, /\bv_lcc_ownt0e_sponsor_family_proposals\b(?!_cache)/,
+    'must never read the bare (slow) proposals view');
+});
+
+test('lcc_retype_entity.p_decision_id matches lcc_decisions.id\'s type (bigint), and the uuid signature is dropped', () => {
+  const sql = readFileSync(new URL('../supabase/migrations/20261101140000_lcc_c13g_min_retype_decision_id_bigint.sql', import.meta.url), 'utf8')
+    .replace(/^\s*--.*$/gm, '');
+  assert.match(sql, /drop function if exists lcc_retype_entity\(uuid, text, uuid, text, text\)/,
+    'the mismatched uuid overload must be dropped, or the 2-arg/old-arg call becomes ambiguous (N15d/B1)');
+  assert.match(sql, /p_decision_id bigint default null/, 'p_decision_id must be bigint, matching lcc_decisions.id');
+  assert.match(sql, /revoke all on function lcc_retype_entity\(uuid, text, bigint, text, text\) from public, anon, authenticated/);
+  assert.match(sql, /has_function_privilege\('anon', 'lcc_retype_entity\(uuid, text, bigint, text, text\)'/);
+  // the apply-time DO block that proves the two types agree in the live DB --
+  // this is its repo-side twin, so a future column-type change is caught here too.
+  assert.match(sql, /select data_type into v_dec from information_schema\.columns where table_name='lcc_decisions' and column_name='id'/);
+  assert.match(sql, /if v_dec is distinct from v_par then/);
 });

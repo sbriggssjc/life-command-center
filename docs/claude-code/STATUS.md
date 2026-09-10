@@ -16,6 +16,28 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-09 — C13g-min-lane-mutation reconciled (PR #2222): verified on `main`, tests-only so nothing to deploy; the retype arc's build side is closed
+
+Re-ran `test/c13g-min-lane.test.mjs` on `main` after the merge: **14/14**; the builder's 46/46 RED is its own
+claim (not re-run here — a mutation pass is the builder's deliverable, the reconcile checks the guard is green
+where it ships). Canonical §9g, backlog ✅ and STATUS were written by the builder in the same commit, as the
+protocol asks. **The one finding worth carrying:** the Tier 0 bench **GAINED 10 cards** from three retyped
+entities (UIRC 7, Global Net Lease 2, Foulger Pratt 1) — an org-typed owner is eligible for that bench and a
+person-typed one is not, so §9f's "retyping touches nothing on Tier 0" was true of Gardner/MassMutual and
+false as a lane claim. Same shape as the 12 merge groups: **a retype is a visibility change for every
+consumer that filters on type, in both directions.** `v_lcc_entity_role_ambiguity` read 0 before and after
+(not every retype moves it). Two assertions survived their first mutation and were rewritten (test rows that
+sorted identically by name and rent; a registry regex matching a `research_type` literal) — the mutation pass
+finding them, not a read. §3 (placeholder guard) skipped by design → `C13g-min-lane-placeholder` stays open.
+Live at 23:26 UTC: retype ledger 13, merge log 151, `unclassified_rival` 1,501, lane visible 2 (`Kvalitena AB`,
+`Research In Progress`), the 12 merge groups not yet worked. Prompt + response → `done/`.
+
+**Next step, named.** Operator: the 12 byte-identical merge groups on "Duplicate entities — merge" and
+`Kvalitena AB` on the retype lane. Build: nothing further in this arc is worth a turn until those are worked
+and re-measured — the remaining open items are small and filed (`C13g-min-lane-placeholder`, the OWN-T0e-c
+sponsor-is-duplicate affordance at 1 residual property, the generic-token ack with still zero live instances).
+After that, pick the next thread from the backlog rather than extending this one.
+
 ## 2026-09-09 — C13g-min-lane-mutation: guard is now 14 tests / 46 mutations RED / 46; both §9f gaps closed
 
 `test/c13g-min-lane.test.mjs` mutation-passed end to end (comments stripped first). Two assertions
