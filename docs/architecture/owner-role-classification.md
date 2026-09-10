@@ -1082,3 +1082,44 @@ as an unconditional person signal (no further name check inside that function fo
   (Trust/Holdings/Properties/Capital/Realty/Company suffixes → organization; real two-token individual
   names stay person; an explicit vendor `type` still wins), and asserts the function body calls
   `hasFirmSuffix(` and can never again contain the narrow inline alternation.
+
+## §9i — C13g-costar-stoplist: the "never reads it back" claim above was WRONG (2026-09-10)
+
+§9h's own bullet said CoStar's scanner-set `type` "could disagree with what the backend would have
+said... and `contactEntityType()` never reads the scanner's own verdict back." **Re-traced precisely,
+and that is false: `contactEntityType()` checks `contact.type` FIRST, before ever falling back to
+`hasFirmSuffix`.** CoStar's `_forsale-contacts-parse.js` (`looksLikePerson`/`parseTrailingLabelBlock`/
+`mapForSaleFigures`) always stamps an explicit `type` on every contact it emits, and that snapshot
+`contacts[]` array flows unmodified from `content/costar.js` → the stored `entity.metadata.contacts` →
+`unpackContacts()` → `contactEntityType(contact)` — no field is dropped or renamed in transit. So the
+scanner's verdict was already winning outright; the backend's list was never consulted for this path.
+
+- **The two lists were never independently-drifting copies of the same population.** `hasFirmSuffix()`
+  (`entity-link.js`) already covers nearly the ENTIRE extension stoplist — Trust, Holdings, Properties,
+  Capital, Realty, Ventures, Management, Company/Co, Group — missing only 4 brokerage BRAND names
+  (newmark/cbre/jll/colliers) the extension additionally screens for (those never mattered for the
+  32-row residue: a brand name appearing inside a *contact's own name* is a vanishingly narrow case).
+- **The real, load-bearing gap ran the OTHER direction.** The extension's list is missing several terms
+  `hasFirmSuffix()` has: **Bancorp, Investments, Development/Developers, Fund, Ptnrs, Cos, Property
+  (singular), Enterprises, Bank, Mgmt (abbreviated).** A name like `Sentinel Bancorp` or `Meridian
+  Investments` trips `hasFirmSuffix()` but not the extension's `looksLikePerson()` — so the extension
+  stamps `type:'person'` on a real firm, and (before this fix) that explicit-but-wrong verdict was
+  trusted absolutely, minting the firm as a person entity. **This is case (a)** from the residue's own
+  framing (a genuine stoplist-coverage gap) — but inverted: it is the CoStar list under-covering, not
+  the backend under-covering the CoStar terms.
+- **Fix, shipped:** `contactEntityType()` now treats an explicit `type:'person'` as a FLOOR rather than
+  an absolute — `hasFirmSuffix(name)` still overrides it to `'organization'` when the two disagree. This
+  is one-directional only: an explicit `'organization'`/`'entity'` type is NEVER second-guessed by a
+  name heuristic (the same P158a discipline — a name test can produce a false ORG positive on a person,
+  e.g. two capitalised tokens, so downgrading an explicit org verdict on a heuristic would be the
+  mistake; upgrading a person verdict to org on the SAME already-graded firm-suffix guard used
+  everywhere else in the repo is the safe direction). No second stoplist was created and no extension
+  code was touched — same precedent as RCA in §9h: the shared `hasFirmSuffix()` guard is now the single
+  floor under every capture path's classification, explicit-type-present or not.
+- **Scope: forward-mint only, same as §9h.** Existing mistyped entities from before this fix are not
+  bulk-retyped — they remain `entity_type_review` lane population.
+- Guard: `test/c13g-contact-entity-type.test.mjs` (11 tests) — the old "explicit type wins" assertion
+  (`{name:'ACME LLC', type:'person'} → 'person'`) was itself the bug pinned as correct behaviour;
+  replaced with the floor assertion (`Sentinel Bancorp`/`Meridian Investments`/`Ashford Development`,
+  all `type:'person'` → `'organization'`), plus a separate assertion that an explicit `'organization'`
+  type is never downgraded.

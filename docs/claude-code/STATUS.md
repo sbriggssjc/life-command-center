@@ -16,7 +16,37 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
-## 2026-09-10 — C13g-costar-stoplist prompt drafted and sent; a self-caught stat inversion fixed in the pipeline page
+## 2026-09-10 — C13g-costar-stoplist: traced and SHIPPED. Verdict (b) was ruled out, (c) was ruled out, the real cause was a case-(a) gap running the OPPOSITE direction from the row's own framing
+
+Traced the 32-row CoStar residue precisely before writing any fix, per the prompt's own instruction not
+to assume the prior "never read back" framing. Result: **`contactEntityType()` DOES check `contact.type`
+first** (verdict (b)/(c) — a dropped or renamed field — ruled out by reading the code: the extension's
+`contacts[]` snapshot array flows unmodified from `content/costar.js` through `entity.metadata.contacts`
+into `unpackContacts()`). CoStar's `_forsale-contacts-parse.js::looksLikePerson()` always stamps an
+explicit `type`, so its verdict was already winning outright before this fix — the backend's
+`hasFirmSuffix()` guard was never being consulted on this path at all.
+
+**The real gap (case (a), but inverted from how the backlog row framed it):** the two stoplists are not
+independently-drifting copies of one list — `hasFirmSuffix()` already covers nearly the entire extension
+list (Trust/Holdings/Properties/Capital/Realty/Ventures/Management/Company), missing only 4 brokerage
+brand names (newmark/cbre/jll/colliers) that never mattered for this residue. The load-bearing gap runs
+the OTHER way: the extension's list is **missing** terms `hasFirmSuffix()` has — Bancorp, Investments,
+Development/Developers, Fund, Ptnrs, Cos, Property (singular), Enterprises, Mgmt-abbrev — so a name like
+`Sentinel Bancorp` trips the backend's guard but not the extension's, and the extension's (trusted,
+explicit) `type:'person'` verdict was minting real firms as people.
+
+**Fix shipped:** `contactEntityType()` (`api/_handlers/sidebar-pipeline.js`) now treats an explicit
+`type:'person'` as a floor, not an absolute — `hasFirmSuffix(name)` overrides it to `'organization'` when
+they disagree, one-directional only (an explicit `'organization'`/`'entity'` type is never second-guessed
+by a name heuristic — downgrading would repeat the P158a false-org-positive mistake). No second stoplist
+created; no extension code touched, same precedent as RCA in the original C13g fix. Guard
+`test/c13g-contact-entity-type.test.mjs` — 11 tests, all pass; the old "explicit type wins" assertion
+(`ACME LLC` + `type:'person'` → `'person'`) was itself pinning the bug and is replaced with the floor
+assertion. Forward-mint only — existing mistyped entities stay `entity_type_review` lane population, not
+bulk-retyped here. Docs: `owner-role-classification.md` §9i (new); `PLANNED-BACKLOG.md` row
+`C13g-costar-stoplist` marked ✅.
+
+## 2026-09-10 (earlier) — C13g-costar-stoplist prompt drafted and sent; a self-caught stat inversion fixed in the pipeline page
 
 Prompt drafted at `docs/claude-code/prompts/C13g-costar-stoplist.md`, sent to CC, not yet run. It does
 NOT assume the prior response's "never read back" framing is correct — `contactEntityType()` actually
