@@ -16,54 +16,45 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
-## 2026-09-10 — C13g-costar-stoplist: traced and SHIPPED. Verdict (b) was ruled out, (c) was ruled out, the real cause was a case-(a) gap running the OPPOSITE direction from the row's own framing
+## 2026-09-10 — CFE-RUNAWAY root-caused and fixed in `Dialysis` (PR #7398, not this repo) — the exact call site named, two adjacent defects decided, and a real-but-unconfirmed drop in live timeouts
 
-Traced the 32-row CoStar residue precisely before writing any fix, per the prompt's own instruction not
-to assume the prior "never read back" framing. Result: **`contactEntityType()` DOES check `contact.type`
-first** (verdict (b)/(c) — a dropped or renamed field — ruled out by reading the code: the extension's
-`contacts[]` snapshot array flows unmodified from `content/costar.js` through `entity.metadata.contacts`
-into `unpackContacts()`). CoStar's `_forsale-contacts-parse.js::looksLikePerson()` always stamps an
-explicit `type`, so its verdict was already winning outright before this fix — the backend's
-`hasFirmSuffix()` guard was never being consulted on this path at all.
+**The prompt.** `docs/claude-code/prompts/done/CFE-RUNAWAY-cms-financial-estimates-repair.md`, filed
+2026-09-10 for the `Dialysis` repo (this session cannot reach it directly — no GitHub credentials in
+this cloud environment, confirmed again today via a failed `WebFetch` on the PR URL, 404). Handed to
+Claude Code on Scott's desktop, where `Dialysis` is actually cloned.
 
-**The real gap (case (a), but inverted from how the backlog row framed it):** the two stoplists are not
-independently-drifting copies of one list — `hasFirmSuffix()` already covers nearly the entire extension
-list (Trust/Holdings/Properties/Capital/Realty/Ventures/Management/Company), missing only 4 brokerage
-brand names (newmark/cbre/jll/colliers) that never mattered for this residue. The load-bearing gap runs
-the OTHER way: the extension's list is **missing** terms `hasFirmSuffix()` has — Bancorp, Investments,
-Development/Developers, Fund, Ptnrs, Cos, Property (singular), Enterprises, Mgmt-abbrev — so a name like
-`Sentinel Bancorp` trips the backend's guard but not the extension's, and the extension's (trusted,
-explicit) `type:'person'` verdict was minting real firms as people.
+**The response**, recovered from Scott's saved transcript
+(`CFE Runaway clinic financial estimates surface response.docx`, untracked) the same way
+`RAILWAY-PA-SECRET-log` was recovered — full detail in
+`docs/claude-code/responses/done/CFE-RUNAWAY-cms-financial-estimates-repair.response.md`. In short:
+**`FinancialEstimateTracker._pk_column()` (`financial_estimate_tracker.py:463-472`) called
+`get_live_table_columns(TABLE_NAME, force_refresh=True)` once per clinic, and `force_refresh=True`
+was the exact cause of the two unfiltered per-record probes this session measured live on 09-10.**
+Fix: cache the PK column once per run, never `force_refresh`. Two adjacent defects (a silently-broken
+`properties.estimated_annual_revenue` propagation, and a warning that logged unconditionally even on
+success) were fixed alongside it, not left open. The five `facility_patient_counts` field drops were
+decided per-field (4 intentional, 1 a real gap with a migration filed for review). Retention
+deliberately not executed — proposal only, per the prompt's own scope limit.
+**`B6d-cms-restart` checked and reported as probably NOT the same crash mechanism** — worth carrying
+into that row's own next read, not assumed answered.
 
-**Fix shipped:** `contactEntityType()` (`api/_handlers/sidebar-pipeline.js`) now treats an explicit
-`type:'person'` as a floor, not an absolute — `hasFirmSuffix(name)` overrides it to `'organization'` when
-they disagree, one-directional only (an explicit `'organization'`/`'entity'` type is never second-guessed
-by a name heuristic — downgrading would repeat the P158a false-org-positive mistake). No second stoplist
-created; no extension code touched, same precedent as RCA in the original C13g fix. Guard
-`test/c13g-contact-entity-type.test.mjs` — 11 tests, all pass; the old "explicit type wins" assertion
-(`ACME LLC` + `type:'person'` → `'person'`) was itself pinning the bug and is replaced with the floor
-assertion. Forward-mint only — existing mistyped entities stay `entity_type_review` lane population, not
-bulk-retyped here. Docs: `owner-role-classification.md` §9i (new); `PLANNED-BACKLOG.md` row
-`C13g-costar-stoplist` marked ✅.
+**What this session could independently check, and what it could not.** `Dialysis`'s own diff, tests,
+and PR content are **entirely unverified by this session** — no repo access, so everything above is
+taken from the transcript, not re-read. What IS independently verifiable from here: Supabase's own
+logs. Read just now (2026-09-10 ~15:14 UTC): **postgres statement timeouts on Dialysis_DB dropped
+from the ~400/h rate measured this morning to 2 in a 20-minute window**, and **zero `python-httpx`
+requests of any kind to `clinic_financial_estimates` in the preceding 24 minutes** — both consistent
+with the fix being live, but **neither is proof of it**: the service could simply be paused (Scott was
+walked through pausing it earlier today) or idle between scheduled passes, and this session cannot
+tell those apart from Supabase logs alone. Backlog row moved 🔴 → 🟡, explicitly flagged as
+**not yet confirmed merged/deployed** — PR `sbriggssjc/Dialysis#7398`, branch
+`claude/cfe-runaway-financial-estimates-b913114d`. 👤 **Scott: confirm whether #7398 merged, and
+whether `cms-ingestion` was paused separately** — the STATUS row's ✅/🟡 depends on which one
+actually explains the drop.
 
-## 2026-09-10 (earlier) — C13g-costar-stoplist prompt drafted and sent; a self-caught stat inversion fixed in the pipeline page
-
-Prompt drafted at `docs/claude-code/prompts/C13g-costar-stoplist.md`, sent to CC, not yet run. It does
-NOT assume the prior response's "never read back" framing is correct — `contactEntityType()` actually
-does honor an explicit `contact.type` before falling back to `hasFirmSuffix()`, which the prior framing
-glossed over — so the prompt's first job is tracing the real 32-row CoStar residue to find which of three
-possible causes (wrong stoplist, dropped/renamed field, or type never sent) is actually true, rather than
-guessing and fixing the wrong layer. Backlog row `C13g-costar-stoplist` annotated with the draft/send
-date rather than left silent between "named" and "fixed."
-
-**Also fixed while re-reading the pipeline page for this:** `ownership-truth-pipeline-state.md`'s Stage 4
-section had the `UX-T1a-reach` owner-contact-linkage stat backwards — it read "847 of 6,480 owners have
-no linked person at all," when the source row in `PLANNED-BACKLOG.md` says the opposite: only 847 of
-6,480 (13%) **have** a linked person; 5,633 (87%) have none. Corrected in place — this was my own error,
-caught before it propagated into an answer to Scott, not something the builder produced.
-
-**Next step.** Build: nothing to run until CC returns on the stoplist prompt. Operator: unchanged — the
-12 duplicate-entity merge groups remain the only outstanding piece of the retype arc.
+**Next, once confirmed live:** re-measure COPILOT-SYNC-500 (its row already names CFE-RUNAWAY as the
+blocking cause) and CAL-RECONCILE-STUCK; only then re-open UX34a's `v_cms_data` timing, which was
+measured under this load.
 
 ## 2026-09-10 — C13g capture-path fix reconciled (PR #2234): verified independently, live and deployed; one residual gap filed, not lost
 
