@@ -16,35 +16,37 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
-## 2026-09-10 — ACI-phase0 reconciled (PR #2243): verified independently, live and deployed, docs were already accurate
+## 2026-09-10 — CFE-RUNAWAY and RATINGS-INSERT-COLLISION confirmed merged in `Dialysis`; a fresh test run shows both holding, but a new bug found: `properties.estimated_annual_revenue` propagation still fails 100% of the time — PROPREV1 prompt drafted and sent
 
-Confirmed, not taken on faith: `origin/main` at `13c258cd`; Railway `/version` reads `13c258cde59e` —
-exact match, live. Re-ran both new guards on `main` independently: `test/ac1b-university-scope.test.mjs`
-+ `test/ac10-promote-linked-owner-contacts.test.mjs` — **16/16**.
+Scott confirmed both `Dialysis` branches merged. The test run in flight was cut short mid-run by that
+merge's auto-deploy restarting the container (`Stopping Container`, expected — `Dialysis` auto-deploys
+Railway on merge to `main`, no manual step). A 27-second excerpt just before the stop
+(2026-09-10 16:27:02–16:27:29 UTC) is the first log to actually reach the financial-estimates
+propagation phase, and it's good news on the two fixed bugs: every `supabase_execute_wrapper` call
+shows `count=1` (no recurrence of CFE-RUNAWAY's full-table probes) and zero `ratings`/`circuit_open`/
+`duplicate key` mentions anywhere (RATINGS-INSERT-COLLISION holding too).
 
-**Live DB re-checks, independent of the response transcript:** `v_lcc_ac10_promote_candidates` **0**
-remaining (was 251); `v_lcc_top_seller_prospects` university-named rows **1** (matches the claimed
-credit-union residual); the Pulliam merge is real — `entities.merged_into_entity_id` on the loser
-(`537ecdd2-…`) points at the winner (`d6b0d27e-…`), `lcc_entity_merge_log` id 170 shows the same
-loser/winner pair, `unmerged_at` null; cron `lcc-ac10-promote-linked-contacts` registered, schedule
-`12 6 * * *`, `active=true`; both new SECURITY DEFINER functions in the AC10 migration carry their
-REVOKE/`has_function_privilege` stanzas (9 hits, SEC1 doctrine intact).
+**New problem surfaced, not previously caught:** CFE-RUNAWAY's own response claimed
+`properties.estimated_annual_revenue` propagation was fixed (client threaded through the schema-guard's
+cache-miss check), with 8 new tests reported passing. **Live, in this window, it failed 54/54 times
+(100%)** — `Propagating to properties: {'estimated_annual_revenue': …}` immediately followed every
+time by `[schema_guard] Dropped invalid fields for properties: estimated_annual_revenue (live check
+kept: none)`. "Kept: none" every single time, not just this one field — the live check is returning
+nothing at all. The five already-decided-intentional `facility_patient_counts` drops also appear (56×
+each) and are correctly expected — not re-litigated.
 
-**No documentation corrections needed this round** — the builder's own reconciliation commit
-(`81a44646`) already updated `PLANNED-BACKLOG.md`'s three AC1b/AC7/AC10 rows, `STATUS.md`, and
-`account-based-contact-intelligence.md` §7b's stale-count flag with the real, re-measured numbers
-(251/$329.4M, not the August 11/$240.5M), correctly in the same PR rather than left for reconciliation
-to catch. Prompt and response moved to `prompts/done/` and `responses/done/` with a transcribed
-`.response.md` twin.
+**Shipped this turn:** `docs/claude-code/prompts/PROPREV1-estimated-annual-revenue-propagation-still-dropped.md`
+drafted and sent to CC for `Dialysis`. It does not assume CFE-RUNAWAY's fix is simply absent — three
+hypotheses are laid out (fix didn't land as described, fix landed but the live check fails for an
+unrelated reason, or the 8 passing tests don't exercise the real live-check path) — and explicitly asks
+for the test-gap itself to be explained, since "tests pass" and "still broken live" together are the
+actual finding here, not just the drop itself. **Backlog row added, 🔍.**
 
-**Next step.** Phase 0 of the owner-contact automation plan (`account-based-contact-intelligence.md`
-§7c) is fully closed. Phase 1 (finish Tier 0 deterministic linkage — `AC1d` remaining pieces, `AC1e`
-SPE-subsidiary inheritance) and Phase 2 (bench ranking + Ollama role inference — the REIT/fund
-"who's in charge" build Scott asked for by name) can now both build against an accurate, unstale
-picture. Phase 2 is the larger, more novel piece and the one Scott specifically named; drafting that
-prompt next.
+**Next step.** Nothing to run until CC returns on PROPREV1. Once merged and auto-deployed, trigger one
+more fresh run to confirm all three fixes (CFE-RUNAWAY, RATINGS-INSERT-COLLISION, PROPREV1) landed
+together, per Scott's own plan.
 
-## 2026-09-10 — RATINGS-INSERT-COLLISION fixed in `Dialysis` (not this repo) — the prompt's own hypothesis corrected, not just fixed; pushed to a branch, **not yet merged**
+## 2026-09-10 — RATINGS-INSERT-COLLISION fixed in `Dialysis` (not this repo) — the prompt's own hypothesis corrected, not just fixed; pushed to a branch, **now merged and confirmed by Scott**
 
 **The prompt.** `docs/claude-code/prompts/done/RATINGS-INSERT-COLLISION-cms-ratings-upsert.md`, drafted
 2026-09-10 after this session found the `ratings` circuit-breaker/duplicate-key pattern live in a
