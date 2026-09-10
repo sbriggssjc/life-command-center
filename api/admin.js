@@ -60,6 +60,10 @@ import {
   entityRetypeSubjectRef, buildEntityRetypeCard, validateEntityRetypeVerdict, orderEntityRetypeRows,
 } from './_shared/entity-retype-planner.js';
 import {
+  planAmbiguousEntityMerge, ambiguousEntitySubjectRef, buildAmbiguousEntityCard,
+  validateAmbiguousEntityVerdict,
+} from './_shared/ambiguous-entity-merge-planner.js';
+import {
   applyTier0Attach, tier0BatchTag, TIER0_SOURCE_CONFIRM,
 } from './_shared/tier0-attach-effect.js';
 import {
@@ -123,6 +127,7 @@ import { artifactSafeName } from './_shared/artifact-storage.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 import { handleOwnershipChainDraftTick } from './_handlers/ownership-chain-draft-tick.js';
 import { handleTier0AutoAttachTick } from './_handlers/tier0-auto-attach-tick.js';
+import { handleAmbiguousEntityAutomergeTick } from './_handlers/ambiguous-entity-automerge-tick.js';
 import { handleBenchRankTick } from './_handlers/bench-rank-tick.js';
 import { handleBriefingAnalystTakeTick } from './_handlers/briefing-analyst-take-tick.js';
 import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
@@ -253,6 +258,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'property-twin-assist-tick': return handlePropertyTwinAssistTick(req, res);
     case 'ownership-chain-draft-tick': return handleOwnershipChainDraftTick(req, res);
     case 'tier0-auto-attach-tick':    return handleTier0AutoAttachTick(req, res);
+    case 'ambiguous-entity-automerge-tick': return handleAmbiguousEntityAutomergeTick(req, res);
     case 'bench-rank-tick':          return handleBenchRankTick(req, res);
     case 'briefing-analyst-take-tick': return handleBriefingAnalystTakeTick(req, res);
     case 'sf-link-assist-tick':        return handleSfLinkAssistTick(req, res);
@@ -7479,6 +7485,19 @@ const FEDERATED_DECISION_TYPES = new Set([
   // sec 9b) -- retype_organization is the ONE write, keep_person is
   // record-only, research spawns a task. Reverse: rpc/lcc_unretype_entity.
   'entity_type_review',
+  // PDR1 / P13#1 (2026-09-10) — the needs_human half of the ambiguous-entity
+  // automerge lane (api/_shared/ambiguous-entity-merge-planner.js). Source =
+  // `entities` rows carrying `metadata.ambiguous_resolution` whose planner
+  // score does not clear the documented auto-merge threshold (no single
+  // candidate, or the top two are too close). Card shows the placeholder plus
+  // its scored candidate list, best-to-worst, EXACTLY what the auto-merge
+  // tick's planner saw. Verdicts: merge (repoint to the human-chosen
+  // candidate, via rpc/reconcile_entity -- the SAME writer the auto-merge tick
+  // uses, never a second one) / keep_new (reconcile_entity's p_keep_new path)
+  // / research. Population is CLOSED (documented 189 entities, nothing minted
+  // since 2026-08-04) -- see PLANNED-BACKLOG.md P17/P13#1 and STATUS.md for
+  // the "DB access unavailable at build time" caveat on any real count.
+  'ambiguous_entity_resolution',
   'intake_disposition', 'property_merge', 'provenance_conflict',
   // dia geospatial "address twin" review (2026-08-14). The dia_merge_twins engine
   // auto-merges only blank-operator husks; every twin with a competing clinical
@@ -7655,6 +7674,9 @@ function federatedSubjectRef(type, s) {
     case 'sponsor_family_confirm': return sponsorFamilySubjectRef(s);
     // C13g-min-lane: etype:<entity_id> -- the question is scoped to one entity.
     case 'entity_type_review': return entityRetypeSubjectRef(s);
+    // PDR1 / P13#1: keyed on the placeholder entity alone (amb:<id>).
+    case 'ambiguous_entity_resolution':
+      return ambiguousEntitySubjectRef(s.placeholder_id || s.subject_entity_id);
   }
   return null;
 }
@@ -9084,6 +9106,67 @@ async function fetchFederatedSource(type, cap, opts) {
       };
     });
     out.complete = out.items.length === ordered.length;
+    return out;
+  }
+
+  // ---- ambiguous_entity_resolution (PDR1 / P13#1, 2026-09-10) --------------
+  // Reads `entities` directly (metadata.ambiguous_resolution IS NOT NULL and
+  // not yet merged), enriches each raw {id,name} candidate with address/
+  // normalization from `entities`, and re-runs the SAME pure planner the
+  // auto-merge tick uses (planAmbiguousEntityMerge) -- only the needs_human
+  // rows are surfaced here; the tick drains the auto-mergeable rows on its
+  // own, flag-gated pass. Population is documented as ~189 at build time
+  // (PLANNED-BACKLOG.md P17/P13#1) and read live here, never assumed.
+  if (type === 'ambiguous_entity_resolution') {
+    const er = await opsQuery('GET', 'entities?select=id,name,city,state,metadata'
+      + '&metadata->>ambiguous_resolution=not.is.null'
+      + '&metadata->>merged_into=is.null&order=name.asc&limit=1000');
+    const entRows = (er.ok && Array.isArray(er.data)) ? er.data : [];
+    const allCandidateIds = new Set();
+    for (const row of entRows) {
+      for (const c of (row?.metadata?.ambiguous_resolution || [])) {
+        if (c && c.id) allCandidateIds.add(c.id);
+      }
+    }
+    let candidateById = new Map();
+    if (allCandidateIds.size) {
+      const inList = [...allCandidateIds].map((id) => encodeURIComponent(id)).join(',');
+      const cr = await opsQuery('GET', 'entities?select=id,name,address,normalized_address'
+        + '&id=in.(' + inList + ')');
+      if (cr.ok && Array.isArray(cr.data)) {
+        candidateById = new Map(cr.data.map((c) => [c.id, c]));
+      }
+    }
+    const needsHuman = [];
+    for (const entity of entRows) {
+      const rawCandidates = entity?.metadata?.ambiguous_resolution || [];
+      const enriched = rawCandidates.map((c) => {
+        const found = candidateById.get(c.id) || {};
+        return {
+          id: c.id, name: c.name || found.name || null,
+          address: found.address ?? null, normalized_address: found.normalized_address ?? null,
+          entity_relationships_count: null, portfolio_facts_count: null, external_identities_count: null,
+        };
+      });
+      const plan = planAmbiguousEntityMerge(entity, enriched);
+      if (!plan.eligible) needsHuman.push({ entity, plan });
+    }
+    out.total = needsHuman.length;
+    out.parts = {
+      scanned: entRows.length, needs_human: needsHuman.length,
+      fetch_failed: !er.ok, truncated: entRows.length >= 1000,
+    };
+    out.items = needsHuman.slice(0, cap).map(({ entity, plan }) => {
+      const card = buildAmbiguousEntityCard(entity, plan);
+      return {
+        subject_ref: ambiguousEntitySubjectRef(entity.id),
+        subject_domain: null, subject_property_id: null,
+        subject_entity_id: entity.id,
+        rank_value: null,
+        context: card,
+      };
+    });
+    out.complete = out.items.length === needsHuman.length;
     return out;
   }
 
@@ -13098,6 +13181,97 @@ async function handleDecisionVerdict(req, res) {
     // FROM v_lcc_entity_retype_candidates AT VERDICT TIME, never trusted from
     // the request (P188); the write goes through rpc/lcc_retype_entity, the
     // single writer -- this branch never PATCHes `entities` itself.
+    // ---- ambiguous_entity_resolution (PDR1 / P13#1, 2026-09-10) -------------
+    // THE CARD IS RE-READ FROM `entities` AT VERDICT TIME (P188) -- the raw
+    // candidate list stored on the placeholder is enriched fresh, never
+    // trusted from the request. Both verdicts route through rpc/reconcile_entity
+    // -- the SAME writer the auto-merge tick calls, so there is exactly one
+    // merge writer in the system regardless of which path decided. Placed at
+    // the END of this dispatcher (after every other decision_type's own block)
+    // so it cannot be swept into a block-slice test anchored on an earlier
+    // decision_type pair (a footgun this repo documents repeatedly).
+    if (decision.decision_type === 'ambiguous_entity_resolution') {
+      const placeholderId = decision.subject_entity_id
+        || (decision.context && decision.context.placeholder_id) || null;
+      if (!placeholderId) return res.status(400).json({ error: 'ambiguous_entity_resolution: placeholder_id required' });
+
+      const entR = await opsQuery('GET', 'entities?select=id,name,city,state,metadata'
+        + '&id=eq.' + pgFilterVal(placeholderId) + '&limit=1');
+      const entity = (entR.ok && Array.isArray(entR.data)) ? entR.data[0] : null;
+      if (!entity) return res.status(400).json({ error: 'ambiguous_entity_resolution: placeholder not found' });
+
+      const rawCandidates = entity?.metadata?.ambiguous_resolution || [];
+      let candidateById = new Map();
+      const ids = rawCandidates.map((c) => c && c.id).filter(Boolean);
+      if (ids.length) {
+        const inList = ids.map((id) => encodeURIComponent(id)).join(',');
+        const cr = await opsQuery('GET', 'entities?select=id,name,address,normalized_address'
+          + '&id=in.(' + inList + ')');
+        if (cr.ok && Array.isArray(cr.data)) candidateById = new Map(cr.data.map((c) => [c.id, c]));
+      }
+      const enriched = rawCandidates.map((c) => {
+        const found = candidateById.get(c.id) || {};
+        return {
+          id: c.id, name: c.name || found.name || null,
+          address: found.address ?? null, normalized_address: found.normalized_address ?? null,
+          entity_relationships_count: null, portfolio_facts_count: null, external_identities_count: null,
+        };
+      });
+      const plan = planAmbiguousEntityMerge(entity, enriched);
+      const card = buildAmbiguousEntityCard(entity, plan);
+
+      const gate = validateAmbiguousEntityVerdict(card, verdict, payload);
+      if (!gate.ok) return res.status(400).json({ error: 'ambiguous_entity_resolution: ' + gate.error, placeholder_id: placeholderId });
+      const action = gate.verdict;
+      const verdictCtx = {
+        placeholder_id: placeholderId, placeholder_name: entity.name,
+        city: entity.city, state: entity.state, ranked: card.ranked,
+      };
+
+      if (action === 'research') {
+        const rt = await createResearchTask({
+          research_type: 'ambiguous_entity_resolution',
+          title: 'Which asset does "' + (entity.name || placeholderId) + '" merge into?',
+          instructions: 'Decision Center: ambiguous Salesforce-sync placeholder ' + (entity.name || placeholderId)
+            + ' has ' + rawCandidates.length + ' candidate asset(s) and no clear planner winner. '
+            + 'Confirm the correct merge target, or that this is genuinely a new asset.',
+        });
+        if (!rt.ok) {
+          await recordEffectFailure({ research_task: false, error: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data });
+        }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        const rr = await record('research', 'decided', verdictCtx, { research_task: true, research_task_id: rid });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+
+      // ---- merge / keep_new: the one write, via rpc/reconcile_entity ---------
+      // No second merge writer -- this is the SAME database function
+      // api/_handlers/ambiguous-entity-automerge-tick.js and
+      // mcp/entity-reconcile.js's HTTP route both call.
+      const rpcArgs = action === 'keep_new'
+        ? { p_placeholder: placeholderId, p_canonical: null, p_keep_new: true }
+        : { p_placeholder: placeholderId, p_canonical: gate.candidate.id, p_keep_new: false };
+      const rc = await opsQuery('POST', 'rpc/reconcile_entity', rpcArgs);
+      const rcRow = (rc.ok && Array.isArray(rc.data)) ? rc.data[0] : rc.data;
+      if (!rc.ok || !rcRow || rcRow.ok !== true) {
+        await recordEffectFailure({ reconcile: false, error: (rcRow && rcRow.error) || rc.data });
+        return res.status(502).json({ error: 'ambiguous_entity_resolution: reconcile_failed', detail: (rcRow && rcRow.error) || rc.data });
+      }
+      const rr = await record(action, 'decided', verdictCtx, {
+        ambiguous_entity_resolution: action === 'keep_new' ? 'kept_as_new' : 'merged',
+        canonical_id: action === 'merge' ? gate.candidate.id : null,
+        reconcile_result: rcRow,
+      });
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({
+        ok: true, verdict: action, placeholder_id: placeholderId,
+        canonical_id: action === 'merge' ? gate.candidate.id : null,
+        detail: rcRow,
+      });
+    }
+
     if (decision.decision_type === 'entity_type_review') {
       const entityId = decision.subject_entity_id || (decision.context && decision.context.entity_id) || null;
       if (!entityId) return res.status(400).json({ error: 'entity_type_review: entity_id required' });
@@ -13173,6 +13347,7 @@ async function handleDecisionVerdict(req, res) {
           : undefined,
       });
     }
+
 
     // ---- sponsor_family_confirm (OWN-T0e, 2026-09-09) ----------------------
     // The human verdict on a (sponsor entity, brand token) card.
