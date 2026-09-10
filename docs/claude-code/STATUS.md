@@ -16,6 +16,57 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — `PR-scanner-writeback` shipped: assessor/recorder/SOS scans now write real tables; the SF write-back re-confirmed not buildable
+
+Built against the prompt filed by the entry immediately below (`docs/claude-code/prompts/
+PR-scanner-writeback.md`). Branch `claude/pr-scanner-writeback-wiring-o6dx47`.
+
+**Shipped:**
+- **Assessor scan → `parcel_records`/`tax_records`, recorder scan → `deed_records`** — new
+  `api/_shared/public-records-writeback.js`, source-tagged `assessor_sidebar_manual` /
+  `recorder_sidebar_manual` (distinct from `costar_sidebar` and the gpt-4o `ai_gpt4o_presumed` leg
+  §2a of `public-records-source-lane.md` documents — neither touched). The recorder writer extends
+  `deed-parser.js`'s existing dedup/DTO pattern (`buildDeedDataHash`, `validateDeedIngest`) rather
+  than forking a second insert shape, per the task's own instruction to check for a reusable writer
+  first. New route `POST /api/public-records-capture` (mounted in `server.js`, dispatched from
+  `api/admin.js`). Sidepanel gained `loadPublicRecordPropertyView` for assessor/recorder saves
+  (requires an operator-supplied domain `property_id` — no address→property auto-match; never guess).
+- **SOS scan (incl. CA bizfile) → `llc_member`/`llc_manager` `entity_relationships` edges** — new
+  `applySosEntityCapture`. Free-text edge types (no CHECK enum, so no migration needed). Officers /
+  registered agent resolved through `ensureEntityLink`, the same choke point every other writer in
+  this repo uses. **The residential-vs-agent-service classifier from `address-reverse.js` is reused,
+  not re-derived**, and gates whether an address is ever written as a person's residence — tested both
+  directions in `test/pr-scanner-writeback.test.mjs` (a CSC/registered-agent address never becomes a
+  residence; a real street address does, on the identical code path). `saveOrgBtn`'s no-worklist-
+  target path (previously: bare `/api/entities` create, discarding officers/agent/addresses) now
+  routes through this.
+- **`county-portal-resolver.js` surfaced to the sidepanel** — `handleRecorderPortal` already existed
+  in `api/admin.js`; it had no dedicated mount. Added `app.all('/api/recorder-portal', …)` to
+  `server.js`. Read-only, gov-only (the resolver's own scope). ⚠️ The sidepanel does not yet call it
+  (no UI button wired) — the route is live; wiring the button is a small follow-up (backlog
+  `PR-scanner-5`).
+- **Guard**: `test/pr-scanner-writeback.test.mjs` — 12 tests, all behavioural (injected `deps` stub
+  domainQuery/ensureEntityLink/insertEntityRelationship rather than a source grep), including the
+  positive+negative control pair for the residential-vs-agent-service gate. Full suite re-run:
+  **5649 pass / 0 fail / 6 skipped** (unchanged skip count — nothing newly broken).
+
+**Sized, not built — both with the reason recorded in `research-workbench.md` §7b /
+`public-records-source-lane.md` §7a:**
+- **`county_records_needed` research_type / value-gate.** This session has no Supabase/DB access, so
+  the population and floor could not be measured — shipping either blind would repeat the exact
+  unmeasured-migration mistake CLAUDE.md documents paying for repeatedly (B4/B5, N18, A2's
+  `on conflict do nothing` overcount). Sized as a sixth action on the existing
+  `v_lcc_ownership_history_lane_split` (mirroring A3's `sponsor_spe` precedent) rather than a new lane.
+- **Salesforce write-back for a newly-captured LLC/contact.** Re-confirmed: `api/_shared/salesforce.js`
+  is a read-only Power Automate proxy, no Connected App; a repo-wide grep for `sobjects`/
+  `/services/data/v`/any SF POST returns nothing — unchanged from C1's finding. Needs an operator
+  decision (register a Connected App) before it can be scoped further, let alone built.
+
+**Docs updated in the same change:** `public-records-source-lane.md` §7a (new), `account-based-
+contact-intelligence.md` §8b item 1 (struck the "still needed" framing, marked shipped — corrected in
+place per doctrine, not deleted), `research-workbench.md` §7b (new), `PLANNED-BACKLOG.md` §P3
+(`PR-scanner-1` through `-5`, AC11 corrected in place).
+
 ## 2026-09-10 — Scott's manual research playbook checked against the codebase before sending ACI-phase1-2: found the free-source path already half-built, revised the plan
 
 Scott described his pre-LCC manual ownership-research workflow in full detail (netronline → county
