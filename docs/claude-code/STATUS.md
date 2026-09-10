@@ -16,6 +16,34 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — PDR1's root cause traced to an existing decision fork (P13 #1); Scott decided; prompt drafted and sent
+
+Measured the fleet-wide population behind P17/PDR1 before drafting anything, per standing doctrine —
+and found it's the same population as `PLANNED-BACKLOG.md`'s P13 decision fork 1, filed earlier this
+arc and explicitly reserved for Scott ("do not build past them"). Live count: **189** entities carry
+`metadata.ambiguous_resolution` (down from the August audit's 232 — 43 resolved by ad hoc sweeps
+since), **116** also `orphan_flagged`, all minted in one **2026-07-28 to 2026-08-04** Salesforce
+opportunity-sync burst — a closed population, nothing since. Candidate-list size ranges 2–55 per
+entity. Corrected P13's row in place with the re-measurement and the P17 cross-link.
+
+**Asked Scott directly** which of the three strategies P13 already named (auto-merge + review queue /
+require manual confirmation for all 189 / treat as canonical and merge lazily) to run, rather than
+build past a fork he reserved for himself. **He chose: auto-merge the clear cases, queue the rest.**
+
+**Drafted and sent `docs/claude-code/prompts/PDR1-entity-reconcile-automerge.md`.** One scoring planner
+(bare-placeholder candidates never win over an addressed one; non-normalized addresses lose to
+normalized ones on tie-break; a concrete auto-mergeable threshold to be measured and reported, not
+assumed) feeding two paths through the SAME existing writer (`reconcile_entity` — no new merge path):
+a value-gated auto-merge tick for the confident cases, a new Decision Center federated lane for the
+rest, reusing `list_flagged_open_deals` as the card source. Explicitly scoped to reuse everything that
+already exists (`entity-reconcile.js`, the DC lane pattern from `C13g-min-lane`/`OWN-T0e`) rather than
+building new infrastructure. DaVita/Donna-TX itself (`8d1fd46e-…`) is named as a verification target —
+confirm which path it lands in and whether PDR2/3/4/7 actually resolve once it merges, don't assume.
+
+**Next step.** Nothing to run until `PDR1-entity-reconcile-automerge` comes back. Once it ships, both
+of today's ACI threads (Unit C / role taxonomy, and now entity reconciliation) will have live,
+measured outcomes to reconcile.
+
 ## 2026-09-10 — Verified `ACI-phase2-unitC`'s claims independently; filed the AC2-sf-context gap as its own row; moved prompt/response to done/
 
 Re-checked the shipped PR's claims against live data rather than taking the commit message at face
