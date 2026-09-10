@@ -16,6 +16,69 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — ACI-phase0 SHIPPED: AC1b/AC7/AC10 built, live-run, and guarded (`build/aci-phase0`)
+
+The three Phase-0 hygiene items from `ACI-phase0.md` (below), each measured live before AND after,
+each reversible, none combined into one migration.
+
+**AC1b — university scope drift closed.** New migration
+`20261010120000_lcc_ac1b_top_seller_and_decidability_university_scope.sql` swaps
+`lcc_owner_name_is_public_body` for the composed `lcc_owner_name_is_not_prospected` in
+`v_lcc_top_seller_prospects` and both CASE arms of `v_lcc_owner_contact_decidability` (column lists
+unchanged — predicate-only). Applied live to `xengecqvemvfknjvbvrq`. Measured before/after:
+`v_lcc_top_seller_prospects` university-named rows **14 → 1** (the 1 residual, "Idaho State University
+Federal Credit Union", is correctly NOT a university — 0 false positives introduced);
+`v_lcc_owner_contact_decidability` university rows unblocked as public_body **3 → 1** (the residual,
+"George Washington University (The)", is a pre-existing gap in `lcc_owner_name_is_university`'s own
+regex — the trailing "(The)" defeats its anchor — unrelated to this swap, out of scope, named not
+patched). Guard: `test/ac1b-university-scope.test.mjs` (4 tests, mutation-verified RED reverting the
+swap, GREEN restored).
+
+**AC7 — the Andrew Pulliam duplicate merged.** Measured live rather than trusting the August prompt's
+numbers: entity `d6b0d27e-…` carries 36 outbound + 1 inbound edges (37 total) and is already
+`owner_contact_pivot.active_contact_entity_id` for Easterly Gov Properties; `537ecdd2-…` carries 1
+inbound edge only and no pivot reference — both signals agree on the same survivor, no conflict to
+adjudicate. Merged via the existing reversible `lcc_merge_entity(loser, winner)` (no new merge path
+built, per house doctrine) — `lcc_merge_entity('537ecdd2-…', 'd6b0d27e-…')`. `lcc_entity_merge_log`
+id **170**; `v_lcc_entity_merge_reversibility` confirms `reversible=true`. No new test file — no code
+changed, and the merge path itself is already guarded (`test/merge-entity-reversible.test.mjs`, P196).
+Reverse with `select lcc_unmerge_entity('537ecdd2-c0ac-4ded-b407-78602e42a652')`.
+
+**AC10 — the promotion counterpart built, run for real.** Re-measured the suppressed population before
+building anything, per the prompt's own instruction (the August 11-owner/$240.5M figure was stale —
+`owner_contact_pivot.active_contact_entity_id` has grown ~50x since): live population **251 owners /
+$329,379,804.64** (14 with no pivot row at all, 237 with a pivot row missing `active_contact_entity_id`).
+New migration `20261010140000_lcc_ac10_promote_linked_owner_contacts.sql` ships
+`v_lcc_ac10_promote_candidates` (ranks the winning linked-person candidate per owner, mirroring
+`owner-reachable-via.js::pickReachableVia` — role authority > recency > stable id, brokers/agents/
+tenants/operators excluded outright, junk names never promoted), `lcc_promote_linked_owner_contacts
+(p_dry_run default true, p_limit, p_batch_tag)` (fill-blanks only, ledger-before-write, re-checks the
+pivot at write time so a race can never clobber), `lcc_ac10_unpromote(batch_tag)` (reversal — skips
+any row the pivot no longer matches, never forces), and the ledger table `lcc_ac10_promote_log`. Both
+SECURITY DEFINER functions carry the revoke + `has_function_privilege` stanza. Forward-running daily
+cron `lcc-ac10-promote-linked-contacts` at **06:12 UTC** (confirmed free against the live `cron.job`
+table before scheduling — P176 doctrine: a one-shot repair of a recurring gap is a chore repeated
+silently forever). Dry-run proved side-effect-free (0 ledger rows written); **real run applied 249 of
+251** (2 carry no candidate surviving the junk/brokerage guards and are correctly left unpromoted
+rather than guessed at) — 14 `created_pivot`, 235 `filled_active_contact`;
+`v_lcc_ac10_promote_candidates` **251 → 0**. Reversibility proven live in a ROLLED-BACK transaction
+(unpromoting the whole batch restored the candidate count to 249, then rolled back — the 249 real
+promotions stand). Guard: `test/ac10-promote-linked-owner-contacts.test.mjs` (12 tests,
+mutation-verified RED on three independent mutations — the fill-blanks UPDATE guard, a missing revoke
+stanza, and swapping the cron's real-run call to dry-run — GREEN restored on each).
+
+**Full suite:** `npm test` — 5643 tests / 5637 pass / 0 fail / 6 skipped (unchanged skip set) — nothing
+broken by either migration or the two new guard files.
+
+**Docs updated in the same change:** `docs/os/PLANNED-BACKLOG.md` rows AC1b/AC7/AC10 marked ✅;
+`account-based-contact-intelligence.md` §7b's stale AC10 flag replaced with the fresh 251→0 count.
+
+**Branch:** `build/aci-phase0`, pushed to origin, not merged (per instructions — no PR opened).
+
+**Next step.** Phase 1 (finish Tier 0 deterministic linkage) and Phase 2 (the REIT/fund role-taxonomy
+build — bench ranking + Ollama function inference, Scott's actual ask) can now build against an
+accurate, unstale picture.
+
 ## 2026-09-10 — Owner-to-contact automation push started: account-based-contact-intelligence.md re-measured, a stale claim corrected, a phased build plan added, Phase 0 prompt sent
 
 Scott's direction: automate owner→contact linkage end to end, minimal human-in-the-loop, split by

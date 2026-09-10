@@ -301,6 +301,20 @@ acquisitions from disposition from DD).
 - **AC7 (Andrew Pulliam duplicate)** — still live: two `entities` rows named "Andrew Pulliam" exist
   today. Not auto-resolved by anything since 08-26.
 
+> ✅ **AC1b / AC7 / AC10 CLOSED 2026-09-10 (`build/aci-phase0`).** The stale-count warning above is now
+> history, not a live blocker — re-measured before building, per its own instruction:
+> **251 owners / $329,379,804.64** were suppressed-and-invisible (14 with no pivot row at all, 237 with
+> a pivot row missing `active_contact_entity_id`) — up from the August 11/$240.5M, exactly as the ~50×
+> pivot-growth warning predicted. `lcc_promote_linked_owner_contacts` (fill-blanks, ledger-before-write,
+> reversible via `lcc_ac10_unpromote`) promoted **249 of 251** (2 carry no candidate surviving the
+> junk/brokerage guards and are correctly left unpromoted rather than guessed at) —
+> `v_lcc_ac10_promote_candidates` **251 → 0**. Forward-running daily cron at 06:12 UTC, not a one-shot.
+> AC7's Pulliam duplicate merged (survivor `d6b0d27e-…`, 37 edges + the existing Easterly pivot
+> reference; loser `537ecdd2-…`, 1 edge, merged via `lcc_merge_entity`, `lcc_entity_merge_log` id 170).
+> AC1b's university-scope drift closed on both views. See `STATUS.md` 2026-09-10 for the full writeup;
+> migrations `20261010120000_lcc_ac1b_*.sql` / `20261010140000_lcc_ac10_*.sql`; guards
+> `test/ac1b-university-scope.test.mjs` / `test/ac10-promote-linked-owner-contacts.test.mjs`.
+
 ### 7c. Phased build order
 
 **Phase 0 — small mechanical fixes that unblock or clean the rest (do first, cheap):**
