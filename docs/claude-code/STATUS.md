@@ -51,6 +51,52 @@ across 3 of the 11 non-tombstoned retyped entities (UIRC 7, Global Net Lease 2, 
 §9f's Gardner/MassMutual-only check was right for those two, incomplete as a claim about the lane.
 Full writeup: `docs/architecture/owner-role-classification.md` §9g; backlog `C13g-min-lane-mutation`
 ✅. Not done: the placeholder-guard unit (`C13g-min-lane-placeholder`, unchanged).
+## 2026-09-10 — Overnight reads (to 11:35 UTC): nothing paused on Dialysis_DB; the gates are quiet — and the LCC Opps writer-IP read found the extension still posting through the frozen Vercel build (EXT-HOST, fixed in 1.0.53)
+
+**Dialysis_DB, hourly 20:00 → 11:00 UTC:** `clinic_financial_estimates` inserts ~200/h (3,046 in the 20:00 hour
+when the probe got through), statement timeouts **320–399 every hour**, cron `job startup timeout` 7–24/h,
+`[calendar-reconcile] SKIP` once every hour — **CFE-RUNAWAY is still running; nothing has changed** since it was
+filed. `[copilot-auth]` 1–2/h, all the two PA flows; `[sfenrich-auth]` 0.
+
+**LCC Opps, non-Railway `node` callers 2026-09-09 12:00 → 09-10 11:35 UTC** (the J13 observation read, done
+early because the 12:30 window had not yet opened when this was written):
+
+| ip | n | window (UTC) | what |
+|---|---:|---|---|
+| `44.205.19.44` | 17 | 09-09 12:30:01–02 | day-1 briefing burst (v1 flow) — 3 × 400 on `mv_user_work_counts`, `v_my_work`, `action_items`, as fingerprinted |
+| `3.94.187.179` | 49 | 09-09 14:28:48–58 | **a full intake write**: `users?email=eq.sabriggs…`, `POST inbox_items` 201, `staged_intake_items` 201, artifacts, extraction, `PATCH` matches |
+| `3.82.217.155` | 34 | 09-09 18:59 | the same shape |
+| `52.52.108.50` / `52.52.68.232` / `13.56.136.98` / `54.219.3.3` / `13.56.98.77` / `52.52.40.44` | 3,522 / 4,131 / 184 / 844 / 3,319 / 4,568 | 15:38–15:50 / 16:23–16:50 / 19:39–20:47 | 150–1,064 distinct paths each, `workspace_memberships` first — whole-app sessions |
+| since 21:00 | **0** | — | clean |
+
+Cross-read against `inbox_items` for the same minutes: 14:28:49 = `sidebar_om` "crexi-1450-Innovation-Parkway…"
+(`crexi_sidebar`), 18:59:53 = `sidebar_om` "crexi-103-MBL-BANK-DR…", 20:30:24 = `sidebar_om`
+"DaVitaDialysis-Pasco-WA-Loopnet…" — and the `POST staged_intake_items` writer for 20:30:24 is **`52.52.40.44`,
+the same address as the 4,568-request burst.** The two other sidebar OMs of the day (13:11:53, 19:25:25) were
+written from Railway (`162.220.232.228`, `162.220.232.12`). **So: the browser extension, from at least one of
+the two profiles in use (Edge and Chrome both appear at Scott's address), still posts to the retired Vercel
+deployment, and each "ephemeral pool" burst in the J13 preflight is that build serving one sidebar session.**
+The preflight's §2a reading ("re-executes the app's server logic from Lambda") was right about the mechanism
+and silent about the trigger; corrected in place. The runbook's extension line ("1.0.52 is sufficient — the
+resolver already prefers Railway") was **wrong**: `pickIntakeHost()` in 1.0.52 returns whatever
+`chrome.storage.sync` holds, and a profile configured in the Vercel era still stores that origin.
+
+**EXT-HOST — shipped here (extension 1.0.53):** `isRetiredIntakeOrigin()` refuses any `*.vercel.app` origin
+inside `pickIntakeHost()` (platform-wide, because the P194 guard forbids the literal hostname in executable
+code); `callLCCApi`/`testConnection` route through the resolver; `sidepanel.js::getLCCConfig()` normalizes its
+own read the same way. Five new tests evaluate the real resolver from source: stored retired origin →
+Railway (in either key), positive control (a Railway origin is honoured), negative control (the rule is the
+platform suffix, not a substring). `test/extension-intake-host.test.mjs` 16/16, retired-identifier guard
+green, `node --check` clean. 👤 Reload to 1.0.53 in **both** browsers and set the Settings URL to Railway in
+each; proof = two captures per browser landing from Railway IPs.
+
+**J13 consequence:** the observation window's criterion is now concrete — zero non-Railway writers on
+`staged_intake_items` and zero AWS-pool `node` bursts — and the window cannot start until the extension is
+reloaded everywhere. Today's 12:30 UTC read is still the first test of the *briefing* caller; it is no longer
+the only thing being watched.
+
+---
+
 ## 2026-09-10 — RAILWAY-PA-SECRET-log: the CC session finished, but its branch never reached GitHub and no PR was opened — nothing to reconcile yet
 
 Scott's transcript (`docs/claude-code/responses/RAILWAY surface response.docx`, untracked) shows the unit

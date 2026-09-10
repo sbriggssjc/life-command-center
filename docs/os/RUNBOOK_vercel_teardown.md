@@ -41,8 +41,17 @@ Concrete new URLs must come from `server.js`'s actual mounted routes (grepped, n
   above the build that shipped after the P194 fix (the commit that made `pickIntakeHost()` Railway-first
   — see `extension/background.js` lines 20–47; shipped manifest version at the time of this preflight:
   **1.0.52**). If older, reload the unpacked/packed extension from the current `main`. **Proof:** a
-  sidebar capture's `POST` lands from a Railway IP (the extension itself has no separate "repoint" step
-  once the installed build is current — `pickIntakeHost()` already prefers `LCC_RAILWAY_URL`).
+  sidebar capture's `POST` lands from a Railway IP ~~(the extension itself has no separate "repoint" step
+  once the installed build is current — `pickIntakeHost()` already prefers `LCC_RAILWAY_URL`)~~.
+  **Corrected 2026-09-10 (measured): being on 1.0.52 is NOT sufficient.** On 2026-09-09 sidebar OMs at 13:11
+  and 19:25 UTC were written from Railway, while 14:28, 18:59 and 20:30 UTC were written from AWS Lambda
+  addresses (`3.94.187.179`, `3.82.217.155`, `52.52.40.44`) — the frozen Vercel build — same machine, same
+  day. 1.0.52's resolver returned whatever `chrome.storage.sync` held, and a browser profile configured in
+  the Vercel era still holds that origin as `LCC_RAILWAY_URL`. **1.0.53 (EXT-HOST) refuses any
+  `*.vercel.app` origin in the resolver and in the side panel's config read.** 👤 Reload the extension to
+  1.0.53 in **every** profile that has it (both Edge and Chrome were seen at Scott's address), and in each
+  open Settings and set the URL to the Railway origin. **Proof:** two consecutive sidebar captures from each
+  browser land from Railway IPs; zero `POST staged_intake_items` from non-Railway IPs for the whole window.
 - **Copilot Studio / Teams agent**: 👤 Scott opens the imported connector in Copilot Studio and reads its
   `host` field. Repoint it to whatever `copilot/lcc-deal-intelligence.connector.v4.swagger.json`
   declares (the current canonical connector; v1 is superseded and archived under `_superseded/`) — read

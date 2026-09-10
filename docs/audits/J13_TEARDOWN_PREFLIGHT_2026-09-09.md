@@ -94,6 +94,16 @@ own serverless functions independently re-running the app's normal server-side l
 functions against Supabase exactly like a Railway request would, just from AWS Lambda's IP pool instead
 of Railway's.
 
+> **Resolved 2026-09-10 (Cowork, measured):** the "visit" is the **browser extension's sidebar session**.
+> `POST /rest/v1/staged_intake_items` writers on 2026-09-09: Railway at 13:11 and 19:25 UTC; `3.94.187.179`
+> at 14:28, `3.82.217.155` at 18:59, **`52.52.40.44` at 20:30** — the last being the same address as the
+> 4,568-request 20:18–20:47 burst in this table's population. The `inbox_items` rows for those minutes are
+> `sidebar_om` / `crexi_sidebar`. So each ephemeral-pool burst is the frozen Vercel build serving one
+> extension session (the sidebar polls the app heavily), from a browser profile whose stored host is still
+> the Vercel origin. Fix: EXT-HOST (extension 1.0.53) + reloading the extension in every profile. The
+> observation-window criterion therefore becomes concrete: **zero non-Railway `POST staged_intake_items`**
+> and zero `node`-UA bursts from AWS pools, not merely a quiet 12:30.
+
 ### 2b. A genuine write, at a time that lines up with a known schedule
 
 ```sql

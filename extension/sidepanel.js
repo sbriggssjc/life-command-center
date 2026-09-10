@@ -97,9 +97,22 @@ const DOMAIN_LABELS = {
   rca: 'RCA',
 };
 
+// EXT-HOST (2026-09-10): the side panel cannot import background.js, so it
+// carries the same one-line rule — a stored *.vercel.app origin is the retired
+// deployment (still serving a frozen build with live credentials) and is
+// replaced by the Railway default. Keep in sync with pickIntakeHost().
+const SIDEPANEL_DEFAULT_HOST = 'https://tranquil-delight-production-633f.up.railway.app';
+function normalizeLCCHost(raw) {
+  if (!raw) return raw;
+  try { if (/\.vercel\.app$/i.test(new URL(String(raw)).hostname)) return SIDEPANEL_DEFAULT_HOST; } catch (_) {}
+  return raw;
+}
+
 async function getLCCConfig() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get(['LCC_RAILWAY_URL', 'LCC_API_KEY'], resolve);
+    chrome.storage.sync.get(['LCC_RAILWAY_URL', 'LCC_API_KEY'], (cfg) => {
+      resolve({ ...cfg, LCC_RAILWAY_URL: normalizeLCCHost(cfg && cfg.LCC_RAILWAY_URL) });
+    });
   });
 }
 
