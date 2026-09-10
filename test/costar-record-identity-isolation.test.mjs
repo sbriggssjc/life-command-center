@@ -158,7 +158,7 @@ test('all three runtime layers enforce the shared record boundary', () => {
     entry.matches.some((match) => match.includes('costar.com'))
   );
   assert.equal(costarScript.js[0], 'shared/property-identity.js');
-  assert.equal(manifest.version, '1.0.52');
+  assert.equal(manifest.version, '1.0.53');
 
   const content = readFileSync(join(ROOT, 'extension/content/costar.js'), 'utf8');
   const background = readFileSync(join(ROOT, 'extension/background.js'), 'utf8');
