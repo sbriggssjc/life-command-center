@@ -166,6 +166,28 @@ This function has no `/health`-equivalent bypass — its only GET route, `/diagn
 leak, so every route is gated. Full state: `docs/architecture/edge-function-deploy-drift.md`
 §"SFENRICH-gate".
 
+### 4a-Railway. `api/sync.js` PA webhook gate — the SAME env vars, on Railway (RAILWAY-PA-SECRET-log, 2026-09-10)
+
+`PA_WEBHOOK_SECRET` is checked in **two** environments — Supabase (the edge functions above) and
+**Railway** (`api/sync.js::authenticateWebhook`, the seven `webhookAuth()` call sites: RCM ingest,
+RCM backfill, LoopNet ingest, processing-complete, todo-completion-poll, listing-webhook,
+cross-domain-match). As of 2026-09-09 it read UNSET on Railway (`connectorHeaders()` only attaches
+`X-PA-Webhook-Secret` when the var is present), which is the whole reason this is a log-only gate:
+setting it turns the check ON for every one of those seven routes at once, and nothing here has
+ever audited who calls them without the header.
+
+| var | default | meaning |
+|---|---|---|
+| `PA_WEBHOOK_SECRET` | unset on Railway as of 2026-09-09 | to be **set** — one value, shared with the Supabase side above |
+| `PA_WEBHOOK_AUTH_MODE` | `log` | `log` = a caller the fallback (`authenticate()` + operator role) would also deny is logged `[pa-webhook] DENY-WOULD <route> <fallback-path> <ua_class> <ip_class>` and still let through; `enforce` = the fallback's own 401/403 stands |
+| `PA_WEBHOOK_KNOWN_IPS` | unset | same `class:prefix,class:prefix` format as `COPILOT_KNOWN_IPS`/`SFENRICH_KNOWN_IPS` above — mirrors `supabase/functions/_shared/caller-class.ts`'s classifier in plain JS (this service is Node/Railway, not Deno, so the module isn't imported, only the shape) |
+
+Operator order: merge → redeploy → set `PA_WEBHOOK_SECRET` (+ `PA_WEBHOOK_KNOWN_IPS` if the known
+caller IPs are known) → read `[pa-webhook] DENY-WOULD … none` for a few days → fix each `none`
+caller (starting with the To Do Completion Poll flow's second, header-less call — flagged in the
+unit's own brief, not yet re-exported) → flip `PA_WEBHOOK_AUTH_MODE=enforce`. Backlog
+**RAILWAY-PA-SECRET**, `docs/os/PLANNED-BACKLOG.md`.
+
 ## 5. The bigger architecture (pointers)
 - Request-understanding layer (why plain-language handling is a cross-tool gap): `docs/architecture/request-
   understanding-and-consistency-layer.md` + the audit `docs/architecture/intent-resolution-audit-2026-08-03.md`.

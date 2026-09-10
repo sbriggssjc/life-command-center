@@ -54,6 +54,53 @@ of the new assertions (tied refusal, payload-cannot-redirect-target, the branch'
 duplicate-suspect group that is ALSO a sponsor_id elsewhere: **zero rows.** So the affordance is
 built and unit-tested but has never fired against production data — say so plainly rather than
 claiming an end-to-end verification that did not happen.
+## 2026-09-10 — RAILWAY-PA-SECRET-log shipped (re-run — a prior CC session finished this correctly and never pushed)
+
+`api/sync.js::webhookAuth()` is now the single gate for all **seven** PA webhook handlers
+(`rcm-ingest`, `rcm-backfill`, `loopnet-ingest`, `processing-complete`, `todo-completion-poll`,
+`listing-webhook`, `cross-domain-match`) — confirmed by grep before writing any code, not seven by
+memory of the earlier attempt. Each used to inline its own
+`if (!authenticateWebhook(req)) { authenticate() + requireRole('operator') }`; `lead-ingest` and
+`live-ingest` were never in this population (a pure edge-function proxy and a plain-`authenticate()`
+route respectively — see the prompt's Read-first note).
+
+**Why this is a re-run, not a continuation:** a prior Claude Code session completed this exact unit
+correctly earlier today, but its branch (`claude/railway-pa-secret-log`) never reached `origin` and
+no PR was opened — that work exists only in a now-closed session's local clone and is unrecoverable
+from here. Treat everything below as fresh work against `main`, not a resumption.
+
+**What shipped:** `PA_WEBHOOK_AUTH_MODE` defaults to `log`. With `PA_WEBHOOK_SECRET` unset (today's
+state on Railway), `authenticateWebhook()` still returns `true` for everyone and `webhookAuth()`
+never runs the fallback at all — byte-identical to before this unit. Once the secret is SET: a
+caller sending the correct `X-PA-Webhook-Secret` passes as before; a caller the fallback
+(`authenticate()` + `requireRole('operator')`, per-handler — three of the seven never required the
+operator role and keep not requiring it) would also deny is **logged, never refused**:
+`[pa-webhook] DENY-WOULD <route> <fallback-path> <ua_class> <ip_class>`, `fallback-path` ∈
+`jwt|api-key|none` from the headers, `ua_class`/`ip_class` mirroring
+`supabase/functions/_shared/caller-class.ts`'s classifier in plain JS (`PA_WEBHOOK_KNOWN_IPS`,
+same `class:prefix,...` format). `PA_WEBHOOK_AUTH_MODE=enforce` restores byte-identical-to-before
+behavior (the fallback's own 401/403 stands). The log line never carries the secret or the caller's
+API key — asserted directly, not just by omission.
+
+**Guard:** `test/pa-webhook-auth-mode.test.mjs` (9 tests) — structural (exactly 7
+`await webhookAuth(` dispatch sites, `authenticateWebhook(req)` appears nowhere but its own
+definition and the one call inside `webhookAuth()`, with a positive control proving a bypass would
+be caught) + behavioural (secret unset → nothing logged, nothing refused; log mode never 401s;
+enforce mode's 401 matches `authenticate()`'s real body; the correct secret always passes in both
+modes; the `requireOperatorRole:false` handlers never 403 a bare caller; the log line never
+contains the secret/API-key value; `PA_WEBHOOK_KNOWN_IPS` resolves the IP class). Full suite run
+before handing off: **5,603 pass / 0 fail / 6 skipped** (2,489 suites) — not just the new file.
+
+**Branch pushed and PR-worthy this time** (see the "Verify on" checklist in the prompt — confirmed
+`origin` carries the branch before ending this entry, not assumed).
+
+**Docs updated in the same change:** `docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md` §4a-Railway
+(new — the Railway-side env var table, distinct from the Supabase `COPILOT_*`/`SFENRICH_*` pair
+already documented there) and `docs/os/PLANNED-BACKLOG.md`'s `RAILWAY-PA-SECRET` row (🔴 → 🟡, this
+unit's completion recorded, the 👤 operator order restated with the secret-set/read/fix/flip
+sequence). **Out of scope, named as such:** actually setting `PA_WEBHOOK_SECRET` on Railway, the To
+Do Completion Poll flow's designer edit, exporting the three PA5 flows, and the edge-side gates
+(already shipped 2026-09-09) — all 👤 Scott's.
 
 ## 2026-09-10 — `fix/ext-host-refuse-retired-origin` failed CI on an unrelated pin, fixed; and the J13 12:30 UTC observation read is clean but IP-level confirmation is still Not on file
 
@@ -80,6 +127,44 @@ but is not the same measurement as naming the IP — recorded as a gap, not pape
 
 **J13-teardown status unchanged:** still blocked on the extension actually being reloaded to 1.0.53 in both
 browser profiles (👤 Scott, pending the PR above merging first).
+
+## 2026-09-10 — Close-out prompt drafted for the two remaining C13g/OWN-T0e items; new full-pipeline state page written
+
+Live-checked before writing anything: unchanged since the last reconciliation (merge log 151, retype log
+13, lane 5 candidates live — `Kvalitena AB` + 3 likely-genuine person names + the placeholder — none
+blocking OWN-T0e). The 12 duplicate-entity merge groups and `Kvalitena AB` are still Scott's, in progress.
+
+**Drafted:** `docs/claude-code/prompts/C13g-OWN-T0e-close-out.md` — bundles the two small items the
+mutation-pass prompt named but didn't build: §1 routes placeholder entities (`Research In Progress`)
+off the retype lane onto `junk_entity_review`; §2 builds the missing "the sponsor itself is the
+duplicate" merge affordance (`OWN-T0e-c`) that NGP Group's case had to work around by hand. Backlog
+rows `C13g-min-lane-placeholder` and `OWN-T0e-c` annotated with the prompt reference; both stay 🟢
+open until it ships.
+
+**Written:** `docs/architecture/ownership-truth-pipeline-state.md` — at Scott's request, the first page
+that walks the WHOLE pipeline he specified (property → recorded owner → chain-to-developer → true
+owner → Salesforce/Outlook/WebEx/enrichment → LCC pushed back out) stage by stage, citing every
+existing canonical doc and backlog row rather than re-deriving their numbers. Two findings worth
+carrying: (1) entity-dedup/entity-typing (`C13g`, the still-unbuilt capture-path fix; `OWN-T0b/c/d/f/g`'s
+417 pending duplicate-entity merges) is the single shared blocker behind residue in BOTH the
+ownership-chain stage (A2's 92-row residue, 54 of them `ambiguous_entity`) and the entity-resolution
+stage itself — fix it once, upstream, rather than per-stage; (2) Stage 5 (LCC writing its resolved truth
+back OUT to Salesforce/Outlook/WebEx) is the thinnest stage in the whole pipeline — almost nothing
+writes back past Salesforce today, and building more of that has limited value while the store it would
+push from is still ~2% mistyped and 43% self-disagreeing upstream. Also folded in: a one-table summary
+of the UX-review tiers (UX-T0 through UX-T4) against `PLANNED-BACKLOG.md` §P16, which stays the source
+of state.
+
+**Consolidation, checked not guessed:** read the three 2026-07-31 property-owner docs
+(`property-owner-subsystem.md`, `property-owner-source-authority-and-doctrine.md`,
+`data-quality-lease-and-owner.md`) before deciding whether to banner them — they describe the still-live
+Stage 1 evidence-vote mechanism (`lcc_reconcile_property_owner`) that the Stage 3 reconciled store reads
+as one of its inputs (`OWN-T0h`), so they are evidence trail, not stale; left as-is rather than bannered
+on a guess. Pointers added from `CURRENT-STATE.md` and `PLANNED-BACKLOG.md` §P0d to the new page.
+
+**Next step, named.** Operator: same as last entry — the 12 merge groups and `Kvalitena AB`. Build:
+the close-out prompt above is ready to run whenever Scott has a Claude Code turn free; nothing else in
+this arc needs a build turn before that.
 
 ## 2026-09-09 — C13g-min-lane-mutation reconciled (PR #2222): verified on `main`, tests-only so nothing to deploy; the retype arc's build side is closed
 
