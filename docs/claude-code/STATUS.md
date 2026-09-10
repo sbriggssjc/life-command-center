@@ -16,6 +16,41 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — C13g-costar-stoplist reconciled (PR #2239): verified independently, live and deployed; the C13g capture-path arc is now fully closed, RCA and CoStar both
+
+Confirmed, not taken on faith: `origin/main` at `e4f71458` (the merge commit itself); Railway `/version`
+reads `e4f71458f6a1` — an exact match, live with no redeploy owed. Re-ran
+`test/c13g-contact-entity-type.test.mjs` on `main` independently: **11/11**.
+
+**The finding matters more than the fix — read from the diff, not just the summary.** The prompt's own
+framing ("CoStar's stoplist is broader and never read back") was wrong, and the response said so plainly
+rather than building around it: `contactEntityType()` already checks `contact.type` first, and CoStar's
+scanner always stamps an explicit type, so its verdict was winning outright — `hasFirmSuffix()` was never
+consulted on this path at all. The real gap ran the OTHER direction: the extension's stoplist is missing
+terms `hasFirmSuffix()` already has (Bancorp, Investments, Development, Fund, Ptnrs, Cos, Property,
+Enterprises, Mgmt), so a real firm like "Sentinel Bancorp" got an explicit but wrong `type:'person'` stamp
+that was trusted verbatim. Fix: an explicit `type:'person'` is now a FLOOR, not an absolute —
+`hasFirmSuffix()` can still override it to `'organization'`, one-directional only (an explicit org verdict
+is never downgraded, holding the P158a discipline). No second stoplist, no extension code touched — same
+shared-guard precedent as the original C13g fix.
+
+**Housekeeping:** `PLANNED-BACKLOG.md`'s row cited `owner-role-classification.md §9h` — that section still
+carries the ORIGINAL, now-corrected "never reads it back" claim; the real finding is in the new §9i.
+Fixed the citation to point at §9i with a note that it corrects §9h. Updated
+`ownership-truth-pipeline-state.md`'s Stage 3 entry and both forward-references, and
+`CURRENT-STATE.md`'s owner-role-classification row, from "capture-path fix still has one open residue" to
+"C13g + C13g-costar-stoplist both shipped — the arc is fully closed." Prompt and response moved to
+`prompts/done/` and `responses/done/` with a transcribed `.response.md` twin.
+
+**Next step.** Build: nothing open under `C13g` at all now — first time this arc has been fully closed on
+every front (lane, mutation, placeholder, sponsor-merge, RCA capture, CoStar capture). Operator: unchanged
+— the 12 duplicate-entity merge groups on "Duplicate entities — merge" remain the only outstanding piece,
+pure app-UI work, no build needed. The next real build decision is a direction call, not a small
+follow-on: Stage 4's owner-to-person linkage (only 13% of 6,480 owners have any linked person — the
+biggest measured gap in the whole ownership-to-contact pipeline) versus Stage 1's `OWN-T0a` 43.4%
+government-source disagreement versus Stage 3's `OWN-T0b/c/d/f/g` 417-merge residue. Worth deciding with
+Scott before drafting the next prompt rather than picking one unprompted.
+
 ## 2026-09-10 — C13g-costar-stoplist: traced and SHIPPED. Verdict (b) was ruled out, (c) was ruled out, the real cause was a case-(a) gap running the OPPOSITE direction from the row's own framing
 
 Traced the 32-row CoStar residue precisely before writing any fix, per the prompt's own instruction not
