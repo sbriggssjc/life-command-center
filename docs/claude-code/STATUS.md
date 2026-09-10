@@ -42,6 +42,44 @@ but is not the same measurement as naming the IP — recorded as a gap, not pape
 **J13-teardown status unchanged:** still blocked on the extension actually being reloaded to 1.0.53 in both
 browser profiles (👤 Scott, pending the PR above merging first).
 
+## 2026-09-10 — Close-out prompt drafted for the two remaining C13g/OWN-T0e items; new full-pipeline state page written
+
+Live-checked before writing anything: unchanged since the last reconciliation (merge log 151, retype log
+13, lane 5 candidates live — `Kvalitena AB` + 3 likely-genuine person names + the placeholder — none
+blocking OWN-T0e). The 12 duplicate-entity merge groups and `Kvalitena AB` are still Scott's, in progress.
+
+**Drafted:** `docs/claude-code/prompts/C13g-OWN-T0e-close-out.md` — bundles the two small items the
+mutation-pass prompt named but didn't build: §1 routes placeholder entities (`Research In Progress`)
+off the retype lane onto `junk_entity_review`; §2 builds the missing "the sponsor itself is the
+duplicate" merge affordance (`OWN-T0e-c`) that NGP Group's case had to work around by hand. Backlog
+rows `C13g-min-lane-placeholder` and `OWN-T0e-c` annotated with the prompt reference; both stay 🟢
+open until it ships.
+
+**Written:** `docs/architecture/ownership-truth-pipeline-state.md` — at Scott's request, the first page
+that walks the WHOLE pipeline he specified (property → recorded owner → chain-to-developer → true
+owner → Salesforce/Outlook/WebEx/enrichment → LCC pushed back out) stage by stage, citing every
+existing canonical doc and backlog row rather than re-deriving their numbers. Two findings worth
+carrying: (1) entity-dedup/entity-typing (`C13g`, the still-unbuilt capture-path fix; `OWN-T0b/c/d/f/g`'s
+417 pending duplicate-entity merges) is the single shared blocker behind residue in BOTH the
+ownership-chain stage (A2's 92-row residue, 54 of them `ambiguous_entity`) and the entity-resolution
+stage itself — fix it once, upstream, rather than per-stage; (2) Stage 5 (LCC writing its resolved truth
+back OUT to Salesforce/Outlook/WebEx) is the thinnest stage in the whole pipeline — almost nothing
+writes back past Salesforce today, and building more of that has limited value while the store it would
+push from is still ~2% mistyped and 43% self-disagreeing upstream. Also folded in: a one-table summary
+of the UX-review tiers (UX-T0 through UX-T4) against `PLANNED-BACKLOG.md` §P16, which stays the source
+of state.
+
+**Consolidation, checked not guessed:** read the three 2026-07-31 property-owner docs
+(`property-owner-subsystem.md`, `property-owner-source-authority-and-doctrine.md`,
+`data-quality-lease-and-owner.md`) before deciding whether to banner them — they describe the still-live
+Stage 1 evidence-vote mechanism (`lcc_reconcile_property_owner`) that the Stage 3 reconciled store reads
+as one of its inputs (`OWN-T0h`), so they are evidence trail, not stale; left as-is rather than bannered
+on a guess. Pointers added from `CURRENT-STATE.md` and `PLANNED-BACKLOG.md` §P0d to the new page.
+
+**Next step, named.** Operator: same as last entry — the 12 merge groups and `Kvalitena AB`. Build:
+the close-out prompt above is ready to run whenever Scott has a Claude Code turn free; nothing else in
+this arc needs a build turn before that.
+
 ## 2026-09-09 — C13g-min-lane-mutation reconciled (PR #2222): verified on `main`, tests-only so nothing to deploy; the retype arc's build side is closed
 
 Re-ran `test/c13g-min-lane.test.mjs` on `main` after the merge: **14/14**; the builder's 46/46 RED is its own
