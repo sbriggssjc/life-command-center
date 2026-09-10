@@ -16,6 +16,45 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — PDR1 live-verified: the real auto-merge/needs_human split measured (22/167/0 of 189), migration applied, DaVita/Donna-TX confirmed resolvable
+
+`PDR1-entity-reconcile-automerge` came back well-built but explicitly flagged its own biggest unknown
+honestly: no Supabase egress in the build sandbox, so the real auto-mergeable/needs_human split of the
+189-entity population was never measured, and the migration was never applied. This session has live
+DB access, so closed both gaps rather than leaving them as "pending":
+
+- **Re-implemented the planner's exact scoring rule in SQL** (address-present +100, normalized +50,
+  signal count capped +40; auto-mergeable requires the top candidate ≥100 and leading the runner-up by
+  ≥50) and ran it against the live population. **Real split: 22 auto-mergeable / 167 needs_human
+  (`margin_too_close`) / 0 with no candidate clearing the minimum, out of 189.** The 167 is larger than
+  hoped — most ambiguous entities have two comparably well-populated candidates, a genuine judgment
+  call, not noise — but that is the honest number, not adjusted to look better.
+- **DaVita/Donna-TX itself verified as one of the 22.** Its three real candidates score 172 (`d90be440…`,
+  "1006 I-2, Donna, TX 78537" — addressed, normalized, 11 real relationship/portfolio/identity rows),
+  104 (`3c2dc7d3…`, addressed but never normalized), and 40 (`c94991a3…`, the bare city placeholder,
+  no address at all) — the planner picks the right winner by a comfortable 68-point margin, exactly
+  the ranking Scott's own worked example called for.
+- **Applied migration `20260910120000` live** (run-log table + `AMBIGUOUS_ENTITY_AUTOMERGE` flag,
+  registered `state='off'`) — additive, reversible, no live effect (the flag stays off). Updated the
+  flag's own `notes` column with the real measured split so anyone reading `feature_flags_registry`
+  later sees real numbers, not the build-time "unknown."
+- **Re-ran the 24-test guard independently** — 24/24 pass, unchanged.
+- Moved `PDR1-entity-reconcile-automerge.md` to `prompts/done/`, response `.docx` + new `.response.md`
+  transcript to `responses/done/`. `PLANNED-BACKLOG.md` PDR1 and P13#1 rows corrected in place (BUILT →
+  BUILT + LIVE-VERIFIED).
+
+**What did NOT happen:** no merge has actually run. `AMBIGUOUS_ENTITY_AUTOMERGE` is still `off` —
+DaVita/Donna-TX and the other 21 auto-mergeable entities are unchanged in the live database. Flipping
+the flag (or calling `reconcile_entity` directly for the 22, or for DaVita alone to unblock that one
+property now) is a live write against `bd_opportunities`/`activity_events`/`deal_party` — asked Scott
+directly rather than assuming the "auto-merge the clear cases" decision extends to "and Cowork should
+pull the trigger unsupervised the same day it's measured."
+
+**Next step.** Scott's call on execution: run the 22 now (including DaVita), run DaVita alone first as
+a single proof case, or hold entirely until he's reviewed the split himself. Whichever he picks, PDR2/
+PDR3/PDR4/PDR7 (the property tabs marked "depends on PDR1" in §P17) need a live re-check against
+DaVita's post-merge state once it actually merges — not assumed fixed by the merge alone.
+
 ## 2026-09-10 — RATINGS3 resolves the 3-round `ratings` saga: the fix was correct all along, the test run was executing stale pre-merge code, and a real (previously invisible) `updated_at` bug was found and fixed; live before/after proof obtained for the first time this arc
 
 `RATINGS3-live-proven-upsert-fix.md` demanded what the first two rounds skipped: an actual before/after
