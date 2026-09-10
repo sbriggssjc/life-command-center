@@ -16,6 +16,43 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — RATINGS2 fixed in `Dialysis` (not this repo): the partial-index upsert bug was worse than diagnosed (silently blacklisting the whole table), a second PROPREV1-shaped bug found in the quality-metrics path — but live verification could not happen on either side, this session's Supabase MCP token expired mid-arc too
+
+**The prompt.** `docs/claude-code/prompts/done/RATINGS2-partial-index-upsert-and-cqm-fulltable-probe.md`,
+filed for `Dialysis` after a follow-up test run showed RATINGS-INSERT-COLLISION's upsert still failing
+100% of the time (partial-index diagnosis) plus a new, much larger full-table probe on
+`clinic_quality_metrics`.
+
+**The response**, recovered from Scott's saved transcript (`ratings2 surface response.docx`,
+untracked) — full detail in
+`docs/claude-code/responses/done/RATINGS2-partial-index-upsert-and-cqm-fulltable-probe.response.md`.
+**Confirmed this session's partial-index diagnosis, sharper than expected:** the original
+RATINGS-INSERT-COLLISION fix's bare `ON CONFLICT (medicare_id) DO UPDATE` raised Postgres `42P10`
+(invalid `ON CONFLICT` spec against a partial index) — and `_direct_upsert_record` caught that error
+and **blacklisted the whole table for the rest of the run, treating it as "handled"** rather than
+surfacing it, so rows were silently dropped. Fixed with an explicit `conflict_where` predicate on the
+direct-SQL path and an **explicit update-then-insert** REST fallback (rejecting the plain-unique-
+constraint alternative outright, correctly: both `medicare_id` and the CCN column are legitimately
+independently nullable). **A second instance of PROPREV1's exact bug shape found and fixed:**
+`_build_quality_payload` called `_has_column(..., refresh=True)` ~30 times per row — once per quality
+field — bypassing every cache by design; fixed with a once-per-run cache reset instead. The original
+`count=7013` `ratings` probe was confirmed already fixed by the prior PR — a regression test was added
+so it can't silently regress. Tests: 6 new + 2 updated, RED-before/GREEN-after confirmed explicitly;
+full suite 3,166/0 failed.
+
+**Live verification did not happen on either side of this fix — worth knowing.** The `Dialysis`-side
+session's own Supabase MCP token expired mid-session and couldn't be reauthorized non-interactively,
+the same failure mode this session is hitting right now (Supabase MCP shows disconnected, needs
+reauthorization). **Neither this session nor the one that built the fix has independently confirmed
+against Dialysis_DB that an existing `medicare_id` row's `updated_at` actually bumps, or that the
+`clinic_quality_metrics` probe count drops to O(1).** PR opened: `sbriggssjc/Dialysis#7401` — merge
+status not stated in the transcript, confirm with Scott. 👤 **Scott: please reauthorize the Supabase
+connector (claude.ai connector settings) when convenient — both the live-verification step here and
+this session's own cross-checks are blocked on it.**
+
+**Responses folder:** the new `ratings2 surface response.docx` has been transcribed and archived to
+`responses/done/`, matching the ongoing cleanup convention.
+
 ## 2026-09-10 — ACI-phase2-unitC SHIPPED: AC2 bench-ranking planner + AC3 Ollama role-inference planner + reversible write path
 
 Built the prompt sent earlier today (`docs/claude-code/prompts/ACI-phase2-unitC.md`). Scope held to
@@ -359,64 +396,6 @@ broker-role re-role, now measured at 17 candidate edges, not confirmed-broker co
 
 **Branch:** `build/aci-phase1-2`, pushed, not merged, no PR opened per instruction.
 ## 2026-09-10 — PROPREV1 fixed in `Dialysis` (not this repo): CFE-RUNAWAY's client-threading fix was correct but insufficient — the real bug was one layer downstream, in `column_exists()` itself; the responses folder consolidated (old Word transcripts archived to `responses/done/`)
-## 2026-09-10 — Reconciled ACI-phase1-2 + PR-scanner-writeback against what CC actually shipped; triaged Scott's DaVita/Donna-TX property walkthrough into P17
-
-**PR reconciliation.** Both PRs are merged and deployed (`/version` → `225ba9fa4e51`, one commit ahead
-via an unrelated concurrent-window PR). Read both response transcripts (now
-`docs/claude-code/responses/done/ACI-phase1-2.response.md` /
-`PR-scanner-writeback.response.md`) against the actual commits (`6f0cb946`, `831b8748`, `6b4f6598`,
-`20fb1ffe`, `2e7925d4`) rather than the prompts' asks. `PR-scanner-writeback` shipped honestly —
-Units 1-2 built and guarded (assessor/recorder → `parcel_records`/`tax_records`/`deed_records`, SOS
-→ new `llc_member`/`llc_manager` edges, both source-tagged distinctly from `costar_sidebar` and the
-gpt-4o leg; 12 tests, full suite 5649/0/6 unchanged), Units 3-4 correctly sized-not-built (no DB
-access that session to measure `county_records_needed`'s population; Salesforce write-back
-re-confirmed a read-only proxy, no Connected App). `ACI-phase1-2` shipped Unit A(c) (reject-demotion,
-deliberately unwired — 0 of 27 confirm-log rows are rejects) and Unit B (parent-inheritance planner,
-227 proposals re-measured, live call site not built) — **Unit C (AC2/AC3, the REIT/fund bench-ranking
-+ Ollama role-inference build Scott specifically named across two turns) was explicitly NOT
-attempted**, named in the commit message as "a genuinely large surface... that could not be built and
-guarded to standard in the time available," not a silent drop. **Next step for Unit C: it needs its
-own right-sized prompt, not a unit inside a four-unit PR** — filed as the open item below, not
-guessed at or built blind this turn.
-
-**Doc hygiene found and fixed while reconciling:** the two PRs each corrected `PLANNED-BACKLOG.md`'s
-`AC11` row in place independently (on parallel branches, merged separately), producing two duplicate
-AC11 rows on `main` — one carrying the population=0 sizing detail, the other carrying the
-`llc_member`/`llc_manager`-shipped correction, neither carrying both. Merged into one row (both facts
-kept) — this is a real defect class worth naming: two Cowork/CC sessions correcting the same row on
-the same day, on different branches, merge cleanly at the git level but leave the DOCUMENT forked.
-Moved both prompts to `prompts/done/`, both responses (.docx + new `.response.md` transcripts) to
-`responses/done/`.
-
-**Property-reconciliation triage (Scott's separate, explicitly-parallel ask).** Read/viewed all 9
-screenshots + narrative in Scott's uploaded notes on the DaVita Kidney Care listing in Donna, TX (a
-property he personally sold in 2017-18). Investigated live rather than assumed: **found 5 unmerged
-`entities` rows for this one address** (`c94991a3…` bare city placeholder, `d90be440…` and `3c2dc7d3…`
-two differently-normalized address variants, `8d1fd46e…` the Salesforce-opportunity-sync orphan the
-app actually opens, `9e6ce72a…` Northmarq Chicago's own office address mistagged `city='Donna, TX'`).
-The orphan record's own `metadata` names the root cause: `orphan_flagged: true` +
-`ambiguous_resolution: [the 3 real candidates]`, minted by SF opportunity-sync on **2026-07-29**,
-never resolved in the 43 days since. A real, live, mounted reconciliation endpoint pair exists for
-exactly this (`GET/POST /api/pipeline/flagged-deals` + `reconcile-entity`) — it has simply never been
-run against this deal, and **nothing drains that queue on a schedule** (every prior clearance was a
-manual one-time sweep). Confirms BOTH of Scott's hypotheses at once, because they share one mechanism
-gap. Filed **`PLANNED-BACKLOG.md` §P17** (PDR1–PDR11, ranked by importance, PDR1 = the root-cause
-merge + the missing recurring drain; PDR2–PDR7 = the ownership/deal-history/documents/CMS-link/
-activity-log symptoms, expected to mostly self-resolve once PDR1's merge repoints the property, each
-flagged to re-check rather than assumed-fixed; PDR8 = the competitive-landscape rent/financials
-feature request; PDR9 = the self-flagged geocoding gap, catalogued per Scott's ask but not a defect;
-PDR10 = the Chicago-address mistagging found along the way; PDR11 = the systemic finding written
-plainly). Rent-roll accuracy (PDR5) needs the source lease from the Team Briggs shared folder, not
-reachable from this session — flagged, not guessed at.
-
-**Next step.** Two independent threads, per Scott's own "don't let this get us off our current
-track" framing: (1) a right-sized follow-up prompt for Unit C (REIT/fund role taxonomy) — smaller
-scope than the four-unit `ACI-phase1-2`, so it can actually be built and guarded in one pass; (2) PDR1
-itself — either a quick manual `reconcile-entity` call to unblock this one property now, or size the
-fleet-wide `ambiguous_resolution` population first and build the recurring drain in one prompt (same
-"measure before building a lane" discipline as PR-scanner-3/AC11). Scott's call on which goes first.
-
-## 2026-09-10 — `PR-scanner-writeback` shipped: assessor/recorder/SOS scans now write real tables; the SF write-back re-confirmed not buildable
 
 **The prompt.** `docs/claude-code/prompts/PROPREV1-estimated-annual-revenue-propagation-still-dropped.md`,
 filed for `Dialysis` after the post-merge test run showed `properties.estimated_annual_revenue`
@@ -1022,20 +1001,6 @@ on a guess. Pointers added from `CURRENT-STATE.md` and `PLANNED-BACKLOG.md` §P0
 **Next step, named.** Operator: same as last entry — the 12 merge groups and `Kvalitena AB`. Build:
 the close-out prompt above is ready to run whenever Scott has a Claude Code turn free; nothing else in
 this arc needs a build turn before that.
-## 2026-09-10 — ASC multi-address parcels: candidate-scoped three-token rule implemented
-
-The restricted ASC sample exposed a parcel whose official facility location, assessor situs, and licensed
-property display use three different civic numbers. The matcher now has a distinct fail-closed reason code
-for this class. It requires the exact frozen and captured tokens, a distinct assessor token with the same
-city/state/postal components, exact parcel and CoStar record pins, exact CMS facility identity, an allow-listed
-operating tenant in the captured roster, both facility-registry and licensed-public-record evidence classes,
-authorization metadata, and mandatory second review. The 28-test focused suite is green, including rejection
-of wrong record, parcel, address, locality, tenant, source, assessor token, facility identity, review flag, and
-incomplete citations. No global normalization or canonical address write was introduced.
-
-**Next step, named.** Merge and deploy the guarded matcher before activating any candidate-scoped evidence
-entry; then verify the single pending candidate remains otherwise unchanged and retry the licensed-source
-capture for second review. F2 remains the longer-term extraction into the lane-neutral identity resolver.
 
 ## 2026-09-09 — C13g-min-lane-mutation reconciled (PR #2222): verified on `main`, tests-only so nothing to deploy; the retype arc's build side is closed
 
