@@ -16,6 +16,105 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — ACI-phase2-unitC SHIPPED: AC2 bench-ranking planner + AC3 Ollama role-inference planner + reversible write path
+
+Built the prompt sent earlier today (`docs/claude-code/prompts/ACI-phase2-unitC.md`). Scope held to
+exactly AC2+AC3, nothing else attempted. Live DB access to `xengecqvemvfknjvbvrq` was available and
+used to confirm the `bench` column shape and the Pulliam/Shuler facts before writing any code — no
+live writes were made (see "measured vs assumed" below).
+
+**AC2 — `api/_shared/bench-ranking-planner.js` (pure).** `rankBench(candidates)` sorts on a strict
+key hierarchy: `two_way` (an inbound/reply signal, absolute) → inferred-function priority
+(acquisitions > disposition > transaction_dd > broker; unknown is neutral, never assumed
+acquisitions-grade) → correspondence volume → recency (the tiebreak when volume ties) → seniority
+(title-derived, 0/unknown when absent — silence, never a junior claim) → name (stable last resort).
+**Never collapses to one winner** — every candidate handed in comes back out, ranked, per Scott's
+08-26 doctrine ("a re-derived ranking, not a decision recorded once"). Extends the EXISTING `bench`
+jsonb shape (`{name, role, source, n_props, authority, contact_entity_id, is_named_individual}`,
+confirmed live) by appending `correspondence_volume`, `last_email_date`, `two_way`,
+`inferred_function`, `inferred_function_confidence`, `inferred_function_basis`, `seniority_known`,
+`seniority_score`, `rank`, `rank_reason` — nothing removed or redefined. `ownerPassesBenchValueGate`
+reuses `cadenceSignalFloor()` (`cadence-engine.js`, env `CADENCE_SIGNAL_MIN_VALUE`, default 500000)
+rather than inventing a new floor.
+
+**AC3 — `api/_shared/bench-role-inference-planner.js`.** Four-bucket taxonomy from §3a
+(acquisitions/disposition/transaction_dd/broker). `titleFunctionHint()` is the deterministic,
+no-LLM path — when a title is present and maps cleanly it is confidence `'high'`, basis `'title'`,
+and the model is never called (verified: a titled candidate never invokes `invoke` in
+`inferBenchRoles`). When no title (or an unmapped one), `invokeExtractionAI` is called via the
+repo's existing seam (same shape `ownership-chain-draft-planner.js`/`property-twin-assist-planner.js`
+use — `{prompt, surface}` in, `ai.data.response` out), and `resolveCandidateFunction()` is the P181
+confidence gate: **a correspondence-only verdict is CAPPED at `'medium'` even when the model itself
+claims `'high'`** — the exact rule the prompt's guard asked for. Every inferred function also carries
+a verbatim-quote guard on `evidence_quote` (drops the whole verdict, not just the quote, if the
+quote is not a literal substring of a supplied subject line — the W8-U3/EXT1 doctrine).
+
+**Write path — `api/_handlers/bench-rank-tick.js`**, mounted `case 'bench-rank-tick'` in `admin.js`
+and `/api/bench-rank-tick` in `server.js` (mirrors `tier0-auto-attach-tick.js`'s GET-dry-run /
+POST-flag-gated-write shape exactly). GET is always a dry run, ungated, and never writes
+(`?infer_roles=1` optionally runs AC3's Ollama call in the dry run too, for grading before the flag
+flips). POST writes `owner_contact_pivot.bench` only when `BENCH_RANK_WRITE` is on, value-gated per
+owner via `cadenceSignalFloor()`. Reversibility: a ledger row (`lcc_bench_rank_write_log`, carrying
+the FULL prior bench array) is written BEFORE the pivot PATCH, keyed `bench_rank_YYYYMMDD_<8hex>`,
+mirroring `tier0-attach-effect.js`'s "ledger before write, carries prior state" pattern. A
+run-lifecycle table (`lcc_bench_rank_run_log`) is opened before the batch and closed after, P123
+style.
+
+**⚠️ Migration NOT applied live.** `supabase/migrations/20261010150000_lcc_bench_rank_run_log.sql`
+(both ledger tables, purely additive) is written but was deliberately NOT run against
+`xengecqvemvfknjvbvrq` in this session — writing to the production database without an explicit
+instruction to do so was judged out of scope. Until an operator applies it, `POST` still cannot do
+any real damage: the ledger write fails soft (logged) and the bench PATCH is separately gated on the
+`BENCH_RANK_WRITE` flag, which also does not exist yet. **This is a named, deliberate gap, not an
+oversight** — an operator needs to (1) apply the migration, (2) add the `feature_flags_registry` row
+for `BENCH_RANK_WRITE`, (3) run `GET /api/bench-rank-tick` a few times to eyeball the ranking before
+flipping the flag.
+
+**Measured live vs assumed (be explicit, per the task's own instruction):**
+- ✅ MEASURED live: `owner_contact_pivot.bench` populated on 1,622 of 5,488 rows (confirms the doc's
+  number exactly); the EXACT jsonb shape of a populated row (used verbatim as the planner's
+  passthrough fields); `unified_contacts` columns exist as documented
+  (title/total_emails_sent/last_email_date/outlook_contact_id/engagement_score/company_name/…);
+  Andrew Pulliam resolves at `unified_id=2330d585-…`, `title=NULL`, `total_emails_sent=132`,
+  `last_email_date=2023-02-27`, `company_name='Easterly Partners'`; "Shuler"/"Pulliam" search on
+  `email_bodies` shows the real inbound/outbound split for the Williston deal — 48 `is_sent=false`
+  (inbound) rows and 3 `is_sent=true` (outbound) against `apulliam@easterlyreit.com`, confirming a
+  genuine two-way signal exists and that `email_bodies.is_sent` is the right column for AC2's
+  two-way input. Ryan/Lucas Shuler does NOT resolve by full-name search in `unified_contacts` —
+  confirmed, matching the prompt's warning; the test fixtures model his row as absent/thin rather
+  than guessing a resolution.
+- ⚠️ NOT measured live (assumed/derived from schema + docs, flagged honestly): the exact live
+  ranking `rankBench` would produce over a REAL owner's REAL bench array (no live call was made —
+  only reads); whether `invokeExtractionAI` behaves as documented under `surface: 'bench_role_inference'`
+  in production (no live AI call was made, by design — tests stub `invoke`); SF campaign/role context
+  join shape for AC3's prompt input (`sf_context` is accepted as an optional string field but no live
+  `lcc_sf_list_membership` join was written or tested against real rows — the prompt said "reuse the
+  existing join, don't re-derive a name-based one," and the handler does not yet build that join at
+  all, which is a named gap, see below).
+
+**Named blocker / deferred, per the out-of-scope rules:** the handler's `enrichBenchCandidates` /
+`attachInboundCounts` build the correspondence+two-way inputs from `unified_contacts` +
+`email_bodies` directly, but does **not** yet join Salesforce campaign/role context into AC3's
+`sf_context` field (§3b's email-domain-keyed `lcc_sf_list_membership` join) — the planner ACCEPTS
+that field and the prompt builder includes it when present, but the handler never populates it. This
+is a real, sizeable remaining wire-up, not attempted here because it needs its own measurement pass
+against `lcc_sf_list_membership` (which §3b's correction already flagged as its own can of worms —
+`org_entity_id` reads 0 for every high-value owner). Filed as follow-up **AC2-sf-context** below.
+
+AC6 (professional emails misfiled as personal), AC8 (`v_lcc_prospecting_edge_review` false
+negatives) and AC9 (competitor-broker edges) were not touched, per the prompt's explicit exclusion.
+
+**Tests:** 3 new files (`test/bench-ranking-planner.test.mjs`, `test/bench-role-inference-planner.test.mjs`,
+`test/bench-rank-tick.test.mjs`), **47 + 20 = 67 assertions total, all passing.** Mutation-checked by
+hand on the two load-bearing rules (the sort-key ordering and the confidence cap) — both mutations
+correctly turned tests red. Positive control on the Pulliam/Shuler pair as fixture data (live facts,
+since the doc's own doc-vs-live numbers disagree — 132 emails per the live re-check, 71/51 per the
+doc's narrative table — both are exercised as separate test cases rather than picking one).
+
+Backlog: AC2/AC3 rows in `PLANNED-BACKLOG.md` updated 🟡 → 🟢 shipped, with the sf_context gap named.
+`account-based-contact-intelligence.md` §7d gets an appended follow-up subsection recording the
+outcome (not overwriting the "not attempted" entry from `ACI-phase1-2`, which is now historical).
+
 ## 2026-09-10 — Right-sized Unit C follow-up drafted and sent: `ACI-phase2-unitC.md` (AC2 bench ranking + AC3 Ollama role inference)
 
 Picking up the open thread from today's PR reconciliation: `ACI-phase1-2`'s Unit C (the REIT/fund

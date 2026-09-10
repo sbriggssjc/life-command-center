@@ -123,6 +123,7 @@ import { artifactSafeName } from './_shared/artifact-storage.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 import { handleOwnershipChainDraftTick } from './_handlers/ownership-chain-draft-tick.js';
 import { handleTier0AutoAttachTick } from './_handlers/tier0-auto-attach-tick.js';
+import { handleBenchRankTick } from './_handlers/bench-rank-tick.js';
 import { handleBriefingAnalystTakeTick } from './_handlers/briefing-analyst-take-tick.js';
 import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
 import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
@@ -252,6 +253,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'property-twin-assist-tick': return handlePropertyTwinAssistTick(req, res);
     case 'ownership-chain-draft-tick': return handleOwnershipChainDraftTick(req, res);
     case 'tier0-auto-attach-tick':    return handleTier0AutoAttachTick(req, res);
+    case 'bench-rank-tick':          return handleBenchRankTick(req, res);
     case 'briefing-analyst-take-tick': return handleBriefingAnalystTakeTick(req, res);
     case 'sf-link-assist-tick':        return handleSfLinkAssistTick(req, res);
     case 'sf-link-rescore-tick':       return handleSfLinkRescoreTick(req, res);
