@@ -48,6 +48,24 @@ Build: nothing left to prompt in this arc. The capture-path fix (`C13g` proper �
 producer that keeps writing new mistyped entities) is the one real open thread left standing behind
 this arc, sized at a ~1,950-entity floor; picking it up is a genuine next-arc decision, not a small
 follow-on, and is named as such in `ownership-truth-pipeline-state.md`.
+## 2026-09-10 — RAILWAY-PA-SECRET-log reconciled: independently re-verified, no gaps found; the re-run this time reached `origin`
+
+The re-run of `RAILWAY-PA-SECRET-log.md` (issued after the prior session's identical work was lost to an
+unpushed branch) landed on `main` as `4a6494ea`. Independently re-verified rather than taken on the session's
+word: `grep -n "authenticateWebhook(req)" api/sync.js` → the only call site left is inside `webhookAuth()`
+(line 190); `grep -n "webhookAuth(" api/sync.js` → exactly seven handlers (`rcm-ingest`, `rcm-backfill`,
+`loopnet-ingest`, `processing-complete`, `todo-completion-poll`, `listing-webhook`, `cross-domain-match`);
+`proxyToLeadIngest` and `handleLiveIngest` confirmed untouched, as the prompt required. Full `npm test`
+re-run on the merged tree: **5,610 pass / 0 fail / 6 skipped** (the session's own handoff number was
+5,603/0 — the difference is other PRs landing on `main` in between, not a discrepancy in this unit).
+`PLANNED-BACKLOG.md`'s RAILWAY-PA-SECRET row and `AI-SURFACES-OPERATIONAL-REFERENCE.md` §4a-Railway were
+already correct as written — nothing to correct in place this time. Prompt + response moved to `done/`.
+
+**Operator order, unchanged and still open (👤 Scott):** (1) redeploy both Railway services now that this is
+merged; (2) set `PA_WEBHOOK_SECRET` to the same value Dialysis_DB holds, plus `PA_WEBHOOK_KNOWN_IPS` if known
+caller IPs are known; (3) read `[pa-webhook] DENY-WOULD … none` for ~3 days; (4) fix each `none` caller,
+starting with the To Do Completion Poll flow's header-less second call (designer edit + re-export — never
+hand-edit the JSON) and the three unexported PA5 flows; (5) flip `PA_WEBHOOK_AUTH_MODE=enforce`.
 
 ## 2026-09-10 — C13g-min-lane-placeholder shipped and seeded live; OWN-T0e-c's affordance is BUILT (no live instance to exercise it end-to-end)
 
