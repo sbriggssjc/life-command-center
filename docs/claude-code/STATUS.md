@@ -16,6 +16,49 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — RATINGS-INSERT-COLLISION fixed in `Dialysis` (not this repo) — the prompt's own hypothesis corrected, not just fixed; pushed to a branch, **not yet merged**
+
+**The prompt.** `docs/claude-code/prompts/done/RATINGS-INSERT-COLLISION-cms-ratings-upsert.md`, drafted
+2026-09-10 after this session found the `ratings` circuit-breaker/duplicate-key pattern live in a
+Railway log excerpt from the CFE-RUNAWAY test run (see that entry below). Filed for `Dialysis`
+(this session cannot reach it directly), same convention as `CFE-RUNAWAY`.
+
+**The response**, recovered from Scott's saved transcript (`ratings insert collision bug surface
+response.docx`, untracked) — full detail in
+`docs/claude-code/responses/done/RATINGS-INSERT-COLLISION-cms-ratings-upsert.response.md`. Headline:
+**the prompt's own working hypothesis was wrong and got corrected, not just patched around.** It
+guessed a plain `INSERT` with no upsert path; in fact a fallback (insert → on-conflict → update)
+already existed — the real defect was that the fallback still needed a genuine `INSERT` to fail first,
+and that predictable failure (for the 3 medicare_ids already present from the March backfill) tripped
+a **table-wide** circuit breaker that collaterally blocked unrelated `ratings` rows too, producing the
+349 `circuit_open` warnings and 174 pointless retries measured live. Fix: `_ingest_ratings()`
+(`cms_aux_ingestion.py:638`) now does a native `.upsert(..., on_conflict=...)`, matching the pattern
+already used elsewhere in the same file (`_ingest_payer_mix`/`_ingest_ownership_history`). The second
+full-table probe (the `count=7013` mystery value) was a distinct bug, not CFE-RUNAWAY's per-record
+pattern — a once-per-run `_load_existing_key_set()` prefetch reading the whole table twice; removed
+entirely since the upsert makes it unnecessary. Circuit breaker confirmed to self-reset after an
+8-second cooldown (no restart needed) — but a real, separate defect was found and explicitly left
+unfixed: `circuit_open` was being misclassified as a transport error, which is what drove the useless
+"retry with a fresh client" churn. **The prompt's own Unit 5 assumption was also corrected**: the
+`clinic_quality_metrics` skips are NOT a cascade off the ratings failures — they're driven by an
+independent `medicare_clinics` lookup with its own breaker key, and those 210 rows genuinely have no
+parent yet; Unit 2 landing does not clear that count. `_ingest_quality_metrics` shares the same
+underlying helper and is theoretically exposed to the same cascade shape, but was correctly left
+untouched since it wasn't reported failing. Tests: 3,155/0 failed (7 skipped, 1 xfailed).
+**Delivery: branch `claude/ratings-insert-collision-01TdbTHbDZpAy42HfAvZAA8E`, pushed, no PR opened
+(by design) — NOT YET MERGED.** Merge instructions were handed to Scott; confirm before treating this
+as deployed.
+
+**Correction to this session's own prior work:** the STATUS/backlog entries for this finding drafted
+earlier today reached `origin` (PR #2241) but did not survive it — a later PR merged around the same
+time (`docs/aci-phase0-prompt`, #2242) was branched from before #2241 landed, and when main was merged
+into it the RATINGS-INSERT-COLLISION block was dropped rather than combined (visible in the repo
+history: it is absent from `origin/main` immediately after both merges, though present in the
+intermediate merge commit). Several sessions were editing this repo's docs concurrently around
+2026-09-10 10:45–11:05 UTC. The fix itself, on Scott's machine in `Dialysis`, was never at risk — only
+this repo's paperwork about it. Redone here from the saved transcript, against a freshly re-pulled
+`origin/main`.
+
 ## 2026-09-10 — Owner-to-contact automation push started: account-based-contact-intelligence.md re-measured, a stale claim corrected, a phased build plan added, Phase 0 prompt sent
 
 Scott's direction: automate owner→contact linkage end to end, minimal human-in-the-loop, split by
