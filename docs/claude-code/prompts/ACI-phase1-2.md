@@ -61,21 +61,26 @@ each before fixing — all three are named from an August audit.
 
 ## Unit D — the individual-owner control-chain classifier (new, §8 of the design doc)
 
-Read §8 in full before starting — it states plainly what data exists and what doesn't, and Scott's
-explicit choice to build on free data only. Do not attempt the member-list or tax-bill-mailing-address
-corroboration Scott originally described in full — that needs the paid APIs (§8a) and is explicitly
-out of scope this round. Build what §8b scopes instead:
+⚠️ **§8's original framing (paid APIs required, build only against `true_owners.notice_address_1`) is
+SUPERSEDED — read `public-records-source-lane.md` §7 FIRST, and the correction banner at the top of
+§8, before starting this unit.** A companion prompt (`PR-scanner-writeback.md`) wires the extension's
+existing county/recorder/SOS scanner into real structured captures (mailing address, deed grantor/
+grantee, SOS officers/members) — if that prompt has already shipped, source this unit's `llc_member`
+edges and address signals from ITS real data, not only `true_owners.notice_address_1`. If it has not
+shipped yet, build Unit D exactly as scoped below against `notice_address_1` alone (still correct, just
+narrower), and note in the response that it should be re-run against the richer source once available
+— do not block this unit on the other one landing first, they are independently useful.
 
 1. Size the population first: how many recorded-owner LLCs classified `one_off_owner` (C13b/C13c) have
-   *any* signal available under §8b (a `true_owners.notice_address_1` that survives
-   `address-reverse.js`'s residential-vs-agent-service classifier, OR an incidental member name
-   surfaced in correspondence/Salesforce/deed text)? State the real number before building anything —
-   §8a's measurements suggest it will be small; confirm rather than assume.
+   *any* signal available — a `true_owners.notice_address_1` that survives `address-reverse.js`'s
+   residential-vs-agent-service classifier, an incidental member name surfaced in correspondence/
+   Salesforce/deed text, OR (if `PR-scanner-writeback` has shipped) a real SOS/recorder capture? State
+   the real number before building anything.
 2. If the population justifies it: add the `llc_member`/`llc_manager` `entity_relationships` edge
    type (none exists today — confirmed live). Only a human-verdicted or corroborated-from-existing-text
    member claim may write this edge; never a silent auto-mint from an unverified name match.
-3. Wire `address-reverse.js`'s existing classifier against `true_owners.notice_address_1` for this
-   population, as a real signal with its own confidence weight — do not blend it into Tier 0's
+3. Wire `address-reverse.js`'s existing classifier against whatever real address source is available
+   for this population, as a real signal with its own confidence weight — do not blend it into Tier 0's
    email-domain confidence tiers, which measure something different.
 4. If step 1's population is too small to be worth a lane of its own, say so plainly, record the
    measurement in the backlog, and do NOT build a lane for a population you cannot show exists —

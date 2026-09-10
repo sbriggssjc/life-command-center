@@ -16,6 +16,87 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — Scott's manual research playbook checked against the codebase before sending ACI-phase1-2: found the free-source path already half-built, revised the plan
+
+Scott described his pre-LCC manual ownership-research workflow in full detail (netronline → county
+assessor → recorder of deeds → Secretary of State → cross-reference in Salesforce/Google → 7-touch
+cadence) and asked, before sending `ACI-phase1-2`, to make sure the design covers all of it — entirely
+free sources, a possible county-level Chrome/Edge sidebar adapter if one is needed, a priority-weighted
+research queue, and a living system that re-checks its own conclusions over time.
+
+**Checked before adding anything to the plan, per standing doctrine — and the finding upgrades the
+design significantly:** `extension/content/public-records.js` already scans assessor, recorder, and
+SOS sites (including a dedicated CA-bizfile parser with a real bug fix already paid for) and correctly
+extracts `mailing_address`, `registered_agent`/`officers`, `grantor`/`grantee`, `tax_amount` — exactly
+the data the LLC-member control chain needs. `county-portal-resolver.js` + `county_authority_cache`
+(926 counties) already ingest netronline's own index — Scott's literal starting point is already data
+in this database. **The actual gap: the sidepanel's save handler for a scanned public-records capture
+discards everything except `name`+`description`, going through a generic entity-create call instead
+of the real structured writer (`upsertPublicRecords`) that already works and is proven live for
+CoStar.** This is a wiring defect, not a missing subsystem, and it means the "wait for paid APIs"
+framing in `account-based-contact-intelligence.md` §8 (written earlier this session) was wrong —
+corrected in place with a banner, not deleted.
+
+**Filed the finding** in `public-records-source-lane.md` §7 (the canonical page for this exact
+question) and cross-linked from §8. **Drafted and sent `docs/claude-code/prompts/PR-scanner-writeback.md`** —
+wire the three scanner outputs into real writers (reusing `upsertPublicRecords`, building a new
+SOS-officer writer that creates the `llc_member`/`llc_manager` entity_relationships edge type), surface
+the netronline-sourced county portal URLs in the sidepanel, extend `research_workbench` (not a new
+queue) for the priority-ranked "what to research next" list, and size — not blind-build — the
+Salesforce opportunity/list write-back Scott's workflow ends with.
+
+**Revised `ACI-phase1-2.md`'s Unit D in place** (not yet sent to CC — Scott asked to hold before
+proceeding) to source from `PR-scanner-writeback`'s real captures once shipped rather than only the
+thin `true_owners.notice_address_1` signal, without blocking on it landing first.
+
+Backlog: new row `PR-scanner-writeback`; `AC11` corrected in place with a pointer to the finding.
+
+**Next step.** Both prompts (`ACI-phase1-2`, revised, and `PR-scanner-writeback`, new) are ready to
+send — Scott's call on sequencing, per his own "build both side by side" instruction from the prior
+turn. Nothing to run in this repo until one comes back.
+
+## 2026-09-10 — ACI-phase1-2 designed and sent: Tier 0 completion + REIT/fund role taxonomy + a new individual-owner control-chain classifier
+
+Scott's direction: build the individual-owner path and the institutional REIT/fund path side by side
+so nothing gets missed between them, plus formalize a third piece he described in detail — an LLC
+recorded-owner → member → residence-address → tax-bill-mailing-address chain that identifies who is
+actually in control (single member/family → treat as an individual owner; multiple members → the one
+whose address demonstrates control is the contact). He also asked for Ollama to review and improve
+this as data works through the pipeline, with a shrinking human-in-the-loop footprint over time.
+
+**Before designing anything, checked what the exact heuristic he described would actually run on —
+and it's mostly not there yet, on three independent fronts:** `entity_relationships` has no LLC
+member/manager edge type at all today; `entities.address`/`normalized_address` are populated on 0.3%
+of persons and 0.2% of organizations; and the assessor tax-bill data that would corroborate a mailing
+address is either GPT-4o fabricating plausible county records (25,334 of 25,621 dia tax rows) or, on
+the one real capture source, has never once carried a tax amount — a measured ceiling of zero, not a
+gap. Real member/mailing-address data exists behind OpenCorporates and Regrid, both coded, gated on
+API keys Scott hasn't provided.
+
+**Asked Scott directly rather than guessing which way to build** — get the paid keys, build free-data-
+only and accept under-coverage, or build the framework with stubs. He chose: build the logic now on
+free/existing data, accept the LLC-member scenario will be under-covered until real data is added
+later.
+
+**Added `account-based-contact-intelligence.md` §8**, the control-chain design scoped to that choice:
+uses `true_owners.notice_address_1` (the one real, non-fabricated address field at scale) through the
+already-built `address-reverse.js` residential-vs-agent-service classifier, `one_off_owner`
+(C13b/C13c) as the single-owner starting signal instead of a member count we can't get for free, and
+states plainly this will only resolve a small population until paid data lands — the prompt requires
+CC to measure and report that population rather than assume it's worth a lane.
+
+**Drafted and sent `docs/claude-code/prompts/ACI-phase1-2.md`** — four units in one PR, each
+independently guarded and revertible: Unit A (AC1d remaining pieces — un-park signals, reject
+learning), Unit B (AC1e — SPE subsidiary inheritance), Unit C (AC2/AC3 — bench ranking + Ollama role
+inference, gated on landing the AC6/AC8/AC9 input-quality spin-offs first or alongside), Unit D (the
+new control-chain classifier, sized before built). Backlog rows AC1d/AC1e/AC2/AC3/AC6/AC8/AC9
+annotated; new row AC11 filed for the control-chain classifier.
+
+**Next step.** Build: nothing to run until CC returns on `ACI-phase1-2`. This is the largest and most
+novel prompt of the whole owner-contact automation push — expect it to come back partial (Unit D in
+particular may report "population too small for a lane" rather than a working build, which is a valid
+and useful outcome per the prompt's own instruction, not a failure).
+
 ## 2026-09-10 — CFE-RUNAWAY and RATINGS-INSERT-COLLISION confirmed merged in `Dialysis`; a fresh test run shows both holding, but a new bug found: `properties.estimated_annual_revenue` propagation still fails 100% of the time — PROPREV1 prompt drafted and sent
 
 Scott confirmed both `Dialysis` branches merged. The test run in flight was cut short mid-run by that
