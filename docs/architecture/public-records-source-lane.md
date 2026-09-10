@@ -781,3 +781,55 @@ Do not wait for OpenCorporates/Regrid to build the individual-owner control chai
 **Net effect on `ACI-phase1-2`:** hold Unit D as drafted — it undersells what's buildable. A revised
 prompt (`PR-scanner-writeback`) should ship first, since Units A-C (Tier 0 completion, the REIT/fund
 taxonomy) are unaffected by this finding and can proceed independently.
+
+## 7a. ✅ PR-scanner-writeback SHIPPED (2026-09-10) — the sidepanel scan captures now write real tables
+
+Item 1's premise ("the sidepanel discards everything except `name` and a description on save") is
+now false for the assessor / recorder / SOS scan paths. New shared module
+**`api/_shared/public-records-writeback.js`** (source-tagged **`assessor_sidebar_manual`** /
+**`recorder_sidebar_manual`** / **`sos_sidebar_manual`** — distinct from `costar_sidebar` and from
+the gpt-4o `ai_gpt4o_presumed` leg §2a describes; neither of those is touched by this unit, per its
+own explicit scope). Route: `POST /api/public-records-capture` (mounted directly in `server.js`,
+also reachable as `/api/admin?_route=public-records-capture`), called from the sidepanel's new
+`loadPublicRecordPropertyView` (assessor/recorder) and the rebuilt `saveOrgBtn` handler (SOS,
+no-active-worklist-target path).
+
+- **Assessor scan → `parcel_records` + `tax_records`** (`applyAssessorCapture`). Fill-blanks against
+  an existing row via `filterByFieldPriority`; a NEW row is inserted with the scan's own
+  `apn/county/state/assessed_value/land_value/improvement_value/tax_amount/year_built/square_footage/
+  lot_size/zoning/property_type/owner_name/mailing_address`. `owner_name` rides through **unmodified
+  from the scan** — never backfilled from a property record we already hold, the exact gov ORE
+  Phase A1 "echo" defect §2 and §2a document on the automated legs. Requires an operator-supplied
+  domain `property_id` (no address→property auto-match — never guess).
+- **Recorder scan → `deed_records`** (`applyRecorderCapture`). Extends the existing
+  `deed-parser.js` dedup/DTO pattern (`buildDeedDataHash`, `validateDeedIngest`, PK-per-domain,
+  `grantor_address`/`grantee_address` per ORE Phase 1 Unit C) rather than forking a second insert
+  shape; a duplicate `data_hash` is a no-op, never a second row.
+- **SOS scan → `llc_member` / `llc_manager` entity_relationships edges** (`applySosEntityCapture`,
+  new module, new edge types — the vocabulary is free-text, not a closed CHECK enum, so no migration
+  was needed to add them). Resolves/mints the LLC as an `organization` entity and each named officer
+  / the registered agent as a `person` entity through the SAME choke point every other writer in this
+  repo uses (`ensureEntityLink`), then writes the edge. **The residential-vs-agent-service classifier
+  in `address-reverse.js` (`classifyReverseAddress` — not re-derived) gates whether an address is ever
+  recorded as that person's residence**; a CSC/registered-agent-service address still gets its edge
+  (association is still true) but is never patched onto the person's `entities.address`. Positively
+  tested both directions in `test/pr-scanner-writeback.test.mjs`.
+- **All three are human-triggered only** — the operator reviews the editable form and clicks Save;
+  no crawler, no polling, no autonomous fetch anywhere in the module.
+- **County-portal-resolver is now sidepanel-reachable**: `GET /api/recorder-portal?domain=gov&
+  property_id=<id>` was already implemented in `api/admin.js` (imported `county-portal-resolver.js`)
+  but had no dedicated mount — added `app.all('/api/recorder-portal', …)` in `server.js` so the
+  sidepanel can call it directly without going through the internal `_route=` param. Read-only, gov-
+  only (per the resolver's own design — dia has no `county_authorities` table).
+- **NOT shipped, sized instead:**
+  - **A `county_records_needed` research_type / value-gated queue** for the scanner's own backlog
+    (what properties/owners still need a manual county lookup) — the task's Unit 3. Every value-gate
+    shipped in this repo (A5c, P161, B1, C2a — all the `$500k` floor instances) was calibrated against
+    a LIVE population read from the production databases; this session has no Supabase/DB access, so
+    predicting an admitted-row count or picking a floor here would be exactly the "we must acquire the
+    data" / unmeasured-migration mistake this file documents paying for repeatedly (B4/B5, N18, A2's
+    `on conflict do nothing` count). Sized in `research-workbench.md` §7b instead of shipped blind.
+  - **A Salesforce write-back for a newly-captured LLC/contact** — item 6 above, this repo's Unit 4.
+    Re-confirmed this session: `api/_shared/salesforce.js` is read-only (Power Automate proxy, no
+    Connected App), and a repo-wide grep for `sobjects` / `/services/data/v` / any Salesforce POST
+    still returns nothing. Sized as backlog, not built — see `PLANNED-BACKLOG.md`.
