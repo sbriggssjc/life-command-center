@@ -16,6 +16,86 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — RATINGS3 resolves the 3-round `ratings` saga: the fix was correct all along, the test run was executing stale pre-merge code, and a real (previously invisible) `updated_at` bug was found and fixed; live before/after proof obtained for the first time this arc
+
+`RATINGS3-live-proven-upsert-fix.md` demanded what the first two rounds skipped: an actual before/after
+row from Dialysis_DB, not a green-tests assertion. It delivered:
+
+- **Unit 1** — deployed code confirmed to match RATINGS2's own description word for word; no
+  description/reality mismatch this round.
+- **Unit 2** — reproduced the failure live via `postgres_logs`, then went further and cross-referenced
+  `ingestion_tracker`: the 2026-09-10 run judged RATINGS2 **started at 17:23:08 UTC, 69 minutes before
+  RATINGS2 merged at 18:32:10 UTC**, with a flat, unbroken error rate straight through the merge instant.
+  **The container was running old code in memory for the entire run.** This is a "merged is not running"
+  class problem — RATINGS2's fix may have been correct earlier than this arc believed; the round that
+  "disproved" it never actually tested it.
+- **Unit 3 — the non-negotiable requirement, met**: ran the real client against `id=1` /
+  `medicare_id='012500'` directly on Dialysis_DB. No `42P10`, no `23505`, a genuine UPDATE, row count
+  held at 7,013. **New defect found in the process**: `ratings.updated_at` has never been stamped by
+  either write path and the table has no update trigger — meaning the exact metric
+  (`max(updated_at)` unchanged) this whole arc used to judge success was structurally blind to a
+  successful write. (The RATINGS2-era duplicate-key storm itself was independently confirmed via
+  `postgres_logs` counts, so that specific earlier failure was real — the blind spot compounds the
+  difficulty of trusting any single round's verdict, it doesn't erase this one.) Fixed: `updated_at` now
+  stamped explicitly in both write paths, gated on column existence.
+- **Unit 4** — 6 genuine statement timeouts confirmed within the run's ratings-ingestion hour, correlated
+  with but not provably caused by the duplicate-key storm (no `STATEMENT` text retained at this log
+  level) — stated as correlation, not causation.
+- **Unit 5** — named the real test gap explicitly: RATINGS2's tests mocked a cursor checking a WHERE
+  substring, never a real partial unique index — exactly why green tests coexisted with 100% live
+  failure twice. Two new regression tests added for the `updated_at` stamp. Local `pytest` still can't
+  run in that sandbox (no PyPI egress); `py_compile` used as a fallback, CI's `Run Tests` is the real
+  gate.
+- **Unit 6** — no gap to disclose this round; Supabase MCP access held for the whole session and live
+  proof was obtained exactly as required.
+
+**PR `sbriggssjc/Dialysis#7402` confirmed merged — `main` at commit `000eda1`.** Files: `cms_aux_ingestion.py`
+(+15/-0), `test_cms_aux_ingestion.py` (+58/-0).
+
+**Open item, explicitly NOT the same as "merged":** the response itself flags that the currently-running
+Railway `cms-ingestion` process needs to be redeployed/restarted onto `000eda1` before the fix takes
+effect in production — Dialysis was previously confirmed to auto-deploy on merge to `main`, which may
+already cover this, but given this exact round's own finding (a merge that didn't reach the running
+process), **this needs to be explicitly confirmed with Scott, not assumed**, before the next test run is
+treated as a clean measurement. `RATINGS-INSERT-COLLISION`'s backlog row is moved to 🟡 (fix proven live,
+production-running-state unconfirmed) rather than ✅, for exactly that reason. Moved
+`RATINGS3-live-proven-upsert-fix.md` to `prompts/done/`; response `.docx` + this `.response.md` filed to
+`responses/done/`.
+
+**Next step.** Confirm with Scott whether the Railway service has been redeployed/restarted onto
+`000eda1` (or that auto-deploy already handled it), then recommend one more fresh, decisive run that
+starts strictly AFTER that confirmation — checking run-start-time against merge-time this time, not just
+log content — to close out CFE-RUNAWAY / PROPREV1 / RATINGS2 / RATINGS3 together as a single verified
+state.
+
+## 2026-09-10 — PDR1's root cause traced to an existing decision fork (P13 #1); Scott decided; prompt drafted and sent
+
+Measured the fleet-wide population behind P17/PDR1 before drafting anything, per standing doctrine —
+and found it's the same population as `PLANNED-BACKLOG.md`'s P13 decision fork 1, filed earlier this
+arc and explicitly reserved for Scott ("do not build past them"). Live count: **189** entities carry
+`metadata.ambiguous_resolution` (down from the August audit's 232 — 43 resolved by ad hoc sweeps
+since), **116** also `orphan_flagged`, all minted in one **2026-07-28 to 2026-08-04** Salesforce
+opportunity-sync burst — a closed population, nothing since. Candidate-list size ranges 2–55 per
+entity. Corrected P13's row in place with the re-measurement and the P17 cross-link.
+
+**Asked Scott directly** which of the three strategies P13 already named (auto-merge + review queue /
+require manual confirmation for all 189 / treat as canonical and merge lazily) to run, rather than
+build past a fork he reserved for himself. **He chose: auto-merge the clear cases, queue the rest.**
+
+**Drafted and sent `docs/claude-code/prompts/PDR1-entity-reconcile-automerge.md`.** One scoring planner
+(bare-placeholder candidates never win over an addressed one; non-normalized addresses lose to
+normalized ones on tie-break; a concrete auto-mergeable threshold to be measured and reported, not
+assumed) feeding two paths through the SAME existing writer (`reconcile_entity` — no new merge path):
+a value-gated auto-merge tick for the confident cases, a new Decision Center federated lane for the
+rest, reusing `list_flagged_open_deals` as the card source. Explicitly scoped to reuse everything that
+already exists (`entity-reconcile.js`, the DC lane pattern from `C13g-min-lane`/`OWN-T0e`) rather than
+building new infrastructure. DaVita/Donna-TX itself (`8d1fd46e-…`) is named as a verification target —
+confirm which path it lands in and whether PDR2/3/4/7 actually resolve once it merges, don't assume.
+
+**Next step.** Nothing to run until `PDR1-entity-reconcile-automerge` comes back. Once it ships, both
+of today's ACI threads (Unit C / role taxonomy, and now entity reconciliation) will have live,
+measured outcomes to reconcile.
+
 ## 2026-09-10 — Verified `ACI-phase2-unitC`'s claims independently; filed the AC2-sf-context gap as its own row; moved prompt/response to done/
 
 Re-checked the shipped PR's claims against live data rather than taking the commit message at face
