@@ -356,6 +356,26 @@ and is growing (7a), correspondence and SF campaign membership are both already 
 (individual-owner automation vs. REIT/fund person-in-charge) — Phase 1 serves the first, Phase 2 the
 second. They can build in parallel once Phase 0 clears; Phase 2 does not depend on Phase 1 finishing.
 
+### 7d. ✅ `ACI-phase1-2` returned 2026-09-10 — Phase 1 units A/B measured and partially shipped, Phase 2 (C) not attempted this pass
+
+Live DB access to `xengecqvemvfknjvbvrq` was available. Full writeup: `STATUS.md` 2026-09-10.
+
+- **AC1d(c)** (reject-learning) shipped as pure logic (`api/_shared/tier0-domain-demote.js`),
+  deliberately unwired — `lcc_tier0_confirm_log` re-measured at 0 of 27 rows `verdict='reject'`, so
+  there is nothing to learn from yet. AC1d(a) and (b) not built.
+- **AC1e** (SPE inheritance) shipped a pure planner (`api/_shared/entity-parent-inheritance-planner.js`)
+  after re-measuring `v_lcc_entity_tier0_parent` at **227** proposals (was 330) and confirming every
+  subsidiary already resolves to one parent — the ambiguity is at the parent's Tier 0 bench, not the
+  mapping. The live call site (fetch + Decision Center wiring + `applyTier0Attach`) was not built.
+- **AC2/AC3 (Phase 2, the REIT/fund bench + role taxonomy)** was **not attempted** this pass — it is
+  a large, novel surface (correspondence scoring, a new Ollama prompt, a value-gated federated lane)
+  that could not be built and mutation-guarded to this repo's own standard in the time available.
+  Remains 🟡/🟢 per `PLANNED-BACKLOG.md` — unbuilt, not regressed.
+- **AC6/AC8/AC9** — AC9 re-measured (Easterly `prospecting_contact` edges: 17 live today, not the
+  "7" cited in August; confirming broker-shape needs the C11 role/company join, not re-run this
+  pass). AC6/AC8 not re-measured.
+- **Unit D** (§8 below) was sized and correctly NOT built — see §8d0.
+
 ## 8. The recorded-owner → true-owner control-chain logic (2026-09-10, Scott's framing)
 
 > ⚠️ **CORRECTED THE SAME DAY — §8a below is too pessimistic.** Scott's full manual research workflow
@@ -449,6 +469,24 @@ here identically, not as a separate design:
   (`app-ux-review-2026-09-02.md` §3) already adopted elsewhere: track how many cards a human actually
   had to touch per period and whether that count is falling as the ledger accumulates. If it isn't,
   that's a build defect worth surfacing, not a shrug.
+
+### 8d0. ✅ SIZED 2026-09-10 (`ACI-phase1-2`) — the population on `notice_address_1` alone is ZERO, and building was correctly refused
+
+Per 8b step 1's own instruction ("size this population before building"), measured live before
+touching code:
+
+- `one_off_owner` entities (C13b/C13c): **142** total.
+- Resolve to a dia `true_owners` row (via `external_identities`, `source_system='dia'`,
+  `source_type='true_owner'`): **19 of 142**. Resolve to a gov `true_owners` row: **0 of 142** (LCC
+  Opps has no gov path for this role today).
+- Of those 19: `notice_address_1` non-null: **0 of 19**. `name` containing "LLC"/"L.L.C": **0 of 19**.
+
+**The population this section's build was scoped to is zero.** No `entity_relationships` edge type
+(`llc_member`/`llc_manager`), no write, no lane was built — building one for a population that does
+not exist would be worse than doing nothing (per this section's own instruction). `PR-scanner-
+writeback` had not shipped at measurement time (checked: no `llc_member`/`sos_officer`/
+`recorder_capture` symbol anywhere in `extension/` or `api/`) — re-run this exact sizing the moment
+that lands, since it changes the input population this section is scoped against, not the logic.
 
 ### 8d. What this section does NOT change
 
