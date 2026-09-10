@@ -83,6 +83,10 @@ var LCC_DECISION_LANE_MAP = {
   // identity/dedup question -- it unblocks OWN-T0e-b merges the type guard
   // correctly refuses today, but the retype itself never merges an entity.
   entity_type_review:            { lane: 'entity_merge',  merges: false },
+  // PDR1 / P13#1: "which asset does this Salesforce-sync placeholder merge
+  // into?" is an entity-identity question -- the merge itself moves
+  // bd_opportunities/activity_events/entity_relationships via reconcile_entity.
+  ambiguous_entity_resolution:   { lane: 'entity_merge',  merges: true },
   implausible_value:             { lane: 'automation',    merges: false },
   llc_research_dead:             { lane: 'automation',    merges: false },
   availability_checker_botblock: { lane: 'automation',    merges: false },
