@@ -191,3 +191,39 @@ the human escalation still earns its place).
 - No new lexical/regex classification — the NPI tab reads the existing `best_match_score` signal
   verbatim rather than adding a threshold; the Owner Contact tab reads the existing P131
   decidability view verbatim.
+
+## 7b. `county_records_needed` — SIZED, NOT SHIPPED (PR-scanner-writeback, 2026-09-10)
+
+`public-records-source-lane.md` §7 item 4 called for a `county_records_needed`/`sos_research_needed`
+`research_type` folded into this workbench, to rank which owners/properties still need a manual
+county/SOS lookup (the population the new sidepanel Save flow in §7a actually captures against).
+**Not built this round.**
+
+- **Why:** every value-gate this repo has shipped (`{dia,gov}_research_gate_value_floor()` = $500k,
+  P161's weak-role floor, C2a's asset-mint curve, B1's chain-lane split) was calibrated against a
+  LIVE population read off the production databases, then the predicted delta was checked against the
+  measured one before shipping (A2's `on conflict do nothing` overcount, C2e-T2a's ±2-row canonical-key
+  miss — both caught only because a prediction existed to compare against). This session has **no
+  Supabase/DB access**, so there is no way to measure: how many properties/owners actually lack an
+  assessor or SOS record on file, what the rent distribution of that population looks like (to pick a
+  floor, or confirm $500k transfers), or what `research_workbench_lanes`/`v_lcc_research_lane_summary`
+  would report post-ship. Shipping a migration and a floor without that is exactly the "we must
+  acquire the data" / unmeasured-write mistake CLAUDE.md documents paying for repeatedly (B4/B5, N18).
+- **Where it should fold in, decided but not executed:** into `establish_ownership_history`'s
+  EXISTING split (`v_lcc_ownership_history_lane_split`, the A1/A2/A3/A4/A4b action vocabulary) as a
+  SIXTH action — `county_records_needed` — rather than a brand-new `research_type`, because the split
+  already asks "why can't this chain be confirmed automatically" per property, and "we have no county
+  record on file at all" is one more disposition in that same question, not a separate lane. This
+  mirrors A3's `sponsor_spe` precedent (a fifth action added to the same split, never folded into
+  `agrees` because it is a materially different decision). The value gate is the split's existing
+  `human_actionable` floor (`lcc_chain_human_value_floor()`), not a new one — B1 already established
+  that this lane's human-facing gate must be per-lane and named, not a fourth repeat of the $500k
+  literal.
+- **What would need to be measured before shipping:** (1) population — properties in
+  `v_lcc_ownership_history_lane_split` whose chain is blocked purely on a missing county/SOS record,
+  cross-referenced against `parcel_records`/`deed_records` coverage (§2's producer-set diff, Class 20);
+  (2) whether the population overlaps `no_records`/`all_guarded` (A4/A4b already retire/adjudicate part
+  of this) — a new action must not duplicate an existing one; (3) the predicted vs. actual delta on
+  `v_lcc_research_lane_summary.open_tasks` for this lane before and after, per the A2/C2e-T2a
+  discipline.
+- **Filed:** `PLANNED-BACKLOG.md` §P3/PR-scanner (row `PR-scanner-3`).

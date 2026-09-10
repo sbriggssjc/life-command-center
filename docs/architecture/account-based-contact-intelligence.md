@@ -404,13 +404,25 @@ should add a **Tier 0.5 — the control-chain classifier**, sitting between Tier
 and Tier 1-2 (institutional bench + role inference), covering the individual/small-owner population
 Tier 0 alone does not resolve:
 
-1. **A new `entity_relationships` edge type is needed first — `llc_member`/`llc_manager`** (person →
-   owner LLC), because none exists. Without SOS/OpenCorporates, the only sources able to populate it
-   today are: (a) a human verdict recorded through the existing lane pattern (never a silent auto-mint
-   — an unverified member claim is worse than no claim); (b) whatever member names already surface
-   incidentally in correspondence, Salesforce, or deed grantor/grantee text and can be matched with
-   the same discipline `entity-link.js` already applies elsewhere. Size this population before
-   building — do not assume it is large.
+1. ✅ **SHIPPED 2026-09-10 (PR-scanner-writeback) — the `llc_member`/`llc_manager` edge type
+   this step called for now exists**, and source (b) below is exactly what got wired: the sidepanel's
+   SOS scan (officers/registered-agent text the operator is already reading off a real SOS page) is
+   the free, human-verified source this section asked for, routed through `applySosEntityCapture`
+   (`api/_shared/public-records-writeback.js`) → `ensureEntityLink` (the same choke point every other
+   writer here uses) → `insertEntityRelationship`. **It is human-triggered, not a silent auto-mint** —
+   the operator reviews the parsed officer/agent list in the sidepanel before Save, satisfying this
+   step's own "never a silent auto-mint" requirement. Source (a) (a bare human verdict with no SOS
+   page behind it) and OpenCorporates/direct-SOS-scrape as an AUTOMATED source remain unbuilt — this
+   ships the manual-capture half only. Full state, including the safety test for the
+   residential-vs-agent-service gate below, in `public-records-source-lane.md` §7a.
+   ~~A new `entity_relationships` edge type is needed first — `llc_member`/`llc_manager`~~
+   (person → owner LLC), because none exists. Without SOS/OpenCorporates, the only sources able to
+   populate it today are: (a) a human verdict recorded through the existing lane pattern (never a
+   silent auto-mint — an unverified member claim is worse than no claim); (b) whatever member names
+   already surface incidentally in correspondence, Salesforce, or deed grantor/grantee text and can be
+   matched with the same discipline `entity-link.js` already applies elsewhere. Size this population
+   before building — do not assume it is large. **(historical — see the ✅ note above; struck, not
+   deleted, per this repo's own doctrine of correcting a stale claim in place.)**
 2. **The single-member/family inference runs on `one_off_owner` (C13b/C13c) as its starting signal**,
    not a member count we cannot get for free — `one_off_owner` already exists as a classification and
    is the closest thing this repo has to "probably not an institution." Corroborate, don't invent a
