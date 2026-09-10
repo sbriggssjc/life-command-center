@@ -106,6 +106,81 @@ Backlog: new row `PR-scanner-writeback`; `AC11` corrected in place with a pointe
 send — Scott's call on sequencing, per his own "build both side by side" instruction from the prior
 turn. Nothing to run in this repo until one comes back.
 
+## 2026-09-10 — ACI-phase1-2 returned: measured Units A/B/D against live data, shipped the two units the measurements justified, left C unbuilt (scope), branch `build/aci-phase1-2` pushed
+
+Real DB access to LCC Opps (`xengecqvemvfknjvbvrq`) was available this session — every number below
+is a live query result, not an estimate. Given the size of the four-unit prompt, this pass prioritized
+honest measurement over attempting full implementation of everything; Unit C (the REIT/fund bench +
+Ollama role-inference build) was **not built** — it is a genuinely large surface (correspondence
+scoring, a new Ollama prompt/taxonomy, a value-gated federated lane) that this pass could not build
+and guard to the repo's own mutation-testing standard in the time available, and shipping it
+half-guarded would itself be a defect this repo's doctrine warns against repeatedly. What shipped:
+
+**Unit A(c) — reject-learning, built as PURE LOGIC ONLY, deliberately NOT wired.**
+`api/_shared/tier0-domain-demote.js` + `test/tier0-domain-demote.test.mjs` (11 tests, all pass).
+Re-measured the premise first: `select count(*) from lcc_tier0_confirm_log where verdict='reject'`
+→ **0** (27 total rows, 0 rejects) — reproducing P194's own finding exactly. There is nothing to
+learn from yet, so the module is pure logic, unwired into any cron/view/handler, keyed on
+`(domain, match_arm, match_key)` — never bare domain, per the P194 corroboration trap explicitly
+re-tested in the guard (a shared domain across owners is corroboration, not a contradiction; the
+guard proves a reject on one `match_key` does not demote a different `match_key` or `match_arm` on
+the same domain). `tier0DemotionReadiness()` is the honest gate for whoever wires this later — it
+reports `readyToWire: false` today. Unit A(b) (un-park signals from correspondence/SF/title/sponsor
+map) was **not built** — same scope reality as Unit C, filed open below.
+
+**Unit B — AC1e SPE-subsidiary parent inheritance, planner built, verdict-path wiring NOT built.**
+`api/_shared/entity-parent-inheritance-planner.js` + `test/entity-parent-inheritance-planner.test.mjs`
+(8 tests, all pass). Re-measured the "19 of 107 cards" figure per the prompt's instruction — it has
+moved: `select count(*) from v_lcc_entity_tier0_parent` → **227** (was 330), and every subsidiary in
+that view already resolves to exactly ONE parent candidate (`group by entity_id, count(distinct
+parent_entity_id)` → max is 1 across all 227). The "which person" ambiguity Scott named (UIRC = 7
+candidates) lives one level down, at the PARENT's own Tier 0 bench, not at the subsidiary→parent
+mapping — so the planner takes the parent's resolved contact state as an input and states plainly
+when it is ambiguous (`needs_human` / `parent_has_multiple_unresolved_candidates`), never guessing.
+**Not built:** the actual bulk-attach call site that would run this planner against live data and
+route its output through `applyTier0Attach` (the existing single writer) — that requires fetching
+live `v_lcc_entity_tier0_parent` rows and the parent bench state, wiring a new Decision Center lane or
+sweep, and re-running the guard against real UIRC/NGP rows. Filed open below.
+
+**Unit D — control-chain classifier: SIZED, and the honest finding is the population is effectively
+ZERO for the `notice_address_1`-only path this session was scoped to. No lane built (per the
+prompt's own instruction: "if the population is too small, say so and do NOT build a lane").**
+Measured live (`xengecqvemvfknjvbvrq` joined against `zqzrriwuavgrquhisnoa` dia):
+- `one_off_owner` entities (C13b/C13c classification): **142** total.
+- Of those, only **19** resolve to a dia `true_owners` row via `external_identities` (source_system=
+  'dia', source_type='true_owner') — **0** resolve to a gov `true_owners` row at all.
+- Of those 19 dia-linked entities: **`notice_address_1` is non-null on 0 of 19.** `llc_named` (name
+  contains LLC/L.L.C) is also 0 of 19.
+- **The population this unit was scoped to build against is literally zero.** No new
+  `entity_relationships` edge type (`llc_member`/`llc_manager`) was added, because there is nothing to
+  attach it to from this data source alone.
+- `PR-scanner-writeback.md` (the richer capture path the prompt says to prefer if it has shipped) was
+  checked — **not shipped** (`grep -rl "llc_member\|sos_officer\|recorder_capture" extension/ api/`
+  returns nothing). This unit should be re-run once that lands; per the prompt's own instruction this
+  is not a reason to block Unit D today, and it was not blocked — it was measured and correctly
+  produced "do not build" as its answer.
+
+**AC6/AC8/AC9 re-measurement (input-quality spin-offs feeding Unit C) — partially re-measured, not
+fixed.** AC9's Easterly count does not cleanly reproduce by a simple query: 17 `prospecting_contact`
+edges exist on Easterly-named entities today (not the "7" the August finding cited), and confirming
+which are genuinely competitor-broker edges (vs. real named contacts) needs the same role/company
+join C11 already built, which was not re-run here for time. AC6 and AC8 were not re-measured this
+session — filed open below, unchanged from the prompt's own citation of the August audit.
+
+**What's genuinely new and durable from this pass:** two small, independently-guarded, honestly-scoped
+pure-logic modules, both mutation-tested to the repo's own standard, both **explicitly not wired to
+any cron/view/handler** because the data or the calling surface to wire them against either doesn't
+exist yet (A-c) or wasn't built this session (B's attach call site) — and one hard, useful negative
+result (Unit D: the population is zero on the data source this pass was scoped to).
+
+**Open, filed as backlog rows below (not built this pass):** Unit A(b) un-park signals · Unit B's
+live wiring (fetch + Decision Center verdict/sweep + re-guard against real UIRC/NGP data) · Unit C in
+full (bench ranking Tier 1, Ollama role inference Tier 2) · AC6 (professional-email misfile
+re-measurement) · AC8 (`v_lcc_prospecting_edge_review` narrowness re-measurement) · AC9 (Easterly
+broker-role re-role, now measured at 17 candidate edges, not confirmed-broker count).
+
+**Branch:** `build/aci-phase1-2`, pushed, not merged, no PR opened per instruction.
+
 ## 2026-09-10 — ACI-phase1-2 designed and sent: Tier 0 completion + REIT/fund role taxonomy + a new individual-owner control-chain classifier
 
 Scott's direction: build the individual-owner path and the institutional REIT/fund path side by side
