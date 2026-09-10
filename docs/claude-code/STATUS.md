@@ -53,6 +53,348 @@ this session's own cross-checks are blocked on it.**
 **Responses folder:** the new `ratings2 surface response.docx` has been transcribed and archived to
 `responses/done/`, matching the ongoing cleanup convention.
 
+## 2026-09-10 — ACI-phase2-unitC SHIPPED: AC2 bench-ranking planner + AC3 Ollama role-inference planner + reversible write path
+
+Built the prompt sent earlier today (`docs/claude-code/prompts/ACI-phase2-unitC.md`). Scope held to
+exactly AC2+AC3, nothing else attempted. Live DB access to `xengecqvemvfknjvbvrq` was available and
+used to confirm the `bench` column shape and the Pulliam/Shuler facts before writing any code — no
+live writes were made (see "measured vs assumed" below).
+
+**AC2 — `api/_shared/bench-ranking-planner.js` (pure).** `rankBench(candidates)` sorts on a strict
+key hierarchy: `two_way` (an inbound/reply signal, absolute) → inferred-function priority
+(acquisitions > disposition > transaction_dd > broker; unknown is neutral, never assumed
+acquisitions-grade) → correspondence volume → recency (the tiebreak when volume ties) → seniority
+(title-derived, 0/unknown when absent — silence, never a junior claim) → name (stable last resort).
+**Never collapses to one winner** — every candidate handed in comes back out, ranked, per Scott's
+08-26 doctrine ("a re-derived ranking, not a decision recorded once"). Extends the EXISTING `bench`
+jsonb shape (`{name, role, source, n_props, authority, contact_entity_id, is_named_individual}`,
+confirmed live) by appending `correspondence_volume`, `last_email_date`, `two_way`,
+`inferred_function`, `inferred_function_confidence`, `inferred_function_basis`, `seniority_known`,
+`seniority_score`, `rank`, `rank_reason` — nothing removed or redefined. `ownerPassesBenchValueGate`
+reuses `cadenceSignalFloor()` (`cadence-engine.js`, env `CADENCE_SIGNAL_MIN_VALUE`, default 500000)
+rather than inventing a new floor.
+
+**AC3 — `api/_shared/bench-role-inference-planner.js`.** Four-bucket taxonomy from §3a
+(acquisitions/disposition/transaction_dd/broker). `titleFunctionHint()` is the deterministic,
+no-LLM path — when a title is present and maps cleanly it is confidence `'high'`, basis `'title'`,
+and the model is never called (verified: a titled candidate never invokes `invoke` in
+`inferBenchRoles`). When no title (or an unmapped one), `invokeExtractionAI` is called via the
+repo's existing seam (same shape `ownership-chain-draft-planner.js`/`property-twin-assist-planner.js`
+use — `{prompt, surface}` in, `ai.data.response` out), and `resolveCandidateFunction()` is the P181
+confidence gate: **a correspondence-only verdict is CAPPED at `'medium'` even when the model itself
+claims `'high'`** — the exact rule the prompt's guard asked for. Every inferred function also carries
+a verbatim-quote guard on `evidence_quote` (drops the whole verdict, not just the quote, if the
+quote is not a literal substring of a supplied subject line — the W8-U3/EXT1 doctrine).
+
+**Write path — `api/_handlers/bench-rank-tick.js`**, mounted `case 'bench-rank-tick'` in `admin.js`
+and `/api/bench-rank-tick` in `server.js` (mirrors `tier0-auto-attach-tick.js`'s GET-dry-run /
+POST-flag-gated-write shape exactly). GET is always a dry run, ungated, and never writes
+(`?infer_roles=1` optionally runs AC3's Ollama call in the dry run too, for grading before the flag
+flips). POST writes `owner_contact_pivot.bench` only when `BENCH_RANK_WRITE` is on, value-gated per
+owner via `cadenceSignalFloor()`. Reversibility: a ledger row (`lcc_bench_rank_write_log`, carrying
+the FULL prior bench array) is written BEFORE the pivot PATCH, keyed `bench_rank_YYYYMMDD_<8hex>`,
+mirroring `tier0-attach-effect.js`'s "ledger before write, carries prior state" pattern. A
+run-lifecycle table (`lcc_bench_rank_run_log`) is opened before the batch and closed after, P123
+style.
+
+**⚠️ Migration NOT applied live.** `supabase/migrations/20261010150000_lcc_bench_rank_run_log.sql`
+(both ledger tables, purely additive) is written but was deliberately NOT run against
+`xengecqvemvfknjvbvrq` in this session — writing to the production database without an explicit
+instruction to do so was judged out of scope. Until an operator applies it, `POST` still cannot do
+any real damage: the ledger write fails soft (logged) and the bench PATCH is separately gated on the
+`BENCH_RANK_WRITE` flag, which also does not exist yet. **This is a named, deliberate gap, not an
+oversight** — an operator needs to (1) apply the migration, (2) add the `feature_flags_registry` row
+for `BENCH_RANK_WRITE`, (3) run `GET /api/bench-rank-tick` a few times to eyeball the ranking before
+flipping the flag.
+
+**Measured live vs assumed (be explicit, per the task's own instruction):**
+- ✅ MEASURED live: `owner_contact_pivot.bench` populated on 1,622 of 5,488 rows (confirms the doc's
+  number exactly); the EXACT jsonb shape of a populated row (used verbatim as the planner's
+  passthrough fields); `unified_contacts` columns exist as documented
+  (title/total_emails_sent/last_email_date/outlook_contact_id/engagement_score/company_name/…);
+  Andrew Pulliam resolves at `unified_id=2330d585-…`, `title=NULL`, `total_emails_sent=132`,
+  `last_email_date=2023-02-27`, `company_name='Easterly Partners'`; "Shuler"/"Pulliam" search on
+  `email_bodies` shows the real inbound/outbound split for the Williston deal — 48 `is_sent=false`
+  (inbound) rows and 3 `is_sent=true` (outbound) against `apulliam@easterlyreit.com`, confirming a
+  genuine two-way signal exists and that `email_bodies.is_sent` is the right column for AC2's
+  two-way input. Ryan/Lucas Shuler does NOT resolve by full-name search in `unified_contacts` —
+  confirmed, matching the prompt's warning; the test fixtures model his row as absent/thin rather
+  than guessing a resolution.
+- ⚠️ NOT measured live (assumed/derived from schema + docs, flagged honestly): the exact live
+  ranking `rankBench` would produce over a REAL owner's REAL bench array (no live call was made —
+  only reads); whether `invokeExtractionAI` behaves as documented under `surface: 'bench_role_inference'`
+  in production (no live AI call was made, by design — tests stub `invoke`); SF campaign/role context
+  join shape for AC3's prompt input (`sf_context` is accepted as an optional string field but no live
+  `lcc_sf_list_membership` join was written or tested against real rows — the prompt said "reuse the
+  existing join, don't re-derive a name-based one," and the handler does not yet build that join at
+  all, which is a named gap, see below).
+
+**Named blocker / deferred, per the out-of-scope rules:** the handler's `enrichBenchCandidates` /
+`attachInboundCounts` build the correspondence+two-way inputs from `unified_contacts` +
+`email_bodies` directly, but does **not** yet join Salesforce campaign/role context into AC3's
+`sf_context` field (§3b's email-domain-keyed `lcc_sf_list_membership` join) — the planner ACCEPTS
+that field and the prompt builder includes it when present, but the handler never populates it. This
+is a real, sizeable remaining wire-up, not attempted here because it needs its own measurement pass
+against `lcc_sf_list_membership` (which §3b's correction already flagged as its own can of worms —
+`org_entity_id` reads 0 for every high-value owner). Filed as follow-up **AC2-sf-context** below.
+
+AC6 (professional emails misfiled as personal), AC8 (`v_lcc_prospecting_edge_review` false
+negatives) and AC9 (competitor-broker edges) were not touched, per the prompt's explicit exclusion.
+
+**Tests:** 3 new files (`test/bench-ranking-planner.test.mjs`, `test/bench-role-inference-planner.test.mjs`,
+`test/bench-rank-tick.test.mjs`), **47 + 20 = 67 assertions total, all passing.** Mutation-checked by
+hand on the two load-bearing rules (the sort-key ordering and the confidence cap) — both mutations
+correctly turned tests red. Positive control on the Pulliam/Shuler pair as fixture data (live facts,
+since the doc's own doc-vs-live numbers disagree — 132 emails per the live re-check, 71/51 per the
+doc's narrative table — both are exercised as separate test cases rather than picking one).
+
+Backlog: AC2/AC3 rows in `PLANNED-BACKLOG.md` updated 🟡 → 🟢 shipped, with the sf_context gap named.
+`account-based-contact-intelligence.md` §7d gets an appended follow-up subsection recording the
+outcome (not overwriting the "not attempted" entry from `ACI-phase1-2`, which is now historical).
+
+## 2026-09-10 — Right-sized Unit C follow-up drafted and sent: `ACI-phase2-unitC.md` (AC2 bench ranking + AC3 Ollama role inference)
+
+Picking up the open thread from today's PR reconciliation: `ACI-phase1-2`'s Unit C (the REIT/fund
+role-taxonomy build Scott named by name across two turns) was bundled with three other units and
+explicitly not attempted, per its own commit message. Rather than re-bundle it, drafted a standalone
+prompt scoped to exactly AC2+AC3, nothing else — explicitly excludes AC1d(a/b), AC6, AC8, AC9, and any
+new value-gate/bench-shape invention, so it can actually be built and mutation-guarded in one pass.
+
+**Measured before drafting, per standing doctrine:** `owner_contact_pivot.bench` (the ranking column
+this needs) is already populated on **1,622 of 5,488 rows (29.6%)** — not a from-scratch build.
+Re-checked the doc's own worked example live: Andrew Pulliam (Easterly, 132 emails, last
+2023-02-27) has `title = NULL` in `unified_contacts` today — the volume signal is there, the title
+signal isn't; Ryan Shuler doesn't resolve by name in `unified_contacts` at all, flagged for the build
+to check email/alias before assuming his row is simply thin. Title coverage overall is still 5.2%
+(re-confirmed from §7a, unchanged) — named as the binding constraint AC3's confidence-gating has to
+account for honestly, not paper over.
+
+**Drafted and sent `docs/claude-code/prompts/ACI-phase2-unitC.md`.** AC2: rank (never collapse to one
+winner) on volume/recency/two-way/seniority/inferred function, write into the existing `bench` column,
+ship as a pure planner mirroring the `entity-parent-inheritance-planner.js` pattern already proven this
+arc. AC3: Ollama infers the four-bucket function (acquisitions/disposition/transaction-DD/broker),
+confidence carried per P181, surface gated on it — explicitly told to re-run the Pulliam/Shuler check
+live and report the real title-present vs. inferred-only confidence split rather than let the
+well-titled 5.2% set the tone for the rest. Value-gate by owner reusing the existing P161/P180
+mechanism, no new threshold invented.
+
+Backlog: AC2/AC3 rows updated from 🟢 (designed, not started) to 🟡 (prompt sent), both pointing at the
+new prompt file.
+
+**Next step.** Nothing to run until `ACI-phase2-unitC` comes back. The property-reconciliation thread
+(P17/PDR1 — the unresolved Salesforce-sync orphan blocking DaVita/Donna-TX) is still open and
+independent of this one; Scott's call on which to prompt next, or both can run in parallel.
+
+## 2026-09-10 — Fresh test run (all three `Dialysis` fixes merged) shows RATINGS-INSERT-COLLISION's upsert doesn't actually work — a partial-index/PostgREST gotcha found — plus a new, much larger full-table probe on `clinic_quality_metrics`; RATINGS2 prompt drafted and sent
+
+CFE-RUNAWAY, RATINGS-INSERT-COLLISION, and PROPREV1 all confirmed merged in `Dialysis`. Scott triggered
+a fresh run; a ~30-second log excerpt from ~22 minutes in (2026-09-10 17:43:59–17:44:29 UTC) was cross-
+checked live against Dialysis_DB.
+
+**RATINGS-INSERT-COLLISION's upsert does not work.** `ratings` is still exactly 7,013 rows,
+`max(updated_at)` still 2026-03-12, unchanged across two separate full test runs. The write correctly
+logs `op=upsert` now (the conversion from plain `INSERT` did land), but still throws
+`duplicate key value violates unique constraint "ratings_medicare_id_uidx"` (3 medicare_ids this
+window: 102594, 102605, 102617, all pre-existing March-backfill rows), tripping
+`circuit_open:('upsert', 'ratings')` 21× in 30 s. **Root cause found this session:**
+`ratings_medicare_id_uidx` is a **partial** unique index
+(`... WHERE (medicare_id IS NOT NULL)`, confirmed via `pg_indexes`) — PostgREST's
+`.upsert(..., on_conflict='medicare_id')` cannot use a partial index as its `ON CONFLICT` arbiter
+without also expressing the predicate, which PostgREST's standard `on_conflict` param can't do, so it
+silently falls back to a plain insert that then collides. A genuine PostgREST/Postgres interaction, not
+a logic bug in the retry code — flagged to `Dialysis` to confirm independently, not taken on faith.
+
+**New, larger problem found:** an unconditional full-table probe against `clinic_quality_metrics` fired
+**844 times in 30 seconds** (`count=7555`, confirmed live to match that table's exact row count) — far
+more frequent than any probe measured earlier in this arc (previously ~2 per iteration). No statement
+timeouts yet (the table's still small at 7,555 rows), but this is the same unbounded shape as
+CFE-RUNAWAY on a table that will eventually hit the same wall. **Also:** the `count=7013` `ratings`
+full-table probe that RATINGS-INSERT-COLLISION's own response said was removed (`_load_existing_key_set()`
+deleted) still appeared 48× in the same window — that removal apparently didn't fully land, or a second
+call site produces the same signature.
+
+**Shipped this turn:** `docs/claude-code/prompts/RATINGS2-partial-index-upsert-and-cqm-fulltable-probe.md`,
+covering all three findings, with an explicit ask not to just retry harder — three concrete fix options
+laid out for the partial-index problem (RPC with an explicit predicate, drop-to-plain-constraint if
+`medicare_id` is truly always non-null, or an explicit update-then-insert-if-no-match pattern) — and an
+explicit call-out that this arc has now twice had "tests pass, production still broken" (PROPREV1 found
+this once already) and a live-verification unit (not just tests) is required this time too.
+
+**Next step.** Nothing to run until CC returns on RATINGS2. `properties.estimated_annual_revenue`
+(PROPREV1) remains unconfirmed either way — this window's log never reached that phase.
+
+**Correction to this session's own prior work:** PROPREV1's backlog row (meant to move it from 🔍 to
+🟡 once its response came in) never actually landed — a stale local read at write time caused that
+edit to overwrite unrelated `ACI-phase1-2` annotations instead, silently reverting a few lines of that
+arc's own prompt-sent notes rather than adding the intended PROPREV1 content (a later `ACI-phase1-2`
+follow-up PR re-added its own annotations independently, so no ACI content was lost, but PROPREV1's row
+sat un-updated until this entry). Fixed here, and going forward this session is fetching/resetting to
+`origin/main` immediately before every edit intended for `device_commit_files`, not just once per turn.
+
+## 2026-09-10 — `PR-scanner-writeback` shipped: assessor/recorder/SOS scans now write real tables; the SF write-back re-confirmed not buildable
+
+Built against the prompt filed by the entry immediately below (`docs/claude-code/prompts/
+PR-scanner-writeback.md`). Branch `claude/pr-scanner-writeback-wiring-o6dx47`.
+
+**Shipped:**
+- **Assessor scan → `parcel_records`/`tax_records`, recorder scan → `deed_records`** — new
+  `api/_shared/public-records-writeback.js`, source-tagged `assessor_sidebar_manual` /
+  `recorder_sidebar_manual` (distinct from `costar_sidebar` and the gpt-4o `ai_gpt4o_presumed` leg
+  §2a of `public-records-source-lane.md` documents — neither touched). The recorder writer extends
+  `deed-parser.js`'s existing dedup/DTO pattern (`buildDeedDataHash`, `validateDeedIngest`) rather
+  than forking a second insert shape, per the task's own instruction to check for a reusable writer
+  first. New route `POST /api/public-records-capture` (mounted in `server.js`, dispatched from
+  `api/admin.js`). Sidepanel gained `loadPublicRecordPropertyView` for assessor/recorder saves
+  (requires an operator-supplied domain `property_id` — no address→property auto-match; never guess).
+- **SOS scan (incl. CA bizfile) → `llc_member`/`llc_manager` `entity_relationships` edges** — new
+  `applySosEntityCapture`. Free-text edge types (no CHECK enum, so no migration needed). Officers /
+  registered agent resolved through `ensureEntityLink`, the same choke point every other writer in
+  this repo uses. **The residential-vs-agent-service classifier from `address-reverse.js` is reused,
+  not re-derived**, and gates whether an address is ever written as a person's residence — tested both
+  directions in `test/pr-scanner-writeback.test.mjs` (a CSC/registered-agent address never becomes a
+  residence; a real street address does, on the identical code path). `saveOrgBtn`'s no-worklist-
+  target path (previously: bare `/api/entities` create, discarding officers/agent/addresses) now
+  routes through this.
+- **`county-portal-resolver.js` surfaced to the sidepanel** — `handleRecorderPortal` already existed
+  in `api/admin.js`; it had no dedicated mount. Added `app.all('/api/recorder-portal', …)` to
+  `server.js`. Read-only, gov-only (the resolver's own scope). ⚠️ The sidepanel does not yet call it
+  (no UI button wired) — the route is live; wiring the button is a small follow-up (backlog
+  `PR-scanner-5`).
+- **Guard**: `test/pr-scanner-writeback.test.mjs` — 12 tests, all behavioural (injected `deps` stub
+  domainQuery/ensureEntityLink/insertEntityRelationship rather than a source grep), including the
+  positive+negative control pair for the residential-vs-agent-service gate. Full suite re-run:
+  **5649 pass / 0 fail / 6 skipped** (unchanged skip count — nothing newly broken).
+
+**Sized, not built — both with the reason recorded in `research-workbench.md` §7b /
+`public-records-source-lane.md` §7a:**
+- **`county_records_needed` research_type / value-gate.** This session has no Supabase/DB access, so
+  the population and floor could not be measured — shipping either blind would repeat the exact
+  unmeasured-migration mistake CLAUDE.md documents paying for repeatedly (B4/B5, N18, A2's
+  `on conflict do nothing` overcount). Sized as a sixth action on the existing
+  `v_lcc_ownership_history_lane_split` (mirroring A3's `sponsor_spe` precedent) rather than a new lane.
+- **Salesforce write-back for a newly-captured LLC/contact.** Re-confirmed: `api/_shared/salesforce.js`
+  is a read-only Power Automate proxy, no Connected App; a repo-wide grep for `sobjects`/
+  `/services/data/v`/any SF POST returns nothing — unchanged from C1's finding. Needs an operator
+  decision (register a Connected App) before it can be scoped further, let alone built.
+
+**Docs updated in the same change:** `public-records-source-lane.md` §7a (new), `account-based-
+contact-intelligence.md` §8b item 1 (struck the "still needed" framing, marked shipped — corrected in
+place per doctrine, not deleted), `research-workbench.md` §7b (new), `PLANNED-BACKLOG.md` §P3
+(`PR-scanner-1` through `-5`, AC11 corrected in place).
+
+## 2026-09-10 — Scott's manual research playbook checked against the codebase before sending ACI-phase1-2: found the free-source path already half-built, revised the plan
+
+Scott described his pre-LCC manual ownership-research workflow in full detail (netronline → county
+assessor → recorder of deeds → Secretary of State → cross-reference in Salesforce/Google → 7-touch
+cadence) and asked, before sending `ACI-phase1-2`, to make sure the design covers all of it — entirely
+free sources, a possible county-level Chrome/Edge sidebar adapter if one is needed, a priority-weighted
+research queue, and a living system that re-checks its own conclusions over time.
+
+**Checked before adding anything to the plan, per standing doctrine — and the finding upgrades the
+design significantly:** `extension/content/public-records.js` already scans assessor, recorder, and
+SOS sites (including a dedicated CA-bizfile parser with a real bug fix already paid for) and correctly
+extracts `mailing_address`, `registered_agent`/`officers`, `grantor`/`grantee`, `tax_amount` — exactly
+the data the LLC-member control chain needs. `county-portal-resolver.js` + `county_authority_cache`
+(926 counties) already ingest netronline's own index — Scott's literal starting point is already data
+in this database. **The actual gap: the sidepanel's save handler for a scanned public-records capture
+discards everything except `name`+`description`, going through a generic entity-create call instead
+of the real structured writer (`upsertPublicRecords`) that already works and is proven live for
+CoStar.** This is a wiring defect, not a missing subsystem, and it means the "wait for paid APIs"
+framing in `account-based-contact-intelligence.md` §8 (written earlier this session) was wrong —
+corrected in place with a banner, not deleted.
+
+**Filed the finding** in `public-records-source-lane.md` §7 (the canonical page for this exact
+question) and cross-linked from §8. **Drafted and sent `docs/claude-code/prompts/PR-scanner-writeback.md`** —
+wire the three scanner outputs into real writers (reusing `upsertPublicRecords`, building a new
+SOS-officer writer that creates the `llc_member`/`llc_manager` entity_relationships edge type), surface
+the netronline-sourced county portal URLs in the sidepanel, extend `research_workbench` (not a new
+queue) for the priority-ranked "what to research next" list, and size — not blind-build — the
+Salesforce opportunity/list write-back Scott's workflow ends with.
+
+**Revised `ACI-phase1-2.md`'s Unit D in place** (not yet sent to CC — Scott asked to hold before
+proceeding) to source from `PR-scanner-writeback`'s real captures once shipped rather than only the
+thin `true_owners.notice_address_1` signal, without blocking on it landing first.
+
+Backlog: new row `PR-scanner-writeback`; `AC11` corrected in place with a pointer to the finding.
+
+**Next step.** Both prompts (`ACI-phase1-2`, revised, and `PR-scanner-writeback`, new) are ready to
+send — Scott's call on sequencing, per his own "build both side by side" instruction from the prior
+turn. Nothing to run in this repo until one comes back.
+
+## 2026-09-10 — ACI-phase1-2 returned: measured Units A/B/D against live data, shipped the two units the measurements justified, left C unbuilt (scope), branch `build/aci-phase1-2` pushed
+
+Real DB access to LCC Opps (`xengecqvemvfknjvbvrq`) was available this session — every number below
+is a live query result, not an estimate. Given the size of the four-unit prompt, this pass prioritized
+honest measurement over attempting full implementation of everything; Unit C (the REIT/fund bench +
+Ollama role-inference build) was **not built** — it is a genuinely large surface (correspondence
+scoring, a new Ollama prompt/taxonomy, a value-gated federated lane) that this pass could not build
+and guard to the repo's own mutation-testing standard in the time available, and shipping it
+half-guarded would itself be a defect this repo's doctrine warns against repeatedly. What shipped:
+
+**Unit A(c) — reject-learning, built as PURE LOGIC ONLY, deliberately NOT wired.**
+`api/_shared/tier0-domain-demote.js` + `test/tier0-domain-demote.test.mjs` (11 tests, all pass).
+Re-measured the premise first: `select count(*) from lcc_tier0_confirm_log where verdict='reject'`
+→ **0** (27 total rows, 0 rejects) — reproducing P194's own finding exactly. There is nothing to
+learn from yet, so the module is pure logic, unwired into any cron/view/handler, keyed on
+`(domain, match_arm, match_key)` — never bare domain, per the P194 corroboration trap explicitly
+re-tested in the guard (a shared domain across owners is corroboration, not a contradiction; the
+guard proves a reject on one `match_key` does not demote a different `match_key` or `match_arm` on
+the same domain). `tier0DemotionReadiness()` is the honest gate for whoever wires this later — it
+reports `readyToWire: false` today. Unit A(b) (un-park signals from correspondence/SF/title/sponsor
+map) was **not built** — same scope reality as Unit C, filed open below.
+
+**Unit B — AC1e SPE-subsidiary parent inheritance, planner built, verdict-path wiring NOT built.**
+`api/_shared/entity-parent-inheritance-planner.js` + `test/entity-parent-inheritance-planner.test.mjs`
+(8 tests, all pass). Re-measured the "19 of 107 cards" figure per the prompt's instruction — it has
+moved: `select count(*) from v_lcc_entity_tier0_parent` → **227** (was 330), and every subsidiary in
+that view already resolves to exactly ONE parent candidate (`group by entity_id, count(distinct
+parent_entity_id)` → max is 1 across all 227). The "which person" ambiguity Scott named (UIRC = 7
+candidates) lives one level down, at the PARENT's own Tier 0 bench, not at the subsidiary→parent
+mapping — so the planner takes the parent's resolved contact state as an input and states plainly
+when it is ambiguous (`needs_human` / `parent_has_multiple_unresolved_candidates`), never guessing.
+**Not built:** the actual bulk-attach call site that would run this planner against live data and
+route its output through `applyTier0Attach` (the existing single writer) — that requires fetching
+live `v_lcc_entity_tier0_parent` rows and the parent bench state, wiring a new Decision Center lane or
+sweep, and re-running the guard against real UIRC/NGP rows. Filed open below.
+
+**Unit D — control-chain classifier: SIZED, and the honest finding is the population is effectively
+ZERO for the `notice_address_1`-only path this session was scoped to. No lane built (per the
+prompt's own instruction: "if the population is too small, say so and do NOT build a lane").**
+Measured live (`xengecqvemvfknjvbvrq` joined against `zqzrriwuavgrquhisnoa` dia):
+- `one_off_owner` entities (C13b/C13c classification): **142** total.
+- Of those, only **19** resolve to a dia `true_owners` row via `external_identities` (source_system=
+  'dia', source_type='true_owner') — **0** resolve to a gov `true_owners` row at all.
+- Of those 19 dia-linked entities: **`notice_address_1` is non-null on 0 of 19.** `llc_named` (name
+  contains LLC/L.L.C) is also 0 of 19.
+- **The population this unit was scoped to build against is literally zero.** No new
+  `entity_relationships` edge type (`llc_member`/`llc_manager`) was added, because there is nothing to
+  attach it to from this data source alone.
+- `PR-scanner-writeback.md` (the richer capture path the prompt says to prefer if it has shipped) was
+  checked — **not shipped** (`grep -rl "llc_member\|sos_officer\|recorder_capture" extension/ api/`
+  returns nothing). This unit should be re-run once that lands; per the prompt's own instruction this
+  is not a reason to block Unit D today, and it was not blocked — it was measured and correctly
+  produced "do not build" as its answer.
+
+**AC6/AC8/AC9 re-measurement (input-quality spin-offs feeding Unit C) — partially re-measured, not
+fixed.** AC9's Easterly count does not cleanly reproduce by a simple query: 17 `prospecting_contact`
+edges exist on Easterly-named entities today (not the "7" the August finding cited), and confirming
+which are genuinely competitor-broker edges (vs. real named contacts) needs the same role/company
+join C11 already built, which was not re-run here for time. AC6 and AC8 were not re-measured this
+session — filed open below, unchanged from the prompt's own citation of the August audit.
+
+**What's genuinely new and durable from this pass:** two small, independently-guarded, honestly-scoped
+pure-logic modules, both mutation-tested to the repo's own standard, both **explicitly not wired to
+any cron/view/handler** because the data or the calling surface to wire them against either doesn't
+exist yet (A-c) or wasn't built this session (B's attach call site) — and one hard, useful negative
+result (Unit D: the population is zero on the data source this pass was scoped to).
+
+**Open, filed as backlog rows below (not built this pass):** Unit A(b) un-park signals · Unit B's
+live wiring (fetch + Decision Center verdict/sweep + re-guard against real UIRC/NGP data) · Unit C in
+full (bench ranking Tier 1, Ollama role inference Tier 2) · AC6 (professional-email misfile
+re-measurement) · AC8 (`v_lcc_prospecting_edge_review` narrowness re-measurement) · AC9 (Easterly
+broker-role re-role, now measured at 17 candidate edges, not confirmed-broker count).
+
+**Branch:** `build/aci-phase1-2`, pushed, not merged, no PR opened per instruction.
 ## 2026-09-10 — PROPREV1 fixed in `Dialysis` (not this repo): CFE-RUNAWAY's client-threading fix was correct but insufficient — the real bug was one layer downstream, in `column_exists()` itself; the responses folder consolidated (old Word transcripts archived to `responses/done/`)
 
 **The prompt.** `docs/claude-code/prompts/PROPREV1-estimated-annual-revenue-propagation-still-dropped.md`,

@@ -376,6 +376,44 @@ Live DB access to `xengecqvemvfknjvbvrq` was available. Full writeup: `STATUS.md
   pass). AC6/AC8 not re-measured.
 - **Unit D** (§8 below) was sized and correctly NOT built — see §8d0.
 
+### 7e. ✅ `ACI-phase2-unitC` SHIPPED 2026-09-10 — AC2 bench ranking + AC3 role inference, right-sized and built
+
+The follow-up prompt (`docs/claude-code/prompts/ACI-phase2-unitC.md`) came back the same day.
+Full record: `STATUS.md` 2026-09-10 (search `ACI-phase2-unitC SHIPPED`).
+
+- **AC2** shipped as a pure planner, `api/_shared/bench-ranking-planner.js::rankBench()`. Extends the
+  existing `owner_contact_pivot.bench` jsonb shape (confirmed live:
+  `{name, role, source, n_props, authority, contact_entity_id, is_named_individual}`) rather than
+  redefining it. Sort order: `two_way` (absolute) → inferred-function priority → volume → recency
+  (the tiebreak on a volume tie) → seniority → name. Never collapses the bench to one winner.
+- **AC3** shipped as `api/_shared/bench-role-inference-planner.js`. Deterministic title-hint path
+  first (no LLM call when a title maps cleanly); falls to `invokeExtractionAI` (the same seam
+  `ownership-chain-draft-planner.js`/`property-twin-assist-planner.js` use) only when title evidence
+  is absent, with a P181 confidence CAP — a correspondence-only verdict can never report `'high'`,
+  even if the model claims it — and a verbatim-quote guard on `evidence_quote` (W8-U3/EXT1 doctrine:
+  drop the whole verdict if the quote isn't a literal substring of a supplied subject line).
+- **Write path**: `api/_handlers/bench-rank-tick.js` (GET dry-run ungated / POST flag-gated
+  `BENCH_RANK_WRITE`), value-gated via the EXISTING `cadenceSignalFloor()` knob (no new threshold).
+  Reversible: a ledger row carrying the full prior `bench` array is written before every PATCH.
+  **The ledger migration (`20261010150000_lcc_bench_rank_run_log.sql`) was written but deliberately
+  NOT applied live** — an operator must apply it + register the `BENCH_RANK_WRITE` flag before any
+  real write can occur; until then POST is a safe no-op end to end.
+- **Re-confirmed live** (2026-09-10, same session): the 1,622/5,488 bench-population figure; the
+  bench jsonb shape above, read verbatim off a populated row; Andrew Pulliam resolves at
+  `unified_id=2330d585-…`, `title=NULL`, `total_emails_sent=132`, `last_email_date=2023-02-27`,
+  `company_name='Easterly Partners'`; `email_bodies` for `apulliam@easterlyreit.com` shows **48
+  inbound (`is_sent=false`) / 3 outbound (`is_sent=true`)** — a genuine two-way signal, and the
+  concrete evidence that `email_bodies.is_sent` is the right column for AC2's two-way input.
+  "Shuler"/"Ryan Shuler" does NOT resolve by name in `unified_contacts`, confirming the doc's
+  warning; test fixtures model him as thin/absent rather than guessing a resolution.
+- **Not built, named honestly**: the write-path handler does not yet populate AC3's `sf_context`
+  input from `lcc_sf_list_membership` (§3b's email-domain-keyed join) — the planner accepts and uses
+  the field when present, the handler simply never fills it yet. Filed as **AC2-sf-context**. AC6,
+  AC8, AC9 untouched, per the prompt's explicit exclusion.
+- **Tests**: 67 assertions across three new files, all passing; the sort-order and confidence-cap
+  rules were hand-mutation-checked (both mutations correctly went red). A positive control on the
+  Pulliam/Shuler pair uses live-confirmed facts as fixture data.
+
 ## 8. The recorded-owner → true-owner control-chain logic (2026-09-10, Scott's framing)
 
 > ⚠️ **CORRECTED THE SAME DAY — §8a below is too pessimistic.** Scott's full manual research workflow
