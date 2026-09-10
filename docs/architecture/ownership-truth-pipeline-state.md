@@ -135,7 +135,8 @@ pipeline — as of the last version of this page. **It is now mostly closed:**
 - **`[UX-T1a-reach]`** 🔴 "reached" as a concept is broken in both directions: counting only
   owner-entity-linked touches gives a false floor of 19 owners; following any link at all gives a false
   ceiling of 1,024 (it imports machine-written asset events). The real constraint the audit found:
-  **847 of 6,480 owners have no linked person at all** — missing *links*, not missing *touches*.
+  **only 847 of 6,480 owners (13%) have a linked person at all — 5,633 (87%) have none** — missing
+  *links*, not missing *touches*.
   `[UX-T1a-touchcount]` 🔴 blocks grading any fix here — `current_touch` reads p50 0 / max 8,198 against
   a 7-step sequence, so cadence position is presently unreadable.
 - **SFENRICH / SF-DIRECT / RAILWAY-PA-SECRET** — separate, currently-active infra threads (owned by
