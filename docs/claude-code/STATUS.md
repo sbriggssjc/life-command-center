@@ -16,6 +16,45 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — C13g-min-lane-placeholder shipped and seeded live; OWN-T0e-c's affordance is BUILT (no live instance to exercise it end-to-end)
+
+Two independent, small units off the C13g/OWN-T0e arc.
+
+**1. C13g-min-lane-placeholder (backlog row now 🟢).** `v_lcc_entity_retype_candidates` no longer
+surfaces a placeholder entity — measured live before shipping that NONE of the three existing
+guards fires on "Research In Progress" (`lcc_is_placeholder_owner_name` / `lcc_p131_is_document_row_label`
+/ `lcc_a2_is_placeholder_party` all `false`). Widened `lcc_is_placeholder_owner_name`'s exact-match
+IN list with the one literal (blast radius measured first: 2 entities fleet-wide, both genuine
+placeholders — `select count(*) from entities where lower(btrim(name))='research in progress'`).
+Migration `20261101150000_lcc_c13g_min_lane_placeholder.sql`, applied live to LCC Opps: candidates
+view **4 → 3** rows (exact predicted delta); a new `v_lcc_entity_retype_placeholder_excluded` view
+carries the excluded population for the seeder. Seeded live: `junk_entity_review` review_id 386,
+`heuristic='entity_retype_placeholder'`, `dismiss`, recording the entity held 2 current portfolio
+facts. New one-shot `api/admin.js?action=entity-retype-placeholder-seed` (GET dry-run / POST
+`&apply=true`) for any future recurrence.
+
+**2. OWN-T0e-c — the "sponsor is itself the duplicate" affordance (backlog row updated, not closed —
+no live case exists to close).** Read the design doc §6 per the prompt's instruction before building:
+the signal is already computed by the existing cache, no new detector — `spe_ids` (the non-sponsor
+side of a group) and `spe_props_max >= 2` (the existing `duplicate_entity_suspect` flag). A card's
+own `sponsor_id` showing up inside ANOTHER breadth card's `spe_ids`, where that other card's
+`spe_props_max >= 2`, is the NGP-Group-inside-NGP-Capital shape. Shipped:
+`findSponsorDuplicateTarget`/`annotateSponsorDuplicates` (pure, `sponsor-family-planner.js`), a
+fifth verdict `merge_into_sponsor` (loser = this card's own sponsor, winner = the target — re-derived
+LIVE from the cache at verdict time via a `spe_ids=cs.{...}` PostgREST contains filter, never
+accepted from the client payload — P188), reusing the exact same `lcc_merge_entity` writer +
+refresh pair + reversal as OWN-T0e-b's `same_party`+`merge_now`. Card + button in `dc-lanes.js`
+(`dcSponsorFamilyMergeIntoSponsor`, payload `{}` — nothing client-supplied). Guard
+`test/own-t0e-sponsor-family-lane.test.mjs` grew to 23 tests; spot-mutation-verified RED on three
+of the new assertions (tied refusal, payload-cannot-redirect-target, the branch's own existence).
+
+⚠️ **Checked live, not assumed: NO current card exercises this shape.** The one historical instance
+(NGP Group → NGP Capital) was already resolved by a direct manual `lcc_merge_entity` call on
+2026-09-09 (backlog OWN-T0e-c's own prior entry). Queried today's cache for any spe_id of a
+duplicate-suspect group that is ALSO a sponsor_id elsewhere: **zero rows.** So the affordance is
+built and unit-tested but has never fired against production data — say so plainly rather than
+claiming an end-to-end verification that did not happen.
+
 ## 2026-09-10 — `fix/ext-host-refuse-retired-origin` failed CI on an unrelated pin, fixed; and the J13 12:30 UTC observation read is clean but IP-level confirmation is still Not on file
 
 **CI failure, diagnosed.** PR `fix/ext-host-refuse-retired-origin` failed `npm test`, but not from the EXT-HOST

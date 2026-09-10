@@ -857,10 +857,18 @@ function _fedCardHTML(it, i, isNext) {
           return '<option value="' + esc(String(id)) + '">' + esc(memberNames[k] || ('member ' + String(id).slice(0, 8))) + '</option>';
         }).join('') + '</select></div>';
     }
+    // OWN-T0e-c: this card's OWN sponsor was itself recognised as a duplicate
+    // of a DIFFERENT sponsor's card (annotated server-side, never guessed here).
+    const dupOf = c.duplicate_of_sponsor_id ? esc(String(c.duplicate_of_sponsor_name || 'the other sponsor')) : '';
+    const dupOfLine = c.duplicate_of_sponsor_id
+      ? '<div class="q-item-meta" style="opacity:.85">⚠ This sponsor is itself a recognised duplicate of <b>' + dupOf
+        + '</b> (token <b>' + esc(String(c.duplicate_of_sponsor_token || '')) + '</b>) — see that card, or merge directly below.</div>'
+      : '';
     body = '<div class="q-item-header"><span class="q-item-title">' + title + '</span>' + badges + '</div>'
-      + speLine + tokLine + flip + pick + dupPick;
+      + speLine + tokLine + dupOfLine + flip + pick + dupPick;
     actions = '<button class="q-action primary" onclick="dcSponsorFamilyConfirm(' + i + ')">Confirm family (writes 1 registry row)</button>'
       + (members.length > 1 ? '<button class="q-action" onclick="dcSponsorFamilyMergeNow(' + i + ')">Merge duplicate now (reversible)</button>' : '')
+      + (c.duplicate_of_sponsor_id ? '<button class="q-action" onclick="dcSponsorFamilyMergeIntoSponsor(' + i + ')">Merge THIS sponsor into "' + dupOf + '" (reversible)</button>' : '')
       + '<button class="q-action" onclick="dcFed(' + i + ',\'same_party\')">Same party — route to merge lane</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'not_family\')">Not a family</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
@@ -1501,6 +1509,22 @@ function dcSponsorFamilyMergeNow(i) {
   return dcFed(i, 'same_party', payload);
 }
 window.dcSponsorFamilyMergeNow = dcSponsorFamilyMergeNow;
+
+// OWN-T0e-c: the reverse direction — THIS card's own sponsor is itself a
+// recognised duplicate of a DIFFERENT sponsor's card, so merge IT into the
+// other, already-canonical sponsor. No picker: the target is computed
+// server-side (c.duplicate_of_sponsor_id) and never sent from the client
+// (P188) — the payload carries nothing.
+function dcSponsorFamilyMergeIntoSponsor(i) {
+  const it = _dcFedArr[i]; if (!it) return;
+  const c = it.context || {};
+  if (!c.duplicate_of_sponsor_id) { if (typeof showToast === 'function') showToast('No recognised duplicate-of target on this card', 'error'); return; }
+  const loser = c.sponsor_name || 'this sponsor';
+  const winner = c.duplicate_of_sponsor_name || 'the other sponsor';
+  if (typeof window.confirm === 'function' && !window.confirm('Merge "' + loser + '" INTO "' + winner + '"? Reversible via lcc_unmerge_entity.')) return;
+  return dcFed(i, 'merge_into_sponsor', {});
+}
+window.dcSponsorFamilyMergeIntoSponsor = dcSponsorFamilyMergeIntoSponsor;
 
 function dcTier0Attach(i) {
   const sel = document.getElementById('dc-t0-' + i);

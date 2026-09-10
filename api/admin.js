@@ -53,6 +53,7 @@ import {
 import {
   SPONSOR_FAMILY_CACHE_TABLE, SPONSOR_FAMILY_REGISTRY_TABLE,
   sponsorFamilySubjectRef, buildSponsorFamilyCard, validateSponsorFamilyVerdict, orderSponsorFamilyRows,
+  annotateSponsorDuplicates,
 } from './_shared/sponsor-family-planner.js';
 import {
   ENTITY_RETYPE_SOURCE_VIEW,
@@ -238,6 +239,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'junk-prescreen-tick':        return handleJunkPrescreenTick(req, res);
     case 'tm-misparse-seed':           return handleTmMisparseSeed(req, res);
     case 'junk80-seed':                return handleJunk80Seed(req, res);
+    case 'entity-retype-placeholder-seed': return handleEntityRetypePlaceholderSeed(req, res);
     case 'naming-hygiene-tick':        return handleNamingHygieneTick(req, res);
     case 'dup-pair-tick':              return handleDupPairTick(req, res);
     case 'link-propagation-tick':      return handleLinkPropagationTick(req, res);
@@ -2723,6 +2725,61 @@ async function handleJunk80Seed(req, res) {
       { headers: { Prefer: 'return=minimal,resolution=merge-duplicates' } });
     if (ur.ok) summary.seeded += 1;
     else summary.errors.push({ id: r.id, detail: ur.data });
+  }
+  return res.status(200).json({ ok: true, ...summary });
+}
+
+// ---------------------------------------------------------------------------
+// C13g-min-lane-placeholder (2026-09-09) — one-shot: a PLACEHOLDER entity
+// (e.g. "Research In Progress") is not a real party, so neither
+// `entity_type_review` verdict fits ("Retype to organization" asserts a
+// firm; "Keep as person" asserts a person). `v_lcc_entity_retype_candidates`
+// now excludes `lcc_is_placeholder_owner_name(name)` (migration
+// 20261101150000); this seeds the excluded row(s) into the EXISTING
+// junk_entity_review lane (retire, never merge — same machinery as the
+// TrafficMetrix/junk80 sweeps above) so the fact that they held 2 current
+// portfolio facts is not silently dropped.
+//
+// Deterministic (provider 'none'), `dismiss` — a placeholder name is not a
+// judgement call. Idempotent (on_conflict=subject_ref). Dry-run by default;
+// ?apply=1 (POST) writes.
+//
+// GET  /api/admin?action=entity-retype-placeholder-seed            -> dry run
+// POST /api/admin?action=entity-retype-placeholder-seed&apply=true -> seed
+const ENTITY_RETYPE_PLACEHOLDER_HEURISTIC = 'entity_retype_placeholder';
+
+async function handleEntityRetypePlaceholderSeed(req, res) {
+  const apply = String(req.query.apply || '') === 'true' && req.method === 'POST';
+  const sourceRunId = 'retype_ph_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+
+  // v_lcc_entity_retype_placeholder_excluded mirrors v_lcc_entity_retype_candidates'
+  // fact_pop CTE (person-typed, live, >= 2 current facts) restricted to the
+  // placeholder subset the candidates view now EXCLUDES — SQL is the single
+  // owner of that judgement (lcc_is_placeholder_owner_name); this handler never
+  // re-derives it in JS.
+  const vr = await opsQuery('GET', 'v_lcc_entity_retype_placeholder_excluded?select=entity_id,name,current_facts&limit=1000');
+  if (!vr.ok) return res.status(502).json({ error: 'placeholder_view_query_failed', detail: vr.data });
+  const candidates = (Array.isArray(vr.data) ? vr.data : []).map((r) => ({ id: r.entity_id, name: r.name, current_facts: r.current_facts }));
+
+  const summary = { apply, source_run_id: sourceRunId, candidates: candidates.length, seeded: 0, errors: [], sample: candidates };
+  if (!apply) return res.status(200).json({ ok: true, ...summary });
+
+  for (const c of candidates) {
+    const body = {
+      subject_ref: junkSubjectRef('lcc', 'entities', c.id), domain: 'lcc', table_name: 'entities',
+      pk_value: String(c.id), entity_name: c.name == null ? '' : String(c.name),
+      heuristic: ENTITY_RETYPE_PLACEHOLDER_HEURISTIC, proposed_verdict: 'dismiss', confidence: 1,
+      evidence_quote: String(c.name || '').slice(0, 200),
+      reason: 'Placeholder entity name (lcc_is_placeholder_owner_name), not a real party — held '
+        + c.current_facts + ' current portfolio facts. Excluded from entity_type_review '
+        + '(C13g-min-lane-placeholder) — neither verdict fits a placeholder.',
+      model_provider: 'none', model_name: null, source_run_id: sourceRunId, scan_batch_id: null,
+      status: 'proposed',
+    };
+    const ur = await opsQuery('POST', 'junk_entity_review?on_conflict=subject_ref', body,
+      { headers: { Prefer: 'return=minimal,resolution=merge-duplicates' } });
+    if (ur.ok) summary.seeded += 1;
+    else summary.errors.push({ id: c.id, detail: ur.data });
   }
   return res.status(200).json({ ok: true, ...summary });
 }
@@ -8967,12 +9024,17 @@ async function fetchFederatedSource(type, cap, opts) {
     const reg = new Set(((rr.ok && Array.isArray(rr.data)) ? rr.data : [])
       .map((f) => String(f.sponsor_entity_id) + ':' + String(f.sponsor_token)));
     const live = rows.filter((r) => !(r.sponsor_id && reg.has(String(r.sponsor_id) + ':' + String(r.sponsor_token))));
-    const ordered = orderSponsorFamilyRows(live);
+    // OWN-T0e-c: annotate over the WHOLE live population before ordering/paging,
+    // so a card's own sponsor can be recognised as a duplicate of a sponsor that
+    // sits anywhere else in the lane (never only the page being served).
+    const annotated = annotateSponsorDuplicates(live);
+    const ordered = orderSponsorFamilyRows(annotated);
     out.total = ordered.length;
     out.parts = {
       breadth: ordered.filter((r) => r.sponsor_side !== 'tied').length,
       tied: ordered.filter((r) => r.sponsor_side === 'tied').length,
       duplicate_entity_suspect: ordered.filter((r) => Number(r.spe_props_max) >= 2).length,
+      sponsor_is_duplicate_of: ordered.filter((r) => r.duplicate_of_sponsor_id).length,
       cache_refreshed_at: rows.length ? rows[0].refreshed_at : null,
       cache_truncated: rows.length >= 1000,
       cache_fetch_failed: !cr.ok,
@@ -13143,7 +13205,7 @@ async function handleDecisionVerdict(req, res) {
       const row = (rowR.ok && Array.isArray(rowR.data)) ? rowR.data[0] : null;
       // A vanished card (cache refreshed it away) must still be CLOSEABLE for the
       // record-only verdicts; only confirm_family needs the live row.
-      const card = buildSponsorFamilyCard(row || {
+      let card = buildSponsorFamilyCard(row || {
         group_key_id: ctx.group_key_id, sponsor_id: ctx.sponsor_id, sponsor_name: ctx.sponsor_name,
         sponsor_side: ctx.sponsor_side, sponsor_token: tok, member_ids: [], spe_names: ctx.spe_names,
       });
@@ -13151,15 +13213,39 @@ async function handleDecisionVerdict(req, res) {
         return res.status(404).json({ error: 'sponsor_family_confirm: card no longer in the proposal set', sponsor_token: tok });
       }
 
+      // OWN-T0e-c: merge_into_sponsor re-derives duplicate_of_sponsor_id LIVE
+      // from the cache (never from a value the client sent — P188). Same signal
+      // as annotateSponsorDuplicates: another breadth row, not this card's own
+      // sponsor, whose spe_ids CONTAINS this card's sponsor_id and whose
+      // spe_props_max already reads as a duplicate suspect (>= 2).
+      if (verdict === 'merge_into_sponsor' && !tied && card.sponsor_id) {
+        const dupR = await opsQuery('GET', SPONSOR_FAMILY_CACHE_TABLE
+          + '?select=sponsor_id,sponsor_token,sponsor_name,spe_props_max,spe_ids'
+          + '&sponsor_side=eq.breadth&spe_props_max=gte.2'
+          + '&sponsor_id=neq.' + pgFilterVal(card.sponsor_id)
+          + '&spe_ids=cs.{' + pgFilterVal(card.sponsor_id) + '}&limit=1');
+        const dupRow = (dupR.ok && Array.isArray(dupR.data)) ? dupR.data[0] : null;
+        card = Object.assign({}, card, dupRow ? {
+          duplicate_of_sponsor_id: String(dupRow.sponsor_id),
+          duplicate_of_sponsor_token: dupRow.sponsor_token || null,
+          duplicate_of_sponsor_name: dupRow.sponsor_name || null,
+        } : { duplicate_of_sponsor_id: null, duplicate_of_sponsor_token: null, duplicate_of_sponsor_name: null });
+      }
+
       // Live guard inputs. The sponsor to test is the card's for a breadth group,
       // the operator's pick for a tied one — resolved by the planner, so read
-      // both facts for whichever id the planner will name.
-      const candidateSponsor = tied ? (payload.sponsor_entity_id ? String(payload.sponsor_entity_id) : null)
+      // both facts for whichever id the planner will name. For merge_into_sponsor
+      // the "sponsor" under test is the TARGET (the winner) and the "duplicate"
+      // is THIS card's own sponsor (the loser) — the reverse of same_party.
+      const mergeIntoSponsor = verdict === 'merge_into_sponsor';
+      const candidateSponsor = mergeIntoSponsor ? (card.duplicate_of_sponsor_id || null)
+        : tied ? (payload.sponsor_entity_id ? String(payload.sponsor_entity_id) : null)
         : (card.sponsor_id ? String(card.sponsor_id) : null);
       const mergeNow = verdict === 'same_party' && payload.merge_now === true;
-      const candidateDup = mergeNow && payload.duplicate_entity_id ? String(payload.duplicate_entity_id) : null;
+      const candidateDup = mergeIntoSponsor ? (card.sponsor_id ? String(card.sponsor_id) : null)
+        : (mergeNow && payload.duplicate_entity_id ? String(payload.duplicate_entity_id) : null);
       let live = { registry_has: false, sponsor_is_tombstone: false };
-      if ((verdict === 'confirm_family' || mergeNow) && candidateSponsor) {
+      if ((verdict === 'confirm_family' || mergeNow || mergeIntoSponsor) && candidateSponsor) {
         const [regR, entR, dupR] = await Promise.all([
           opsQuery('GET', SPONSOR_FAMILY_REGISTRY_TABLE + '?select=sponsor_entity_id'
             + '&sponsor_entity_id=eq.' + pgFilterVal(candidateSponsor) + '&sponsor_token=eq.' + pgFilterVal(tok) + '&limit=1'),
@@ -13223,6 +13309,27 @@ async function handleDecisionVerdict(req, res) {
             reverse: 'select lcc_unmerge_entity(<loser_id>)' });
         if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
         return res.status(200).json({ ok: true, verdict: 'same_party', merged: 1, sponsor_token: tok,
+          winner_id: gate.sponsor_entity_id, loser_id: gate.duplicate_entity_id });
+      }
+      if (action === 'merge_into_sponsor') {
+        // OWN-T0e-c: the missing other direction of same_party/merge_now — THIS
+        // card's own sponsor (gate.duplicate_entity_id, the loser) merges INTO the
+        // already-canonical sponsor named on the card (gate.sponsor_entity_id, the
+        // winner), re-derived live above from the cache, never from the request.
+        // Same writer, same refresh set, same reversal as OWN-T0e-b.
+        const mr = await opsQuery('POST', 'rpc/lcc_merge_entity', { p_loser: gate.duplicate_entity_id, p_winner: gate.sponsor_entity_id });
+        if (!mr.ok) {
+          await recordEffectFailure({ merge: false, error: mr.data });
+          return res.status(502).json({ error: 'sponsor_family_confirm: merge_failed', detail: mr.data });
+        }
+        try { await opsQuery('POST', 'rpc/lcc_refresh_buyer_spe_resolved', {}); } catch (_e) { /* soft */ }
+        try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+        const rr = await record('merge_into_sponsor', 'decided',
+          Object.assign({}, verdictCtx, { duplicate_entity_id: gate.duplicate_entity_id, merge_now: true }),
+          { sponsor_family: 'merged', lcc_merge_entity: 'merged', winner_id: gate.sponsor_entity_id, loser_id: gate.duplicate_entity_id,
+            reverse: 'select lcc_unmerge_entity(<loser_id>)' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'merge_into_sponsor', merged: 1, sponsor_token: tok,
           winner_id: gate.sponsor_entity_id, loser_id: gate.duplicate_entity_id });
       }
       if (action === 'research') {

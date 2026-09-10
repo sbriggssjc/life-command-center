@@ -12,11 +12,14 @@ import {
   SPONSOR_FAMILY_VERDICTS, SPONSOR_FAMILY_CACHE_TABLE, SPONSOR_FAMILY_REGISTRY_TABLE,
   sponsorTokenIsValid, sponsorFamilySubjectRef, parseSponsorFamilySubjectRef,
   buildSponsorFamilyCard, validateSponsorFamilyVerdict, orderSponsorFamilyRows,
+  findSponsorDuplicateTarget, annotateSponsorDuplicates,
 } from '../api/_shared/sponsor-family-planner.js';
 
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
 const C = '33333333-3333-4333-8333-333333333333';
+const D = '44444444-4444-4444-8444-444444444444';
+const E = '55555555-5555-4555-8555-555555555555';
 
 const breadthRow = {
   group_key_id: A, sponsor_id: A, sponsor_name: 'Boyd Watterson', sponsor_side: 'breadth',
@@ -125,7 +128,6 @@ test('same_party / not_family / research never need the live facts; same_party v
   const bad = validateSponsorFamilyVerdict(card, 'same_party', { duplicate_entity_id: '44444444-4444-4444-8444-444444444444' }, undefined);
   assert.equal(bad.ok, false);
   assert.equal(validateSponsorFamilyVerdict(card, 'attach', {}, undefined).ok, false, 'a Tier 0 verdict is not a lane verdict');
-  assert.deepEqual([...SPONSOR_FAMILY_VERDICTS], ['confirm_family', 'same_party', 'not_family', 'research']);
 });
 
 // ── OWN-T0e-b: same_party + merge_now ─────────────────────────────────────
@@ -181,6 +183,95 @@ test('ordering: breadth-decided groups first, rent desc within, and a null rent 
   assert.deepEqual(orderSponsorFamilyRows(rows).map((r) => r.sponsor_name), ['b50', 'b5', 'b-null', 't']);
 });
 
+// ── OWN-T0e-c: findSponsorDuplicateTarget / annotateSponsorDuplicates ─────────
+// A: NGP Capital (sponsor of the family), member D listed as spe_id, spe_props_max
+// 2 (so it reads as duplicate_entity_suspect). D also has its OWN breadth card
+// (sponsor_id: D) — that is the "NGP Group" shape: a sponsor on its own card who
+// is itself listed as an SPE of a DIFFERENT sponsor.
+const ngpCapitalRow = {
+  group_key_id: A, sponsor_id: A, sponsor_name: 'NGP Capital', sponsor_side: 'breadth',
+  sponsor_token: 'ngp', spe_ids: [D], spe_props_max: 2, member_ids: [A, D], spe_names: ['NGP Group'],
+};
+const ngpGroupOwnCardRow = {
+  group_key_id: D, sponsor_id: D, sponsor_name: 'NGP Group', sponsor_side: 'breadth',
+  sponsor_token: 'national', spe_ids: [E], spe_props_max: 1, member_ids: [D, E], spe_names: ['NGP Elsewhere LLC'],
+};
+// A sibling group where the "SPE" holds only 1 property (not a duplicate suspect) —
+// must NOT be treated as a target even though C sits in its spe_ids.
+const notADuplicateSuspectRow = {
+  group_key_id: B, sponsor_id: B, sponsor_name: 'Boyd Watterson', sponsor_side: 'breadth',
+  sponsor_token: 'boyd', spe_ids: [C], spe_props_max: 1, member_ids: [B, C], spe_names: ['Boyd Ashburn LLC'],
+};
+const tiedNoSponsorRow = { group_key_id: E, sponsor_id: null, sponsor_side: 'tied', sponsor_token: 'x', spe_ids: null, spe_props_max: 1 };
+
+test('findSponsorDuplicateTarget: finds the OTHER card listing this id as a duplicate-suspect SPE, never the row\'s own group, never a non-suspect group', () => {
+  const rows = [ngpCapitalRow, ngpGroupOwnCardRow, notADuplicateSuspectRow, tiedNoSponsorRow];
+  const found = findSponsorDuplicateTarget(D, rows);
+  assert.deepEqual(found, { sponsor_id: A, sponsor_token: 'ngp', sponsor_name: 'NGP Capital' });
+  // C sits in a group whose spe_props_max is 1 (not >= 2) — no target
+  assert.equal(findSponsorDuplicateTarget(C, rows), null);
+  // A sponsor with no id, or not present anywhere as an SPE, finds nothing
+  assert.equal(findSponsorDuplicateTarget(null, rows), null);
+  assert.equal(findSponsorDuplicateTarget(A, rows), null, 'A is a sponsor, never listed as anyone\'s SPE');
+  assert.equal(findSponsorDuplicateTarget(B, rows), null, 'B is the sponsor of its OWN group — must not match itself');
+});
+
+test('annotateSponsorDuplicates: only the row whose sponsor is duplicate-suspect elsewhere gets the three fields; tied rows and rows with no match are untouched', () => {
+  const rows = [ngpCapitalRow, ngpGroupOwnCardRow, notADuplicateSuspectRow, tiedNoSponsorRow];
+  const out = annotateSponsorDuplicates(rows);
+  const byToken = Object.fromEntries(out.map((r) => [r.sponsor_token, r]));
+  assert.equal(byToken.national.duplicate_of_sponsor_id, A);
+  assert.equal(byToken.national.duplicate_of_sponsor_token, 'ngp');
+  assert.equal(byToken.national.duplicate_of_sponsor_name, 'NGP Capital');
+  assert.equal(byToken.ngp.duplicate_of_sponsor_id, undefined, 'the sponsor doing the pointing is not itself annotated');
+  assert.equal(byToken.boyd.duplicate_of_sponsor_id, undefined);
+  assert.equal(byToken.x.duplicate_of_sponsor_id, undefined, 'a tied row (no sponsor_id) is passed through unchanged');
+  assert.equal(annotateSponsorDuplicates([]).length, 0);
+});
+
+test('buildSponsorFamilyCard carries duplicate_of_sponsor_* through from an annotated row, null when absent', () => {
+  const annotated = annotateSponsorDuplicates([ngpCapitalRow, ngpGroupOwnCardRow])
+    .find((r) => r.sponsor_token === 'national');
+  const card = buildSponsorFamilyCard(annotated);
+  assert.equal(card.duplicate_of_sponsor_id, A);
+  assert.equal(card.duplicate_of_sponsor_name, 'NGP Capital');
+  const plainCard = buildSponsorFamilyCard(breadthRow);
+  assert.equal(plainCard.duplicate_of_sponsor_id, null);
+});
+
+// ── OWN-T0e-c: merge_into_sponsor verdict gate ────────────────────────────────
+test('merge_into_sponsor refuses a tied group, a card with no target, and self-target', () => {
+  const tiedCard = buildSponsorFamilyCard(tiedRow);
+  assert.match(validateSponsorFamilyVerdict(tiedCard, 'merge_into_sponsor', {}, {}).error, /tied group/);
+  const noTargetCard = buildSponsorFamilyCard(breadthRow); // no duplicate_of_sponsor_id
+  assert.match(validateSponsorFamilyVerdict(noTargetCard, 'merge_into_sponsor', {}, {}).error, /no recognized duplicate-of target/);
+  const selfCard = buildSponsorFamilyCard(Object.assign({}, breadthRow, { duplicate_of_sponsor_id: breadthRow.sponsor_id }));
+  assert.match(validateSponsorFamilyVerdict(selfCard, 'merge_into_sponsor', {}, {}).error, /is the card's own sponsor/);
+});
+
+test('merge_into_sponsor refuses on LIVE tombstone/type facts and never accepts a client-supplied target', () => {
+  const card = buildSponsorFamilyCard(Object.assign({}, breadthRow,
+    { duplicate_of_sponsor_id: D, duplicate_of_sponsor_token: 'ngp', duplicate_of_sponsor_name: 'NGP Capital' }));
+  const okLive = { sponsor_is_tombstone: false, duplicate_is_tombstone: false, sponsor_type: 'organization', duplicate_type: 'organization' };
+  assert.match(validateSponsorFamilyVerdict(card, 'merge_into_sponsor', {}, Object.assign({}, okLive, { sponsor_is_tombstone: true })).error, /already merged away/);
+  assert.match(validateSponsorFamilyVerdict(card, 'merge_into_sponsor', {}, Object.assign({}, okLive, { duplicate_is_tombstone: true })).error, /target is merged away/);
+  assert.match(validateSponsorFamilyVerdict(card, 'merge_into_sponsor', {}, Object.assign({}, okLive, { duplicate_type: 'person' })).error, /entity_type differs/);
+  const ok = validateSponsorFamilyVerdict(card, 'merge_into_sponsor', {}, okLive);
+  assert.equal(ok.ok, true);
+  assert.equal(ok.sponsor_entity_id, D, 'winner is the TARGET named on the card');
+  assert.equal(ok.duplicate_entity_id, A, 'loser is THIS card\'s own sponsor');
+  assert.equal(ok.merge_now, true);
+  // a client-supplied target is IGNORED entirely — the card's own annotation
+  // is the only source (P188); passing a different id changes nothing
+  const spoofed = validateSponsorFamilyVerdict(card, 'merge_into_sponsor',
+    { sponsor_entity_id: '99999999-9999-4999-8999-999999999999' }, okLive);
+  assert.equal(spoofed.sponsor_entity_id, D, 'payload cannot redirect the merge target');
+});
+
+test('SPONSOR_FAMILY_VERDICTS names all five, merge_into_sponsor included', () => {
+  assert.deepEqual([...SPONSOR_FAMILY_VERDICTS], ['confirm_family', 'same_party', 'merge_into_sponsor', 'not_family', 'research']);
+});
+
 // ── structural ──────────────────────────────────────────────────────────────
 const strip = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
 const admin = strip(readFileSync(new URL('../api/admin.js', import.meta.url), 'utf8'));
@@ -211,6 +302,10 @@ test('registered in all four registries (admin set, ops set, lane meta + tile, r
   assert.match(dc, /const payload = \{ merge_now: true, duplicate_entity_id: dup \}/, 'merge_now rides the payload with the named duplicate');
   assert.match(dc, /if \(typeof window\.confirm === 'function' && !window\.confirm\([^\n]*\) return;/, 'a second confirm guards the one entity-moving verdict');
   assert.match(rs, /sponsor_family_confirm:\s*\{ lane: 'ownership'/);
+  // OWN-T0e-c
+  assert.match(dc, /window\.dcSponsorFamilyMergeIntoSponsor = dcSponsorFamilyMergeIntoSponsor/, 'the reverse-direction merge helper is exported');
+  assert.match(dc, /dcFed\(i, 'merge_into_sponsor', \{\}\)/, 'the payload carries nothing — the target is never client-supplied');
+  assert.match(dc, /c\.duplicate_of_sponsor_id \? '<button class="q-action" onclick="dcSponsorFamilyMergeIntoSponsor\(/, 'the button only renders when the card carries a target');
 });
 
 test('the fetch branch reads the CACHE table, never the 20 s view, and re-derives already_confirmed live', () => {
@@ -224,22 +319,38 @@ test('the fetch branch reads the CACHE table, never the 20 s view, and re-derive
   assert.match(b, /out\.complete = out\.items\.length === ordered\.length/);
   assert.equal(SPONSOR_FAMILY_CACHE_TABLE, 'lcc_ownt0e_sponsor_family_proposals_cache');
   assert.equal(SPONSOR_FAMILY_REGISTRY_TABLE, 'lcc_ownership_sponsor_family');
+  // OWN-T0e-c: annotated over the WHOLE population BEFORE ordering/paging, so a
+  // duplicate target anywhere in the lane is found regardless of which page a
+  // card lands on.
+  assert.match(b, /annotateSponsorDuplicates\(live\)/);
+  assert.match(b, /orderSponsorFamilyRows\(annotated\)/);
+  assert.match(b, /sponsor_is_duplicate_of: ordered\.filter\(\(r\) => r\.duplicate_of_sponsor_id\)\.length/);
 });
 
-test('the verdict path carries exactly ONE write — a POST to the registry — and touches nothing else', () => {
+test('OWN-T0e-c merge_into_sponsor never trusts a client-supplied target — the target is re-derived LIVE from the cache (P188)', () => {
+  const b = block(admin, "if (decision.decision_type === 'sponsor_family_confirm') {", /\n {4}return res\.status\(400\)\.json\(\{ error: 'unsupported_decision_type'/);
+  assert.match(b, /verdict === 'merge_into_sponsor' && !tied && card\.sponsor_id/, 'the re-derivation runs for this verdict only');
+  assert.match(b, /spe_ids=cs\.\{' \+ pgFilterVal\(card\.sponsor_id\)/, 'reads the cache CONTAINS filter on this card\'s own sponsor_id');
+  assert.match(b, /sponsor_side=eq\.breadth&spe_props_max=gte\.2/, 'same duplicate-suspect gate as the pure annotator');
+  assert.match(b, /sponsor_id=neq\.' \+ pgFilterVal\(card\.sponsor_id\)/, 'excludes this card\'s own group');
+  assert.doesNotMatch(b, /candidateSponsor = mergeIntoSponsor \? \(payload\./, 'the winner never comes from the request payload for this verdict');
+});
+
+test('the verdict path carries exactly TWO merge writers (same_party+merge_now, and OWN-T0e-c merge_into_sponsor) — a POST to the registry, and nothing else', () => {
   const b = block(admin, "if (decision.decision_type === 'sponsor_family_confirm') {", /\n {4}return res\.status\(400\)\.json\(\{ error: 'unsupported_decision_type'/);
   const posts = (b.match(/opsQuery\('POST', [^,]+/g) || []).map((x) => x.replace(/\s+$/, ''));
-  // OWN-T0e-b added the merge path: the registry INSERT, the single lcc_merge_entity
-  // call, and the two cache refreshes the merge lane also issues. Nothing else.
-  assert.deepEqual(posts.sort(), [
-    "opsQuery('POST', 'rpc/lcc_merge_entity'",
-    "opsQuery('POST', 'rpc/lcc_refresh_buyer_spe_resolved'",
-    "opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved'",
-    "opsQuery('POST', SPONSOR_FAMILY_REGISTRY_TABLE",
-  ].sort(), 'exactly: one registry write, one merge, two refreshes');
-  assert.equal((b.match(/rpc\/lcc_merge_entity/g) || []).length, 1, 'ONE merge call site, never a loop');
+  const countOf = (needle) => posts.filter((p) => p === needle).length;
+  // OWN-T0e-b added same_party's merge path; OWN-T0e-c adds a SECOND, structurally
+  // identical merge_into_sponsor call site (the reverse direction) — two lcc_merge_entity
+  // call sites now, never a loop over either. Each carries its own pair of soft refreshes.
+  assert.equal(countOf("opsQuery('POST', 'rpc/lcc_merge_entity'"), 2, 'exactly two merge call sites: same_party+merge_now, merge_into_sponsor');
+  assert.equal(countOf("opsQuery('POST', 'rpc/lcc_refresh_buyer_spe_resolved'"), 2);
+  assert.equal(countOf("opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved'"), 2);
+  assert.equal(countOf("opsQuery('POST', SPONSOR_FAMILY_REGISTRY_TABLE"), 1, 'exactly ONE registry write, confirm_family only');
+  assert.equal(posts.length, 7, 'no other write exists on this decision type (2+2+2+1)');
   assert.match(b, /\{ p_loser: gate\.duplicate_entity_id, p_winner: gate\.sponsor_entity_id \}/, 'loser = named duplicate, winner = sponsor');
   assert.match(b, /if \(action === 'same_party' && gate\.merge_now\)/, 'merge only on the planner\'s merge_now');
+  assert.match(b, /if \(action === 'merge_into_sponsor'\)/, 'OWN-T0e-c has its own execution branch');
   assert.match(b, /duplicate_is_tombstone: candidateDup \? \(!dupEnt \|\| dupEnt\.merged_into_entity_id != null\)/, 'loser liveness read live');
   assert.match(b, /entity_type&id=eq\./, 'entity_type read live for the same-type guard');
   assert.equal((b.match(/opsQuery\('(PATCH|DELETE)'/g) || []).length, 0, 'no PATCH/DELETE');
