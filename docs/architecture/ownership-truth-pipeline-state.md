@@ -80,13 +80,18 @@ depends on.
   is unit-tested but has never fired against a live card — the one historical instance (NGP Group) was
   already resolved by hand before it shipped; the next real case is its first live test.
 
-With both of those closed, **the largest open gap in Stage 3 — and in the whole pipeline — is the one below,
-which neither item touched:**
-- **`[C13g]`** 🟠 **the CAPTURE-PATH fix is still unbuilt.** C13g-min only lets a human fix one row at
-  a time; the producer that *keeps writing* `entity_type='person'` for companies — the transaction
-  vendors' "contact" party slot — has never been touched. Sized at a **non-lexical floor of 414 of
-  56,192 entities (0.74%)**, with the only defensible estimate (a hand-read sample) at **~1,950**.
-  Until this ships, every retype done by hand is a bucket bailing a leaking boat.
+With both of those closed, the item below was the largest open gap in Stage 3 — and in the whole
+pipeline — as of the last version of this page. **It is now mostly closed:**
+- **`[C13g]`** ✅ **the CAPTURE-PATH fix shipped 2026-09-10.** Traced to `unpackContacts() -> contactEntityType()`
+  in `api/_handlers/sidebar-pipeline.js`, the one mint path both RCA and CoStar sidebar capture share.
+  RCA's deed-party owner slot sends no explicit type at all, so a too-narrow org-marker regex was the
+  SOLE signal for 115 of the 142 sampled mistyped rows — now routed through the same `hasFirmSuffix()`
+  guard used everywhere else in the repo. Forward-mint only, by design: the existing ~1,950-entity
+  population stays `entity_type_review` lane material, not bulk-retyped from here.
+  ⚠️ **`[C13g-costar-stoplist]`** 🟡 **not closed** — the CoStar residue (32 of 142) has a DIFFERENT
+  cause the fix didn't touch: the CoStar scanner's own `looksLikePerson()` stoplist is broader than
+  the backend's and is never read back, so its classification can disagree with the backend's on the
+  same name even when CoStar sets an explicit type. Filed, not fixed.
 - **`[OWN-T0b/c/d/f/g]`** 🔴 residue named in the 2026-09-02 audit: no LCC mirror of
   `v_ownership_transitions_portfolio`; **417** `duplicate_entity` merges still needed (the same
   `Duke Realty` class blocking Stage 2's A2 residue); 11 tombstones still holding a live current fact
@@ -151,7 +156,7 @@ not yet contradicted by anything built since.
 out past Salesforce today — no Outlook write-back, no WebEx write-back, and the one Salesforce
 write-back doctrine line is aspirational more than it is a built system with guards and a ledger the
 way `lcc_merge_entity` or `lcc_retype_entity` are. **This is the natural next design question once
-Stage 3's capture-path fix (`C13g`) and Stage 4's mailbox/link gaps close** — there is limited value in
+Stage 3's remaining `C13g-costar-stoplist` residue and Stage 4's mailbox/link gaps close** — there is limited value in
 building more push-back machinery while the store it would push from is still ~2% mistyped
 (`C13g`) and 43% disagreeing with itself upstream (`OWN-T0a`).
 
@@ -163,7 +168,7 @@ Two patterns repeat across every stage, worth carrying into whatever gets priori
 
 1. **Every stage's residue is smaller once the SAME class of fix lands upstream.** Stage 2's A2 residue
    (54 of 92) and Stage 3's OWN-T0b/c/d/f/g residue (417 `duplicate_entity` merges) are both blocked by
-   the identical entity-dedup gap; Stage 3's own `C13g` capture-path gap is what keeps re-creating the
+   the identical entity-dedup gap; Stage 3's `C13g` capture-path gap (now mostly closed, `C13g-costar-stoplist` excepted) was what kept re-creating the
    population Stage 3's retype lane exists to clean up. **Fixing entity-dedup and entity-typing at the
    root (once, upstream) is worth more than any one stage's local patch** — this is the single highest-
    leverage thread across the whole pipeline as stated.

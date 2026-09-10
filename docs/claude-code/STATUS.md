@@ -16,6 +16,36 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — C13g capture-path fix reconciled (PR #2234): verified independently, live and deployed; one residual gap filed, not lost
+
+Confirmed, not taken on faith: `origin/main` at `8459f95a` (the CFE-RUNAWAY docs PR, unrelated, which
+came after this one); Railway `/version` reads `8459f95a9600` and `c84ac1e9` (the fix commit) is an
+ancestor of that deployed SHA — live. Re-ran `test/c13g-contact-entity-type.test.mjs` on `main`
+independently: **10/10**.
+
+**What shipped, read from the diff, not just the summary:** `sidebar-pipeline.js::contactEntityType()`'s
+no-explicit-type fallback now calls the same `hasFirmSuffix()` guard used elsewhere in the repo instead
+of a second, narrower org-marker regex — the actual producer for the RCA/CoStar sidebar-capture "contact"
+mint, traced to `unpackContacts()` precisely rather than guessed from the eleven-file grep the prompt
+started from. Forward-mint only, correctly scoped: the existing ~1,950-entity population stays
+`entity_type_review` lane material per the prompt's own instruction not to build a second retype path.
+
+**Found while reconciling, filed rather than left implicit:** the response and the canonical doc both
+named — but the backlog never separately tracked — that this fix closes the RCA majority (115 of 142)
+and leaves the CoStar residue (32 of 142) untouched, because it has a different cause (the CoStar
+scanner's own `looksLikePerson()` stoplist disagreeing with the backend's, never read back). Filed as
+`C13g-costar-stoplist` (🟡) so it doesn't quietly disappear now that `C13g` itself reads ✅. Updated
+`ownership-truth-pipeline-state.md`'s Stage 3 section and its two forward-references to match — the
+page previously called the whole capture-path gap open; it's now accurate that the RCA majority is
+closed and one smaller, differently-caused residue remains.
+
+**Next step.** Operator: the 12 duplicate-entity merge groups are still the only outstanding piece of
+the original retype arc — untouched by anything in this session. Build: `C13g-costar-stoplist` is small
+and well-scoped if picked up, but nothing here is urgent enough to draft a prompt unprompted; the
+larger threads named in the pipeline page (Stage 3's `OWN-T0b/c/d/f/g` 417-merge residue, Stage 4's
+mailbox/SF-write-back gaps) are bigger decisions than a follow-on to this arc deserves without checking
+with Scott first on direction.
+
 ## 2026-09-10 — C13g-OWN-T0e close-out reconciled (PRs #2229/#2231): verified independently, backlog deduped, the C13g/OWN-T0e arc's build side is now fully closed
 
 Both units confirmed live and deployed, not just claimed. `origin/main` at `83a6c1c9` (PR #2231, which
