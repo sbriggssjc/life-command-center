@@ -102,6 +102,7 @@ import { openResearchTask } from './_shared/research-task.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
 import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared/county-portal-resolver.js';
+import { applyAssessorCapture, applyRecorderCapture, applySosEntityCapture } from './_shared/public-records-writeback.js';
 import { reconcilePropertyOwnership, propagateDeedGranteeToOwner, reconcileSaleAndOwnershipForNewOwner } from './_handlers/sidebar-pipeline.js';
 import { lookupLlc } from './_shared/llc-research.js';
 import { handleFlSosEnrichLink } from './_shared/fl-sos-enrich-link.js';
@@ -217,6 +218,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'gov-buyer-sync':          return handleGovBuyerSync(req, res);
     case 'next-best-action':        return handleNextBestAction(req, res);
     case 'recorder-portal':         return handleRecorderPortal(req, res);
+    case 'public-records-capture':  return handlePublicRecordsCapture(req, res);
     case 'client-error':            return handleClientErrorReport(req, res);
     case 'llc-research-queue':      return handleLlcResearchQueueList(req, res);
     case 'resolve-llc-research':    return handleResolveLlcResearch(req, res);
@@ -18376,6 +18378,77 @@ async function handleRecorderPortal(req, res) {
   } catch (e) {
     console.warn('[recorder-portal] resolution failed:', e && e.message);
     return res.status(200).json({ ok: true, property_id: propertyId, portal_url: null });
+  }
+}
+
+// ============================================================================
+// PUBLIC-RECORDS SCANNER SAVE — routes the sidepanel's "Scan This Page"
+// capture (extension/content/public-records.js) through real structured
+// writers instead of discarding it. Human-triggered only — the operator
+// clicks Save after reviewing the editable form; nothing here crawls or
+// polls. See api/_shared/public-records-writeback.js for the write logic.
+//
+// POST /api/admin?_route=public-records-capture
+//   Body: {
+//     site_type: 'assessor'|'recorder'|'sos',
+//     domain?: 'government'|'dialysis',   // required for assessor/recorder
+//     property_id?: <domain property id>, // required for assessor/recorder
+//     owner_entity_id?: <LCC entities.id>,// optional, sos only
+//     source_url?: string,
+//     capture: { ...scanner fields, operator-edited }
+//   }
+// ============================================================================
+async function handlePublicRecordsCapture(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const body = req.body || {};
+  const siteType = String(body.site_type || '').toLowerCase();
+  const capture = body.capture && typeof body.capture === 'object' ? body.capture : {};
+  const sourceUrl = body.source_url ? String(body.source_url).slice(0, 1000) : null;
+
+  try {
+    if (siteType === 'assessor') {
+      const domain = String(body.domain || '').toLowerCase();
+      if (!['government', 'dialysis'].includes(domain)) {
+        return res.status(400).json({ error: "domain must be 'government' or 'dialysis'" });
+      }
+      const propertyId = body.property_id;
+      if (propertyId == null || propertyId === '') {
+        return res.status(400).json({ error: 'property_id required for an assessor capture' });
+      }
+      const result = await applyAssessorCapture(domain, propertyId, capture,
+        { sourceUrl, entityState: body.state || capture.state || null });
+      return res.status(result.ok ? 200 : 422).json({ ok: result.ok, site_type: siteType, ...result });
+    }
+
+    if (siteType === 'recorder') {
+      const domain = String(body.domain || '').toLowerCase();
+      if (!['government', 'dialysis'].includes(domain)) {
+        return res.status(400).json({ error: "domain must be 'government' or 'dialysis'" });
+      }
+      const propertyId = body.property_id;
+      if (propertyId == null || propertyId === '') {
+        return res.status(400).json({ error: 'property_id required for a recorder capture' });
+      }
+      const result = await applyRecorderCapture(domain, propertyId, capture,
+        { sourceUrl, entityState: body.state || capture.state || null });
+      return res.status(result.ok ? 200 : 422).json({ ok: result.ok, site_type: siteType, ...result });
+    }
+
+    if (siteType === 'sos') {
+      const result = await applySosEntityCapture(capture, {
+        sourceUrl,
+        ownerEntityId: body.owner_entity_id || null,
+      });
+      return res.status(result.ok ? 200 : 422).json({ ok: result.ok, site_type: siteType, ...result });
+    }
+
+    return res.status(400).json({ error: "site_type must be 'assessor', 'recorder', or 'sos'" });
+  } catch (err) {
+    console.error('[public-records-capture]', err?.message || err);
+    return res.status(500).json({ error: 'public_records_capture_failed', message: err?.message });
   }
 }
 
