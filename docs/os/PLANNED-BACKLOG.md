@@ -998,7 +998,7 @@ part of the design, not an oversight.
 
 1. **Entity reconciliation** — 232 deals in multi-asset cities are parked as flagged entities. Auto-merge
    on best-match with a review queue, require manual confirmation for all 232, or treat the flagged
-   entity as canonical and merge lazily as signal arrives?
+   entity as canonical and merge lazily as signal arrives? ⚠️ **Re-measured 2026-09-10 — this is P17/PDR1's root cause, found from the opposite direction (a single property Scott flagged by hand).** Population today: **189** entities carry `ambiguous_resolution` (down from 232 — 43 resolved by ad hoc sweeps since), **116 also `orphan_flagged`**, all minted in one **2026-07-28 to 2026-08-04** Salesforce-sync burst (nothing since). Candidate-list size per entity ranges 2 to 55 (median in the single digits) — some are trivially resolvable (a 2-candidate ambiguity where one candidate is a bare city placeholder, as DaVita/Donna-TX turned out to be), others genuinely need a human look. The live `flagged-deals`/`reconcile-entity` endpoint pair (`entity-reconcile.js`) can action any of the three strategies below — it is a question of WHICH strategy and how much to automate, not whether the tooling exists. See `PLANNED-BACKLOG.md` §P17 for the single-property case that surfaced this.
 2. **Team mailbox intake (Kelly / Sarah / Nate)** — the single biggest cadence-accuracy lever (LCC sees
    only Scott's mailbox; every outlook row is `SYSTEM_ACTOR`). Which mailboxes, what auth model, how to
    attribute per broker. **Deferred by Scott.** Phase 1 (attribution) is buildable independently.
