@@ -833,6 +833,89 @@ test('candidate-scoped CoStar record and parcel pin resolves a tenantless same-a
   );
 });
 
+test('candidate-scoped multi-address parcel binds an approved operating tenant to one CoStar record', () => {
+  const conflict = {
+    status: 'approved',
+    reason_code: 'service_location_multi_address_same_parcel_operating_identity',
+    cms_facility_name: 'Synthetic Risser Surgery Center LLC',
+    operating_names: ['Synthetic Risser Orthopedic Group'],
+    frozen_address_token: '2615 E WASHINGTON BLVD|TESTVILLE|CA|91107',
+    assessor_address_token: '2611 E WASHINGTON BLVD|TESTVILLE|CA|91107',
+    captured_address_token: '2627 WASHINGTON BLVD|TESTVILLE|CA|91107',
+    parcel_number: '5751-005-004',
+    costar_property_id: '5750756',
+    authorized_by: 'research_owner',
+    authorized_at: '2026-09-10T12:00:00Z',
+    second_review_required: true,
+    evidence_citations: [
+      { source: 'official_facility_registry', url: 'https://registry.example/asc-location' },
+      { source: 'licensed_property_public_record', url: 'https://property.example/public-record' },
+    ],
+  };
+  const target = {
+    candidate_fingerprint: sha('4'),
+    address_token: conflict.frozen_address_token,
+    cms_identity: {
+      facility_name: conflict.cms_facility_name,
+      address: '2615 E Washington Blvd', city: 'Testville', state: 'CA', zip: '91107',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Risser Surgery Center'],
+      approved_same_parcel_address_conflicts: [conflict],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://product.costar.com/detail/all-properties/5750756/tenant',
+    costar_property_id: '5750756',
+    address: '2627 Washington Blvd', city: 'Testville', state: 'CA', zip: '91107',
+    parcel_number: '5751-005-004',
+    tenant_name: 'Unrelated Primary Tenant',
+    tenants: [{ name: 'Synthetic Risser Orthopedic Group' }],
+    square_footage: '6,964',
+  };
+
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.identity_match.mode, 'approved_same_parcel_address_conflict');
+  assert.equal(built.identity_match.corroboration_basis,
+    'approved_operating_identity_multi_address_parcel');
+  assert.equal(built.identity_match.assessor_address_preserved,
+    conflict.assessor_address_token);
+  assert.equal(built.identity_match.costar_property_id, '5750756');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  const blockedContexts = [
+    { ...context, costar_property_id: '5750757' },
+    { ...context, parcel_number: '5751-005-005' },
+    { ...context, address: '2629 Washington Blvd' },
+    { ...context, city: 'Other City' },
+    { ...context, zip: '91108' },
+    { ...context, tenants: [{ name: 'Unrelated Orthopedic Group' }] },
+    { ...context, source: 'rca' },
+  ];
+  for (const blocked of blockedContexts) {
+    assert.throws(() => buildAscStructuredCapture(target, blocked), /does not match/);
+  }
+
+  for (const invalidEvidence of [
+    { assessor_address_token: '' },
+    { assessor_address_token: conflict.frozen_address_token },
+    { assessor_address_token: '2611 E WASHINGTON BLVD|OTHER CITY|CA|91107' },
+    { cms_facility_name: 'Unrelated Surgery Center LLC' },
+    { second_review_required: false },
+    { evidence_citations: [conflict.evidence_citations[0]] },
+  ]) {
+    assert.throws(() => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: {
+        ...target.cms_evidence,
+        approved_same_parcel_address_conflicts: [{ ...conflict, ...invalidEvidence }],
+      },
+    }, context), /does not match/);
+  }
+});
+
 test('building ranges contain a frozen street number only with exact location and tenant corroboration', () => {
   const target = {
     candidate_fingerprint: sha('9'),

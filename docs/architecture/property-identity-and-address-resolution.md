@@ -126,6 +126,15 @@ enrollment-organization tenant, and cites both an official facility registry and
 record. Parcel agreement without tenant corroboration is insufficient. The capture preserves both addresses,
 the parcel identifier, and any square-footage disagreement, and always requires second review.
 
+A multi-address parcel is a stricter form of that conflict, not an address-normalization rule. Where the
+official facility location, the assessor situs label, and the licensed property's displayed address are three
+different civic numbers, an approval must preserve and pin all three tokens, one parcel identifier, one source
+record ID, the exact frozen facility identity, and an allow-listed operating tenant observed in the current
+source roster. The assessor token must share the frozen city, state, and postal components and must differ from
+both the frozen and captured tokens. Missing or substituted tenant, record, parcel, address, evidence class,
+authorization metadata, or second-review metadata blocks the attachment. No value becomes a canonical address
+correction merely because the candidate-scoped research capture is allowed.
+
 ## 5. Shared component boundaries
 
 | Component | Responsibility | Must not do |
