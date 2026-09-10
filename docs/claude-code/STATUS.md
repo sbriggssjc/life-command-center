@@ -16,6 +16,32 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-10 — `fix/ext-host-refuse-retired-origin` failed CI on an unrelated pin, fixed; and the J13 12:30 UTC observation read is clean but IP-level confirmation is still Not on file
+
+**CI failure, diagnosed.** PR `fix/ext-host-refuse-retired-origin` failed `npm test`, but not from the EXT-HOST
+code — the full 5,600-test suite (it genuinely runs ~3 minutes; several individual test files that legitimately
+take 8–20s each, e.g. `test/auth-fetch-interceptor.test.mjs`'s unmocked `AUTH_READY_TIMEOUT_MS`, were briefly
+mistaken here for hangs against a too-short per-file timeout before a full untimed run showed they finish and
+pass). The one real failure: `test/costar-record-identity-isolation.test.mjs` pins `manifest.version` to the
+literal `'1.0.52'` as a drift guard, unrelated to EXT-HOST; bumping the extension to 1.0.53 broke that pin.
+Fixed the pin to `'1.0.53'`; full suite now **5,594 pass / 0 fail**. Follow-up commit written to Scott's disk
+on the same branch — pending push/merge.
+
+**J13 12:30 UTC observation read** (LCC Opps `edge_logs`, 12:25–12:40 UTC, plus `staged_intake_items` POSTs
+since 11:35 UTC, per the scheduled check-in): **zero 400s** on `mv_user_work_counts` / `v_my_work` /
+`action_items` in the window (all 200/206, UA `node` and the edge function's own `Deno`/`SupabaseEdgeRuntime`
+UA — the latter is `ai-copilot` calling its own DB, not an external caller); **zero `POST staged_intake_items`**
+of any kind since 11:35 UTC (all traffic on that table in the window is `GET`/`PATCH`, UA `node`). Both
+measurable signals read clean. **Honestly Not on file this read:** IP-level confirmation that the specific
+day-1 caller (`44.205.19.44`) is gone — this session's `query_logs` schema access for per-request IP/header
+fields (the `cross join unnest(...headers)` pattern used for the prior writer-IP table) returned backend
+errors against this project today; UA-class and status-code fields were readable, IP was not. Zero write
+activity of any kind on `staged_intake_items` in the window is itself consistent with "the caller is gone,"
+but is not the same measurement as naming the IP — recorded as a gap, not papered over.
+
+**J13-teardown status unchanged:** still blocked on the extension actually being reloaded to 1.0.53 in both
+browser profiles (👤 Scott, pending the PR above merging first).
+
 ## 2026-09-09 — C13g-min-lane-mutation reconciled (PR #2222): verified on `main`, tests-only so nothing to deploy; the retype arc's build side is closed
 
 Re-ran `test/c13g-min-lane.test.mjs` on `main` after the merge: **14/14**; the builder's 46/46 RED is its own
