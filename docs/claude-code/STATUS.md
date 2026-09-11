@@ -16,6 +16,19 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-11 — Housekeeping: `prompts/` cleaned of stale duplicates left over from earlier `git mv`s
+
+With the PRI arc closed, checked `docs/claude-code/prompts/` for anything sitting stale — this is the
+ongoing "clean that folder as we go" cleanup Scott asked for earlier in this arc. Found three prompt
+files (`PRI1`, `PRI3`, `CQM1`) that existed **both** at the top level of `prompts/` and, byte-for-byte
+identical, in `prompts/done/` — duplicates left behind by an earlier `git mv` that apparently didn't
+stick cleanly (or was superseded by a later full-tree write). Removed the stale top-level copies; the
+`done/` copies (already correctly filed) are untouched. Also moved `PROPREV1`'s prompt to `done/` — its
+response was filed and the item closed ✅ days ago, but the prompt itself had never been moved.
+**Left `PDR14b`'s prompt alone** — that's a concurrent session's own item (already shipped + verified
+live per `PLANNED-BACKLOG.md`), not something this session's response-processing loop filed, so archiving
+it isn't this session's call to make.
+
 ## 2026-09-11 — PRI arc closed: `Dialysis` PR #7406 confirmed merged and deployed live — PRI1/PRI2/PRI3 all ✅
 
 Scott confirmed: *"That merged. The dialysis branch is also merged and PR 7406 is deployed live."* This
