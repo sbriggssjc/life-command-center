@@ -101,7 +101,7 @@ begin
     'Approved same-parcel recorded-owner evidence preserved; adjacent licensed-source building was not captured.',
     p_completed_by, v_observed_at
   )
-  on conflict (run_id, candidate_fingerprint) do update set
+  on conflict on constraint healthcare_research_reviews_pkey do update set
     property_form = 'unresolved',
     reviewer_confidence = 'medium',
     second_review_required = true,

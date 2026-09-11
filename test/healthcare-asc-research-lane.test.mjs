@@ -1292,6 +1292,9 @@ test('parcel-owner evidence completion advances with zero captures and mandatory
   assert.doesNotMatch(migration, /set\s+address_token\s*=/i);
   assert.match(migration, /v_capture_count <> 0/);
   assert.match(migration, /final_disposition[\s\S]*parcel_owner_evidence_only/);
+  assert.match(migration,
+    /on conflict on constraint healthcare_research_reviews_pkey do update/i);
+  assert.doesNotMatch(migration, /on conflict\s*\(run_id,\s*candidate_fingerprint\)/i);
   assert.match(migration, /set status = 'reviewed'/);
   assert.match(migration, /security invoker/i);
   assert.match(migration, /revoke all[\s\S]*from public, anon, authenticated/i);
