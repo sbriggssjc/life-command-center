@@ -16,6 +16,30 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-11 — PRI arc closed: `Dialysis` PR #7406 confirmed merged and deployed live — PRI1/PRI2/PRI3 all ✅
+
+Scott confirmed: *"That merged. The dialysis branch is also merged and PR 7406 is deployed live."* This
+closes the last open item from the PRI arc — the connection-retry sweep is now live in production, not
+just fixed-and-tested-per-the-response.
+
+`PLANNED-BACKLOG.md` updated: **`PRI3`** moved 🟡 → ✅ (fixed, merged, confirmed deployed live).
+**`PRI2`** closed ✅ as well — it was the root-cause escalation finding that pointed at `PRI3`'s full
+catalog for the fix; with that catalog now shipped, leaving `PRI2` open pointing at a resolved item
+would be stale bookkeeping, so it's closed rather than left dangling. `PRI1` was already ✅ from the
+prior round.
+
+**What's still genuinely open from this arc, carried forward rather than glossed over just because the
+headline item closed**: (1) the actual crash trigger behind the original Railway "Deploy Crashed" email
+(catalog item (h)) was traced exhaustively in `PRI3`'s response and never resolved — concluded possibly
+an OOM/platform-level kill, not confirmed; (2) the before/after proof text for 5 of the fixed call sites,
+and the name of a 6th changed file, were never independently visible in what this session could extract
+from the response `.docx` — this session's confirmation of the fix rests on the response's own
+self-report plus Scott's live-merge confirmation, not on this session re-reading the actual `Dialysis`
+diff (no credentials to that repo); (3) `PRI1`'s own Unit 4 question (whether a distinct "process exited
+with code 1" line exists near the original 07:03 crash, separate from "Stopping Container" at 12:27) was
+never answered by Scott. None of these block closing the arc — the confirmed, live fix is the load-
+bearing fact — but they're worth keeping visible rather than let disappear once the row turns green.
+
 ## 2026-09-11 — PRI3 response reviewed: 5 of 6 call sites fixed with proof asserted (not independently visible), the `owners` code bug fixed, full suite green (3183 passed, up from 3173) — held at 🟡, not ✅, pending confirmation `Dialysis` PR #7406 is actually merged
 
 `PRI3`'s response (`"PRi3 surface response.docx"`, saved by Scott) was read in full and transcribed to
