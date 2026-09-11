@@ -1,5 +1,48 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — BROKER1 applied live: a real bug found and fixed in production, 1,303 prospects assigned (870 gov→Scott, 414 dia→Kelly, 19 catch-all→Scott), Nate confirmed untouched
+
+The shipped code (`8a40073d`, merged) could not be run by the session that built it — no DB credentials there.
+This session applied the migration directly against `xengecqvemvfknjvbvrq`.
+
+**The migration's own self-check passed, but the first live call to the function it created did not.**
+`lcc_broker1_assign_prospect_brokers(p_dry_run)` declares `RETURNS TABLE(bucket text, n bigint)`, which makes
+`bucket` an implicit PL/pgSQL variable inside the function body — three `count(*) FILTER (WHERE bucket = '...')`
+lines collided with it (`42702: column reference "bucket" is ambiguous`), a bug the shipped test suite's 13
+Node tests never could have caught since none of them touch live Postgres. Fixed live by qualifying every
+reference with the temp table's own alias; no behavior change, same buckets, same rule.
+
+**Ran the real dry-run, then the real apply.** Final counts over the 1,355-prospect seller-prospecting queue:
+`already_manual_assignment_left_alone=52`, `defaulted_gov_to_scott=870`, `defaulted_dia_to_kelly=414`,
+`defaulted_catchall_to_scott=19`. The design's ordering requirement (the JS ROE self-signal pre-pass must run
+*before* the SQL default sweep, or a real "someone's already pursuing this" signal could get overwritten by a
+vertical default) couldn't be honored by calling the actual `/api/broker1-assign-tick` route — it's
+auth-gated behind `LCC_API_KEY`, which this session doesn't hold. Instead of skipping the check, the JS pass's
+exact query (`external_identities` where `source_system='salesforce'`, `source_type='account'`, for every
+currently-unassigned prospect) was run directly in SQL first: **0 of 1,303 unassigned prospects carry any SF
+Account-owner metadata at all**, confirming the pre-pass has nothing to write — not skipped, genuinely empty —
+so applying the default sweep directly was safe.
+
+**Nate verified untouched, the way the rule requires**: 7 `lcc_entity_owner_override` rows do name him, but
+every one carries `set_by='reconciled'` — an older, unrelated `deal_owner`/`sf_task` signal that predates this
+build. BROKER1's own function never references Nate's `lcc_user_id` as an assignable value, and fill-blanks-only
+means it could not have touched these regardless. Spot-checked 8 random post-sweep rows live via the new
+`v_lcc_broker1_prospect_assignment_state` view — all correctly bucketed by domain.
+
+**Confirmed the deployed app is current**: Railway `/version` on `tranquil-delight-production-633f` reads
+`8716d86d406f`, matching this session's `git` HEAD exactly — `/api/broker1-assign-tick` is live, this session
+simply lacks the key to call it. Running the JS pre-pass for real through the actual route (a harmless no-op
+today, given the confirmed-empty population, but worth closing the loop formally) is the one remaining operator
+action — not a build gap.
+
+**Docs**: `PLANNED-BACKLOG.md` `BROKER1` row updated with the live-applied outcome and the bug fix; `C4c`'s
+supersession note is unaffected. Moved `BROKER1-prospect-assignment.md` and its response to `done/`.
+
+**Next step.** `BROKER1-sf` (the Salesforce connect-back) stays correctly unbuilt — no write path into
+Salesforce exists yet, unchanged from the shipped finding. The rest of the ownership/contact-propagation
+thread (`OWN-T0a`, `B1b`, `AC11`'s population re-measure, the AC2/AC3 migration+flag operator action) is
+still open and untouched by this entry.
+
 ## 2026-09-11 — Confirmed: the PRI3 test run is genuinely hung, not just idle-logging — filed as `PRI4`
 
 Follow-up to the preliminary finding above. Scott checked Railway directly: the deployment
