@@ -1039,8 +1039,11 @@ All rows are aggregate-only and preserve the current fail-closed research bounda
 | PI7 | **Emit aggregate identity-quality metrics.** Measure match modes, missingness, disagreements, collisions, second-review agreement, stale-state errors, technical failures, and research time without exposing row-level or licensed data. | 🟢 | property identity contract §10 |
 | PI8 | **Optional on-box discrepancy-note assistant.** After PI3 emits structured decisions, an on-box model may suggest reason codes or draft reviewer notes. It is advisory only and may never match, alias, approve, or write. | ⚪ | property identity contract §9 |
 
-**Gate:** complete and aggregate-review the frozen 50-property ASC sample before Phase B/PI2–PI3 begins.
-Activation in any lane remains a separate decision.
+**Gate (measured 2026-09-11):** source collection is complete — 44 captured + 6 reviewed exceptions + 0
+pending — but aggregate review is not. Complete 22 mandatory second reviews, populate exactly 50 governed
+scorecards, and accept the privacy-safe aggregate receipt before Phase B/PI2–PI3 begins. Two historical captures
+without a stored mode remain explicit instrumentation missingness. Activation in any lane remains a separate
+decision. Evidence: `docs/audits/HEALTHCARE_ASC_50_PROPERTY_CAPTURE_CHECKPOINT_2026-09-11.md`.
 
 ## P11 — New verticals & long-horizon specs (design-only, nothing authorized)
 
