@@ -1,5 +1,34 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 -- OWN-T0h decided: reconciled store is canonical conflict count; found it doubled since 09-02
+
+Picked up OWN-T0h next (the "756 vs 2,097 conflict denominators" question CURRENT-STATE.md had been
+flagging as open since OWN-T0). Read both view definitions in full: `v_lcc_property_multi_current`
+only checks whether `lcc_entity_portfolio_facts` disagrees with itself (>1 distinct current-survivor
+entity on one property); `v_lcc_property_ownership_reconciled` additionally admits the resolver's
+`lcc_property_owner` proposal and the domain true_owner mirror as competing current-owner candidates
+-- which is what the property panel and Decision Center actually read, per OWN-T0's own "one door"
+doctrine. **Decision: the reconciled store's count is canonical**, not `multi_current`'s -- they
+answer different questions (data-hygiene-within-one-table vs. genuine cross-source ownership
+disagreement), and the original audit had already said as much in its own §9.6 without finishing the
+thought.
+
+Re-measuring live to write the decision down surfaced something bigger than the original question:
+the reconciled conflict count has **more than doubled since the 2026-09-02 audit -- 2,097 -> 4,478**
+(gov 1,769->3,635, dia 328->843; by class: `unclassified_rival` 3,229, `duplicate_entity` 942,
+`sponsor_family_confirmed` 307), confirmed stable on a second read minutes later. `multi_current`
+itself barely moved (756->740, expected drift -- nothing end-dates those facts). Fleet size is flat
+(8,068->8,070 current properties), so the growth isn't more properties -- it's more competing
+current-owner-candidate claims landing on an unchanged fact ledger (more `lcc_property_owner`
+resolver rows and/or `lcc_property_owner_facts` domain-mirror rows). **Did not investigate why** --
+flagged plainly in all three docs so nobody quotes 4,478 as settled, and left as a named follow-up
+rather than guessing at a cause I hadn't verified.
+
+Updated `docs/os/PLANNED-BACKLOG.md` (OWN-T0h closed, decided + re-measured),
+`docs/architecture/ownership-history-lane.md` § OWN-T0 (canonical page, replaced the stale
+2,097/756 callouts with the decision and the live re-measurement), and `docs/os/CURRENT-STATE.md`'s
+OWN-T0 row (same).
+
 ## 2026-09-11 — PRI5 merged and deployed; recommended another live CMS test run
 
 Scott confirmed `Dialysis` PR `#7408` merged. `PLANNED-BACKLOG.md`'s `PRI5` row moved to ✅. Recommended
