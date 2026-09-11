@@ -127,6 +127,7 @@ import { buildNameBackfillPatch, reverseNameBackfillPatch, senderEmailFromMetada
 import { artifactSafeName } from './_shared/artifact-storage.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 import { handleOwnershipChainDraftTick } from './_handlers/ownership-chain-draft-tick.js';
+import { handleOwnT0jSponsorClassifyTick } from './_handlers/ownt0j-sponsor-classify-tick.js';
 import { handleTier0AutoAttachTick } from './_handlers/tier0-auto-attach-tick.js';
 import { handleBroker1AssignTick } from './_handlers/broker1-assign-tick.js';
 import { handleAmbiguousEntityAutomergeTick } from './_handlers/ambiguous-entity-automerge-tick.js';
@@ -260,6 +261,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'property-twin-assist-tick': return handlePropertyTwinAssistTick(req, res);
     case 'dia-property-link-tick': return handleDiaPropertyLinkTick(req, res);
     case 'ownership-chain-draft-tick': return handleOwnershipChainDraftTick(req, res);
+    case 'ownt0j-sponsor-classify-tick': return handleOwnT0jSponsorClassifyTick(req, res);
     case 'tier0-auto-attach-tick':    return handleTier0AutoAttachTick(req, res);
     case 'broker1-assign-tick':       return handleBroker1AssignTick(req, res);
     case 'ambiguous-entity-automerge-tick': return handleAmbiguousEntityAutomergeTick(req, res);
