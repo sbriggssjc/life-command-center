@@ -1,5 +1,29 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 -- Correction: OWN-T0h's "conflict count doubled to 4,478" was my own counting bug
+
+Caught and fixed my own error from the OWN-T0h entry earlier today. That entry re-measured the
+reconciled store's conflict count with `count(*)` and reported it had more than doubled since the
+2026-09-02 audit (2,097 -> 4,478). That number was wrong: `count(*)` on
+`v_lcc_property_ownership_reconciled` counts owner-CANDIDATE ROWS, not properties -- and every
+conflict property carries >=2 rows by construction (that's what makes it a conflict), so `count(*)`
+systematically inflates the property count.
+
+Re-ran it correctly as `count(distinct (source_domain, source_property_id))`:
+**2,065 conflict properties today (gov 1,752 / dia 313) -- essentially flat vs. the audit's 2,097**
+(gov 1,769 / dia 328). The small drop is fully explained by OWN-T0e's confirm lane, which has been
+converting `unclassified_rival` pairs into `sponsor_family_confirmed` (1,617->1,508 rival, 64->142
+confirmed) plus a handful of merges (`duplicate_entity` 417->415). No mystery growth, no root-cause
+follow-up needed -- retracting that flag entirely.
+
+I'd already written the false "doubled" claim into three docs (`PLANNED-BACKLOG.md`'s OWN-T0h row,
+`ownership-history-lane.md`, `CURRENT-STATE.md`) and told Scott directly. All three are corrected in
+this commit, and this entry says so plainly rather than quietly overwriting the earlier claim.
+Lesson for this lane going forward: always `count(distinct property)` on
+`v_lcc_property_ownership_reconciled`, never `count(*)` -- the row/property distinction is easy to
+miss because most other counts in this codebase (fact ledger rows, task rows) ARE the thing being
+measured.
+
 ## 2026-09-11 — Doctrine: truth is fixed at its source of record; operator-identity audit (ID1) queued ahead of MB-b
 
 Scott, on the MB1e operator-name split: *"for any of these factual errors, we want to track the source to ensure that the
