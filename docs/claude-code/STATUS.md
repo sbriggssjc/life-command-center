@@ -1,5 +1,23 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — PRI4 merged and deployed live; no new prompt needed — next step is another live test run
+
+Scott confirmed `Dialysis` PR `#7407` merged and the redeploy live. `PLANNED-BACKLOG.md`'s `PRI4` row
+moved to ✅. **Not yet independently re-verified** — this fix hasn't been proven against a real run yet,
+same discipline as every other round in this arc (a green PR is not the same as a proven fix).
+
+**No new prompt is warranted right now.** Everything currently open in this arc — `PRI3`'s original
+live-fix proof (never exercised because every run so far died before reaching those call sites) and
+`PRI4`'s own open questions (the (b) tracker-close discrepancy, (c)'s unconfirmed root cause) — is best
+answered by **triggering another CMS ingestion run and watching what actually happens**, not by more
+code-reading. Recommended to Scott: trigger the run now. On the next report-back, verify directly against
+Dialysis_DB: does `facility_patient_counts`'s preflight step now succeed or retry-and-recover instead of
+failing outright; does the run get **past** preflight this time (the first real test of `PRI3`'s fixed
+call sites); if it still hits trouble, does the process now exit promptly via the new `os._exit(2)` path
+instead of hanging; and does whichever `ingestion_tracker` row this run creates actually close out
+(`finished_at` set, `run_status` not stuck at 'started') — directly answering the (b) discrepancy this
+round couldn't resolve from the code alone.
+
 ## 2026-09-11 -- OWN-T0a re-investigated: the finding changed shape, nothing built, a real decision surfaced for Scott
 
 Picked OWN-T0a (gov's own 43.4% recorded-transition-grantee vs true_owner_id disagreement) as the next lever
