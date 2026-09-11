@@ -1,5 +1,39 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 -- OWN-T0j reviewed: classification logic verified correct, but the deployed route 502s -- found and fixed a real bug
+
+Scott: "the OWN-T0j prompt is done and the response is saved... review and update all documentation and plans
+accordingly." Reviewed by independently reproducing the numbers, not by re-reading the response.
+
+**Classification logic verified correct, byte-for-byte.** Ran the identical classification directly against
+both live Supabase projects (not through the app): 5,133 comparable / 2,462 disagree / 482 sponsor_family_confirmed
+(19.6%) / 1,980 unclassified_rival (80.4%) -- matches the shipped PLANNED-BACKLOG claim exactly. The Boyd
+Watterson positive control also holds live.
+
+**But the deployed route is broken -- curled it directly and got a 502.** `GET /api/ownt0j-sponsor-classify-tick`
+on the live Railway deploy (confirmed current: `/version` matches this session's git HEAD) returns
+`{"error":"gov true_owners fetch failed at chunk 0"}`. Root cause: the true_owners fetch batches up to 1,000
+UUID ids into a single PostgREST `in.(...)` filter -- roughly 39KB of query string, which Railway's edge
+rejects. The properties fetch just above it uses the identical shape but with short numeric ids (~8KB for
+1,000), which is why only this one fetch failed -- and why the shipped 11-test suite (pure classifier functions
+only) could not have caught it; nothing in that suite exercises an HTTP fetch.
+
+**Fixed** (branch `fix/ownt0j-true-owners-url-length`): scan `true_owners` unfiltered, paged by limit/offset
+like the transitions fetch already does, and keep only the needed ids via a client-side Set lookup -- no
+`in.()` filter, no URL-length ceiling regardless of population size (16,274 total true_owners today).
+`node --check` clean; the 11 existing classifier tests (they test pure functions, untouched by this fix)
+still pass.
+
+**The cache table remains empty in production** -- this fix hasn't shipped yet. Once it's merged and Railway
+redeploys, the next `lcc-ownt0j-sponsor-classify-refresh` cron fire should populate it for real; that's the
+thing to re-check next, not the classification math (already independently confirmed correct).
+
+**Docs**: `PLANNED-BACKLOG.md` `OWN-T0j` row appended with the verification + bug fix. Did not touch the
+`OWN-T0a`/`OWN-T0e`/`AC11` rows from the prior entry -- nothing here changes those findings.
+
+**Next step.** Get this fix branch pushed and merged, confirm the Railway redeploy, then re-check the cache
+table and the reporting view actually populate on the next cron fire.
+
 ## 2026-09-11 — PRI5 response reviewed: both real root causes found and fixed (not "undetermined" again), the orphaned-row gap resolved with live before/after, `census_demographics`'s months-old bug finally identified — held pending `Dialysis` PR #7408 merge confirmation
 
 `PRI5`'s response (`"PR15 surface response.docx"`, saved by Scott) read in full and transcribed to
