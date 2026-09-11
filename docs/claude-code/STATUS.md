@@ -1,5 +1,37 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — Live PRI3 test run: connection instability confirmed still present, now hitting an uncovered preflight call site; `ingestion_tracker` row still stuck at `started` — preliminary, awaiting Railway status before filing a prompt
+
+Scott triggered a fresh CMS ingestion run to test `PRI3`'s deployed fix. Logs (deployment
+`39b0ef8e-e041-44ca-9066-4c62d27ec7b4`, started `2026-09-11T15:53:06Z`) show it did **not** reach the
+`PRI3`-fixed call sites at all — it aborted cleanly at **preflight**, before `oig_leie_ingestor`,
+`ownership_linker`, or `census_demographics` ever ran, so this run is not evidence either way about those
+fixes. What it does show:
+
+1. **`facility_patient_counts`'s preflight check has no retry** — failed immediately on
+   `httpx.RemoteProtocolError: Server disconnected`, a call site not in `PRI3`'s catalog (preflight is a
+   separate code path from the ingestion-body call sites `PRI3` fixed).
+2. **`ingestion_tracker.start_run` DID retry this time** (per `PRI3`'s fix — log line: `failed to start
+   ingestion_tracker run for cms_medicare_clinics after retries: None`) but still failed — confirming the
+   underlying connection instability is still occurring in production, just not always fatal anymore.
+3. **Confirmed live in Dialysis_DB**: the `ingestion_tracker` row this run created
+   (`started_at 2026-09-11 15:53:15.083884`) is still stuck at `run_status='started'`, `finished_at=null`
+   — the identical stuck-open-row symptom seen on the pre-fix crash. The script printed a full, orderly
+   `=== CMS ingestion (preflight abort) run summary ===` (all-zero counters, `elapsed: 1.01s`) and,
+   per the log excerpt, went silent immediately after — but Scott reports the Railway deployment still
+   shows 42 minutes elapsed with no further log lines, an echo of `PRI1`'s own unresolved "5-hour idle
+   window" mystery (Unit 4, still never answered). **Cannot determine from Supabase alone whether the
+   process is genuinely hung, or exited cleanly without ever calling back into `ingestion_tracker` to
+   close the row** (a real gap either way — a clean-abort path that never marks the run `failed`/`aborted`
+   is itself worth fixing, separate from whatever is or isn't still running).
+
+**Not yet filed as a prompt** — asked Scott to check Railway's dashboard directly for this deployment's
+actual status (Running/Crashed/Success) and to pull the full log past `15:53:16Z` if any exists, since
+this excerpt cuts off right at the summary print. Will draft a prompt once that's confirmed — likely
+covering (a) `facility_patient_counts`'s uncovered preflight call site, (b) the tracker row never closing
+on a preflight-abort exit, and (c) whatever the fuller log shows about the 42-minute gap.
+
+
 > **START HERE for the current state:** `docs/os/CURRENT-STATE.md` (what is LIVE / flag-gated OFF /
 > PLANNED, plus the canonical-doc map). **Everything unbuilt-but-intended:**
 > `docs/os/PLANNED-BACKLOG.md`. **Surfaces / comps engine / deploy mechanics:**
