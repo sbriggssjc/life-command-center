@@ -717,3 +717,55 @@ duplicate to merge here.
 | Gov agency sequencing (§8.7) | **Separate build (ID3a)** — same pattern, different registry and fact. |
 
 Build: **ID2a** (`prompts/ID2a-operator-registry-resolver-and-guard.md`), then ID2b (consumer switch).
+
+## 12. ID2a addendum — shipped, unapplied (2026-09-11, session 3)
+
+**This session had no live Dialysis_DB credentials either** — everything below is (B) a repo
+finding about what was built, never (A) a live measurement. Nothing here should be read as
+confirming the design worked against real data; §13 of the migration lists the exact queries to run
+before trusting any number.
+
+- **Shipped:** `supabase/migrations/dialysis/20260911200000_dia_id2a_operator_registry.sql` —
+  registry rebuild (kind/parent/merged_into columns, category+payer reclassification, the two
+  `DaVita | …` composites retired as `non_operator` for ID3i, the five family merge groups run
+  through a generic name-pattern procedure since this session had no ids to hardcode against),
+  `dia_operator_aliases` (seeded from the merge output + the known variant strings), the resolver
+  `dia_resolve_operator(text)` (fails closed, hop-capped survivor resolution, never mints),
+  `properties.operator_id` / `leases.operator_id` FKs, the hard-block write-guard trigger + review
+  lane + resolve-review helper, and the dry-run-default reviewed backfill
+  `dia_id2a_backfill_property_operator_ids()`. `api/_shared/operator-normalize.js` renamed its
+  canonical Fresenius/US Renal Care targets to §11's decisions and gained
+  `resolveOperatorAgainstRegistry()`.
+- **Not shipped, deliberately (§5's "what NOT to do"):** no consumer switch anywhere (`rpc_query_comps`,
+  CM views/exports, the market brief, the dossier, MCP tools all still read the free-text
+  `operator` column exactly as before); no gov agency work (ID3a stays separate); no multi-tenant
+  restructuring (ID3i untouched — the two composite rows are flagged `non_operator` and left);
+  `lcc_operator_affiliate_patterns` (LCC Opps) is untouched in this phase (its cache-vs-retire
+  decision is stated in the migration's header but not wired — ID2b's job, since its one live
+  consumer is a lease-extractor guard this phase does not touch).
+- **⚠️ Genuinely new finding, from the "no second canonical map" guard's own first run — not from
+  reading either audit pass.** `api/_shared/tenant-canonical.js` is a live, previously
+  undocumented FOURTH operator-identity source: it canonicalizes `dia.leases.tenant` (a DIFFERENT
+  column from this audit's `dia.properties.operator`) and its spellings now DISAGREE with the §11
+  decision — `'DaVita Kidney Care'` (not `'DaVita'`), `'U.S. Renal Care'` (not `'US Renal Care'`),
+  `'DCI'` (not `'Dialysis Clinic, Inc.'`), `'Innovative Renal Care'` (not `'American Renal
+  Associates'`). Live writers: `sidebar-pipeline.js`, `intake-promoter.js`,
+  `bridge-handlers-salesforce.js`. **This is exactly the class this whole audit exists to find, and
+  it was sitting in the repo the entire time this audit ran without being grepped for.** Filed as
+  backlog **ID2c** — needs its own measurement pass (how many `leases.tenant` rows carry each of its
+  five canonical spellings, whether any writer feeds both this AND `properties.operator` for the
+  same row, and whether it should retire into the ID2a registry or stay a distinct tenant-display
+  rule) before deciding anything.
+- **Honestly unverified in this session** (no DB access): the registry before/after counts, the
+  alias count, the auto/review backfill split, FK coverage on `properties`/`leases`, the review
+  queue depth, and — most importantly — §4's parity gate (per-operator TTM cap-rate band before vs
+  after must differ ONLY by the merge of known variants). `v_id2a_operator_registry_parity` ships
+  as the population-level input to that check; the cap-band join itself needs a CM export view this
+  session did not have access to construct against live data. **Do not proceed to ID2b until
+  someone with Dialysis_DB credentials has run §13's queries and confirmed the parity gate.**
+- **Also unverified:** whether `dia.leases` actually carries a raw-text `operator` column distinct
+  from `operator_id` at all — the audit's own §1.1 FK-coverage table only shows `operator_id`
+  already exists at 30% population, never confirms a text column feeds it. The migration's guard
+  trigger on `leases` is conditional on that column's presence (`information_schema` check) so it
+  cannot fail the migration either way, but it means the leases half of "every writer routes through
+  the guard" may currently be a no-op. Confirm on the live schema before relying on it.
