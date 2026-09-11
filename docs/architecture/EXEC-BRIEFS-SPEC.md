@@ -1,7 +1,7 @@
 # Executive Briefs — Market Briefs per swimlane (MB) + CTO/CDO Build Brief (XB) + Operator Funnel (OC)
 
 **Spec v0.2 — decisions recorded 2026-09-11 (Scott), architecture recommended (Cowork). Design approved in
-principle; build proceeds prompt-by-prompt. EB1 (foundation) merged PR #2291 2026-09-11; OC-a merged PR #2298; MB-a merged PR #2301; next: `docs/claude-code/prompts/MBa2-psql-source-fixes-and-live-verify.md`.**
+principle; build proceeds prompt-by-prompt. EB1 (foundation) merged PR #2291 2026-09-11; OC-a merged PR #2298; MB-a merged PR #2301; MB-a2 merged PR #2307; next: `docs/claude-code/prompts/MBa3-freshness-honest-facts-and-live-flip.md`.**
 **Backlog:** `docs/os/PLANNED-BACKLOG.md` §P18. **Exemplars:** `docs/briefs/exemplars/2026-09-11-*.md`.
 
 ## 0. Scott's decisions (2026-09-11)
@@ -212,3 +212,11 @@ no Railway/API reach, so the JS fix is committed but not yet redeployed or exerc
 endpoint. Operator next step: redeploy, `GET /api/market-brief-psql-tick?lane=dialysis`, read `gaps[]`
 (expect empty), one flag-forced `POST`, compare the reported cap-rate band to a direct `query_comps` call
 for the same window, then flip both flags.
+
+**Addendum 2026-09-11 "MB-a2 reconcile" (PR #2307 merged; Cowork live check, read-only):** fixes and migrations
+confirmed live (`fact_key`, both flags off, crons 07:15/10:10 UTC, `v_market_brief_cms_operator_counts` sums 6,695);
+app redeployed at `e42dbcb7`; 0 producer runs yet. **New defect MB1d:** CMS facts dated by run time over a census last
+seen 2026-01-22 (B6d-cms outage), and DaVita = Fresenius = 2,450 exactly. **Design rule 3 added: every fact's
+`source_date` is the source data's own as-of — never the producer's run time — and a producer whose source is beyond
+its feed SLA writes a named gap instead of facts.** Without this rule the staleness machinery (§1) cannot see
+upstream decay, which is the failure the living-brief design exists to prevent.

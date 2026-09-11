@@ -8,6 +8,43 @@ workbook; email draft in Scott's voice). Client folder reorganized with `00-READ
 (American Airlines Ba3/B+ and Oil States ratings looked up). Spec gains §4.7 (OM sourcing, BUY-G3) and §9 (deliverable contract, seed code, gaps, build
 order). Supersedes the unpushed local branch `docs/buy0-om-sourcing-layer` (its §4.7 content is included here). **Next:** Scott sends Round 1; build
 starts with BUY1a when authorized.
+## 2026-09-11 -- OWN-T0j verified end-to-end: real write succeeded, cache populated, closed out
+
+Triggered the real POST directly via `select public.lcc_cron_post('/api/ownt0j-sponsor-classify-tick',
+'{}'::jsonb, 'railway')` after the auth-convention fix deployed (Railway `a95fef46`, confirmed via
+git merge-base against the fix commit). Got back `200 {"written":2462}`.
+
+**Cache table now holds real data**: `sponsor_family_confirmed=482`, `unclassified_rival=1,980` --
+byte-for-byte the same numbers every earlier independent measurement produced (this session's direct SQL
+replication, the live GET dry-run before this write, the build's own original claim). The reporting view
+(`v_lcc_ownt0j_sponsor_disagreement_report`) reads them back correctly too.
+
+OWN-T0j is now genuinely done: built, two real bugs found post-ship and fixed (both in the untested
+handler-level HTTP/auth code, not the well-tested pure classifier), and the whole path verified working
+end-to-end rather than trusted on a response's say-so. Condensed the PLANNED-BACKLOG.md row (it had grown
+through three separate verification passes into one very long entry) into a single closing summary; this
+file keeps the full blow-by-blow.
+
+**Next step.** Genuinely nothing left open on OWN-T0j. The ownership/contact-propagation thread's remaining
+open items: `B1b` (developer chain, gated behind an unstarted `B5`) is the one entirely untouched item;
+`OWN-T0e`'s own confirm lane still has the four candidates from the earlier investigation
+(Realty Income, Elman Investors, Gardner Tanenbaum, USAA Real Estate) sitting for a human decision; and the
+`gov`-token precision caveat above is worth a look before anyone confirms more short-token sponsor families.
+
+## 2026-09-11 — MB-a2 reconciled (PR #2307 merged): fixes confirmed live; new blocker MB1d (false-fresh CMS facts); MB-a3 drafted
+
+Filed `responses/MB-a2 desktop response.docx` + the already-reconciled `OWN-T0j desktop response.docx` (that thread's
+review is the 2026-09-11 "OWN-T0j reviewed" entry) → `done/`; MBa2 prompt → `prompts/done/`. **Cowork live check
+(read-only):** MB-a2 confirmed — `fact_key` + index, `MARKET_BRIEF_PSQL/PRSS` = off, crons `lcc-market-brief-psql`
+07:15 / `-rss` 10:10 UTC active, `v_market_brief_cms_operator_counts` faithful (sum 6,695). App `tranquil-delight`
+redeployed at `e42dbcb7` (per the OWN-T0j thread) → ticks are live behind OFF flags; 0 `producer_runs` yet. Standalone
+MCP still lacks `log_operator_note`/`get_operator_inbox` → not redeployed; `operator_notes` still 0. **New defect
+MB1d:** `buildCmsOperatorFacts` dates CMS counts with the run date (confidence 0.9) while the census is stale —
+DaVita/Fresenius last seen 2026-01-22, `last_ingested_at` NULL, no inactive rows (B6d-cms outage) — and
+**DaVita = Fresenius = 2,450 exactly** (likely capped import). Flipping PSQL now would publish a January census as
+today's fact. Spec §9 design rule 3 (source-as-of dating + feed gate); OPERATOR-ACTIONS MBa-hold extended; OC-v item 1
+marked half-done. **Next:** send `prompts/MBa3-freshness-honest-facts-and-live-flip.md`; after it merges, redeploy BOTH
+services (carries OC-a's MCP tools).
 
 ## 2026-09-11 -- OWN-T0j: URL-length fix confirmed live, then a SECOND bug found -- POST always 401'd
 
