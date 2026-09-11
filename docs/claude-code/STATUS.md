@@ -1,5 +1,71 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — EB1 shipped: Executive Briefs foundation (schema + contracts + measurement, no rendering)
+
+Ran `docs/claude-code/prompts/EB1-exec-briefs-foundation.md` (spec `docs/architecture/EXEC-BRIEFS-SPEC.md`
+v0.2). Branch `feat/eb1-exec-briefs-foundation`, pushed. **No sandbox DB/network access in this
+environment** — every §1 measurement below is either static-analysis (repo code read) or explicitly marked
+UNMEASURED where it needs a live query/network call this session cannot make.
+
+**§1 measurements (table):**
+
+| # | Question | Answer |
+|---|---|---|
+| 1 | `briefing-intel-snapshot` feeds/streams | Code confirms exactly the 4 streams the spec names — `healthcare` (MedCity News, KFF Health News, Health Affairs), `government` (GSA News, Government Executive), `net_lease` (GlobeSt, Bisnow National, Commercial Observer), `tax_policy` (Tax Foundation) — `RSS_FEEDS` in `supabase/functions/briefing-intel-snapshot/index.ts`. Items/day per the last 7 `briefing_intel_snapshot` rows and which feeds are currently failing: **UNMEASURED — no DB/network access this session.** |
+| 2 | Analyst's Take on-box path | Flag state + last-known measurement (2026-08-26, `briefing-analyst-take-onprem.md`): `BRIEFING_ANALYST_TAKE_ONPREM` reads `on`; that day's row carried a 774-char take, `analyst_take_meta.source='onprem_ollama'`. **Not re-measured this session** (dated per CLAUDE.md's own re-measure doctrine — flag `on` here.) |
+| 3 | `ANTHROPIC_API_KEY` presence/success, web-search tool | Presence per runtime: **UNMEASURED** (cannot read Railway/Supabase env, and must not print a key value if it could). Last known call outcome (2026-08-26, code comment in `briefing-analyst-take.js`): key is SET on the `briefing-intel-snapshot` edge fn but every call since 2026-07-08 returns `Anthropic API 400: ... credit balance too low` — billing-dead, not unconfigured. **Web-search tool: NOT enabled in the current code path** — `supabase/functions/briefing-intel-snapshot/index.ts`'s `fetch('https://api.anthropic.com/v1/messages', ...)` body carries no `tools` field at all (static fact, confirmed by reading the request body construction). |
+| 4 | Scheduler / tick registration + health check | pg_cron (`lcc_cron_post`) posts to Railway/edge on a schedule; every recent tick follows the P123/P133 lifecycle — a run-log table opened at entry (`status='started'`) and closed on exit (`completed`/`failed`), read via a `v_..._run_health` view (mirrored exactly from `lcc_ownership_chain_draft_run_log` / `20260826230000_lcc_p133_ownership_chain_draft_run_log.sql`). `producer_runs` (this migration) generalises that pattern across every MB/XB/OC producer instead of minting a new dedicated run-log table per producer. |
+| 5 | Tagged Outlook intake (`intake-tagged-comm.js`) | Handler exists (`api/_handlers/intake-tagged-comm.js`) — viable reuse for the `outlook_tagged` operator-note channel per the contract doc. Flag state + rows in the last 30 days: **UNMEASURED — no DB access this session.** |
+| 6 | MCP `log_memory` write template | Read directly from `mcp/server.js`: one POST to `cortex_memory` (`domain`, `kind`, `summary`, `detail`, `source:'mcp:log_memory'`), returns `{ok, logged}`. `log_operator_note` (OC1, later prompt) should mirror this exactly — one call, one row, no read-back. |
+| 7 | Overlap tables | `cm_report_snapshots` — pattern reused deliberately (`market_brief_issues.fact_ids` freezes a fact set the same way). `cortex_market_intel` — table is referenced live (RLS-enabled in `20260728120000_rls_security_hardening_ops.sql`) but its `CREATE TABLE` is not in this repo's migration history and no `api/` code reads/writes it; **could not determine its schema or purpose from repo-only analysis** — flagged as a possible pre-repo or externally-created table, not reused. `staged_intake_feedback` — different domain (intake-match human feedback), no overlap. Decision Center lanes — different shape (verdict-per-row, not fact-per-claim); not reused. |
+
+**Migrations applied:** **NO** — written as a file only, not applied to any live Supabase project (per the
+prompt's explicit instruction; this session has no Supabase credentials regardless).
+`supabase/migrations/20260911165100_lcc_eb1_exec_briefs_foundation.sql` — five tables
+(`market_brief_facts`, `market_brief_issues`, `build_brief_snapshots`, `operator_notes`,
+`producer_runs`) + two views (`v_market_brief_live`, `v_market_brief_staleness`), RLS enabled on all five
+new tables using the existing lockdown pattern (`service_role` FOR ALL + `authenticated` FOR SELECT,
+mirrored from `20260522140000_lcc_rls_lockdown_new_backend_tables.sql`).
+
+**Contracts (docs only):** `docs/architecture/market_brief_payload_contract.md` +
+`docs/architecture/operator_note_contract.md`, mirroring `daily_briefing_payload_contract.md`'s style.
+Both are explicit that no endpoint they describe exists yet — MB-a/MB-b/MB-c and OC1/OC2/OC3 build to
+these contracts, not the reverse.
+
+**Seed script:** `scripts/eb1-seed-dialysis-exemplar.mjs` (dry-run by default). Dry-run over the dialysis
+exemplar (`docs/briefs/exemplars/2026-09-11-dialysis-market-brief.md`) plans **16 facts** — operators 6,
+policy 4, capital_markets 3, trades 1, implications 2 (14 `reported` + 2 `opinion`) — and explicitly
+excludes the exemplar's 5 `[UNVERIFIED]` items (a 2026 FMC rating action, USRC's Moody's timing, IRC M&A,
+a dialysis-specific cap-rate average, GLP-1 demand impact). Idempotent via the migration's own
+`uq_mbf_source_identity` unique index (`Prefer: resolution=ignore-duplicates`).
+
+**Guard + suite:** `test/eb1-market-brief-foundation.test.mjs` (16 tests — migration structural invariants:
+table/constraint/index presence, the staleness view's CROSS-JOIN-before-LEFT-JOIN shape per the Class-20
+lesson, comment-stripping positive control) + `test/eb1-seed-exemplar.test.mjs` (7 tests — pure-function
+idempotency, `[UNVERIFIED]` exclusion, TTL math). **Full suite run: 5,791 pass / 0 fail / 6 skipped**
+(pre-existing skips, unrelated to this change).
+
+**What EB1 did NOT touch (per the prompt's §5):** no change to `briefing-email-handler.js`, no new cloud-
+model call, no producer tick, no email sent, no flag flipped, nothing sent to a cloud model. Everything
+ships flag-gated OFF by construction — there is no flag yet, because nothing reads this schema yet.
+
+**Contradicts/missing from the spec:** nothing found. `EXEC-BRIEFS-SPEC.md` v0.2, `PLANNED-BACKLOG.md` §P18
+and the two exemplars all existed exactly as the prompt described; no gap between the spec and what was
+built. The one thing worth flagging forward: §1.7's `cortex_market_intel` could not be graded reuse-vs-new
+because its schema is not in this repo — MB-a should re-check it live before deciding whether any MB table
+should fold into it instead.
+
+**Branch:** `feat/eb1-exec-briefs-foundation`, pushed to `origin` (`git push -u origin
+feat/eb1-exec-briefs-foundation` succeeded). **No PR opened** — not requested, and this session cannot
+merge to `main` regardless (branch-protected, required check `npm test`).
+
+**Files created:** `supabase/migrations/20260911165100_lcc_eb1_exec_briefs_foundation.sql`,
+`docs/architecture/market_brief_payload_contract.md`, `docs/architecture/operator_note_contract.md`,
+`scripts/eb1-seed-dialysis-exemplar.mjs`, `test/eb1-market-brief-foundation.test.mjs`,
+`test/eb1-seed-exemplar.test.mjs`. **Files modified:** `docs/os/PLANNED-BACKLOG.md` (§P18 EB1 row),
+`docs/claude-code/STATUS.md` (this entry). `docs/os/CURRENT-STATE.md` not touched — nothing here is live
+(unmigrated + unread by any consumer), so there is nothing yet to add to the LIVE map.
+
 ## 2026-09-11 — Confirmed: the PRI3 test run is genuinely hung, not just idle-logging — filed as `PRI4`
 
 Follow-up to the preliminary finding above. Scott checked Railway directly: the deployment
