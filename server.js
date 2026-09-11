@@ -28,6 +28,8 @@ import { handleOperatorNoteIntake } from './api/_handlers/operator-notes-intake.
 import { handleOperatorTriageTick } from './api/_handlers/operator-triage-tick.js';
 import { handleDealCommsPropagateTick } from './api/_handlers/deal-comms-propagate-tick.js';
 import { handleCommsOwnerAttributionTick } from './api/_handlers/comms-owner-attribution-tick.js';
+import { handleMarketBriefPsqlTick } from './api/_handlers/market-brief-psql-tick.js';
+import { handleMarketBriefRssTick } from './api/_handlers/market-brief-rss-tick.js';
 
 // ── Import the core 9 API handlers (Phase 4b consolidated) ─────────────────
 // daily-briefing, data-proxy, diagnostics absorbed into admin.js
@@ -431,6 +433,11 @@ app.all('/api/intake-tagged-comm', (req, res) => { req.query._route = 'tagged-co
 // _route dispatch) — each handler is its own auth boundary.
 app.all('/api/operator-notes', handleOperatorNoteIntake);
 app.all('/api/operator-triage-tick', handleOperatorTriageTick);
+// MB-a — market brief producers, dialysis lane first (spec EXEC-BRIEFS-SPEC.md
+// §2, MB1/MB2). Flag-gated (MARKET_BRIEF_PSQL / MARKET_BRIEF_PRSS), both off
+// until live-verified. GET is always a dry run.
+app.all('/api/market-brief-psql-tick', handleMarketBriefPsqlTick);
+app.all('/api/market-brief-rss-tick', handleMarketBriefRssTick);
 // W7.6 Mailbox Mirror: deterministic worklist of closed-loop flagged emails +
 // the PA mover's ack endpoint. Flag-gated (MAILBOX_MIRROR).
 app.all('/api/mailbox-reconcile-worklist', (req, res) => { req.query._route = 'mailbox-reconcile-worklist'; intakeHandler(req, res); });

@@ -49,6 +49,23 @@ read the one to-do list. ⚠️ **Not yet live-verified end to end (needs a Rail
 off. Session-start hook **is** wired (`.claude/hooks/session-start.sh` L23, non-blocking; no-ops without `OPS_SUPABASE_*` creds). **Measured 2026-09-11 (Cowork):** 0 `operator_notes` rows; `OPERATOR_NOTE_TRIAGE` has **no row** in `feature_flags_registry`; no pg_cron job for the tick; the connected LCC MCP exposes neither `log_operator_note` nor `get_operator_inbox` → **standalone MCP not yet redeployed**. → `docs/architecture/operator_note_contract.md`,
 `docs/architecture/EXEC-BRIEFS-SPEC.md` §6, PLANNED-BACKLOG.md §P18 (EB1a/OC1–OC3).
 
+### Market-brief producers (MB-a, dialysis lane) — built, flags OFF pending live-verify
+`GET/POST /api/market-brief-psql-tick` (flag `MARKET_BRIEF_PSQL`) writes deterministic on-box SQL facts —
+TTM dia cap-rate band (whole-market + per operator, 5-comp small-n floor), on-market count + median ask cap
+from `v_dia_on_market`, trades since the producer's last run, CMS clinic counts by top operator + net-change vs.
+the prior run — through a pure supersede/skip/conflict decision (`decideFactWrite`, `api/_shared/market-brief-
+facts.js`). `GET/POST /api/market-brief-rss-tick` (flag `MARKET_BRIEF_PRSS`) reads today's
+`briefing_intel_snapshot.sector_news.healthcare`, uses on-box Ollama to judge dialysis relevance + extract
+candidate claims, drops any claim whose number is not verbatim in the article text, and fails closed (named
+`producer_runs.skip_reason`, zero facts) when Ollama is unreachable — never a silent quiet night. Migration
+`20260911180000_lcc_mba_market_brief_producers.sql` adds `market_brief_facts.fact_key` + both flags (both
+`off`) + both cron schedules (guarded, not flag-gated). ⚠️ **Not live-verified this session (no Supabase/
+Railway reach)** — an operator must run the GET dry run for both ticks, read `gaps[]` (surfaces a wrong dia
+column name before any write), run one POST with the flag forced on, check `v_market_brief_staleness` for the
+dialysis lane before/after, then flip both flags. `cortex_market_intel` (a live 922-row source, writer still
+unlocated) and gov GSA lease events are NOT wired yet. → `docs/architecture/EXEC-BRIEFS-SPEC.md` §2/§9,
+`docs/architecture/market_brief_payload_contract.md`, PLANNED-BACKLOG.md §P18 (MB1/MB2/MB1a/MB1b).
+
 ### Deal-intelligence spine — LIVE end to end
 SF Opportunity sync → `bd_opportunities` (592 deals) → Team-Briggs scope (roster edges) → deal-email
 matcher → cadence-scan → weekly pipeline email; deal dossier + link-only Salesforce write-back.
