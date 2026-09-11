@@ -1,5 +1,38 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — ID1 shipped: the operator-identity audit, and a THIRD registry the queuing note above missed
+
+Executed the ID1 prompt in full (read-only against every live DB; no writes, no migrations, no flag
+flips — no live DB credentials in this sandbox, so the deliverable cites Cowork's 2026-09-11 numbers
+already on record plus a fresh repo-side writer inventory, per the doctrine's own "re-measure a dated
+blocker" and "never fabricate" rules). Full deliverable:
+`docs/audits/ID1_OPERATOR_IDENTITY_AUDIT_2026-09.md`.
+
+**The queuing note below said "operator-normalize.js and the registry disagree on the canonical
+Fresenius name" — singular registry. There is a THIRD.** `supabase/migrations/20260522340000_lcc_
+operator_affiliate_registry.sql` seeds `lcc_operator_affiliate_patterns` (LCC Opps), a subsidiary-
+name-pattern registry keyed to `entities.id`, independent of both `dia.operators` and
+`operator-normalize.js`. **Its seed resolves the Fresenius parent entity by `LOWER(name) = 'fresenius
+medical care'`** — so 2 of the now-3 stores, plus CMS `chain_organization`, already say `Fresenius
+Medical Care`; only `operator-normalize.js` says the shorter `Fresenius`, and by its own comment it
+chose that spelling only because it was the majority instance of the free-text defect it exists to
+clean up, not because any external authority uses it. This is the audit's central finding: a fix to
+any one of the three stores alone cannot close the split, because none references either of the
+others.
+
+Also produced: a 9-writer inventory (this repo's OM promoter, sidebar/CoStar lease carry-forward,
+the LCC-Opps entity-mint fallback that reads `properties.operator` as a name source with no FK back
+to any registry, the P113 owner-guard reader, plus the Dialysis-repo CMS ingester); a ranked sibling
+list (**government agency naming ranked #1** — same free-text-no-FK shape with *no* normalizer at
+all, worse off than dialysis operator today); an 👤 canonical-name decision for Scott (Fresenius vs
+Fresenius Medical Care, with the export-layer `short_operator` display token already able to absorb
+either choice); and an open attribution gap on the `DaVita | ...` composite strings that needs a
+direct row read to resolve. Backlog: ID1 marked ✅ shipped, ID2 gated on the 👤 decision, ID3 revised
+with the ranked list (one item, `cortex_market_intel.tenant`, could not be located in this repo's
+`api`/`mcp`/`scripts` this session and needs a direct DB check before it can be ranked at all).
+
+**Next:** Scott's naming decision (ID1 §5.2), then ID2 (the build) split into the safe steps ID1 §5
+lays out, starting with the comps engine as the shared substrate every other consumer reads from.
 ## 2026-09-11 -- Correction: OWN-T0h's "conflict count doubled to 4,478" was my own counting bug
 
 Caught and fixed my own error from the OWN-T0h entry earlier today. That entry re-measured the
