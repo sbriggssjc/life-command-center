@@ -50,7 +50,7 @@ off. Session-start hook **is** wired (`.claude/hooks/session-start.sh` L23, non-
 `docs/architecture/EXEC-BRIEFS-SPEC.md` §6, PLANNED-BACKLOG.md §P18 (EB1a/OC1–OC3).
 
 ### Market-brief producers (MB-a, dialysis lane) — built, sources fixed + DB applied, flags OFF pending a live tick verify
-**MB-a2 (2026-09-11):** the four MB1c source defects are fixed and verified against the live Dialysis_DB
+**Cowork check after MB-a2 (2026-09-11):** app redeployed at `e42dbcb7` (ticks live, flags OFF, crons active 07:15/10:10 UTC, 0 `producer_runs` yet); **do not flip — MB1d:** CMS operator facts would carry today's date over a census last seen 2026-01-22, and DaVita = Fresenius = 2,450 exactly (likely capped import). Standalone MCP not redeployed. **MB-a2 (2026-09-11):** the four MB1c source defects are fixed and verified against the live Dialysis_DB
 schema via Supabase MCP — cap-rate band + trades now read `rpc/rpc_query_comps` (the shared comps-engine
 RPC, same one `query_comps` calls) instead of a raw `sales_transactions` select missing
 `operator_name`/`address`/`city`/`state`; `v_dia_on_market` reads `current_cap_rate` (not a bare
