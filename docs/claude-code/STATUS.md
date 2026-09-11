@@ -40,6 +40,19 @@ non-effect finding; cross-referenced to OWN-T0e, OWN-T0i, and RO2.
 big-population sponsors even though it won't move this specific metric (it does fix what brokers actually see in
 the LCC panel), or move on to AC11's population re-measurement instead.
 
+## 2026-09-11 — BUY0 cont.: Geller Phase 0 deliverables shipped; living-engagement design + sourcing audit added to spec
+
+Cowork session (Jordan Geller 2026 industrial search). Delivered to the client folder: `Jordan Geller - Industrial
+MSA Ranking - Sep 26 (Draft v2).xlsx` (75 MSAs × 15 public factors — Census PEP V2025, ACS 2024, BLS QCEW 2019/2024,
+Tax Foundation 2026, CNBC Top States 2026; editable weights) and `Jordan Geller - Buyer Showing - Sep 26.xlsx`
+(lightweight client file on the Team Briggs Buyer Showing Template: static Market Ranking tab 1 + Focused / Broad
+Market / Passed with Credit / Lease / Real Estate leg scoring). Both restyled to BDPS (`bov_constants.py` palette,
+Calibri, role heights). Spec `BUYER-ENGAGEMENT-MODULE-SPEC-v0.1.md` gained §4.4 (living engagement = reuse deal
+spine + W7 matcher/propagation + Ollama proposals, no parallel pipeline), §4.5 (sourcing audit: email alerts lack
+location → **BUY-G1**; no SF path for industrial `Comp__c` → **BUY-G2**), §6a (Scott's answers: files-in-folder,
+query-on-demand, three-leg scoring, rent evidence hierarchy) and §7a (egress: census/bls/bea blocked from sandbox
+and local shell). **Next:** top-3 markets (DFW, Austin, Charlotte) sourcing — Scott exports CoStar/LoopNet/RCA + an
+SF report; Claude normalizes into Broad Market. No build authorized yet.
 ## 2026-09-11 — PRI4 response reviewed: uncovered preflight call site fixed, tracker close-out fixed for one path but a live check contradicts the other, and a genuine `safe_execute()` timeout defect found (possibly explaining PRI1's own unanswered Unit 4 mystery) — held pending `Dialysis` PR #7407 merge confirmation
 
 `PRI4`'s response (`"PRI4 surface response.docx"`, saved by Scott) read in full and transcribed to

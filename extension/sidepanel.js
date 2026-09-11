@@ -345,6 +345,25 @@ async function wireAscResearchAction(ctx, actions) {
     parcelEvidence.textContent = 'Complete parcel evidence only';
     wrap.appendChild(parcelEvidence);
   }
+  const parcelSitusAlias = (
+    Array.isArray(target.cms_evidence?.approved_parcel_situs_evidence)
+      ? target.cms_evidence.approved_parcel_situs_evidence : []
+  ).find((alias) =>
+    alias?.status === 'approved'
+    && alias?.reason_code === 'service_location_exact_parcel_situs_adjacent_context_record'
+    && alias?.adjacent_context_only === true
+    && alias?.capture_authorized === false
+    && alias?.second_review_required === true
+    && alias?.context_costar_property_id
+    && alias?.parcel_number
+  );
+  const parcelSitus = parcelSitusAlias ? document.createElement('button') : null;
+  if (parcelSitus) {
+    parcelSitus.className = 'btn btn-sm btn-secondary';
+    parcelSitus.style.cssText = 'margin-left:5px;margin-top:5px;';
+    parcelSitus.textContent = 'Complete parcel situs evidence only';
+    wrap.appendChild(parcelSitus);
+  }
   actions.appendChild(wrap);
 
   const appendCaptureCompletion = () => {
@@ -402,6 +421,36 @@ async function wireAscResearchAction(ctx, actions) {
       detail.textContent = toErrorMessage(
         advanced.data?.detail || advanced.data?.error || advanced.error
       ) || 'Could not complete parcel evidence';
+    }
+  });
+
+  parcelSitus?.addEventListener('click', async () => {
+    const confirmed = window.confirm(
+      'Confirm this candidate has approved exact-situs parcel evidence and the open CoStar property is adjacent context only. This will advance the worklist with zero captures and mandatory second review.',
+    );
+    if (!confirmed) return;
+    parcelSitus.disabled = true;
+    button.disabled = true;
+    missing.disabled = true;
+    if (parcelEvidence) parcelEvidence.disabled = true;
+    parcelSitus.textContent = 'Recording parcel situs evidence…';
+    const advanced = await apiCall('/api/asc-research-complete', {
+      run_id: target.run_id,
+      candidate_fingerprint: target.candidate_fingerprint,
+      completion_mode: 'parcel_situs_evidence_only',
+    });
+    if (advanced.ok) {
+      parcelSitus.textContent = 'Parcel situs evidence recorded ✓ — open next property';
+      detail.textContent = 'Candidate advanced with zero captures and mandatory second review. Reload the next property to load the next frozen candidate.';
+    } else {
+      parcelSitus.disabled = false;
+      button.disabled = false;
+      missing.disabled = false;
+      if (parcelEvidence) parcelEvidence.disabled = false;
+      parcelSitus.textContent = 'Complete parcel situs evidence only';
+      detail.textContent = toErrorMessage(
+        advanced.data?.detail || advanced.data?.error || advanced.error
+      ) || 'Could not complete parcel situs evidence';
     }
   });
 
