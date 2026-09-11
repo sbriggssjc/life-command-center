@@ -16,6 +16,48 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-11 — PDR14 investigated per Scott's direction: only 28 of 89 orphaned LCC-dia links trace to a known dia merge ledger; evidence points the other 61 at pre-audit-log-era cleanup, not ongoing loss; two fix prompts filed (PDR14a, PDR14b)
+
+Scott's direction: dig into the 66 unexplained orphans to rule out an ongoing/larger issue, but pursue
+correctness regardless of whether the exact cause is found, and build the fix so both databases actively
+propagate and reconcile with each other going forward, in both directions.
+
+**Searched every dia table that could plausibly hold merge/consolidation history** (5 found:
+`dia_property_merge_backup`, `property_merge_log`, `dia_property_consolidation_log`,
+`p31_property_consolidation_log`, `dq7_property_merge_map`). Of the 89 orphaned links: **12 trace to
+`dia_property_merge_backup`** (Aug 14 onward, includes PDR13's own 3), **11 to `property_merge_log`**
+(April-May 2026 merges), **5 to `p31_property_consolidation_log`** — 28 total explained. Notably, the
+11 in `property_merge_log` all carry a `reconciled_lcc_at` timestamp claiming 100% reconciliation, yet
+LCC's entities still show stale pointers for every one of them — whatever that column meant, it did not
+mean "wrote back to `entities.metadata.domain_property_id`."
+
+**The remaining 61 have no trace in any of the 5 ledgers.** Could not confirm a specific cause via code
+(the Dialysis repo is too large to grep quickly over the device connection — attempts timed out). Circumstantial
+evidence gathered instead: 76% of the 61 (48 of 63 entity rows) were created 2026-04-26 through 05-16, a
+tight 3-week cluster right around `property_merge_log`'s own earliest entry (04-29); several carry literal
+placeholder names (`"property <uuid>"`). Consistent with early, pre-audit-log-era data hygiene passes
+rather than ongoing silent loss — not proof, the strongest evidence available without more archaeology
+than the question is worth.
+
+**Filed two prompts** (fix spans both repos, per Scott's "both databases working together" direction):
+- `PDR14a-dia-canonical-property-redirect.md` (Dialysis repo) — consolidate the 5 fragmented merge/
+  consolidation ledgers into one canonical, permanent redirect table every current and future dia
+  property-merge path writes to (backfilled from all 5 existing tables so the 28 explained cases carry
+  forward, chained where a property was merged more than once).
+- `PDR14b-lcc-domain-property-reconciliation.md` (life-command-center repo) — a reconciliation sweep +
+  read-time self-heal + ongoing monitoring: resolve via PDR14a's canonical redirect first (chained),
+  fall back to confident address/parcel/CCN re-resolution (mirroring PDR13's own strong-id logic) for
+  cases with no redirect trace, queue anything not confident for human review, and keep checking on an
+  ongoing basis so this class of gap can never again go unnoticed for months.
+
+**Docs updated:** `PLANNED-BACKLOG.md` PDR14 row carries the full investigation. Also had to repair
+PDR3/PDR6/PDR13 rows, which a concurrent session's branch (merged in between, unrelated PRI1/PRI2 work)
+had reverted back to their pre-verification text via what looks like a merge-conflict resolution that
+picked the stale side — restored to the correct, live-verified versions.
+
+**Next step.** Send both prompts to their respective sessions. PDR2 (ownership guard-gap) and PDR12
+(Rock Hill planner gap) remain queued behind this, unaffected.
+
 ## 2026-09-11 — Escalation: the CMS ingestion re-run's own logs show the exact same connection-reset error from `PRI1` firing on 50% of ALL Supabase calls, continuously — not a rare blip, filed as `PRI2`
 
 Scott sent partial logs from the fresh CMS ingestion run he'd triggered ("here's the logs so far"), meant
