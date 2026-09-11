@@ -1,5 +1,32 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 -- RO2a sized: 1,380 gov recorded_owners name-variant groups, merge lane deferred
+
+Picked up RO2a next (fleet-wide sizing of same-party name variants in gov `recorded_owners`, named
+but not run by the 2026-09-08 audit). Grouped live (unmerged) owners by `gov_owner_strict_core`,
+gating on core length >= 4 after finding the suffix-stripper produces false-positive collisions
+below that (`GLP` strict-cores to `g` because its trailing `lp` reads as the "Limited Partnership"
+suffix token -- 26 short-core groups / 60 rows excluded on this basis).
+
+Split what's left into two real populations rather than one number: 311 exact-duplicate-name groups
+(628 rows, 589 properties touched) where the identical literal name sits on multiple separate
+`recorded_owner_id` rows -- the safest, purely mechanical class -- and 1,069 true name-variant groups
+(2,242 rows, 800 property-referenced, 1,218 properties touched) that are genuine punctuation/
+abbreviation/suffix variants of one party. Spot-checked both the largest groups and the short (4-6
+char) end; mostly clean, but found the SAME risk class RO2b just fixed sitting inside this
+population too -- `CBRE` / `CBRE, Inc.` and a 4-way `U.S. Bank National Association` group are a
+brokerage and a lienholder, not obviously real owners to blind-merge. Flagged that any future merge
+sweep must run every group through `isCompetitorBroker` / `isFederalOwnerAntiPattern` / a bank-lender
+check before merging, same guards RO2b just added.
+
+Recommendation: this population (1,380 groups / 2,870 rows / ~1,807 properties combined) is big
+enough to be its own build, not a quick follow-on -- the merge itself has to move
+`properties.recorded_owner_id` and any deed/lease FK refs, log a reversible batch, and dry-run first.
+Did not build it this pass; sized and documented only, per the row's own ask ("size... before
+proposing a merge lane").
+
+Updated `docs/os/PLANNED-BACKLOG.md`'s RO2a row (closed, sized).
+
 ## 2026-09-11 — ID2 decisions settled by Scott; ID2a prompt drafted (registry + resolver + hard guard)
 
 Scott decided the four 👤 items ID1 raised: canonical **`Fresenius Medical Care`** (with `short_operator: 'Fresenius'`
