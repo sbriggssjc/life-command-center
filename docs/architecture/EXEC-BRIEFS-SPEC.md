@@ -1,7 +1,7 @@
 # Executive Briefs — Market Briefs per swimlane (MB) + CTO/CDO Build Brief (XB) + Operator Funnel (OC)
 
 **Spec v0.2 — decisions recorded 2026-09-11 (Scott), architecture recommended (Cowork). Design approved in
-principle; build proceeds prompt-by-prompt. EB1 (foundation) merged PR #2291 2026-09-11; OC-a merged PR #2298; next: `docs/claude-code/prompts/MBa-market-brief-producers-dialysis.md`.**
+principle; build proceeds prompt-by-prompt. EB1 (foundation) merged PR #2291 2026-09-11; OC-a merged PR #2298; MB-a merged PR #2301; next: `docs/claude-code/prompts/MBa2-psql-source-fixes-and-live-verify.md`.**
 **Backlog:** `docs/os/PLANNED-BACKLOG.md` §P18. **Exemplars:** `docs/briefs/exemplars/2026-09-11-*.md`.
 
 ## 0. Scott's decisions (2026-09-11)
@@ -177,3 +177,11 @@ so an operator can confirm real dia column names (via the response's `gaps[]`) b
 20 cells (5 populated / 15 missing). Outlook dormancy cause found in code: `parseLccCategoryHint` could never match
 `LCC-Note` (hyphen) — fixed; whether the PA trigger fires is still unconfirmed. Funnel not live yet: 0 notes, no
 `OPERATOR_NOTE_TRIAGE` registry row, no cron job, standalone MCP not redeployed (backlog OC-v).
+
+**Addendum 2026-09-11 "MB-a reconcile" (PR #2301 merged; Cowork live check, read-only):** MB-a migration not applied;
+0 producer runs. P-SQL sources vs live Dialysis_DB: `sales_transactions` lacks operator/address/city/state; raw
+`cap_rate` on 37 TTM rows vs `cap_rate_final` on 106 (94 eligible, 66 `exclude_from_market_metrics`) → **design rule
+added: every cap-rate fact in any brief comes from the shared comps engine (`runComps`) or a parity-tested copy of its
+filters, so a brief can never disagree with `query_comps`**; `v_dia_on_market` uses `current_cap_rate`; the
+`medicare_clinics` read truncates at 1,000 of 6,695. **Design rule added: producers aggregate in SQL; no row-limit-bound
+client-side counts; CI carries a truncation tripwire and live column contracts.** OC-v still open (0 notes, no triage flag row).
