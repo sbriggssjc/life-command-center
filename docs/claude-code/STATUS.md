@@ -12,6 +12,70 @@ engine); `v_dia_on_market` has `current_cap_rate` not `cap_rate` (→ 400); `med
 every cap-rate fact; SQL aggregation + truncation tripwire + column contracts). OPERATOR-ACTIONS **MBa-hold**: do not
 flip MB flags. **OC-v unchanged** (0 notes, no triage flag row, MCP not redeployed). **Next:** send
 `prompts/MBa2-psql-source-fixes-and-live-verify.md`; redeploy both Railway services after it merges (ships OC-a too).
+## 2026-09-11 — OWN-T0j shipped: gov OWN-T0a disagreement split into `sponsor_family_confirmed` vs `unclassified_rival`
+
+Built the cross-database classifier the prompt above asked for. **Node-layer job, not SQL** — gov's
+`v_ownership_transitions_portfolio` (project `scknotsqkcheojiaewwh`) and LCC Opps'
+`lcc_ownership_sponsor_family` (project `xengecqvemvfknjvbvrq`) are separate Supabase projects; no SQL
+join is possible between them.
+
+**Shipped:**
+- `api/_shared/ownt0j-sponsor-classifier.js` — pure functions (`normalizeGovNameKey` is a byte-for-byte
+  JS port of gov's own key expression from `v_ownership_transitions_portfolio`'s view def, confirmed by
+  reading `pg_get_viewdef` live; `classifyDisagreement`/`classifyDisagreementBatch` do the split).
+- `api/_handlers/ownt0j-sponsor-classify-tick.js` — GET dry-run (reads both sides, classifies, no
+  writes), POST writes the cache (paged at 1000/PostgREST's hard cap on both the gov and ops reads).
+  Wired in `api/admin.js` (`case 'ownt0j-sponsor-classify-tick'`) and `server.js`
+  (`/api/ownt0j-sponsor-classify-tick`).
+- Migration `supabase/migrations/20260911190000_lcc_own_t0j_sponsor_disagreement_classifier.sql`,
+  **applied live to LCC Opps** — cache table `lcc_ownt0j_sponsor_disagreement_cache` (default grants
+  revoked from `public`/`anon`/`authenticated` per the B6d/OCR2 lesson, verified with
+  `has_table_privilege`), reporting view `v_lcc_ownt0j_sponsor_disagreement_report` (plain view, no
+  SECURITY DEFINER function — nothing here needed elevated privilege, so the definer-privilege stanza
+  rule doesn't apply), and cron `lcc-ownt0j-sponsor-classify-refresh` at `39 */4 * * *` (OWN-T0e's own
+  4-hourly cadence, offset 12 minutes to avoid two ~5,000-row cross-source jobs landing in the same
+  minute).
+- Test `test/own-t0j-sponsor-disagreement-classifier.test.mjs` — 11 tests, spot-checked against two
+  mutations (both went RED: removing the `confirmed_at` guard, removing the substring-match line).
+
+**Real measured counts (live, both projects, 2026-09-11):**
+- Reproduced the OWN-T0a comparison exactly as specified: **5,133 comparable / 2,462 disagree**
+  (drift from the brief's 2,510 is normal re-measurement noise, not a defect — population definition
+  identical). Restricted to `gsa_lease_diff`/`acquisition`: 3,523 comparable / 1,641 disagree (brief:
+  3,523 / 1,648 — matches almost exactly).
+- LCC Opps `lcc_ownership_sponsor_family` currently holds **21 confirmed rows / 18 distinct tokens**
+  (agree, arc, boyd, briarcliff, east, elliott, gip, gov, greenleaf, highwoods, jlb, kilroy, ngp,
+  rainier, rxr, sunflower, uirc, wmc).
+- Classified against the full 2,462-row disagreement population: **`sponsor_family_confirmed` = 482
+  (19.6%)**, **`unclassified_rival` = 1,980 (80.4%)**. Both counts reported, not just the residual.
+- **Positive control — Boyd Watterson:** all 192 gov properties whose disagreeing true_owner name-key
+  contains the confirmed token `boyd` classify **entirely** `sponsor_family_confirmed` (0 leak into
+  `unclassified_rival`, as required — the match is by construction). Restricted to
+  `gsa_lease_diff`/`acquisition` alone: 115 (close to the OWN-T0e investigation's quoted "~111";
+  the small gap is a population-definition detail, not a defect).
+- ⚠️ **Precision caveat, stated honestly, not swept under the 19.6%:** the confirmed token `gov` (2
+  entities: "gov san antonio", "gov ft myers") is a 3-character substring that will match ANY
+  true_owner name containing "gov" anywhere — a real precision risk for a token this generic, distinct
+  from the Boyd/UIRC/NGP/Highwoods cases where the token is a genuine surname/brand fragment. Not
+  fixed here (matches spec: port the classification rule as designed, report what it does — this is
+  new information for whoever curates future sponsor-family confirms, not a defect in this build).
+
+**What this is NOT:** it does not touch gov's `properties.true_owner_id` or `ownership_history`, does
+not build a second sponsor/SPE confirm mechanism (reads `lcc_ownership_sponsor_family`, routes
+genuinely-unclassified pairs conceptually to OWN-T0e's existing `sponsor_family_confirm` lane rather
+than duplicating it), and does not re-implement gov's name normalizer independently.
+
+**Deviations from the prompt, stated:** (1) The gov side is fetched via `domainQuery('government', ...)`
+against `v_ownership_transitions_portfolio` + `properties` + `true_owners` directly rather than reading
+a single pre-joined view, because no such view exists — this matches the two-step read the prompt's own
+Step 1 SQL performs. (2) No dedicated "reporting UI" was built beyond the plain SQL view + the cache
+table itself, per the "simple reporting view or query a human can run" instruction — no Decision Center
+lane, consistent with the explicit prohibition. (3) The live cache table is currently EMPTY — the tick
+has not run in production yet because it ships on the next Railway deploy of merged `main` ("merged is
+not running" — this repo's own doctrine); the counts above come from a direct one-off measurement run
+against both live projects during this session, not from the tick itself, and are reported as such.
+
+Branch: `claude/own-t0j-sponsor-classifier`, pushed to origin (not merged, no PR opened per instructions).
 
 ## 2026-09-11 — Not actually a crash: `ownership_linker`'s fix confirmed working live for the first time; one new orphaned-tracker-row gap found, `census_demographics` still failing — filed as `PRI5`
 
