@@ -1,5 +1,18 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — OC-a reconciled (PR #2298 merged): funnel built, NOT yet a live loop; MB-a prompt drafted
+
+Processed `responses/OC-a desktop response.docx` → `done/`; prompt → `prompts/done/`. OC-a shipped EB1a (applied
+live: 16 facts, staleness view 20 cells) + OC1 (endpoint, in-app Note button, MCP `log_operator_note`, Outlook
+`LCC-Note` — regex bug that silently dropped the category fixed), OC2 (triage tick, deterministic + Ollama, flag
+OFF), OC3 (OPERATOR-INBOX render + `get_operator_inbox` + session-start hook). 62 new tests, 5,839/0.
+**Live measurement (Cowork, read-only):** `operator_notes` = 0 rows; `OPERATOR_NOTE_TRIAGE` **absent** from
+`feature_flags_registry` (flag-flip step must insert it); no pg_cron job for the tick; the connected LCC MCP
+exposes neither new tool after refresh → **standalone MCP not redeployed**. Fixed `CURRENT-STATE.md` (claimed
+the hook was not wired — it is). New backlog row **OC-v** collects the six operator steps; `OPERATOR-ACTIONS.md`
+OCa rows annotated. **Next:** Scott redeploys both Railway services + runs OC-v; Claude Code gets
+`prompts/MBa-market-brief-producers-dialysis.md` (does not depend on OC-v or EB1b).
+
 ## 2026-09-11 — BUY0 cont.: Geller Round 1 sourcing — 1,683 exported rows → 213 in-metro industrial → Focused 24
 
 Cowork. Scott's CoStar / CREXi ×5 / Salesforce Comps exports normalized, metro-assigned on OMB county lists,
