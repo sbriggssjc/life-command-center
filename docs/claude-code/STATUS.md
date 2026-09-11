@@ -43,6 +43,18 @@ pending merge confirmation and given the live-check discrepancy on (b)). Prompt 
 **Still outstanding, unchanged by this round**: `PRI3`'s own live-fix proof — no run has yet gotten past
 preflight to actually exercise `oig_leie_ingestor`/`ownership_linker`/`utils_shared`/
 `ingestion_tracker.start_run`'s retry logic in production.
+## 2026-09-11 — EB1 reconciled (PR #2291 merged) + live measurement; OC-a prompt drafted
+
+Processed `responses/EB1 Executive Briefs foundation desktop response.docx` → `responses/done/`; prompt →
+`prompts/done/`. EB1's §1 cells marked UNMEASURED were measured live (Cowork, Supabase read-only, LCC Opps):
+**(1)** EB1 migration **not applied** — 0 of 5 tables live (→ EB1a, folded into OC-a step 0). **(2)** RSS: 4 streams
+live, 6/stream cap, **gov empty 09-07/08, tax empty 3 of 8 days**. **(3)** Ollama Analyst's Take healthy daily.
+**(4)** `ANTHROPIC_API_KEY` set but **every snapshot call 09-02→09-11 fails "credit balance too low"** → new 👤 row
+**EB1b**; MB5 (P-WEB) blocked until funded. **(5)** `TAGGED_COMM_INTAKE` on but **dormant** (last row 2026-08-07).
+**(6)** **Correction to EB1:** `cortex_market_intel` **exists live** (922 rows, written today; listing alerts with cap
+rate/price/tenant/type; writer outside the repo) → added to MB1 as a source. Spec §9 records all of it; backlog
+§P18 updated (EB1, EB1a, EB1b, MB1, MB2, MB5, OC1–3). **Next:** send `prompts/OCa-operator-funnel-v1.md`; Scott
+decides EB1b. Other open prompts in `prompts/` (PDR2, PDR14b, PRI4) belong to other threads — untouched.
 
 ## 2026-09-11 — EB1 shipped: Executive Briefs foundation (schema + contracts + measurement, no rendering)
 
