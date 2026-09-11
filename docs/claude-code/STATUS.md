@@ -16,6 +16,42 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-11 — P18 decisions recorded; spec v0.2 architecture; EB1 prompt drafted
+
+Scott answered the six P18 questions. **Market briefs:** short form daily in the morning email, kept current as
+news/data arrive; weekly long-form email linked from it; lanes dia / gov / NL / broad NL only. **Hard requirement:
+built into the LCC, not a Cowork task that goes stale** — use local Ollama where it fits. **Build brief:** lives on
+the dashboard, Scott-only. **Operator notes:** every channel → one funnel → one to-do list, auto-routed by topic to
+the right thread, minimum human friction. Architecture (Cowork recommendation, `docs/architecture/EXEC-BRIEFS-SPEC.md`
+v0.2, renamed from `-v0.1`): *living brief* = sourced/dated facts with staleness TTLs, three producers (on-box SQL,
+existing RSS + Ollama, weekly/event cited web research via Anthropic — public facts only), Ollama synthesis, decay
+audited by XB; funnel built first. Backlog §P18 rewritten (EB0 ✅ decided, EB1 🟢, OC1–4, MB1–8, XB1–4).
+**Next:** send `prompts/EB1-exec-briefs-foundation.md` to Claude Code. Not committed.
+
+## 2026-09-11 — P18 opened (design-only): swimlane Market Briefs, CTO/CDO build brief, operator channel
+
+A Cowork parallel-task demo produced a sourced dialysis market brief and a 9-slide LCC build-status deck; Scott
+asked to productize both. **Market briefs (MB):** one per swimlane (dia / gov / general NL, maybe a broad NL
+brief), weekly or monthly, own email and/or folded into the daily briefing, with a homepage tab. **Build brief
+(XB):** Scott-only "exec briefing from the CTO/CDO" email + dashboard that also audits repo docs/plans to rank
+the next best effort. **Operator channel (OC):** Scott emails/chats ideas, bugs, "not connecting" notes that get
+triaged into the backlog and reported back. Reuse map + P131 classification + open questions:
+`docs/architecture/EXEC-BRIEFS-SPEC.md`; rows MB0–MB6 / XB0–XB4 / OC0–OC2 in `PLANNED-BACKLOG.md` §P18;
+exemplars in `docs/briefs/exemplars/`. First audit finding for XB2: backlog ⭐ NEXT (C2g) and the live queue
+(PDR2, prompt drafted 2026-09-11) disagree. **Next:** Scott answers spec §4; no build authorized. Not committed.
+
+## 2026-09-11 — BUY0 Buyer Engagement module opened (design-only) + Jordan Geller industrial search kicked off
+
+Scott's brief: productize the buy-side "buyer showing" process (qualify → criteria → source → score → Broad/Focused
+workbook → feedback → offers → PSA → close) in LCC, piloted on Jordan Geller's 2026 industrial search (~$20M, top-50
+MSA, $5–10M sweet spot, fundamentals/rent-vs-market over credit). Repo sweep found reusable pieces (SF buy-needs
+fields uningested, `buyer_showings.py` template, dia/gov `available_listings`, `cortex_market_intel`, offer tools) and
+the key gap: **no general net lease / industrial on-market store** (sidebar routes only dia/gov). Spec v0.1:
+`docs/architecture/BUYER-ENGAGEMENT-MODULE-SPEC-v0.1.md`; backlog `UX-T4` updated. Engagement log lives in
+`Team Briggs - Documents/Clients/Jordan Geller/2026 Industrial Search/00-ENGAGEMENT-LOG.md`. **Next:** Scott answers
+the open questions (building spec, MSA universe, scoring legs, data sources, decisions A–F); no build authorized.
+Not committed yet (another session has uncommitted work on `main`) — commit on a `docs/buy0-buyer-engagement-spec` branch.
+
 ## 2026-09-11 — Housekeeping: `prompts/` cleaned of stale duplicates left over from earlier `git mv`s
 
 With the PRI arc closed, checked `docs/claude-code/prompts/` for anything sitting stale — this is the
