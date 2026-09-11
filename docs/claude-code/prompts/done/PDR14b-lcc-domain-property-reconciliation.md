@@ -1,13 +1,19 @@
 # PDR14b — LCC self-heals dangling dia property links, and never lets this go silent again
 
-**Repo: `life-command-center`.** Send this AFTER `PDR14a-dia-canonical-property-redirect.md` (Dialysis
-repo) has merged — this prompt calls the resolver that one ships.
+**Repo: `life-command-center`.** `PDR14a-dia-canonical-property-redirect.md` (Dialysis repo) has shipped
+and been independently verified live — this prompt calls the resolver it ships.
 
-**Read first:** `docs/os/PLANNED-BACKLOG.md` §P17 PDR14 (this finding, measured 2026-09-11) and PDR2/PDR3/
-PDR6/PDR13 (the specific symptom this unblocks) · `PDR14a-dia-canonical-property-redirect.md`'s shipped
-response, for the exact shape of `dia_resolve_property_id` (or whatever it ended up named) · wherever
-`entities.metadata.domain_property_id` is read today (`get_property_context`'s property-context
+**Read first:** `docs/os/PLANNED-BACKLOG.md` §P17 PDR14 and PDR14-GOV (this finding, measured 2026-09-11)
+and PDR2/PDR3/PDR6/PDR13 (the specific symptom this unblocks) · `docs/claude-code/responses/done/
+PDR14a-dia-property-redirect-table.response.md`, for the exact shape of `dia_resolve_property_id` ·
+wherever `entities.metadata.domain_property_id` is read today (`get_property_context`'s property-context
 assembly path is the one already exercised by this investigation — find it and any siblings).
+
+**Scope note:** this prompt is `domain='dia'` only. The government side (`domain='gov'`) was investigated
+in parallel and found to be a small, closed, fully-explained gap (5 of 7,224 linked entities, all traced
+to one already-inert 2026-08-04 batch) via a mechanism (`gov_property_dup_retire_log`) that archives
+rather than deletes and is structurally immune to this bug class going forward. It does not need this
+prompt's machinery and is deliberately **out of scope here** — do not add gov handling to this pass.
 
 ## Why this, why now
 
@@ -19,24 +25,26 @@ where `get_property_context` currently returns `documents: []`, `lease_data: nul
 and null ownership — a **regression** from PDR1's own confirmed fix (PDR4 was showing 3 documents as of
 2026-09-10; it shows zero again today, silently, with no error anywhere in the app).
 
-Root-cause investigation (see PLANNED-BACKLOG.md PDR14) found only 28 of the 89 trace to a known dia
-merge ledger; the other 61 are unexplained, likely (not certain) pre-dating dia's own audit logging.
-**Scott's direction: build for correctness regardless of whether the 61's cause is ever known, and make
-the two databases actively reconcile with each other going forward, in both directions — not a one-time
-patch.**
+**PDR14a has since shipped and been independently verified live: of the 89, 31 now resolve directly via
+`dia_resolve_property_id`; 58 still have no redirect trace and remain unexplained.** Scott's direction
+stands regardless of that split: build for correctness whether or not the 58's cause is ever known, and
+make the two databases actively reconcile with each other going forward, in both directions — not a
+one-time patch.
 
 ## 1. One-time sweep, using PDR14a's canonical resolver
 
 For every LCC entity with `domain='dia'` and a `metadata.domain_property_id` that does not resolve in
-dia's live `properties` table, call `dia_resolve_property_id` (from PDR14a). Where it returns a live
-survivor, update `entities.metadata.domain_property_id` to the resolved id (record the correction —
+dia's live `properties` table, call `dia_resolve_property_id` (from PDR14a) **via `domainQuery('dialysis',
+…)` — the direct, service-key path. Do NOT call it through `diaQuery` or the anon-keyed `data-query` edge
+function; the resolver is `service_role`-only and that path will 403.** Where it returns a live survivor,
+update `entities.metadata.domain_property_id` to the resolved id (record the correction —
 `metadata.domain_property_id_corrected_from` and a timestamp, or whatever pattern this repo already uses
 for a value that gets silently repaired, so the change is auditable, not silent). Report the real count
-resolved this way before moving to step 2 — expect it to land close to the 28 measured, not assume more.
+resolved this way before moving to step 2 — expect it to land close to the 31 measured, not assume more.
 
 ## 2. Fallback: confident re-resolution for cases with no redirect trace
 
-For entities PDR14a's resolver can't explain (the ~61), attempt a confident re-resolution against dia's
+For entities PDR14a's resolver can't explain (the ~58), attempt a confident re-resolution against dia's
 live `properties` by address + parcel/CCN, mirroring PDR13's own strong-id scoring approach (do not
 invent a new scoring scheme — reuse or closely mirror that one, since it was already measured and
 guard-tested against this same class of problem). **Do not lower the bar to resolve more of them** — a
@@ -49,12 +57,11 @@ no resolution.
 ## 3. Ongoing monitoring — this can never again go unnoticed for months
 
 Build a way for a dangling `domain_property_id` to surface immediately rather than silently degrade the
-app, in both directions:
+app:
 - A recurring check (mirror this repo's existing flag-gated tick pattern — GET ungated dry run / POST
-  gated behind a new flag) that re-scans all `domain='dia'` entities (and, if the same class of gap could
-  exist there, `domain='gov'` entities against the government database — check whether it does before
-  assuming symmetry) for a `domain_property_id` that no longer resolves, and either self-heals it (steps
-  1–2's logic, applied going forward) or logs it to a reviewable queue.
+  gated behind a new flag) that re-scans all `domain='dia'` entities for a `domain_property_id` that no
+  longer resolves, and either self-heals it (steps 1–2's logic, applied going forward) or logs it to a
+  reviewable queue. **`domain='dia'` only — gov is out of scope for this prompt (see above).**
 - Consider whether `get_property_context`'s own resolution path should opportunistically self-heal
   inline when it notices a dangling pointer during a normal read (cheap, since it's already fetching) —
   weigh this against just relying on the recurring sweep, and say which you chose and why.
@@ -64,8 +71,11 @@ app, in both directions:
 
 ## 4. What NOT to do in this pass
 
-- Do not attempt to determine the cause of the 61 unexplained cases from before — that investigation is
-  done; build for correctness regardless.
+- Do not touch `domain='gov'` entities or the government database at all — that side was investigated
+  separately, found to be a small closed gap, and does not need this prompt's machinery. Filed as
+  **PDR14-GOV** for reference only.
+- Do not attempt to determine the cause of the 58 unexplained dia cases from before — that investigation
+  is done; build for correctness regardless.
 - Do not touch `PDR2` (the ownership guard-gap in `api/operations.js`'s `assemblePropertyPacket()`) —
   unrelated, filed separately, much larger blast radius (4,026 properties), its own prompt.
 - Do not build a new merge/scoring mechanism from scratch for the fallback in step 2 — reuse PDR13's
