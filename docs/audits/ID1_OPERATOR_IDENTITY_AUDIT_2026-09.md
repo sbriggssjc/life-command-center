@@ -680,3 +680,40 @@ duplicate to merge here.
 | 2 | **`dia.tenants`/`dia.leases.tenant`** vs operator | Unchanged from §6 — the resolver (W1) only fires at OM intake, so CoStar-captured tenant strings (W2) never resolve to an operator at all on their own. | Directly upstream of the primary dialysis-operator defect; fixing operator without fixing this reproduces the split on every new capture. |
 | 3 | **LCC Opps `entities.canonical_name` operator-substring pollution (§9.4, new)** | Not the general N15c/P189/P195 canonical-name drift (already tracked, already has a detector) — specifically, the asset-entity mint path treating a bare operator name as an acceptable fallback entity name for a property/deal, at 250+ rows, including **4 duplicate rows for the literal string `davita`** and **4 for `fresenius medical care`**. | Directly blocks §5.1/§5.3's planned entity-registry link — any naive name-match backfill would mismerge hundreds of properties into the operator registry. Moved up from the general rank-3 slot because it now has a specific, measured, high-value instance rather than only the general known defect. |
 | 4 | **`cortex_market_intel.tenant`** | Confirmed real (§9.3): 897/922 rows, 671 distinct, zero FK, writer not located in this repo. | Same shape as dialysis operator, on a table whose writer this repo does not control — any fix needs either an external-system change or a read-time normalization layer, which is a different kind of fix from every other row in this table. |
+
+## 10. Cowork reconcile — 2026-09-11 (read-only, live)
+
+- **§9.1 government figures confirmed exactly:** `properties.agency_id` 0 of 20,509; `property_agencies.agency_id` 160
+  of 132,243; `government_agencies` 65 rows; `agency_canonical` 45 distinct codes.
+- **§9.4 confirmed:** LCC Opps `entities` has `davita` ×3 organizations, `davita inc.` ×1, `fresenius` ×1, `fresenius
+  medical care` ×2 organizations, **plus one `asset` entity whose canonical name is `fresenius medical care`**. This is
+  the asset-mint pollution in its plainest form.
+- **§8 open item 3 resolved: the composite strings.** `properties.operator LIKE '%|%'` returns two rows, plus
+  `DaVita at Home`:
+
+  | property | operator | tenant (property and lease) | state |
+  |---|---|---|---|
+  | 30681 | `DaVita \| US Army Corps of Engineers` | `DaVita Dialysis \| US Army Corps of Engineers` | CA (614 Tully Rd, San Jose) |
+  | 31429 | `DaVita \|San Antonio Kidney Disease Center` | `DaVita Dialysis \|San Antonio Kidney Disease Center` | TX |
+  | 31414 | `DaVita at Home` | `DaVita Dialysis At Home Condo` | TX |
+
+  They aren't display concatenations captured back. **They are multi-tenant buildings stored as a single piped
+  tenant string**, with the operator derived by stripping "Dialysis". `operators` rows 70–80 (the composites,
+  `UnitedHealthcare`, `US Renal Care, Inc.`, `Dialysis Clinic, Inc.`, and others) share one `updated_at` of
+  **2026-04-28 04:26:11 UTC**: a single bulk mint from free-text values, not a live writer. No function in Dialysis_DB
+  inserts into `operators`, and no repo code does either.
+- **New: cross-lane twin with no link.** Government property **30447** is the same building as dia **30681**
+  (614 Tully Rd, San Jose), with `agency = 'ACE'` and **`agency_canonical` NULL**. Nothing connects the two
+  records. → backlog **ID3i**, **P10a**.
+
+## 11. 👤 Decisions — settled by Scott, 2026-09-11 (Cowork)
+
+| §5.2 / §5.4 / §5.6 / §8.7 question | Decision |
+|---|---|
+| Fresenius canonical | **`Fresenius Medical Care`** (the audit's recommendation: 3 of 4 independent sources). Seed `short_operator: 'Fresenius'` in the CM export display map so chart labels are unchanged. |
+| US Renal Care canonical | **`US Renal Care`** (brand form, as CMS uses); `US Renal Care, Inc.` becomes an alias. |
+| Registry home (§5.6) | **Dialysis_DB owns it; LCC Opps references it via `external_identities` `source_type='operator'`** — the audit's recommendation, matching the existing owner/asset pattern. |
+| DB guard (§5.4) | **Hard block plus alert:** an unresolvable operator write is refused and routed to the review lane; a scheduled detector alerts on anything that slips through. |
+| Gov agency sequencing (§8.7) | **Separate build (ID3a)** — same pattern, different registry and fact. |
+
+Build: **ID2a** (`prompts/ID2a-operator-registry-resolver-and-guard.md`), then ID2b (consumer switch).
