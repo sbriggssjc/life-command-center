@@ -16,6 +16,46 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-11 — PDR14a shipped + live-verified; government-side parallel gap investigated and found small, closed, and fully explained; recommendation delivered
+
+**PDR14a (Dialysis repo) verification.** Independently re-checked every claim in the shipped response against
+live Dialysis_DB before trusting it: `dia_property_redirects` table + `dia_resolve_property_id` resolver +
+`v_dia_property_redirect_resolved` view, backfilled from all 5 known merge ledgers into 1,267 deduplicated
+active redirects (confirmed live: `count=1267, active=1267`). Re-ran my own 89-item orphan list through the
+resolver directly: **31 resolve, 58 don't** — a correction to my earlier 28/61 ledger-tally estimate (the
+difference is chained resolution plus a soft-merge column no single ledger could see). DaVita/Donna-TX positive
+control confirmed: `37722`/`23545`/`37710` all resolve to `39874`. Design note worth keeping: the redirect-write
+hook lives in the shared `dia_merge_property` primitive, not `dia_merge_property_reversible` as I'd assumed in
+the prompt — the geospatial cron calls the primitive directly. **PDR14b (life-command-center side) is now
+unblocked and ready to send.**
+
+**Government-side investigation** (Scott's explicit request: "ensure something similar is not happening on the
+government side"). `entities.domain='gov'` is LCC's largest entity population (29,813, bigger than dia's
+14,387), with 7,224 distinct gov-linked property_ids. **Orphan rate: 5 of 7,224 (0.07%) — ~100x lower than
+dia's 7.1%, and unlike dia's 61 unexplained cases, all 5 are fully explained with zero mystery left.** All 5
+trace exactly to a single 20-row batch in `p31_property_consolidation_log` (applied 2026-08-04, a genuine
+hard-delete path) — confirmed by intersecting its 20 `drop_id`s against LCC's gov-linked ids: exactly 5 matches.
+The structural reason gov's rate is so much lower: its dominant dedup mechanism, `gov_property_dup_retire_log`
+(157 rows), **never deletes a property row — it flips `properties.status` from `active` to `archived` and
+leaves it in place** (spot-checked 20 retired ids live, all still exist). That mechanism is immune to the
+PDR14 bug class by construction. gov's `property_merge_log`/`gov_property_merge_backup` tables (dia's heaviest
+sources) have 0 rows each — essentially unused on this side. Also checked the separate `metadata.source_property_id`
+field (~2,478 distinct gov entities, not covered by the `domain_property_id` check): 100% resolve, zero orphans.
+
+**Recommendation delivered to Scott:** do not build a parallel PDR14a/14b-style redirect-table apparatus for
+gov — the gap is small, closed, and fully explained. Fold a tiny gov sweep (resolve the 5 known orphans
+directly off `p31_property_consolidation_log`) and a lightweight gov leg of PDR14b's ongoing-monitoring tick
+into PDR14b's existing scope instead of filing a separate prompt pair, since PDR14b already plans a
+domain-agnostic monitoring tick and gov's exposure going forward is only from any *future* reuse of a
+hard-delete-style consolidation path.
+
+**Docs:** `PLANNED-BACKLOG.md` PDR14 row updated to shipped/verified outcome; new **PDR14-GOV** row added.
+PDR14a's prompt + response moved to `done/`.
+
+**Next step.** Awaiting Scott's go-ahead to fold the gov leg into PDR14b before sending it to the
+life-command-center session. PDR2 (ownership guard-gap) and PDR12 (Rock Hill planner gap) remain queued,
+unaffected.
+
 ## 2026-09-11 — PRI1 merged and confirmed excellent; then a live CMS ingestion crash revealed the same root cause is causing REAL data loss across at least 3 pipeline components — full catalog filed as `PRI3`
 
 Two things landed together this turn: PRI1's response (thorough, answered every unit directly), and a
