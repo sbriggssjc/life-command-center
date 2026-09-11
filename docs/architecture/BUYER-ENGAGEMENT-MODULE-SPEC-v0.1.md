@@ -124,6 +124,20 @@ machinery exists:**
   CoStar For-Sale exports are the primary availables source; RCA supplies sold comps / cap-rate context.
 - **Public data egress:** see §7a — the market-metrics refresh must run where public-data hosts are reachable.
 
+### 4.6 Import normalization — Round 1 lessons (Geller, 2026-09-11)
+Operator exports are broad (all property types, all Scott's markets), so the pipeline is: type filter → metro
+assignment on the official OMB county lists (Census PEP county rows) → address + name/city/price de-dupe →
+criteria screen as *flags* (never silent drops) → within-metro percentile leg scores (Derived, broker-adjustable)
+→ Focused / Broad Market. Seed code: `Clients\Jordan Geller\2026 Industrial Search\Data\JG_pipeline_scripts_2026-09-11.zip`
+(normalize → stage2 → score → build_deals; BDPS styling in `tbstyle.py`). Source quirks to encode:
+- **CoStar For-Sale export** has no State/County/lat-long → metro needs ZIP/city inference; ask operators to add
+  those columns to the saved export layout. Portfolio rows appear as "Multiple - Portfolio" and may duplicate
+  component-address rows elsewhere (dedupe by name + city + price).
+- **CREXi inventory export** has county + lat/long + link (best for geography); header is on row 3.
+- **Salesforce Comps report** carries lease detail (expiration, escalation, options, guarantor, broker contact)
+  that neither CoStar nor CREXi exports have → it should win field-level merges.
+- Nothing carries clear height, dock count or market rent → deal-stage fields.
+
 ## 5. Phasing (draft)
 - **Phase 0 (now):** run Jordan Geller manually in Cowork; capture every step, data source and decision in the
   engagement log → this is the requirements trace.

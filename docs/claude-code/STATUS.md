@@ -1,5 +1,11 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — BUY0 cont.: Geller Round 1 sourcing — 1,683 exported rows → 213 in-metro industrial → Focused 24
+
+Cowork. Scott's CoStar / CREXi ×5 / Salesforce Comps exports normalized, metro-assigned on OMB county lists,
+de-duped and screened; preliminary Derived leg scores; delivered `Jordan Geller - Buyer Showing - Sep 26 (Round 1
+draft).xlsx` (Focused = top 8 per DFW / Austin / Charlotte). Spec §4.6 records the import pipeline + per-source quirks;
+seed scripts saved to the client Data folder. Austin supply is thin (11 industrial) → re-pull requested.
 ## 2026-09-11 — OC-a: operator funnel v1 shipped — EB1a applied live, intake + triage + inbox built
 
 `prompts/OCa-operator-funnel-v1.md` executed end to end on branch `claude/oca-operator-funnel-v1`.
