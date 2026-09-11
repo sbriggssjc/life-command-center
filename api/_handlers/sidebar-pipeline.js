@@ -10068,9 +10068,25 @@ export async function reconcilePropertyOwnership(domain, propertyId) {
 // owner-facts mirror sync / R47 cron. Used by the deed-writer path (forward,
 // new captures) AND the R51 Unit-3 high-confidence auto-fix worker.
 
-// Reusable guard: a brokerage / junk / federal-antipattern / deal-string
-// grantee must NEVER become the recorded owner. Reuses the same write-time
-// guards the entity graph and contact pipeline use.
+// RO2b (2026-09-08 audit, fixed 2026-09-11): named capture artifacts that pass
+// every guard above and get proposed as a recorded owner, sized at 9 rows across
+// the whole 598-row deed arm -- too few to earn a generalized regex class, so
+// they are named literally instead of pattern-matched:
+//   - RMR / "The RMR Group" -- the property MANAGER of GPT/OPI-portfolio assets
+//     (7 of the 9 rows). A deed never conveys title to a manager; this is a
+//     capture artifact where the manager's name sits where the grantee should.
+//   - USPS -- the federal TENANT (1 row), not a grantee.
+// The hedge-phrase class ("... or affiliated/related ...", 1 of the 9 rows) is
+// NOT a one-off -- OWN-T0i sized it fleet-wide in LCC `entities` (57 live rows,
+// 2026-09-11) as an extractor's stated uncertainty written as a name, never a
+// real party. Reused here as a real regex class, unlike RMR/USPS.
+const KNOWN_NOT_A_GRANTEE_RE = /^(the\s+)?rmr(\s+group)?$|^u\.?s\.?\s*postal\s*service$|^usps$/i;
+const HEDGE_PHRASE_OWNER_RE = /\b(or|and\/or)\s+(affiliated|related)\b/i;
+
+// Reusable guard: a brokerage / junk / federal-antipattern / deal-string /
+// manager-or-tenant-capture-artifact / hedge-phrase grantee must NEVER become
+// the recorded owner. Reuses the same write-time guards the entity graph and
+// contact pipeline use.
 export function granteePassesOwnerGuards(name) {
   if (!name || typeof name !== 'string') return false;
   const clean = sanitizeOwnerName(name); // strips " by <Brokerage>" suffix
@@ -10079,6 +10095,8 @@ export function granteePassesOwnerGuards(name) {
   if (isFederalOwnerAntiPattern(clean)) return false; // personal-property bleed-through
   if (isJunkEntityName(clean)) return false;          // structural garbage (org-safe:
                                                       // does NOT reject firm suffixes)
+  if (KNOWN_NOT_A_GRANTEE_RE.test(clean)) return false; // RO2b: manager/tenant capture artifact
+  if (HEDGE_PHRASE_OWNER_RE.test(clean)) return false;  // RO2b/OWN-T0i: extractor uncertainty, not a name
   return true;
 }
 
