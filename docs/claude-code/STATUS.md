@@ -1,5 +1,48 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — PRI4 response reviewed: uncovered preflight call site fixed, tracker close-out fixed for one path but a live check contradicts the other, and a genuine `safe_execute()` timeout defect found (possibly explaining PRI1's own unanswered Unit 4 mystery) — held pending `Dialysis` PR #7407 merge confirmation
+
+`PRI4`'s response (`"PRI4 surface response.docx"`, saved by Scott) read in full and transcribed to
+`docs/claude-code/responses/done/PRI4-preflight-abort-hang-and-uncovered-call-site.response.md`.
+
+**Fixed**: (a) the real no-retry location — `src/health.py::preflight_health_check` (the prompt's own
+framing of `preflight_checks.py` was corrected by the response) — now routed through `safe_execute()`,
+plus two more unguarded probes found along the way, a broader sweep than asked. (d) confirmed safe for
+Scott to kill the hung deployment — no partial state.
+
+**(b), a real discrepancy caught by an independent live check, not just accepted from the response**:
+the response claims the exact failure branch this prompt was built from already calls
+`finish_run(run_status="aborted")` correctly — implying that row should already close. **This session
+re-queried `ingestion_tracker` live and found the actual row (`started_at 15:53:15.083884 UTC`) still
+open, `run_status='started'`, 1.5+ hours later.** Two explanations fit equally well and can't be
+distinguished from here: the described code path doesn't match what actually ran in production, or
+`finish_run()`'s own call silently hung/failed under the same connection instability — which would tie
+(b) directly to (c) as one shared symptom. Flagged plainly rather than accepting "already correct." A
+second, separate abort branch (`has_blockers`) genuinely had no close-out at all and was fixed.
+
+**(c), the hang itself — root cause not proven, but a real and potentially significant defect found**:
+couldn't attach to the live process to confirm (the prompt's ask went unmet, stated honestly). Found that
+`core_utils.safe_execute()`'s timeout only stops waiting on the future — the underlying
+`ThreadPoolExecutor`'s own `shutdown(wait=True)` then blocks again on the same stuck worker thread,
+silently defeating the timeout. Stated as the strongest candidate, not confirmed. **Worth flagging
+prominently**: if real, this is a plausible shared mechanism behind `PRI1`'s own still-unanswered Unit 4
+question (the 5-hour idle gap before "Stopping Container") and this run's 90+-minute hang — one
+explanation across multiple rounds of this arc's mysteries, though not independently verified. Mitigation
+applied regardless: abort/cleanup now runs on a daemon thread with a bounded 60s join, then `os._exit(2)`
+— terminates the process no matter what's stuck underneath.
+
+Full suite: **3222 passed** (up from `PRI3`'s 3183), 0 failed, no regressions.
+
+**Merge status of `sbriggssjc/Dialysis#7407` (branch `claude/inspiring-feynman-y8l6mh`) is
+unconfirmed** — same pattern as `PRI3`'s `#7406`. Asked Scott to confirm directly.
+
+`PLANNED-BACKLOG.md`'s `PRI4` row updated to 🟡 (fixed and tested per the response, held short of ✅
+pending merge confirmation and given the live-check discrepancy on (b)). Prompt moved to
+`docs/claude-code/prompts/done/`. Response docx archived to `responses/done/`.
+
+**Still outstanding, unchanged by this round**: `PRI3`'s own live-fix proof — no run has yet gotten past
+preflight to actually exercise `oig_leie_ingestor`/`ownership_linker`/`utils_shared`/
+`ingestion_tracker.start_run`'s retry logic in production.
 ## 2026-09-11 — EB1 reconciled (PR #2291 merged) + live measurement; OC-a prompt drafted
 
 Processed `responses/EB1 Executive Briefs foundation desktop response.docx` → `responses/done/`; prompt →
