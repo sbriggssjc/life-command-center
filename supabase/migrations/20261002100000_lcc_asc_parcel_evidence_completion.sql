@@ -44,8 +44,12 @@ begin
     and a.value->>'status' = 'approved'
     and a.value->>'reason_code' =
       'service_location_multi_address_same_parcel_recorded_owner_identity'
-    and a.value->>'frozen_address_token' = c.address_token
-    and a.value->>'assessor_address_token' = c.address_token
+    -- Frozen rows predate later comparison-token normalization. Compare the
+    -- approved evidence to a normalized copy; never rewrite the stored token.
+    and a.value->>'frozen_address_token' =
+      regexp_replace(upper(c.address_token), '\m(PARKWAY|PKY)\M', 'PKWY', 'g')
+    and a.value->>'assessor_address_token' =
+      regexp_replace(upper(c.address_token), '\m(PARKWAY|PKY)\M', 'PKWY', 'g')
     and nullif(a.value->>'captured_address_token', '') is not null
     and a.value->>'captured_address_token' <> c.address_token
     and nullif(a.value->>'owner_mailing_address_token', '') is not null
