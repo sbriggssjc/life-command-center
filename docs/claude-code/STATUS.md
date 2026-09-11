@@ -65,6 +65,76 @@ merge to `main` regardless (branch-protected, required check `npm test`).
 `test/eb1-seed-exemplar.test.mjs`. **Files modified:** `docs/os/PLANNED-BACKLOG.md` (§P18 EB1 row),
 `docs/claude-code/STATUS.md` (this entry). `docs/os/CURRENT-STATE.md` not touched — nothing here is live
 (unmigrated + unread by any consumer), so there is nothing yet to add to the LIVE map.
+## 2026-09-11 — AC2/AC3 (bench ranking + Ollama role inference) flipped live: migration applied, `BENCH_RANK_WRITE` registered on
+
+The last open item from `ACI-phase2-unitC`'s own verification note was a pure operator action: apply
+`20261010150000_lcc_bench_rank_run_log.sql` and register `BENCH_RANK_WRITE` in `feature_flags_registry`.
+Did both against `xengecqvemvfknjvbvrq`.
+
+**Migration applied clean** — `lcc_bench_rank_run_log` and `lcc_bench_rank_write_log` both confirmed live,
+correctly permissioned (`service_role` INSERT, `anon`/`authenticated` revoked on both).
+
+**Flag registered**: `BENCH_RANK_WRITE` inserted into `feature_flags_registry` with `state='on'`,
+`surface='api/bench-rank-tick'`. `feature-flag.js`'s own resolution order (explicit env var wins if set,
+else the registry decides) means this alone is enough — no Railway env var or redeploy needed.
+
+**What this does and doesn't do**: `GET /api/bench-rank-tick` was already ungated (dry-run only) and stays
+that way. `POST` (the real write) was a no-op end-to-end until both the migration and the flag existed —
+now it isn't, but nothing calls the route on a schedule (checked: no cron references
+`bench-rank-tick` anywhere in the repo, it's purely an on-demand admin route). So this makes the write path
+genuinely live and ready rather than actually causing anything to write yet — the first real POST still needs
+a person (or a future cron, not built) to trigger it.
+
+**Docs**: `PLANNED-BACKLOG.md` `AC2` row updated from "ledger migration written, not applied live" to the
+live-confirmed state.
+
+**Next step.** The ownership/contact-propagation thread's other open items are unchanged by this:
+`OWN-T0a` (gov's 43.4% recorded-vs-true-owner disagreement, still the largest untouched upstream gap),
+`B1b` (developer chain, gated behind `B5`), and `AC11` (individual-owner control-chain population needs
+re-measuring now that `PR-scanner-2`'s SOS capture has shipped — it was sized at zero before that existed).
+
+## 2026-09-11 — BROKER1 applied live: a real bug found and fixed in production, 1,303 prospects assigned (870 gov→Scott, 414 dia→Kelly, 19 catch-all→Scott), Nate confirmed untouched
+
+The shipped code (`8a40073d`, merged) could not be run by the session that built it — no DB credentials there.
+This session applied the migration directly against `xengecqvemvfknjvbvrq`.
+
+**The migration's own self-check passed, but the first live call to the function it created did not.**
+`lcc_broker1_assign_prospect_brokers(p_dry_run)` declares `RETURNS TABLE(bucket text, n bigint)`, which makes
+`bucket` an implicit PL/pgSQL variable inside the function body — three `count(*) FILTER (WHERE bucket = '...')`
+lines collided with it (`42702: column reference "bucket" is ambiguous`), a bug the shipped test suite's 13
+Node tests never could have caught since none of them touch live Postgres. Fixed live by qualifying every
+reference with the temp table's own alias; no behavior change, same buckets, same rule.
+
+**Ran the real dry-run, then the real apply.** Final counts over the 1,355-prospect seller-prospecting queue:
+`already_manual_assignment_left_alone=52`, `defaulted_gov_to_scott=870`, `defaulted_dia_to_kelly=414`,
+`defaulted_catchall_to_scott=19`. The design's ordering requirement (the JS ROE self-signal pre-pass must run
+*before* the SQL default sweep, or a real "someone's already pursuing this" signal could get overwritten by a
+vertical default) couldn't be honored by calling the actual `/api/broker1-assign-tick` route — it's
+auth-gated behind `LCC_API_KEY`, which this session doesn't hold. Instead of skipping the check, the JS pass's
+exact query (`external_identities` where `source_system='salesforce'`, `source_type='account'`, for every
+currently-unassigned prospect) was run directly in SQL first: **0 of 1,303 unassigned prospects carry any SF
+Account-owner metadata at all**, confirming the pre-pass has nothing to write — not skipped, genuinely empty —
+so applying the default sweep directly was safe.
+
+**Nate verified untouched, the way the rule requires**: 7 `lcc_entity_owner_override` rows do name him, but
+every one carries `set_by='reconciled'` — an older, unrelated `deal_owner`/`sf_task` signal that predates this
+build. BROKER1's own function never references Nate's `lcc_user_id` as an assignable value, and fill-blanks-only
+means it could not have touched these regardless. Spot-checked 8 random post-sweep rows live via the new
+`v_lcc_broker1_prospect_assignment_state` view — all correctly bucketed by domain.
+
+**Confirmed the deployed app is current**: Railway `/version` on `tranquil-delight-production-633f` reads
+`8716d86d406f`, matching this session's `git` HEAD exactly — `/api/broker1-assign-tick` is live, this session
+simply lacks the key to call it. Running the JS pre-pass for real through the actual route (a harmless no-op
+today, given the confirmed-empty population, but worth closing the loop formally) is the one remaining operator
+action — not a build gap.
+
+**Docs**: `PLANNED-BACKLOG.md` `BROKER1` row updated with the live-applied outcome and the bug fix; `C4c`'s
+supersession note is unaffected. Moved `BROKER1-prospect-assignment.md` and its response to `done/`.
+
+**Next step.** `BROKER1-sf` (the Salesforce connect-back) stays correctly unbuilt — no write path into
+Salesforce exists yet, unchanged from the shipped finding. The rest of the ownership/contact-propagation
+thread (`OWN-T0a`, `B1b`, `AC11`'s population re-measure, the AC2/AC3 migration+flag operator action) is
+still open and untouched by this entry.
 
 ## 2026-09-11 — Confirmed: the PRI3 test run is genuinely hung, not just idle-logging — filed as `PRI4`
 
