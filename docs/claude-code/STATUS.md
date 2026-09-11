@@ -1,5 +1,48 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 -- all three recommended next steps done: OWN-T0j prompt drafted, OWN-T0e confirm-lane gap found (not forced), AC11 re-measured (still 0, now explained)
+
+Scott: "let's do it all in the order you recommend" (build the gov-side classifier; prioritize OWN-T0e confirms
+on the big sponsors; re-measure AC11). Did all three.
+
+**1. OWN-T0j prompt drafted and sent to CC** (`docs/claude-code/prompts/OWN-T0j-gov-side-reconciled-classifier.md`).
+Scoped from the 2026-09-11 OWN-T0a re-measurement directly -- reuses the exact comparison query, points at
+OWN-T0e's cache-table shape as the architecture template, and is explicit that this has to be a cross-database
+Node job (the sponsor registry lives in LCC Opps, the comparison population lives in gov -- no SQL join is
+possible). Explicit "do not build a sweep that forces agreement" guardrail, citing OWN-T0/RO2's prior refusals
+of the identical shape.
+
+**2. OWN-T0e confirm-lane prioritization -- investigated before forcing anything, and the investigation is the
+finding.** Checked whether the 22 gov-side sponsors with >=5 disagreeing properties (from the 2026-09-11
+measurement) are even reachable through OWN-T0e's existing confirm lane before confirming any of them. Only 4
+of 22 appear in `lcc_ownt0e_sponsor_family_proposals_cache` at all, each at a small fraction of their gov-side
+count (Gardner Tanenbaum: 32 gov-side properties vs 1 in the LCC cache) -- live, concrete confirmation of the
+already-filed `OWN-T0b` gap (no LCC mirror of the domain's transition chain): the two populations barely
+overlap, so confirming through this lane, however many sponsors get confirmed, cannot move OWN-T0a's number.
+That alone is why `OWN-T0j` (a build that reads gov's population directly) is the right next step, not more
+confirms. Of the 4 that do exist as candidates, none were blind-confirmed -- each had a specific reason not to:
+`Realty Income Corporation` is a flagged generic token, `Elman Investors`'s only SPE name IS itself a hedge
+phrase (`OWN-T0i` material), `Gardner Tanenbaum Holdings`'s SPE name looks like a same-party name variant (a
+merge question, not a family confirm), and `USAA Real Estate` is a single property, immaterial either way. All
+four left for a human on OWN-T0e's own lane.
+
+**3. AC11 re-measured -- still zero, and now the finding is specific.** `entity_relationships` carries 0 rows
+of type `llc_member`/`llc_manager`, fleet-wide, nine days after `PR-scanner-2` shipped the writer. This is not
+the producer being broken -- it's a forward capture-path fix that only fires when someone actually scans an
+SOS/bizfile page through the extension, and nobody has done that yet since it shipped. So the population is
+correctly zero today; it isn't evidence the fix doesn't work, and re-checking on a calendar basis again won't
+change that -- the next real re-measurement should follow the first live SOS scan, not another date.
+
+**Docs**: `PLANNED-BACKLOG.md` -- new `OWN-T0j` row, `AC11` row appended with the re-measurement. **⚠️ Branch
+note**: local `main` in this session's clone is stale (git fetch/pull fails here, the standing proxy
+limitation) -- `docs/own-t0a-reinvestigate`'s local ref shows "behind origin by 6 commits," meaning more has
+landed on that branch name upstream than this session can see. This entry's new commit is built on this
+session's last-known-good local tip of that branch; reconcile against the real origin state before merging,
+not assumed clean.
+
+**Next step.** `OWN-T0j` needs a Claude Code build session to pick it up. `AC11` stays filed, waiting on real
+SOS-scan usage rather than a rebuild. `B1b` (developer chain, gated behind `B5`) remains the one entirely
+untouched item on the ownership/contact-propagation thread.
 ## 2026-09-11 — MB-a: MB1/MB2 market-brief producers built (dialysis lane), flags OFF, NOT live-verified
 
 Branch `claude/sweet-gates-83wyu7` → PR (see docs). Built `MB1` (P-SQL, `api/_handlers/market-brief-psql-tick.js`)
