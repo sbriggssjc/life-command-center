@@ -1,5 +1,40 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 -- OWN-T0j: URL-length fix confirmed live, then a SECOND bug found -- POST always 401'd
+
+Confirmed the previous fix (fix/ownt0j-true-owners-url-length) deployed: Railway /version now reads e42dbcb7,
+an ancestor check confirms the fix commit is included, and curling the live GET route returns 200 with the
+exact classification counts independently verified earlier (5,133/2,462/482/1,980).
+
+Tried to trigger the real POST immediately rather than waiting ~30 min for the next cron fire -- called
+`select public.lcc_cron_post('/api/ownt0j-sponsor-classify-tick', '{}'::jsonb, 'railway')` directly (the exact
+call the cron makes, with the real X-LCC-Key pulled from Supabase Vault). It came back 401
+`{"error":"unauthorized"}` -- with the correct key. That is not how an auth check should ever behave, so this
+was investigated rather than shrugged off as a fluke.
+
+**Root cause, in the same handler as the last fix**: `authenticate(req, res)` (api/_shared/auth.js) is async
+and returns a user object, or null having already sent its own 401 -- the contract every other handler in this
+repo follows (`const user = await authenticate(req, res); if (!user) return;`, per that file's own header
+comment). OWN-T0j's tick instead called `authenticate(req)` with one argument and no `await`, then checked
+`auth.ok` -- a property that does not exist on the real return shape, and would not exist even if awaited
+correctly (authenticate() returns a user object or null, never {ok, status, error}). The unawaited Promise's
+`.ok` is always undefined, so the POST path 401'd unconditionally, key or no key.
+
+**Fixed** (branch `fix/ownt0j-auth-call-convention`): rewrote the auth check to the real calling convention.
+node --check clean; the 11 existing classifier tests (pure functions, untouched) still pass.
+
+**Why two bugs shipped in one handler**: both are HTTP/auth-layer mistakes in the one part of OWN-T0j that
+had no test coverage -- the 11 shipped tests are all against the pure classifier functions
+(api/_shared/ownt0j-sponsor-classifier.js), and nothing exercises api/_handlers/ownt0j-sponsor-classify-tick.js
+itself end-to-end. Worth a look for a follow-up: a lightweight handler-level test (mocked domainQuery/opsQuery)
+would have caught both.
+
+**Docs**: PLANNED-BACKLOG.md OWN-T0j row appended again.
+
+**Next step.** Get this fix merged and deployed, then re-trigger via lcc_cron_post (or wait for the next
+`39 */4 * * *` fire) and confirm the cache table actually populates -- that's still the one thing not yet
+verified end-to-end.
+
 ## 2026-09-11 — MB-a2: P-SQL source defects fixed against the live schema + both migrations applied; flags still OFF, live tick unverified
 
 Fixed all four MB1c defects (verified live via Supabase MCP, not guessed). Cap-rate band + trades-since-
