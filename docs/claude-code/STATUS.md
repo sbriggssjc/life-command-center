@@ -1,5 +1,29 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 -- RO4 root-caused: the missing deed dates are genuinely unknown, not lost
+
+Picked up RO4 next (why 391 of 598 deed-arm properties carry no `latest_deed_date`, and whether
+`is_newer_than_recorded` is misnamed as the audit suspected). Re-measured live: 391 of 599 today
+(65.3%, matches). Traced the whole path rather than guessing: `v_ownership_resolution`'s
+`DISTINCT ON ... ORDER BY latest_deed_date DESC NULLS LAST` already prefers a dated row when one
+exists, so the view isn't swallowing dates. `properties.latest_deed_date` is fed from
+`deed_records.recording_date` via a write path (`deed-parser.js`) that always writes the grantee but
+only writes the date when one parses. Checked `deed_records` directly for all 391 properties: zero
+have a `recording_date` that `properties` is failing to pick up -- every one is null all the way down
+to the raw capture. Sampled the raw payload: a minimal grantee-only stub (`grantor`, `deed_type`,
+`document_number` all null, `consideration: 0`) across 229 distinct counties nationwide -- not one
+source's formatting bug, a genuine capture limitation spread across the whole footprint.
+
+Conclusion: nothing upstream to fix -- the date is truly unknown for these 391, not lost by a bug.
+The real, actionable finding is the one the audit already named: `is_newer_than_recorded`
+(`latest_deed_date IS NOT NULL`) collapses "confirmed not newer" and "we don't have a date" into the
+same `false`. Documented that whoever eventually builds RO3's card should expose
+`latest_deed_date IS NULL` as its own explicit "date unknown" state. Not built here -- RO3 (whether
+this lane should exist beside OWN-T0e or become OWN-T0's gov arm) is a design question for Scott,
+not decided yet, so there's no card today to fix.
+
+Updated `docs/os/PLANNED-BACKLOG.md`'s RO4 row (closed, root-caused).
+
 ## 2026-09-11 -- RO2a sized: 1,380 gov recorded_owners name-variant groups, merge lane deferred
 
 Picked up RO2a next (fleet-wide sizing of same-party name variants in gov `recorded_owners`, named
