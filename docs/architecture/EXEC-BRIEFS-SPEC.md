@@ -1,7 +1,7 @@
 # Executive Briefs — Market Briefs per swimlane (MB) + CTO/CDO Build Brief (XB) + Operator Funnel (OC)
 
 **Spec v0.2 — decisions recorded 2026-09-11 (Scott), architecture recommended (Cowork). Design approved in
-principle; build proceeds prompt-by-prompt. EB1 (foundation) merged PR #2291 2026-09-11; OC-a merged PR #2298; MB-a merged PR #2301; MB-a2 merged PR #2307; next: `docs/claude-code/prompts/MBa3-freshness-honest-facts-and-live-flip.md`.**
+principle; build proceeds prompt-by-prompt. EB1 (foundation) merged PR #2291 2026-09-11; OC-a merged PR #2298; MB-a merged PR #2301; MB-a2 merged PR #2307; MB-a3 (freshness-honest facts + CMS feed gate) built, PR open, flags OFF pending redeploy — see §9 MB-a3 addendum.**
 **Backlog:** `docs/os/PLANNED-BACKLOG.md` §P18. **Exemplars:** `docs/briefs/exemplars/2026-09-11-*.md`.
 
 ## 0. Scott's decisions (2026-09-11)
@@ -220,3 +220,21 @@ seen 2026-01-22 (B6d-cms outage), and DaVita = Fresenius = 2,450 exactly. **Desi
 `source_date` is the source data's own as-of — never the producer's run time — and a producer whose source is beyond
 its feed SLA writes a named gap instead of facts.** Without this rule the staleness machinery (§1) cannot see
 upstream decay, which is the failure the living-brief design exists to prevent.
+
+**Addendum 2026-09-11 "MB-a3" (this branch; unmerged) — MB1d closed for P-SQL, flags NOT flipped.**
+`buildCmsOperatorFacts` gates each operator on its own `max(last_seen_date)` against a 45-day SLA
+(mirroring dia `feed_freshness_registry.medicare_clinics`) and writes a named `cms_census_gap:<op>`
+fact instead of a count/net-change fact when stale — live measured, DaVita/Fresenius both stale at
+≈8 months while their `cms_last_checked`/`source_last_seen` touch columns read days-old (the reason
+`last_seen_date` was chosen and the touch columns explicitly rejected, documented in code).
+`buildCapRateBandFact`/`buildTradesSinceLastRunFact` now date off the newest comp `sale_date` behind
+the derivation, not the run clock; on-market count and the genuine-zero trades fact keep `asOfIso`
+as a stated exception (no better date exists for a live inventory count). Migration applied to
+Dialysis_DB (append-only `source_as_of` column on `v_market_brief_cms_operator_counts`). 15 new
+tests, full suite green (5,925/0). **The DaVita=Fresenius=2,450 tie is real and load-bearing for
+the gate's design** (both share an identical `created_at` batch ending 2026-01-22 — an import-cap
+artifact, not coincidence; filed to the Dialysis repo's B6d-cms backlog, not fixed here). **Flags
+stay OFF**: this fix is not yet deployed to Railway (`/version` still reads the pre-MB-a3 SHA), and
+flipping `MARKET_BRIEF_PSQL` before a redeploy would re-ship the exact bug this addendum closes.
+P-RSS's Ollama reachability from `tranquil-delight` could not be confirmed (no Railway env access
+from this session) — left OFF, stated as an operator-verification item.

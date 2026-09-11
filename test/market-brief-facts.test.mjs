@@ -4,6 +4,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   MIN_N_CAP_BAND,
+  CMS_FEED_MAX_AGE_DAYS,
+  isSourceStale,
   sectionTtlDays,
   staleAfterIso,
   median,
@@ -17,6 +19,117 @@ import {
   numericTokens,
   claimNumbersAreVerbatim,
 } from '../api/_shared/market-brief-facts.js';
+
+// ---------------------------------------------------------------------------
+// MB-a3 — freshness-honest source_date + the CMS feed gate
+// ---------------------------------------------------------------------------
+
+test('isSourceStale: missing date is stale', () => {
+  assert.equal(isSourceStale(null, '2026-09-11T00:00:00Z', 45), true);
+});
+
+test('isSourceStale: within the SLA is fresh', () => {
+  assert.equal(isSourceStale('2026-08-01', '2026-09-11T00:00:00Z', 45), false);
+});
+
+test('isSourceStale: past the SLA is stale', () => {
+  assert.equal(isSourceStale('2026-01-22', '2026-09-11T00:00:00Z', 45), true);
+});
+
+test('CMS_FEED_MAX_AGE_DAYS mirrors the registered dia.medicare_clinics SLA (45 days)', () => {
+  assert.equal(CMS_FEED_MAX_AGE_DAYS, 45);
+});
+
+test('buildCapRateBandFact uses the sourceAsOfDate, not asOfIso, when given', () => {
+  const rates = [0.06, 0.061, 0.062, 0.063, 0.064];
+  const fact = buildCapRateBandFact({
+    lane: 'dialysis', capRates: rates, sourceLabel: 'test', asOfIso: '2026-09-11T00:00:00Z',
+    sourceAsOfDate: '2026-08-20',
+  });
+  assert.equal(fact.source_date, '2026-08-20');
+});
+
+test('buildCapRateBandFact falls back to asOfIso when no sourceAsOfDate is given', () => {
+  const rates = [0.06, 0.061, 0.062, 0.063, 0.064];
+  const fact = buildCapRateBandFact({
+    lane: 'dialysis', capRates: rates, sourceLabel: 'test', asOfIso: '2026-09-11T00:00:00Z',
+  });
+  assert.equal(fact.source_date, '2026-09-11');
+});
+
+test('buildTradesSinceLastRunFact source_date is the latest sale_date among the trades, not the run date', () => {
+  const trades = [
+    { sold_price: 1000000, cap_rate: 0.06, sale_date: '2026-07-01' },
+    { sold_price: 2000000, cap_rate: 0.065, sale_date: '2026-08-15' },
+  ];
+  const fact = buildTradesSinceLastRunFact({
+    lane: 'dialysis', trades, sinceIso: '2026-06-01T00:00:00Z', sourceLabel: 'x', asOfIso: '2026-09-11T00:00:00Z',
+  });
+  assert.equal(fact.source_date, '2026-08-15');
+  // fact_key identity still keys on the RUN day (dedupe/re-supersede contract), not the source date.
+  assert.equal(fact.fact_key, 'trades_since_last_run:2026-09-11');
+});
+
+test('buildCmsOperatorFacts: with no sourceAsOf Map, the gate is OFF (back-compat)', () => {
+  const facts = buildCmsOperatorFacts({
+    lane: 'dialysis', counts: [{ operator: 'DaVita Inc.', count: 2600 }],
+    priorCounts: new Map(), sourceLabel: 'x', asOfIso: '2026-09-11T00:00:00Z',
+  });
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].fact_key, 'cms_clinic_count:davita_inc');
+});
+
+test('buildCmsOperatorFacts: a fresh operator writes a count fact with its own source_date', () => {
+  const sourceAsOf = new Map([['DaVita Inc.', '2026-08-20']]);
+  const facts = buildCmsOperatorFacts({
+    lane: 'dialysis', counts: [{ operator: 'DaVita Inc.', count: 2600 }],
+    priorCounts: new Map(), sourceLabel: 'x', asOfIso: '2026-09-11T00:00:00Z', sourceAsOf,
+  });
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].unit, 'count');
+  assert.equal(facts[0].source_date, '2026-08-20');
+});
+
+test('buildCmsOperatorFacts: a stale operator writes ONE gap-marker fact, never a count or net-change fact', () => {
+  const sourceAsOf = new Map([['DaVita', '2026-01-22']]);
+  const priorCounts = new Map([['DaVita', 2440]]); // would otherwise trigger a net-change fact
+  const facts = buildCmsOperatorFacts({
+    lane: 'dialysis', counts: [{ operator: 'DaVita', count: 2450 }],
+    priorCounts, sourceLabel: 'x', asOfIso: '2026-09-11T00:00:00Z', sourceAsOf,
+  });
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].unit, 'gap_marker');
+  assert.equal(facts[0].fact_key, 'cms_census_gap:davita');
+  assert.equal(facts[0].value, null);
+  assert.match(facts[0].claim_text, /stale/i);
+});
+
+test('buildCmsOperatorFacts: an operator with no sourceAsOf date at all is treated as stale', () => {
+  const sourceAsOf = new Map(); // no entry for this operator
+  const facts = buildCmsOperatorFacts({
+    lane: 'dialysis', counts: [{ operator: 'Unknown Chain', count: 5 }],
+    priorCounts: new Map(), sourceLabel: 'x', asOfIso: '2026-09-11T00:00:00Z', sourceAsOf,
+  });
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].unit, 'gap_marker');
+});
+
+test('buildCmsOperatorFacts: mixed freshness — one operator gated, one written', () => {
+  const sourceAsOf = new Map([
+    ['DaVita', '2026-01-22'],       // stale
+    ['US Renal Care', '2026-09-01'], // fresh
+  ]);
+  const facts = buildCmsOperatorFacts({
+    lane: 'dialysis',
+    counts: [{ operator: 'DaVita', count: 2450 }, { operator: 'US Renal Care', count: 330 }],
+    priorCounts: new Map(), sourceLabel: 'x', asOfIso: '2026-09-11T00:00:00Z', sourceAsOf,
+  });
+  assert.equal(facts.length, 2);
+  const gap = facts.find((f) => f.fact_key.startsWith('cms_census_gap'));
+  const count = facts.find((f) => f.fact_key.startsWith('cms_clinic_count'));
+  assert.ok(gap && gap.fact_key === 'cms_census_gap:davita');
+  assert.ok(count && count.fact_key === 'cms_clinic_count:us_renal_care');
+});
 
 // ---------------------------------------------------------------------------
 // TTL
