@@ -128,6 +128,7 @@ import { artifactSafeName } from './_shared/artifact-storage.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 import { handleOwnershipChainDraftTick } from './_handlers/ownership-chain-draft-tick.js';
 import { handleTier0AutoAttachTick } from './_handlers/tier0-auto-attach-tick.js';
+import { handleBroker1AssignTick } from './_handlers/broker1-assign-tick.js';
 import { handleAmbiguousEntityAutomergeTick } from './_handlers/ambiguous-entity-automerge-tick.js';
 import { handleBenchRankTick } from './_handlers/bench-rank-tick.js';
 import { handleBriefingAnalystTakeTick } from './_handlers/briefing-analyst-take-tick.js';
@@ -260,6 +261,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'dia-property-link-tick': return handleDiaPropertyLinkTick(req, res);
     case 'ownership-chain-draft-tick': return handleOwnershipChainDraftTick(req, res);
     case 'tier0-auto-attach-tick':    return handleTier0AutoAttachTick(req, res);
+    case 'broker1-assign-tick':       return handleBroker1AssignTick(req, res);
     case 'ambiguous-entity-automerge-tick': return handleAmbiguousEntityAutomergeTick(req, res);
     case 'bench-rank-tick':          return handleBenchRankTick(req, res);
     case 'briefing-analyst-take-tick': return handleBriefingAnalystTakeTick(req, res);

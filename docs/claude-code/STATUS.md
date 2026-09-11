@@ -48,6 +48,120 @@ on a preflight-abort exit, and (c) whatever the fuller log shows about the 42-mi
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-11 — P18 decisions recorded; spec v0.2 architecture; EB1 prompt drafted
+
+Scott answered the six P18 questions. **Market briefs:** short form daily in the morning email, kept current as
+news/data arrive; weekly long-form email linked from it; lanes dia / gov / NL / broad NL only. **Hard requirement:
+built into the LCC, not a Cowork task that goes stale** — use local Ollama where it fits. **Build brief:** lives on
+the dashboard, Scott-only. **Operator notes:** every channel → one funnel → one to-do list, auto-routed by topic to
+the right thread, minimum human friction. Architecture (Cowork recommendation, `docs/architecture/EXEC-BRIEFS-SPEC.md`
+v0.2, renamed from `-v0.1`): *living brief* = sourced/dated facts with staleness TTLs, three producers (on-box SQL,
+existing RSS + Ollama, weekly/event cited web research via Anthropic — public facts only), Ollama synthesis, decay
+audited by XB; funnel built first. Backlog §P18 rewritten (EB0 ✅ decided, EB1 🟢, OC1–4, MB1–8, XB1–4).
+**Next:** send `prompts/EB1-exec-briefs-foundation.md` to Claude Code. Not committed.
+
+## 2026-09-11 — P18 opened (design-only): swimlane Market Briefs, CTO/CDO build brief, operator channel
+
+A Cowork parallel-task demo produced a sourced dialysis market brief and a 9-slide LCC build-status deck; Scott
+asked to productize both. **Market briefs (MB):** one per swimlane (dia / gov / general NL, maybe a broad NL
+brief), weekly or monthly, own email and/or folded into the daily briefing, with a homepage tab. **Build brief
+(XB):** Scott-only "exec briefing from the CTO/CDO" email + dashboard that also audits repo docs/plans to rank
+the next best effort. **Operator channel (OC):** Scott emails/chats ideas, bugs, "not connecting" notes that get
+triaged into the backlog and reported back. Reuse map + P131 classification + open questions:
+`docs/architecture/EXEC-BRIEFS-SPEC.md`; rows MB0–MB6 / XB0–XB4 / OC0–OC2 in `PLANNED-BACKLOG.md` §P18;
+exemplars in `docs/briefs/exemplars/`. First audit finding for XB2: backlog ⭐ NEXT (C2g) and the live queue
+(PDR2, prompt drafted 2026-09-11) disagree. **Next:** Scott answers spec §4; no build authorized. Not committed.
+
+## 2026-09-11 — BUY0 Buyer Engagement module opened (design-only) + Jordan Geller industrial search kicked off
+
+Scott's brief: productize the buy-side "buyer showing" process (qualify → criteria → source → score → Broad/Focused
+workbook → feedback → offers → PSA → close) in LCC, piloted on Jordan Geller's 2026 industrial search (~$20M, top-50
+MSA, $5–10M sweet spot, fundamentals/rent-vs-market over credit). Repo sweep found reusable pieces (SF buy-needs
+fields uningested, `buyer_showings.py` template, dia/gov `available_listings`, `cortex_market_intel`, offer tools) and
+the key gap: **no general net lease / industrial on-market store** (sidebar routes only dia/gov). Spec v0.1:
+`docs/architecture/BUYER-ENGAGEMENT-MODULE-SPEC-v0.1.md`; backlog `UX-T4` updated. Engagement log lives in
+`Team Briggs - Documents/Clients/Jordan Geller/2026 Industrial Search/00-ENGAGEMENT-LOG.md`. **Next:** Scott answers
+the open questions (building spec, MSA universe, scoring legs, data sources, decisions A–F); no build authorized.
+Not committed yet (another session has uncommitted work on `main`) — commit on a `docs/buy0-buyer-engagement-spec` branch.
+## 2026-09-11 — BROKER1: assign every prospect to a Team Briggs broker, built (not yet run live)
+
+Scott's rule, verbatim: existing ROE dictates first; else default by vertical (gov→Scott,
+dia→Kelly); Nate gets nothing in this pass; Scott is the catch-all. Built as a fill-blanks sweep
+over the **existing** point-person slot rather than a new table — `lcc_entity_owner_override`
+(entity_id → owner_user_id, the P112/SF-owner-capture mechanism already read by
+`v_lcc_entity_point_person`, `lcc_cadence_point_person`, and My Work/Team Queue scoping). A second
+"who owns this prospect" table would have been exactly the normaliser-drift/second-registry class
+this repo warns about repeatedly (P116, P189, C1) — this reuses the slot that already exists and
+is already the "point person who works the deal" per `property-owner-subsystem.md`.
+
+**⚠️ This directly supersedes `PLANNED-BACKLOG.md` row `C4c` ("DO NOT BUILD YET — broker
+assignment is premature", 2026-08-29), and the supersession is recorded, not silently
+overridden.** C4c's objection was specifically *"do NOT default-stamp owners to Scott — that
+writes a fact nobody asserted into the column every surface reads."* Scott has now explicitly
+asserted that default policy, by name, with a stated fallback order (self-signal → vertical
+default → Scott catch-all) — which is exactly the missing input C4c was waiting on. C4c's other
+finding (161/161 existing `lcc_entity_owner_override` rows resolve cleanly through
+`v_lcc_entity_point_person`) is the evidence that reusing this table is safe.
+
+**Prospect population:** entities in `lcc_priority_queue_resolved`, the materialized
+seller-prospecting queue cache — the one population the operator doctrine section of this file
+already calls "prospects" ("The priority queue is seller prospecting"). Not every `entities` row,
+not a `pipeline_stage` column (none exists on `bd_opportunities`/`entities`), not raw
+`bd_opportunities` (skews toward active deals, not the earlier prospecting population the queue
+targets).
+
+**Rule 1 (ROE signal wins)** is satisfied two ways, never a rebuilt classifier:
+- Existing `lcc_entity_owner_override` rows already written by SF-owner capture
+  (`set_by like 'sf_owner%'`) ARE the materialized form of "a Team Briggs SF Account Owner is
+  already pursuing" — the sweep's fill-blanks exclusion (`NOT EXISTS`) respects them for free.
+- A new JS pass, `api/_shared/broker1-assign.js::applyBroker1RoeSelfSignal`, reuses
+  **`roe.js::brokerClass()` directly** (imported, not reimplemented) against each unassigned
+  prospect's SF Account-owner name (`entities.external_identities` source_system='salesforce'/
+  source_type='account', the same tier `resolveAccountOwner()` already reads for the Contact 360
+  panel) and writes a fill-blank `lcc_entity_owner_override` row when it classifies `'self'` AND
+  resolves unambiguously to a known active `lcc_users` row — never a guess.
+  ⚠️ Scoped deliberately to the SF-owner tier only, not the `dealAssignees` tier (dia
+  `salesforce_activities.assigned_to`) — that signal is per-contact and cross-database (a
+  different Supabase project), so batching it over every prospect would be the exact N+1
+  round-trip cost the P123 doctrine warns against; it stays on the existing per-contact Contact
+  360 path.
+
+**Rule 2/4 (vertical default + Scott catch-all):** new SQL function
+`lcc_broker1_assign_prospect_brokers(p_dry_run)` (migration
+`20261101160000_lcc_broker1_prospect_broker_assignment.sql`) — for every prospect with **no**
+existing override row: `domain='dia'` → Kelly, else (gov/lcc/cre/null) → Scott. Insert is
+`ON CONFLICT (entity_id) DO NOTHING` — structurally fill-blanks-only; Nate's `lcc_user_id` is
+resolved for reporting only and never appears on the assignable side of the CASE. Reversible:
+`DELETE FROM lcc_entity_owner_override WHERE set_by LIKE 'broker1_%'`.
+
+**Route:** `GET/POST /api/broker1-assign-tick` (`api/_handlers/broker1-assign-tick.js`, mounted in
+`server.js`/`admin.js` per the sub-route convention). GET = dry run (both the JS ROE pass and the
+SQL sweep run in dry-run mode); POST = apply, ROE pass first then the SQL sweep (so a self-signal
+write is already on the row before the sweep's exclusion runs — order asserted by the guard test).
+
+**Salesforce connect-back (step 4) — NOT built, and the reason is a capability fact, not a scoping
+choice.** Per `C1`'s prior finding (still current): *"LCC's entire Salesforce surface is a
+read-only Power Automate proxy — Scott has no admin rights to register a Connected App"* — a
+repo-wide grep for `sobjects`/`/services/data/v`/a POST to Salesforce returns nothing. **There is
+currently no write path from LCC into Salesforce at all**, so "the minimum necessary field on the
+Account/Contact Owner, plus a stable reference back to LCC" cannot be built today regardless of
+scope. Recorded as backlog `BROKER1-sf` rather than faked: the smallest viable shape, if/when a
+Connected App exists, is a single field write (an existing Account/Contact Owner field, since
+Salesforce already reads that for its own ROE) plus the entity's LCC URL as a stable reference —
+never a payload sync of LCC's ownership/contact record, per Scott's "minimum necessary" framing
+and the `ownership-truth-pipeline-state.md` Stage 5 doctrine.
+
+**Guard:** `test/broker1-prospect-broker-assignment.test.mjs` (13 tests) — Nate never assignable,
+fill-blanks-only, ROE-before-default ordering, `brokerClass` reuse (not reimplemented), name
+resolution never guesses on ambiguity. `node --check` + `npm run check:boot` clean.
+
+**⚠️ Not yet run against production — no resolved-count split to report.** This sandbox has no
+Supabase credentials for LCC Opps, so the real self-signal/gov-default/dia-default/catch-all/
+already-manual split (step 3's required output) cannot be produced without fabricating it.
+**Next step:** `GET /api/broker1-assign-tick` for the dry-run counts, spot-check 2–3 live examples
+(one gov, one dia, one with a real `sf_owner%` self-signal if one exists) against the stated rule,
+then `POST` to apply and record the real split here.
+
 ## 2026-09-11 — Housekeeping: `prompts/` cleaned of stale duplicates left over from earlier `git mv`s
 
 With the PRI arc closed, checked `docs/claude-code/prompts/` for anything sitting stale — this is the

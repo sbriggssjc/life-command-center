@@ -220,6 +220,7 @@ app.all('/api/ownership-chain-draft-tick', (req, res) => { req.query._route = 'o
 app.all('/api/briefing-analyst-take-tick', (req, res) => { req.query._route = 'briefing-analyst-take-tick'; adminHandler(req, res); });
 app.all('/api/dia-property-link-tick', (req, res) => { req.query._route = 'dia-property-link-tick'; adminHandler(req, res); });
 app.all('/api/tier0-auto-attach-tick',    (req, res) => { req.query._route = 'tier0-auto-attach-tick';    adminHandler(req, res); });
+app.all('/api/broker1-assign-tick',       (req, res) => { req.query._route = 'broker1-assign-tick';       adminHandler(req, res); });
 app.all('/api/ambiguous-entity-automerge-tick', (req, res) => { req.query._route = 'ambiguous-entity-automerge-tick'; adminHandler(req, res); });
 app.all('/api/bench-rank-tick',           (req, res) => { req.query._route = 'bench-rank-tick';           adminHandler(req, res); });
 app.all('/api/sf-link-assist-tick',        (req, res) => { req.query._route = 'sf-link-assist-tick';        adminHandler(req, res); });
