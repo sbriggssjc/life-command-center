@@ -916,6 +916,86 @@ test('candidate-scoped multi-address parcel binds an approved operating tenant t
   }
 });
 
+test('candidate-scoped multi-address parcel accepts exact CMS recorded-owner identity without tenant identity', () => {
+  const conflict = {
+    status: 'approved',
+    reason_code: 'service_location_multi_address_same_parcel_recorded_owner_identity',
+    frozen_address_token: '155 TIMBERWOLF PKWY|KALISPELL|MT|59901',
+    assessor_address_token: '155 TIMBERWOLF PKWY|KALISPELL|MT|59901',
+    captured_address_token: '165 TIMBERWOLF PKWY|KALISPELL|MT|59901',
+    owner_mailing_address_token: '175 TIMBERWOLF PKWY|KALISPELL|MT|59901',
+    recorded_owner_name: 'GLACIER SURGICAL INC',
+    parcel_number: '07-4077-36-1-10-31-4321',
+    costar_property_id: '19297271',
+    authorized_by: 'research_owner',
+    authorized_at: '2026-09-11T12:00:00Z',
+    second_review_required: true,
+    evidence_citations: [
+      { source: 'official_facility_registry', url: 'https://registry.example/glacier-surgical' },
+      { source: 'licensed_property_public_record', url: 'https://product.costar.com/detail/all-properties/19297271/map' },
+    ],
+  };
+  const target = {
+    candidate_fingerprint: sha('5'),
+    address_token: conflict.frozen_address_token,
+    cms_identity: {
+      facility_name: 'GLACIER SURGICAL INC',
+      address: '155 Timberwolf Parkway', city: 'Kalispell', state: 'MT', zip: '59901',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['GLACIER SURGICAL INC.'],
+      approved_same_parcel_address_conflicts: [conflict],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://product.costar.com/detail/all-properties/19297271/map',
+    costar_property_id: '19297271',
+    address: '165 Timberwolf Pky', city: 'Kalispell', state: 'MT', zip: '59901',
+    parcel_number: '07-4077-36-1-10-31-4321',
+    tenants: [{ name: 'Torrent Technologies, Inc' }, { name: 'Marsh McLennan' }],
+    square_footage: '17,359',
+  };
+
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.identity_match.mode, 'approved_same_parcel_address_conflict');
+  assert.equal(built.identity_match.corroboration_basis,
+    'approved_recorded_owner_identity_multi_address_parcel');
+  assert.equal(built.identity_match.assessor_address_preserved,
+    conflict.assessor_address_token);
+  assert.equal(built.identity_match.owner_mailing_address_preserved,
+    conflict.owner_mailing_address_token);
+  assert.equal(built.identity_match.recorded_owner_name_preserved,
+    conflict.recorded_owner_name);
+  assert.equal(built.identity_match.costar_property_id, '19297271');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const blocked of [
+    { ...context, costar_property_id: '19297272' },
+    { ...context, parcel_number: '07-4077-36-1-10-31-4322' },
+    { ...context, address: '166 Timberwolf Pky' },
+    { ...context, source: 'rca' },
+  ]) assert.throws(() => buildAscStructuredCapture(target, blocked), /does not match/);
+
+  for (const invalidEvidence of [
+    { assessor_address_token: '156 TIMBERWOLF PKWY|KALISPELL|MT|59901' },
+    { owner_mailing_address_token: '' },
+    { owner_mailing_address_token: conflict.captured_address_token },
+    { recorded_owner_name: 'UNRELATED OWNER LLC' },
+    { second_review_required: false },
+    { evidence_citations: [conflict.evidence_citations[0]] },
+  ]) {
+    assert.throws(() => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: {
+        ...target.cms_evidence,
+        approved_same_parcel_address_conflicts: [{ ...conflict, ...invalidEvidence }],
+      },
+    }, context), /does not match/);
+  }
+});
+
 test('building ranges contain a frozen street number only with exact location and tenant corroboration', () => {
   const target = {
     candidate_fingerprint: sha('9'),
