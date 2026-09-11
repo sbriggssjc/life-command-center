@@ -62,6 +62,68 @@ this fix as deployed.
 `PLANNED-BACKLOG.md`'s `PRI3` row updated to 🟡 (fix applied and tested per the response, held short of
 ✅ pending that confirmation). Prompt moved to `docs/claude-code/prompts/done/`. Response docx pending
 archive to `responses/done/` on Scott's machine.
+## 2026-09-11 — PDR14b shipped + live-applied: dia dangling property_id self-heal, ongoing monitoring, acceptance test confirmed
+
+**Scope: `domain='dia'` only, per the prompt's explicit instruction** — `domain='gov'` (PDR14-GOV,
+above) is deliberately untouched, a small closed gap that does not need this machinery.
+
+**Real split (measured live, not extrapolated): 31 via PDR14a redirect / 13 via an unambiguous
+PDR13-style parcel_number match / 46 flagged, never guessed.** Re-derived independently against
+PDR14a's own resolver (`dia_resolve_property_id`, called via `domainQuery('dialysis', …)` — the
+direct service-key path, never `diaQuery`/the anon-keyed edge function): of 1,246 distinct
+dia-linked property ids across 1,304 dia-domain LCC entities, **89 distinct dead pids / 90 dangling
+entities** (one dead pid, `29100`, is shared by two entities — a fact the earlier pid-level "89"
+figure could not see). `dia_resolve_property_id` answered **31 of 89 exactly**, matching PDR14a's
+own reported split. For the remaining 58, reused PDR13's `dia_find_property_twins_strong_id`
+approach rather than inventing a new scoring scheme (parcel_number, exact match, single candidate,
+`min length 6` — its own default): **13 of the 58 resolve unambiguously** (one candidate at
+`parcel='14'`, length 2, was correctly refused — the exact class the length floor exists to catch).
+No medicare_id/CCN fallback was possible — none of the 58 carry one in metadata, a real ceiling, not
+a shortcut. **46 entity/pid pairs (45 distinct dead pids) flagged into the new
+`lcc_dia_property_link_review` table, unresolved, never guessed.**
+
+**Applied live 2026-09-11** (`supabase/migrations/20260911190000_lcc_pdr14b_dia_property_link_review.sql`
++ `…190100_…one_time_sweep_corrections.sql`, both idempotent/state-guarded — a replay after the
+corrections already landed is a safe no-op). Every correction went through a single merge-owner RPC
+(`lcc_pdr14b_apply_dia_redirect`, SECURITY DEFINER, service_role-only, revoke+assert stanza per the
+SEC1 doctrine) — `entities.metadata` is a shared jsonb column with many writers, so a PostgREST PATCH
+would have replaced the whole column (the OCR2 footgun); the RPC fills only the PDR14b keys and is
+fill-blanks-guarded (`WHERE metadata->>'domain_property_id' = <dead pid>`, so a race against another
+writer degrades to a no-op, not a clobber). Auditable: every corrected entity carries
+`metadata.domain_property_id_corrected_from/_at/_via`.
+
+**Acceptance test — confirmed live, not just planned:** `get_property_context` for entity
+`d90be440-c4f2-4e6c-a50e-8a0be44c9d76` (DaVita/Donna-TX) now resolves `domain_property_id=39874`
+(was `37722`), and property `39874` carries **7 documents, 1 transaction, both recorded_owner_id and
+true_owner_id populated** — the exact regression PDR3/PDR6 have been blocked on since PDR13 shipped.
+
+**Ongoing monitoring (never let this go silent for months again):**
+`GET/POST /api/dia-property-link-tick` (`api/_shared/dia-property-redirect-planner.js` for the pure
+resolution logic; the handler lives in `api/admin.js`, mounted in `server.js`). GET is an ungated
+dry run (scans, classifies, reports counts, never writes); POST is gated behind
+`PDR14B_DIA_REDIRECT_SWEEP` in `feature_flags_registry` (**on**) and self-heals going forward using
+the identical redirect→parcel-match→flag resolution order. Chose the **recurring-sweep** shape over
+inline self-heal inside `get_property_context`'s own read path: the read path is a hot, latency-
+sensitive context assembler serving live agent/UI traffic, and adding a redirect RPC call + a
+possible parcel-match probe on every cold read would add unpredictable tail latency to a path this
+repo already documents as needing an assemble-on-miss fallback for long-tail properties (see
+`mcp/context-assemble.js`); a scheduled sweep bounded at `limit=200` (mirrors the `property-twin-
+assist-tick` pattern) keeps the fix off the hot path while still closing the gap within one cron
+cycle of the next dia merge. Visibility: the `lcc_dia_property_link_review` table is the reviewable
+queue (mirrors the repo's other review-lane pattern — reversible via `resolved_at`/`resolved_via`,
+never hard-deleted); `feature_flags_registry` carries the flag's live state per the Inert-Feature-
+Registry doctrine so an "off" sweep is visible on the daily brief's Dormant Capabilities section
+rather than silently no-op'ing forever, the exact failure this whole prompt exists to prevent.
+
+Tests: `test/pdr14b-dia-property-redirect.test.mjs` (15 tests) pin the planner's pure logic — a
+live pointer is never touched (the resolver only ever receives already-dangling candidates), a
+resolvable pointer is corrected exactly once via a named channel (redirect preferred over parcel
+match when both would apply), an ambiguous or sub-threshold parcel match resolves nothing, and the
+live DaVita/Donna-TX acceptance case is pinned as a positive control. `npm run check:boot` and the
+`sql-definer-privilege-stanza` guard both pass with the new RPC (0 new offenders).
+
+**Backlog updated:** PLANNED-BACKLOG.md PDR14 row → shipped+live-verified end to end (both PDR14a
+and PDR14b sides); PDR3/PDR6 → confirmed live, no longer blocked.
 
 ## 2026-09-11 — PDR14a shipped + live-verified; government-side parallel gap investigated and found small, closed, and fully explained; recommendation delivered
 

@@ -118,6 +118,7 @@ import * as RS from './_shared/sf-link-rescore-planner.js';
 import * as DH from './_shared/sf-donor-handoff-planner.js';
 import * as SA from './_shared/sf-link-assist-planner.js';
 import * as PT from './_shared/property-twin-assist-planner.js';
+import * as DPR from './_shared/dia-property-redirect-planner.js';
 import * as CA from './_shared/clean-assist-context.js';
 import { enrichCleanAssistItems } from './_shared/clean-assist-enrich.js';
 import { handleDealCorrespondenceBackfill } from './_handlers/deal-correspondence-backfill.js';
@@ -256,6 +257,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'link-coverage-tick':         return handleLinkCoverageTick(req, res);
     case 'match-disambig-assist-tick': return handleMatchDisambigAssistTick(req, res);
     case 'property-twin-assist-tick': return handlePropertyTwinAssistTick(req, res);
+    case 'dia-property-link-tick': return handleDiaPropertyLinkTick(req, res);
     case 'ownership-chain-draft-tick': return handleOwnershipChainDraftTick(req, res);
     case 'tier0-auto-attach-tick':    return handleTier0AutoAttachTick(req, res);
     case 'ambiguous-entity-automerge-tick': return handleAmbiguousEntityAutomergeTick(req, res);
@@ -2142,6 +2144,182 @@ async function handlePropertyTwinAssistTick(req, res) {
   await recordTwinAssistHealth({ status: summary.failed ? 'amber' : 'green', count: summary.annotated_new,
     lastError: summary.failed ? summary.failed + ' annotation(s) failed in ' + sourceRunId : null, details: summary });
   return res.status(200).json({ ok: true, mode: 'apply', ...summary });
+}
+
+// ============================================================================
+// PDR14b — GET/POST /api/dia-property-link-tick
+//
+// Recurring self-heal sweep for dia-domain entity metadata.domain_property_id
+// pointers that have gone dangling (dia merged/dropped the property row). See
+// api/_shared/dia-property-redirect-planner.js for the resolution order and
+// its doctrine. domain='dia' ONLY.
+//
+// GET  -> ungated dry run: scans, classifies, reports counts. NEVER writes.
+// POST -> gated behind PDR14B_DIA_REDIRECT_SWEEP (feature_flags_registry).
+//         Self-heals the resolvable subset (PDR14a redirect, then an
+//         unambiguous parcel_number match), and upserts the unresolved
+//         residue into lcc_dia_property_link_review — never guessed.
+//
+// Bounded (limit, default 200) + resumable (each run re-scans the current
+// dangling population, so a capped night simply resumes next run) + every
+// correction is reversible via metadata.domain_property_id_corrected_from.
+// ============================================================================
+
+const DPR_TICK_DEFAULT_LIMIT = 200;
+
+async function fetchDiaLinkedEntities() {
+  // Only entities carrying a dia domain_property_id pointer are in scope.
+  // metadata->>'domain_property_id' is a text column so a numeric compare
+  // must cast; PostgREST paging caps at 1000/page (documented repo footgun),
+  // so page explicitly rather than trusting a single request.
+  const out = [];
+  let offset = 0;
+  for (;;) {
+    const r = await opsQuery('GET',
+      `entities?domain=eq.dia&metadata->>domain_property_id=not.is.null` +
+      `&select=id,metadata&order=id.asc&limit=1000&offset=${offset}`);
+    if (!r.ok || !Array.isArray(r.data)) break;
+    out.push(...r.data);
+    if (r.data.length < 1000) break;
+    offset += 1000;
+  }
+  return out;
+}
+
+async function diaPropertiesExist(pids) {
+  // Membership probe against the LIVE dia properties table — the anti-join
+  // that decides which candidates are actually dangling. Chunked to stay
+  // well under any URL-length/1000-row PostgREST limits.
+  const live = new Set();
+  const CHUNK = 200;
+  for (let i = 0; i < pids.length; i += CHUNK) {
+    const chunk = pids.slice(i, i + CHUNK);
+    const r = await domainQuery('dia', 'GET',
+      `properties?property_id=in.(${chunk.join(',')})&select=property_id`);
+    if (r.ok && Array.isArray(r.data)) {
+      for (const row of r.data) live.add(String(row.property_id));
+    }
+  }
+  return live;
+}
+
+async function diaResolveRedirect(pid) {
+  const r = await domainQuery('dia', 'POST', 'rpc/dia_resolve_property_id',
+    { p_property_id: Number(pid) });
+  if (!r.ok) return null;
+  const v = Array.isArray(r.data) ? r.data[0] : r.data;
+  // The RPC returns a bare bigint (or null); PostgREST wraps a scalar RPC's
+  // result in { dia_resolve_property_id: <value> } OR returns it bare
+  // depending on the PostgREST version — handle both.
+  if (v == null) return null;
+  if (typeof v === 'object') return v.dia_resolve_property_id ?? null;
+  return v;
+}
+
+async function diaParcelFallbackMatch(parcelToken) {
+  // PDR13-style unambiguous exact match: a single candidate row wins, more
+  // than one is refused (surfaced, never guessed) — mirrors
+  // dia_find_property_twins_strong_id's `distinct on` + anchor selection,
+  // simplified to "exactly one live property carries this parcel_number".
+  const r = await domainQuery('dia', 'GET',
+    `properties?parcel_number=eq.${encodeURIComponent(parcelToken)}&select=property_id&limit=2`);
+  if (!r.ok || !Array.isArray(r.data)) return { n_match: 0, candidate_pid: null };
+  return {
+    n_match: r.data.length,
+    candidate_pid: r.data.length === 1 ? r.data[0].property_id : null,
+  };
+}
+
+async function handleDiaPropertyLinkTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchW93Flag('PDR14B_DIA_REDIRECT_SWEEP');
+  const enabled = w93FlagEnabled('PDR14B_DIA_REDIRECT_SWEEP', flag);
+  const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit || req.body?.limit || String(DPR_TICK_DEFAULT_LIMIT), 10)));
+
+  const entities = await fetchDiaLinkedEntities();
+  const distinctPids = [...new Set(entities.map(e => String(e.metadata?.domain_property_id || '')).filter(Boolean))];
+  const liveSet = distinctPids.length ? await diaPropertiesExist(distinctPids) : new Set();
+
+  const dangling = entities.filter(e => {
+    const pid = String(e.metadata?.domain_property_id || '');
+    return pid && !liveSet.has(pid);
+  }).slice(0, limit);
+
+  // Resolve each dangling entity's candidates (I/O), then hand the pure
+  // planner the whole batch so the decision logic is identical whether run
+  // here or under test.
+  const resolvedInput = [];
+  for (const e of dangling) {
+    const dead_pid = String(e.metadata?.domain_property_id);
+    const redirectResolved = await diaResolveRedirect(dead_pid);
+    let parcelMatch = null;
+    if (redirectResolved == null) {
+      const token = DPR.usableParcelToken(e.metadata?.parcel_number);
+      if (token) parcelMatch = await diaParcelFallbackMatch(token);
+    }
+    resolvedInput.push({ id: e.id, dead_pid, redirectResolved, parcelMatch });
+  }
+  const plan = DPR.planDiaPropertyRedirectSweep(resolvedInput);
+
+  // ---- GET dry-run ----------------------------------------------------------
+  if (req.method === 'GET') {
+    return res.status(200).json({
+      ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+      surface: 'dia_property_link', limit,
+      linked_total: entities.length, distinct_pids: distinctPids.length,
+      dangling_this_scan: dangling.length,
+      would_resolve_via_redirect: plan.resolved_via_redirect,
+      would_resolve_via_parcel_match: plan.resolved_via_parcel,
+      would_flag: plan.flagged,
+      note: 'domain=dia only. Resolution order: PDR14a dia_resolve_property_id redirect, ' +
+        'then an unambiguous parcel_number match (>=6 chars, single candidate). ' +
+        'No confident match -> lcc_dia_property_link_review, never guessed. NO writes in dry-run.',
+    });
+  }
+
+  // ---- POST apply (flag-gated) -----------------------------------------------
+  if (!enabled) {
+    return res.status(200).json({
+      ok: true, skipped: 'feature_flag_off', enabled: false,
+      dangling_this_scan: dangling.length,
+      would_resolve_via_redirect: plan.resolved_via_redirect,
+      would_resolve_via_parcel_match: plan.resolved_via_parcel,
+      would_flag: plan.flagged,
+    });
+  }
+
+  let applied = 0, apply_failed = 0, flagged = 0, flag_failed = 0;
+  for (const item of plan.toApply) {
+    // entities.metadata is a shared jsonb column with many writers; a
+    // PostgREST PATCH replaces the whole column (the documented OCR2
+    // footgun), so the correction goes through a single-merge-owner RPC
+    // that fills only the PDR14b keys and races safely against every other
+    // writer via a row lock.
+    const rpc = await opsQuery('POST', 'rpc/lcc_pdr14b_apply_dia_redirect', {
+      p_entity_id: item.entity_id,
+      p_resolved_property_id: item.resolved,
+      p_dead_property_id: item.dead_pid,
+      p_via: item.via,
+    });
+    if (rpc.ok) applied += 1; else apply_failed += 1;
+  }
+  for (const item of plan.toFlag) {
+    const rpc = await opsQuery('POST', 'lcc_dia_property_link_review', {
+      entity_id: item.entity_id, dangling_property_id: item.dead_pid, reason: item.reason,
+    }, { Prefer: 'resolution=merge-duplicates,return=minimal' });
+    if (rpc.ok) flagged += 1; else flag_failed += 1;
+  }
+
+  return res.status(200).json({
+    ok: true, mode: 'apply', enabled,
+    dangling_this_scan: dangling.length,
+    resolved_via_redirect: plan.resolved_via_redirect,
+    resolved_via_parcel_match: plan.resolved_via_parcel,
+    applied, apply_failed, flagged, flag_failed,
+  });
 }
 
 // ============================================================================
