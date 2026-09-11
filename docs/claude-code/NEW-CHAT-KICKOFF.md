@@ -24,6 +24,11 @@ You're helping Scott Briggs run **Life Command Center (LCC)** — a CRE business
    possibly already measured and refuted.
 4. `docs/claude-code/STATUS.md` — the running reconcile log, newest first. It is a *log*, not the
    state; pre-2026-08-13 entries are archived under `docs/history/`.
+5. **`docs/os/OPERATOR-INBOX.md`** (OC-a, 2026-09-11) — the one operator-note to-do list, GENERATED
+   from `operator_notes` by `scripts/render-operator-inbox.mjs` (auto-refreshed at session start via
+   `.claude/hooks/session-start.sh` when `OPS_SUPABASE_*` creds are present). Every channel (in-app
+   Note button, Outlook `LCC-Note`, Teams, MCP `log_operator_note`, Cowork) funnels here. Check it
+   alongside `responses/` — it is a second inbox, not a replacement.
 
 Then, only if the task touches them: `docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md` (surfaces /
 comps / deploy map) and `docs/os/LOCAL-MODEL-{LEVERAGE-MAP,GAP-AUDIT}.md` (where the on-prem model

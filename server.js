@@ -24,6 +24,8 @@ import { mountLccMcp } from './mcp/server.js';
 import { makeOpportunitySyncRoute } from './mcp/opportunity-sync.js';
 import { makeDealRosterRoute } from './mcp/deal-roster.js';
 import { handleDealEmailMatchCron } from './api/_handlers/deal-email-match-cron.js';
+import { handleOperatorNoteIntake } from './api/_handlers/operator-notes-intake.js';
+import { handleOperatorTriageTick } from './api/_handlers/operator-triage-tick.js';
 import { handleDealCommsPropagateTick } from './api/_handlers/deal-comms-propagate-tick.js';
 import { handleCommsOwnerAttributionTick } from './api/_handlers/comms-owner-attribution-tick.js';
 
@@ -423,6 +425,12 @@ app.all('/api/intake-log-call', (req, res) => { req.query._route = 'log-call'; i
 // W7.3 path C: Outlook category-tagging receiver (Power Automate). The
 // correspondence design names this receiver /api/intake-tagged-comm.
 app.all('/api/intake-tagged-comm', (req, res) => { req.query._route = 'tagged-comm'; intakeHandler(req, res); });
+// OC-a — operator-note funnel (spec EXEC-BRIEFS-SPEC.md §6): one intake
+// endpoint for every channel (in-app Note, MCP log_operator_note, Cowork,
+// Teams/PA) + the OC2 triage tick. Mounted directly (not via intakeHandler's
+// _route dispatch) — each handler is its own auth boundary.
+app.all('/api/operator-notes', handleOperatorNoteIntake);
+app.all('/api/operator-triage-tick', handleOperatorTriageTick);
 // W7.6 Mailbox Mirror: deterministic worklist of closed-loop flagged emails +
 // the PA mover's ack endpoint. Flag-gated (MAILBOX_MIRROR).
 app.all('/api/mailbox-reconcile-worklist', (req, res) => { req.query._route = 'mailbox-reconcile-worklist'; intakeHandler(req, res); });
