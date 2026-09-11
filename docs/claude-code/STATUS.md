@@ -1,5 +1,20 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — ID1/ID2/ID3 backlog blocks reconciled (two parallel threads, one table)
+
+`docs/os/PLANNED-BACKLOG.md` §P0d carried two independently-sourced `ID1`→`ID2`→`ID3` blocks: the
+Cowork-prompted operator-identity audit (this file's own ID1 entries above) and a separately-run,
+more granular ID0 probe (`docs/audits/ID0_IDENTITY_VALUE_DOMAIN_PROBE_2026-09-11.md`) with its own
+`ID1`/`ID2`/`ID3a–f` rows. Per this repo's own "two windows, one file" doctrine, folded into ONE
+table rather than adjudicated: the duplicate pre-audit `ID1`/`ID2` restatements are retired in
+place with a note (nothing deleted from history), the ID0 probe's six sub-classes (`ID3a`–`ID3f`)
+are kept verbatim and cross-referenced against the audit's own §9.1/§9.5 findings where they
+overlap (gov agency identity, `ID3a` — the two passes corroborate, not duplicate, each other's
+numbers), and the audit's two NEW findings not in the ID0 probe are added as `ID3g` (LCC Opps
+entity-name operator-substring pollution) and `ID3h` (`cortex_market_intel.tenant`, confirmed
+real). `ID4`'s prompt was written to fire "after the ID1 response is reconciled" — that gate is now
+satisfied, and its row is marked unblocked/ready to send.
+
 ## 2026-09-11 — ID1 live-DB follow-up: government + LCC Opps measured (PR #2323); corrects the sibling ranking below
 
 The ID1 entry immediately below this one shipped with no live DB credentials and marked
