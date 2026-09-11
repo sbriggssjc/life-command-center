@@ -1,5 +1,33 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — AC2/AC3 (bench ranking + Ollama role inference) flipped live: migration applied, `BENCH_RANK_WRITE` registered on
+
+The last open item from `ACI-phase2-unitC`'s own verification note was a pure operator action: apply
+`20261010150000_lcc_bench_rank_run_log.sql` and register `BENCH_RANK_WRITE` in `feature_flags_registry`.
+Did both against `xengecqvemvfknjvbvrq`.
+
+**Migration applied clean** — `lcc_bench_rank_run_log` and `lcc_bench_rank_write_log` both confirmed live,
+correctly permissioned (`service_role` INSERT, `anon`/`authenticated` revoked on both).
+
+**Flag registered**: `BENCH_RANK_WRITE` inserted into `feature_flags_registry` with `state='on'`,
+`surface='api/bench-rank-tick'`. `feature-flag.js`'s own resolution order (explicit env var wins if set,
+else the registry decides) means this alone is enough — no Railway env var or redeploy needed.
+
+**What this does and doesn't do**: `GET /api/bench-rank-tick` was already ungated (dry-run only) and stays
+that way. `POST` (the real write) was a no-op end-to-end until both the migration and the flag existed —
+now it isn't, but nothing calls the route on a schedule (checked: no cron references
+`bench-rank-tick` anywhere in the repo, it's purely an on-demand admin route). So this makes the write path
+genuinely live and ready rather than actually causing anything to write yet — the first real POST still needs
+a person (or a future cron, not built) to trigger it.
+
+**Docs**: `PLANNED-BACKLOG.md` `AC2` row updated from "ledger migration written, not applied live" to the
+live-confirmed state.
+
+**Next step.** The ownership/contact-propagation thread's other open items are unchanged by this:
+`OWN-T0a` (gov's 43.4% recorded-vs-true-owner disagreement, still the largest untouched upstream gap),
+`B1b` (developer chain, gated behind `B5`), and `AC11` (individual-owner control-chain population needs
+re-measuring now that `PR-scanner-2`'s SOS capture has shipped — it was sized at zero before that existed).
+
 ## 2026-09-11 — BROKER1 applied live: a real bug found and fixed in production, 1,303 prospects assigned (870 gov→Scott, 414 dia→Kelly, 19 catch-all→Scott), Nate confirmed untouched
 
 The shipped code (`8a40073d`, merged) could not be run by the session that built it — no DB credentials there.
