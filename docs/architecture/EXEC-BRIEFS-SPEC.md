@@ -1,7 +1,7 @@
 # Executive Briefs — Market Briefs per swimlane (MB) + CTO/CDO Build Brief (XB) + Operator Funnel (OC)
 
 **Spec v0.2 — decisions recorded 2026-09-11 (Scott), architecture recommended (Cowork). Design approved in
-principle; build proceeds prompt-by-prompt. EB1 (foundation) merged PR #2291 2026-09-11; OC-a merged PR #2298; MB-a merged PR #2301; next: `docs/claude-code/prompts/MBa2-psql-source-fixes-and-live-verify.md`.**
+principle; build proceeds prompt-by-prompt. EB1 (foundation) merged PR #2291 2026-09-11; OC-a merged PR #2298; MB-a merged PR #2301; MB-a2 merged PR #2307; next: `docs/claude-code/prompts/MBa3-freshness-honest-facts-and-live-flip.md`.**
 **Backlog:** `docs/os/PLANNED-BACKLOG.md` §P18. **Exemplars:** `docs/briefs/exemplars/2026-09-11-*.md`.
 
 ## 0. Scott's decisions (2026-09-11)
@@ -185,3 +185,38 @@ added: every cap-rate fact in any brief comes from the shared comps engine (`run
 filters, so a brief can never disagree with `query_comps`**; `v_dia_on_market` uses `current_cap_rate`; the
 `medicare_clinics` read truncates at 1,000 of 6,695. **Design rule added: producers aggregate in SQL; no row-limit-bound
 client-side counts; CI carries a truncation tripwire and live column contracts.** OC-v still open (0 notes, no triage flag row).
+
+**Addendum 2026-09-11 "MB-a2" — sources fixed against the live schema + DB applied; flags still OFF.**
+All four MB1c defects fixed and verified live via Supabase MCP. Cap-rate band + trades-since-last-run now
+call the comps engine's OWN `rpc/rpc_query_comps` RPC — the same RPC `query_comps`/mcp/comps-tools.js
+uses — rather than reproducing its filters by hand; this satisfies the design rule above by construction
+(the RPC already applies `transaction_state='live'`, `exclude_from_market_metrics IS NOT TRUE`, and
+`cap_rate = coalesce(cap_rate_final, cap_rate)` server-side, and already joins `properties` for
+address/city/state and resolves `tenant`). The handler additionally reads the engine's own DISPLAYED
+(rent÷price) cap basis via `displayedCompCap()` (imported from `mcp/comps-tools.js`), falling back to the
+RPC's coalesced field — the identical basis `query_comps`' own summary quotes (Prompt 52 doctrine).
+Verified live: the RPC returns 200 TTM rows (175 `dialysis_db` + 25 `salesforce`, 98+21 carrying a cap)
+against the raw table's 94 market-eligible rows — a proper superset, not a narrower/different set.
+`v_dia_on_market` now reads `current_cap_rate`. CMS operator counts now read a new server-side view,
+`v_market_brief_cms_operator_counts` (migration `dialysis/20260911190000`, **applied**;
+`sum(clinic_count)=6695`, 32 distinct operators, top row DaVita/Fresenius 2,450 each — matches the full
+population). Every paged source read carries a `truncationGap()` tripwire. Migration
+`20260911180000_lcc_mba_market_brief_producers.sql` is now **APPLIED to LCC Opps**: `fact_key` column +
+partial unique index present, both flags registered `off`, both crons scheduled (`15 7 * * *` P-SQL,
+`10 10 * * *` P-RSS — checked against live `cron.job`, no collision). Guard:
+`test/mba2-market-brief-psql-source-fixes.test.mjs` (12 tests, mutation-verified RED on the reintroduced
+`cap_rate` column-name regression); full repo suite 5,913 pass / 0 fail / 6 skipped. P-RSS (MB2) was swept
+for the same defect class and found clean — it reads ops-side JSON, no domain-DB row limits or guessed
+columns. **⚠️ Neither flag flipped, neither tick run live** — this session has Supabase DB access only,
+no Railway/API reach, so the JS fix is committed but not yet redeployed or exercised against the live
+endpoint. Operator next step: redeploy, `GET /api/market-brief-psql-tick?lane=dialysis`, read `gaps[]`
+(expect empty), one flag-forced `POST`, compare the reported cap-rate band to a direct `query_comps` call
+for the same window, then flip both flags.
+
+**Addendum 2026-09-11 "MB-a2 reconcile" (PR #2307 merged; Cowork live check, read-only):** fixes and migrations
+confirmed live (`fact_key`, both flags off, crons 07:15/10:10 UTC, `v_market_brief_cms_operator_counts` sums 6,695);
+app redeployed at `e42dbcb7`; 0 producer runs yet. **New defect MB1d:** CMS facts dated by run time over a census last
+seen 2026-01-22 (B6d-cms outage), and DaVita = Fresenius = 2,450 exactly. **Design rule 3 added: every fact's
+`source_date` is the source data's own as-of — never the producer's run time — and a producer whose source is beyond
+its feed SLA writes a named gap instead of facts.** Without this rule the staleness machinery (§1) cannot see
+upstream decay, which is the failure the living-brief design exists to prevent.

@@ -9,6 +9,143 @@ now either succeed or fail with an honest, recorded `run_status='failure'` inste
 snapshot row. Every fix in this arc so far has been proven or caught out by an actual run, not by tests
 alone — same discipline applies here.
 
+## 2026-09-11 — BUY0 Phase 0 complete: Geller Round 1 client deliverable + email draft; build handoff written (spec §9) and backlog rows BUY1a/1b + BUY-G1…G6 filed
+
+Cowork. Round 1 for Jordan Geller is client-ready in `Team Briggs - Documents/Clients/Jordan Geller/2026 Industrial Search/Deliverables/Round 1 - Sep 2026/`
+(Buyer Showing: 19 Focused ranked best→worst on Credit/Lease/Real Estate, Market Ranking, 207-row Broad Market, Sources & Notes, How to Use; full MSA
+workbook; email draft in Scott's voice). Client folder reorganized with `00-README.md` as the pickup file. Credit leg automated on a bond-style scale
+(American Airlines Ba3/B+ and Oil States ratings looked up). Spec gains §4.7 (OM sourcing, BUY-G3) and §9 (deliverable contract, seed code, gaps, build
+order). Supersedes the unpushed local branch `docs/buy0-om-sourcing-layer` (its §4.7 content is included here). **Next:** Scott sends Round 1; build
+starts with BUY1a when authorized.
+## 2026-09-11 -- OWN-T0j verified end-to-end: real write succeeded, cache populated, closed out
+
+Triggered the real POST directly via `select public.lcc_cron_post('/api/ownt0j-sponsor-classify-tick',
+'{}'::jsonb, 'railway')` after the auth-convention fix deployed (Railway `a95fef46`, confirmed via
+git merge-base against the fix commit). Got back `200 {"written":2462}`.
+
+**Cache table now holds real data**: `sponsor_family_confirmed=482`, `unclassified_rival=1,980` --
+byte-for-byte the same numbers every earlier independent measurement produced (this session's direct SQL
+replication, the live GET dry-run before this write, the build's own original claim). The reporting view
+(`v_lcc_ownt0j_sponsor_disagreement_report`) reads them back correctly too.
+
+OWN-T0j is now genuinely done: built, two real bugs found post-ship and fixed (both in the untested
+handler-level HTTP/auth code, not the well-tested pure classifier), and the whole path verified working
+end-to-end rather than trusted on a response's say-so. Condensed the PLANNED-BACKLOG.md row (it had grown
+through three separate verification passes into one very long entry) into a single closing summary; this
+file keeps the full blow-by-blow.
+
+**Next step.** Genuinely nothing left open on OWN-T0j. The ownership/contact-propagation thread's remaining
+open items: `B1b` (developer chain, gated behind an unstarted `B5`) is the one entirely untouched item;
+`OWN-T0e`'s own confirm lane still has the four candidates from the earlier investigation
+(Realty Income, Elman Investors, Gardner Tanenbaum, USAA Real Estate) sitting for a human decision; and the
+`gov`-token precision caveat above is worth a look before anyone confirms more short-token sponsor families.
+
+## 2026-09-11 — MB-a2 reconciled (PR #2307 merged): fixes confirmed live; new blocker MB1d (false-fresh CMS facts); MB-a3 drafted
+
+Filed `responses/MB-a2 desktop response.docx` + the already-reconciled `OWN-T0j desktop response.docx` (that thread's
+review is the 2026-09-11 "OWN-T0j reviewed" entry) → `done/`; MBa2 prompt → `prompts/done/`. **Cowork live check
+(read-only):** MB-a2 confirmed — `fact_key` + index, `MARKET_BRIEF_PSQL/PRSS` = off, crons `lcc-market-brief-psql`
+07:15 / `-rss` 10:10 UTC active, `v_market_brief_cms_operator_counts` faithful (sum 6,695). App `tranquil-delight`
+redeployed at `e42dbcb7` (per the OWN-T0j thread) → ticks are live behind OFF flags; 0 `producer_runs` yet. Standalone
+MCP still lacks `log_operator_note`/`get_operator_inbox` → not redeployed; `operator_notes` still 0. **New defect
+MB1d:** `buildCmsOperatorFacts` dates CMS counts with the run date (confidence 0.9) while the census is stale —
+DaVita/Fresenius last seen 2026-01-22, `last_ingested_at` NULL, no inactive rows (B6d-cms outage) — and
+**DaVita = Fresenius = 2,450 exactly** (likely capped import). Flipping PSQL now would publish a January census as
+today's fact. Spec §9 design rule 3 (source-as-of dating + feed gate); OPERATOR-ACTIONS MBa-hold extended; OC-v item 1
+marked half-done. **Next:** send `prompts/MBa3-freshness-honest-facts-and-live-flip.md`; after it merges, redeploy BOTH
+services (carries OC-a's MCP tools).
+
+## 2026-09-11 -- OWN-T0j: URL-length fix confirmed live, then a SECOND bug found -- POST always 401'd
+
+Confirmed the previous fix (fix/ownt0j-true-owners-url-length) deployed: Railway /version now reads e42dbcb7,
+an ancestor check confirms the fix commit is included, and curling the live GET route returns 200 with the
+exact classification counts independently verified earlier (5,133/2,462/482/1,980).
+
+Tried to trigger the real POST immediately rather than waiting ~30 min for the next cron fire -- called
+`select public.lcc_cron_post('/api/ownt0j-sponsor-classify-tick', '{}'::jsonb, 'railway')` directly (the exact
+call the cron makes, with the real X-LCC-Key pulled from Supabase Vault). It came back 401
+`{"error":"unauthorized"}` -- with the correct key. That is not how an auth check should ever behave, so this
+was investigated rather than shrugged off as a fluke.
+
+**Root cause, in the same handler as the last fix**: `authenticate(req, res)` (api/_shared/auth.js) is async
+and returns a user object, or null having already sent its own 401 -- the contract every other handler in this
+repo follows (`const user = await authenticate(req, res); if (!user) return;`, per that file's own header
+comment). OWN-T0j's tick instead called `authenticate(req)` with one argument and no `await`, then checked
+`auth.ok` -- a property that does not exist on the real return shape, and would not exist even if awaited
+correctly (authenticate() returns a user object or null, never {ok, status, error}). The unawaited Promise's
+`.ok` is always undefined, so the POST path 401'd unconditionally, key or no key.
+
+**Fixed** (branch `fix/ownt0j-auth-call-convention`): rewrote the auth check to the real calling convention.
+node --check clean; the 11 existing classifier tests (pure functions, untouched) still pass.
+
+**Why two bugs shipped in one handler**: both are HTTP/auth-layer mistakes in the one part of OWN-T0j that
+had no test coverage -- the 11 shipped tests are all against the pure classifier functions
+(api/_shared/ownt0j-sponsor-classifier.js), and nothing exercises api/_handlers/ownt0j-sponsor-classify-tick.js
+itself end-to-end. Worth a look for a follow-up: a lightweight handler-level test (mocked domainQuery/opsQuery)
+would have caught both.
+
+**Docs**: PLANNED-BACKLOG.md OWN-T0j row appended again.
+
+**Next step.** Get this fix merged and deployed, then re-trigger via lcc_cron_post (or wait for the next
+`39 */4 * * *` fire) and confirm the cache table actually populates -- that's still the one thing not yet
+verified end-to-end.
+
+## 2026-09-11 — MB-a2: P-SQL source defects fixed against the live schema + both migrations applied; flags still OFF, live tick unverified
+
+Fixed all four MB1c defects (verified live via Supabase MCP, not guessed). Cap-rate band + trades-since-
+last-run now call the comps engine's own `rpc/rpc_query_comps` RPC (the same one `query_comps` uses)
+instead of a raw `sales_transactions` select missing `operator_name/address/city/state`; cap value reads
+`reliableCompCap()` (the engine's displayed rent÷price basis via `displayedCompCap()` imported from
+`mcp/comps-tools.js`, falling back to the RPC's own `coalesce(cap_rate_final, cap_rate)`) — measured live:
+RPC returns 200 TTM rows (175 dialysis_db + 25 salesforce, 98+21 with a cap) vs the raw table's 94
+market-eligible, a proper superset. `v_dia_on_market` now reads `current_cap_rate`. CMS operator counts
+now read a new server-side view `v_market_brief_cms_operator_counts` (migration
+`dialysis/20260911190000_dia_mba2_cms_operator_counts_view.sql`, **APPLIED to Dialysis_DB**,
+`sum(clinic_count)=6695` confirmed against the full 6,695-row population). Every paged read carries a
+`truncationGap()` tripwire. Migration `20260911180000_lcc_mba_market_brief_producers.sql` is now
+**APPLIED to LCC Opps** (`fact_key` + partial unique index present; both flags `off`; both crons scheduled,
+no collision checked against live `cron.job`). Guard: `test/mba2-market-brief-psql-source-fixes.test.mjs`
+(12 tests, mutation-verified). Full repo suite: 5,913 pass / 0 fail / 6 skipped. MB2 (P-RSS) swept for the
+same defect class and found clean (ops-side JSON, no domain-DB row limits). **⚠️ NOT verified: a live tick
+call** — this session has Supabase DB access but no Railway/API reach, so the code is committed and the
+DB is applied, but `/api/market-brief-psql-tick` has not been redeployed to or exercised, and the flags
+stay `off`. **Operator next step:** merge the PR, redeploy both Railway services, `GET
+/api/market-brief-psql-tick?lane=dialysis` and confirm `gaps[]` is empty, one flag-forced `POST`, compare
+against a direct `query_comps` call for the same window, flip both flags.
+## 2026-09-11 -- OWN-T0j reviewed: classification logic verified correct, but the deployed route 502s -- found and fixed a real bug
+
+Scott: "the OWN-T0j prompt is done and the response is saved... review and update all documentation and plans
+accordingly." Reviewed by independently reproducing the numbers, not by re-reading the response.
+
+**Classification logic verified correct, byte-for-byte.** Ran the identical classification directly against
+both live Supabase projects (not through the app): 5,133 comparable / 2,462 disagree / 482 sponsor_family_confirmed
+(19.6%) / 1,980 unclassified_rival (80.4%) -- matches the shipped PLANNED-BACKLOG claim exactly. The Boyd
+Watterson positive control also holds live.
+
+**But the deployed route is broken -- curled it directly and got a 502.** `GET /api/ownt0j-sponsor-classify-tick`
+on the live Railway deploy (confirmed current: `/version` matches this session's git HEAD) returns
+`{"error":"gov true_owners fetch failed at chunk 0"}`. Root cause: the true_owners fetch batches up to 1,000
+UUID ids into a single PostgREST `in.(...)` filter -- roughly 39KB of query string, which Railway's edge
+rejects. The properties fetch just above it uses the identical shape but with short numeric ids (~8KB for
+1,000), which is why only this one fetch failed -- and why the shipped 11-test suite (pure classifier functions
+only) could not have caught it; nothing in that suite exercises an HTTP fetch.
+
+**Fixed** (branch `fix/ownt0j-true-owners-url-length`): scan `true_owners` unfiltered, paged by limit/offset
+like the transitions fetch already does, and keep only the needed ids via a client-side Set lookup -- no
+`in.()` filter, no URL-length ceiling regardless of population size (16,274 total true_owners today).
+`node --check` clean; the 11 existing classifier tests (they test pure functions, untouched by this fix)
+still pass.
+
+**The cache table remains empty in production** -- this fix hasn't shipped yet. Once it's merged and Railway
+redeploys, the next `lcc-ownt0j-sponsor-classify-refresh` cron fire should populate it for real; that's the
+thing to re-check next, not the classification math (already independently confirmed correct).
+
+**Docs**: `PLANNED-BACKLOG.md` `OWN-T0j` row appended with the verification + bug fix. Did not touch the
+`OWN-T0a`/`OWN-T0e`/`AC11` rows from the prior entry -- nothing here changes those findings.
+
+**Next step.** Get this fix branch pushed and merged, confirm the Railway redeploy, then re-check the cache
+table and the reporting view actually populate on the next cron fire.
+
 ## 2026-09-11 — PRI5 response reviewed: both real root causes found and fixed (not "undetermined" again), the orphaned-row gap resolved with live before/after, `census_demographics`'s months-old bug finally identified — held pending `Dialysis` PR #7408 merge confirmation
 
 `PRI5`'s response (`"PR15 surface response.docx"`, saved by Scott) read in full and transcribed to
