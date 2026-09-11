@@ -16,7 +16,7 @@
 //   - On-demand via POST /api/entities?action=process_sidebar_extraction
 // ============================================================================
 
-import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, canonicalEntityDomain, isJunkEntityName, normalizeEmail, isGenericInboxEmail, looksLikeContactPhone, recordContactFieldWrites } from '../_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, canonicalEntityDomain, isJunkEntityName, normalizeEmail, isGenericInboxEmail, looksLikeContactPhone, recordContactFieldWrites, hasFirmSuffix } from '../_shared/entity-link.js';
 import { isCompetitorBroker } from '../_shared/sf-nm-classifier.js';
 import { opsQuery, insertEntityRelationship, fetchWithTimeout } from '../_shared/ops-db.js';
 import { uploadArtifactToStorage } from '../_shared/artifact-storage.js';
@@ -1620,15 +1620,47 @@ async function domainPatch(domain, path, data, label) {
 
 /**
  * Infer entity_type for a contact entry from the sidebar metadata.
+ *
+ * C13g: the vendor-supplied `contact.type` is trusted when present (RCA/CoStar
+ * capture code that computes its own person/org classification, e.g. CoStar's
+ * `looksLikePerson()` in `_forsale-contacts-parse.js`, stamps `type` before
+ * this ever runs). Where no `type` arrives at all — RCA's deed-party `owner`
+ * slot never sets one — this is the SOLE signal, and a narrow LLC/INC/CORP-only
+ * regex was measured (C13c) to miss the majority of real org names in this
+ * population (Trust, Holdings, Properties, Capital, Realty, Company, REIT …).
+ * `hasFirmSuffix` is the shared, already-graded org-marker guard used for the
+ * same person-vs-org judgement elsewhere (entity-link.js) — reuse it rather
+ * than maintaining a second, narrower copy that drifts (the P189/A2/N15c
+ * "hazard travels with the technique" class).
+ *
+ * C13g-costar-stoplist (2026-09-10): the CoStar for-sale/for-lease scanner
+ * (`extension/content/_forsale-contacts-parse.js::looksLikePerson`) always
+ * sets `contact.type` explicitly, so its verdict wins here and `hasFirmSuffix`
+ * is never consulted for that path — but that scanner's stoplist is NOT a
+ * superset of `hasFirmSuffix`'s: it carries brand names (newmark/cbre/jll/
+ * colliers) and a few terms `hasFirmSuffix` lacks, while it is MISSING
+ * `hasFirmSuffix` terms (Fund, Ptnrs, Cos, Property [singular], Development,
+ * Developers, Investments, Investors, Enterprises, Bancorp, Bank, Mgmt).
+ * A name like "Sentinel Bancorp" or "Meridian Investments" trips
+ * `hasFirmSuffix` but NOT the extension's list, so the extension stamps
+ * `type:'person'` and — before this fix — that verdict was trusted verbatim,
+ * silently minting the firm as a person. The safe direction is one-way: an
+ * explicit `type:'organization'`/`'entity'` is never second-guessed (nothing
+ * downgrades an org to a person on a name heuristic — that would repeat the
+ * P158a `&`-is-a-couple mistake), but an explicit `type:'person'` IS checked
+ * against `hasFirmSuffix` and overridden when it disagrees, because a firm
+ * suffix in the name is stronger, unambiguous evidence a vendor's own
+ * classifier can still miss. This does not create a second stoplist — it is
+ * the SAME shared guard already used for the no-type fallback, now also
+ * applied as a floor under an explicit but firm-suffixed 'person' verdict.
  */
-function contactEntityType(contact) {
+export function contactEntityType(contact) {
   if (contact.type === 'entity' || contact.type === 'organization') return 'organization';
-  if (contact.type === 'person') return 'person';
-  // Heuristic: if name looks like a company (all-caps, contains LLC/Inc, etc.)
   const name = (contact.name || '').trim();
-  if (/\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|ASSOCIATES|ADVISORS)\b/i.test(name)) {
-    return 'organization';
+  if (contact.type === 'person') {
+    return hasFirmSuffix(name) ? 'organization' : 'person';
   }
+  if (hasFirmSuffix(name)) return 'organization';
   return 'person';
 }
 
@@ -10036,9 +10068,25 @@ export async function reconcilePropertyOwnership(domain, propertyId) {
 // owner-facts mirror sync / R47 cron. Used by the deed-writer path (forward,
 // new captures) AND the R51 Unit-3 high-confidence auto-fix worker.
 
-// Reusable guard: a brokerage / junk / federal-antipattern / deal-string
-// grantee must NEVER become the recorded owner. Reuses the same write-time
-// guards the entity graph and contact pipeline use.
+// RO2b (2026-09-08 audit, fixed 2026-09-11): named capture artifacts that pass
+// every guard above and get proposed as a recorded owner, sized at 9 rows across
+// the whole 598-row deed arm -- too few to earn a generalized regex class, so
+// they are named literally instead of pattern-matched:
+//   - RMR / "The RMR Group" -- the property MANAGER of GPT/OPI-portfolio assets
+//     (7 of the 9 rows). A deed never conveys title to a manager; this is a
+//     capture artifact where the manager's name sits where the grantee should.
+//   - USPS -- the federal TENANT (1 row), not a grantee.
+// The hedge-phrase class ("... or affiliated/related ...", 1 of the 9 rows) is
+// NOT a one-off -- OWN-T0i sized it fleet-wide in LCC `entities` (57 live rows,
+// 2026-09-11) as an extractor's stated uncertainty written as a name, never a
+// real party. Reused here as a real regex class, unlike RMR/USPS.
+const KNOWN_NOT_A_GRANTEE_RE = /^(the\s+)?rmr(\s+group)?$|^u\.?s\.?\s*postal\s*service$|^usps$/i;
+const HEDGE_PHRASE_OWNER_RE = /\b(or|and\/or)\s+(affiliated|related)\b/i;
+
+// Reusable guard: a brokerage / junk / federal-antipattern / deal-string /
+// manager-or-tenant-capture-artifact / hedge-phrase grantee must NEVER become
+// the recorded owner. Reuses the same write-time guards the entity graph and
+// contact pipeline use.
 export function granteePassesOwnerGuards(name) {
   if (!name || typeof name !== 'string') return false;
   const clean = sanitizeOwnerName(name); // strips " by <Brokerage>" suffix
@@ -10047,6 +10095,8 @@ export function granteePassesOwnerGuards(name) {
   if (isFederalOwnerAntiPattern(clean)) return false; // personal-property bleed-through
   if (isJunkEntityName(clean)) return false;          // structural garbage (org-safe:
                                                       // does NOT reject firm suffixes)
+  if (KNOWN_NOT_A_GRANTEE_RE.test(clean)) return false; // RO2b: manager/tenant capture artifact
+  if (HEDGE_PHRASE_OWNER_RE.test(clean)) return false;  // RO2b/OWN-T0i: extractor uncertainty, not a name
   return true;
 }
 

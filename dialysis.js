@@ -5,6 +5,33 @@
 // ============================================================================
 
 // ============================================================================
+// UX-T1b — guarded "Flag for research" (2026-09-08)
+// ============================================================================
+// The three "Flag for research" buttons (CMS Data tab, NPI Intel, Lease
+// Watchlist) used to POST straight into `research_queue_outcomes` from the
+// browser via applyInsertWithFallback — no server-side validation, and
+// invisible to the unified Research workbench (a second, isolated queue).
+// This routes through the guarded server endpoint instead: it validates the
+// domain/queue_type/clinic_id, upserts idempotently on the table's own
+// UNIQUE(queue_type, clinic_id), and creates a linked research_task so the
+// flag lands on the workbench "Follow-ups" tab too.
+async function flagForResearchGuarded(clinicId, clinicName, queueType, notes) {
+  const resp = await fetch('/api/queue?_route=flag-for-research', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      domain: 'dialysis', clinic_id: clinicId, clinic_name: clinicName || null,
+      queue_type: queueType, notes: notes || 'Flagged for research',
+    }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error || `Flag failed (HTTP ${resp.status})`);
+  }
+  return data;
+}
+
+// ============================================================================
 // MODULE STATE
 // ============================================================================
 
@@ -3451,17 +3478,7 @@ function renderDiaChanges() {
         btn.disabled = true;
         btn.textContent = '...';
         try {
-          await applyInsertWithFallback({
-            proxyBase: '/api/dia-query',
-            table: 'research_queue_outcomes',
-            data: {
-              medicare_id: clinicId,
-              outcome: 'flagged_for_review',
-              notes: 'Flagged from CMS Data tab for research',
-              created_at: new Date().toISOString()
-            },
-            source_surface: 'dia_cms_flag'
-          });
+          await flagForResearchGuarded(clinicId, clinicName, 'cms_data', 'Flagged from CMS Data tab for research');
           btn.textContent = '✓';
           btn.style.color = 'var(--success)';
           btn.style.borderColor = 'var(--success)';
@@ -4168,12 +4185,7 @@ function _wireNpiFlagDismissButtons() {
       if (!npiId) return;
       btn.disabled = true; btn.textContent = '…';
       try {
-        await applyInsertWithFallback({
-          proxyBase: '/api/dia-query',
-          table: 'research_queue_outcomes',
-          data: { medicare_id: npiId, outcome: 'flagged_for_review', notes: 'Flagged from NPI Intel BD events', created_at: new Date().toISOString() },
-          source_surface: 'dia_npi_flag'
-        });
+        await flagForResearchGuarded(npiId, npiName, 'npi_intel', 'Flagged from NPI Intel BD events');
         showToast('Flagged ' + (npiName || npiId), 'success');
         // Remove from local list so card disappears
         diaData.npiSignals = (diaData.npiSignals || []).filter(s =>
@@ -10723,17 +10735,7 @@ function buildDiaLeasesHTML() {
         btn.disabled = true;
         btn.textContent = '...';
         try {
-          await applyInsertWithFallback({
-            proxyBase: '/api/dia-query',
-            table: 'research_queue_outcomes',
-            data: {
-              medicare_id: lid,
-              outcome: 'flagged_for_review',
-              notes: 'Flagged from Lease Watchlist — expiring/at-risk lease',
-              created_at: new Date().toISOString()
-            },
-            source_surface: 'dia_lease_flag'
-          });
+          await flagForResearchGuarded(lid, lname, 'lease_watchlist', 'Flagged from Lease Watchlist — expiring/at-risk lease');
           btn.textContent = '✓';
           btn.style.color = 'var(--success)';
           btn.style.borderColor = 'var(--success)';

@@ -105,3 +105,60 @@ describe('Prompt 194 — extension intake host', () => {
     );
   });
 });
+
+// EXT-HOST (2026-09-10) — the resolver must also refuse a STORED retired origin.
+// Measured: on 2026-09-09 sidebar OMs at 13:11 and 19:25 UTC were written from
+// Railway, while 14:28, 18:59 and 20:30 UTC were written from AWS Lambda IPs —
+// the frozen Vercel build — on the same machine, same day. 1.0.52 returned
+// whatever chrome.storage.sync held; a profile configured in the Vercel era
+// still holds that origin. The rule is platform-wide (*.vercel.app) because the
+// guard above forbids the literal hostname in executable code.
+describe('EXT-HOST — a stored retired origin resolves to Railway', () => {
+  // Evaluate the real resolver from source, not a re-implementation.
+  function loadResolver() {
+    const src = readFileSync(join(EXT, 'background.js'), 'utf8');
+    const grab = (re) => { const m = src.match(re); assert.ok(m, `missing ${re}`); return m[0]; };
+    const body = [
+      grab(/^const DEFAULT_INTAKE_HOST\s*=.*$/m),
+      grab(/function isRetiredIntakeOrigin\([\s\S]*?\n}/),
+      grab(/function pickIntakeHost\([\s\S]*?\n}/),
+      'return { pickIntakeHost, isRetiredIntakeOrigin, DEFAULT_INTAKE_HOST };',
+    ].join('\n');
+    return new Function(body)();
+  }
+
+  const RETIRED_ORIGIN = 'https://' + ['life-command-center-nine', 'vercel', 'app'].join('.');
+  const RAILWAY = 'https://tranquil-delight-production-633f.up.railway.app';
+
+  it('a stored *.vercel.app origin in LCC_RAILWAY_URL is replaced by the Railway default', () => {
+    const { pickIntakeHost, DEFAULT_INTAKE_HOST } = loadResolver();
+    assert.equal(pickIntakeHost({ LCC_RAILWAY_URL: RETIRED_ORIGIN }), DEFAULT_INTAKE_HOST);
+    assert.equal(pickIntakeHost({ LCC_RAILWAY_URL: RETIRED_ORIGIN + '/' }), DEFAULT_INTAKE_HOST);
+  });
+
+  it('a stored *.vercel.app origin in LCC_VERCEL_URL (Railway unset) is also refused', () => {
+    const { pickIntakeHost, DEFAULT_INTAKE_HOST } = loadResolver();
+    assert.equal(pickIntakeHost({ LCC_VERCEL_URL: RETIRED_ORIGIN }), DEFAULT_INTAKE_HOST);
+  });
+
+  it('positive control: a configured Railway origin is honoured unchanged (minus trailing slash)', () => {
+    const { pickIntakeHost } = loadResolver();
+    assert.equal(pickIntakeHost({ LCC_RAILWAY_URL: RAILWAY + '/' }), RAILWAY);
+    assert.equal(pickIntakeHost({}), RAILWAY);
+  });
+
+  it('negative control: the refusal is about the platform, not a string accident', () => {
+    const { isRetiredIntakeOrigin } = loadResolver();
+    assert.equal(isRetiredIntakeOrigin('https://x.vercel.app'), true);
+    assert.equal(isRetiredIntakeOrigin('https://vercel.app.example.com'), false);
+    assert.equal(isRetiredIntakeOrigin('not a url'), false);
+  });
+
+  it('sidepanel.js carries the same rule for its own config reads', () => {
+    const src = readFileSync(join(EXT, 'sidepanel.js'), 'utf8');
+    assert.match(src, /function normalizeLCCHost\(/, 'sidepanel.js must normalize LCC_RAILWAY_URL through normalizeLCCHost()');
+    assert.match(src, /\.vercel\\\.app\$|\\\.vercel\\\.app\$/, 'normalizeLCCHost must refuse *.vercel.app');
+    const cfgReads = (stripComments(src).match(/chrome\.storage\.sync\.get\(\['LCC_RAILWAY_URL'/g) || []).length;
+    assert.equal(cfgReads, 1, 'sidepanel.js must read LCC_RAILWAY_URL through getLCCConfig() only');
+  });
+});

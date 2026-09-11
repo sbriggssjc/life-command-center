@@ -76,6 +76,17 @@ var LCC_DECISION_LANE_MAP = {
   // Prompt 188: "do the people at this email domain work for this owner?" is the
   // same LINKAGE question, asked from the other direction.
   tier0_owner_contact:           { lane: 'linkage',       merges: false },
+  // OWN-T0e: "are these two current owner candidates one sponsor family?" is an
+  // OWNERSHIP question — it settles which recorded facts describe the same asset.
+  sponsor_family_confirm:        { lane: 'ownership',     merges: false },
+  // C13g-min-lane: "is this recorded person really an organization?" is an
+  // identity/dedup question -- it unblocks OWN-T0e-b merges the type guard
+  // correctly refuses today, but the retype itself never merges an entity.
+  entity_type_review:            { lane: 'entity_merge',  merges: false },
+  // PDR1 / P13#1: "which asset does this Salesforce-sync placeholder merge
+  // into?" is an entity-identity question -- the merge itself moves
+  // bd_opportunities/activity_events/entity_relationships via reconcile_entity.
+  ambiguous_entity_resolution:   { lane: 'entity_merge',  merges: true },
   implausible_value:             { lane: 'automation',    merges: false },
   llc_research_dead:             { lane: 'automation',    merges: false },
   availability_checker_botblock: { lane: 'automation',    merges: false },

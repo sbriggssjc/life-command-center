@@ -1,5 +1,14 @@
 # Salesforce Connected App Setup — Server-Side File Fetch
 
+> ⚠️ **STALE (DOCMAP1 follow-up, 2026-09-08).** This plan's premise — standing up a
+> Salesforce Connected App for OAuth Client Credentials Flow — was refuted by the C1
+> audit (root `CLAUDE.md` §"C1 — the Salesforce lanes already had a consumer..."):
+> *"LCC's entire Salesforce surface is a read-only Power Automate proxy
+> (`_shared/salesforce.js` states Scott has no admin rights to register a Connected
+> App)."* The real inbound SF producer is the `intake-salesforce` edge function on
+> Dialysis_DB (see `CLAUDE.md` §"GOVDUP1-a"), not a Connected App. Read this page for
+> the ORIGINAL OAuth investigation only; it is not the live file-fetch mechanism.
+
 **Goal:** Stand up a Connected App in NorthMarq's Salesforce org so the LCC `intake-salesforce-files` edge function can authenticate via OAuth 2.0 **Client Credentials Flow** and pull file bytes server-side. This collapses Flow 6 from "5 PA inner actions per file" → "1 server call drains all discovered rows."
 
 This is the Anthropic-recommended path because:

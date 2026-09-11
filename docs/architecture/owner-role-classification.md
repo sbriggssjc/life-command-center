@@ -802,6 +802,10 @@ producers, read by other consumers — **size it and file it**), and touch `inve
 
 ### 9b. The `entities.entity_type` size — C13g, filed not started
 
+> ⚠️ **SUPERSEDED IN PART 2026-09-09 — §9e.** The size below stands; "not started" does not. C13g-min shipped the
+> per-row retype write (RPC + ledger + candidate view, live on LCC Opps, PR #2196). The capture-path fix and the
+> operator lane are still unbuilt.
+
 **Non-lexical floor, both directions: 414 of 56,192 live entities (0.74%).** 338 typed `person`
 carrying a `salesforce/Account` ($0 current rent — none holds a portfolio fact); **76 typed
 `organization` carrying a `salesforce/Contact`, $181.8M**. `works_at` produces **zero**
@@ -889,3 +893,233 @@ one arm's evidence and nothing else.
 **The count deliberately did not fall.** 142 → 13 would have discarded `Maslow Robert C & Michele C`
 and every genuine individual simply absent from Salesforce; the split preserves them while ending the
 assertion that a $22.8M institutional manager is a one-off individual investor.
+
+## 9e. ✅ C13g-min DB half SHIPPED 2026-09-09 (PR #2196, `bd2e556f`) — a single-row retype behind a human verdict; the lane is NOT built
+
+**What is live on LCC Opps** (migration `20261101120000_lcc_c13g_min_entity_retype.sql`, applied; verified by
+`has_function_privilege` read-back, not by the migration text):
+
+- **`lcc_retype_entity(p_entity, p_to, p_decision_id, p_reason, …)`** — the ONE writer. `SECURITY DEFINER`,
+  **`anon` and `authenticated` EXECUTE = false** on both it and `lcc_unretype_entity(uuid)` (SEC1 stanza in
+  the same file). Refuses any `p_to` other than `organization`, a tombstone, or a non-`person` source.
+  Writes **`lcc_entity_retype_log`** (`from_type`, `to_type`, `decision_id`, `reason`, `retyped_at`,
+  `reverted_at`) AND stamps `metadata.c13g_prior_entity_type` — the P149 reversal shape, so one
+  `update … where metadata ? …` covers both sweeps. `lcc_unretype_entity` restores from the log.
+- **`v_lcc_entity_retype_candidates`** — live `person`-typed entities holding ≥2 current portfolio facts,
+  UNION any person-typed member of an OWN-T0e `spe_props_max ≥ 2` group whose sponsor is an organization.
+  **18 rows / $69,427,930** — the prompt's predicted 18 / $69.4M exactly. Every recorded corroboration is on
+  the row (`has_salesforce_contact`, `has_salesforce_account`, `n_rca_contact_ids`, `n_costar_contact_ids`,
+  `looks_like_person_warning`, `has_org_marker`, `relationship_count`, `resolved_owner_of`,
+  `blocks_own_t0e_sponsor_id` / `_token`). The view is anon-SELECTable by Supabase's default grant;
+  **nothing new leaks** — `entities` itself is anon-readable — noted, not changed.
+- **Positive control, rolled back, on the real row**: `Gardner-Tanenbaum` (4dac1df8…) person →
+  organization → `lcc_unretype_entity` → byte-identical (`entity_type='person'`, metadata key cleared).
+  `lcc_entity_retype_log` reads **0** after; nothing has been retyped for real.
+- Guard `test/c13g-min-entity-retype.test.mjs` — **10 source-shape tests, no mutation pass yet.**
+
+**Two footguns paid for on the way in, both already in this repo's invariants:** `entity_type` is an ENUM,
+not text (`::entity_type` casts); and the unretype function hit `#variable_conflict use_column`.
+
+**What is NOT built — deliberately cut by the builder for scope, and now backlog `C13g-min-lane`:** the
+Decision Center lane `entity_type_review` (all four registries, card, planner, verdict branch), the
+mutation-verified guard, the §3 consumer census (the builder confirmed only that a retyped row becomes
+ELIGIBLE for `v_lcc_merge_candidates`; the Tier 0 `people`-bench delta and `v_lcc_entity_role_ambiguity`
+were not measured), and the 18-row named dry-run read. **The RPC is callable today** (`rpc/lcc_retype_entity`
+with the service key), so the two type-blocked OWN-T0e cards can be unblocked by an operator RPC call with
+`p_reason` and a null `p_decision_id` before the lane exists — the ledger still records it.
+
+**⚠️ Retype + merge on Gardner clears 4 conflict properties, not 14** — 10 of the 14 co-claimed properties
+carry a THIRD current claimant, the firm's own RTD/TEP SPEs, which share no brand token with the sponsor
+and are the OWN-T0e design §3 "gate does not reach" class. MassMutual Life: 4 of 14. Predict −4 / −10.
+
+## 9f. ✅ C13g-min-lane SHIPPED 2026-09-09 — the `entity_type_review` Decision Center lane over the retype write
+
+> ⚠️ **HOTFIX 2026-09-09 (same day): the candidate view 502'd the lane on first open.** Both of its references to
+> `v_lcc_ownt0e_sponsor_family_proposals` (the ~20–35 s view) were repointed at
+> `lcc_ownt0e_sponsor_family_proposals_cache` — migration `20261101130000` — 34.7 s → 58 ms, output md5-identical.
+> The OWN-T0e design §6 rule this re-learned: **never read the proposals view at request time; read the cache.**
+>
+> ⚠️ **HOTFIX 2 (same day): the first real verdict failed 22P02** — `lcc_retype_entity(p_decision_id uuid)` against
+> `lcc_decisions.id` **bigint**. Migration `20261101140000`: ledger column + parameter → bigint, old signature
+> DROPPED, privileges re-asserted, apply-time type assertion. **A positive control must pass the caller's real
+> argument shape** — the shipped control nulled the decision id and so proved nothing about it.
+
+
+**Built:** decision type `entity_type_review` in all four registries — `api/admin.js` `FEDERATED_DECISION_TYPES`
++ `federatedSubjectRef` (`etype:<entity_id>`), `ops.js` `_DC_FEDERATED` + the lane tile, `dc-lanes.js`
+`_DC_FED_META` + the card renderer + the `sponsor_family_lane` forward, `review-shared.js` (lane `entity_merge`,
+`merges: false` — the retype itself never merges an entity). Pure planner
+`api/_shared/entity-retype-planner.js` (`buildEntityRetypeCard`, `validateEntityRetypeVerdict`,
+`orderEntityRetypeRows`): three verdicts — `retype_organization` (the ONE write, `rpc/lcc_retype_entity`,
+never a direct PATCH on `entities`), `keep_person` (record-only, excluded from the lane), `research`
+(`research_task`). The card is re-read from `v_lcc_entity_retype_candidates` AT VERDICT TIME (P188); a
+successful retype whose card carried `blocks_own_t0e_sponsor_id` forwards the operator straight to the
+`sponsor_family_confirm` lane. Guard `test/c13g-min-lane.test.mjs` (16 tests, planner behaviour +
+four-registry structural checks + the migration's write/reversal/privilege stanza; one assertion mutation-
+sampled by hand and confirmed RED — a fuller mutation pass was not run against every assertion, unlike the
+sponsor-family lane's 9-mutation suite).
+
+**⚠️ Ordering matters, and it broke the sponsor-family lane's own guard on first attempt.** The obvious
+placement — new registrations AFTER `sponsor_family_confirm` everywhere — shifted the boundary the
+sponsor-family lane's structural tests anchor on (`'sponsor_family_confirm',\n]);` in `ops.js`; a
+`block(admin, startNeedle, endRe)` extraction that runs from the sponsor_family_confirm verdict branch to
+the shared `unsupported_decision_type` terminator). Both live registries were reordered — `entity_type_review`
+now sits immediately BEFORE `sponsor_family_confirm` in `_DC_FEDERATED` and before its verdict block in
+`api/admin.js` — and `test/own-t0e-sponsor-family-lane.test.mjs` was re-run green before and after to confirm
+no collateral break. **Two adjacent federated lanes sharing one array/switch are coupled at the position their
+older guard's block-extraction depends on — insert relative to what the existing guard anchors on, not just
+at the end.**
+
+**Live census, read on the DB (2026-09-09), predicted vs actual:**
+
+| check | predicted (§9e) | measured |
+|---|---:|---:|
+| lane population | 18 rows / $69.4M | **19 rows / re-derivable** (population moves — the view is a live derivation, not a snapshot; re-measured population carries one more row than the PR #2196 read) |
+| `v_lcc_merge_candidates` after Gardner retype | Gardner becomes ELIGIBLE | confirmed present; total count moved 5,205 → 5,204 on the SUBSEQUENT merge (collapsing two rows into one), not on the retype alone |
+| `auto_mergeable` | must not move on retype alone | held; moved 3,012 → 3,011 only on the merge step, tracking the same collapse |
+| Gardner ↔ sponsor `unclassified_rival` conflict rows (broad: any conflict row naming either entity, not scoped to the 14 co-claimed) | not predicted at this grain | **65 → 47 (−18)** across the merge |
+| 14 co-claimed properties specifically | −4 (10 keep a third RTD/TEP claimant) | not independently re-verified this session; the §9e figure stands, unrefuted |
+| Tier 0 `people` bench | not measured in §9e | Gardner-Tanenbaum and MassMutual Life carry **no** `has_salesforce_contact`/`has_salesforce_account` row (both `false` on the retype-candidates view), so retyping them removes nothing from any Tier 0 card — the corroboration column the census was meant to check is negative for both |
+| `v_lcc_entity_role_ambiguity` | not measured in §9e | not re-measured this session (filed, not closed) |
+
+**Rolled-back positive control, run live end-to-end:** `person` → `lcc_retype_entity` → `organization` →
+`lcc_merge_entity(loser=Gardner-Tanenbaum, winner=sponsor)` → `lcc_unmerge_entity` → `lcc_unretype_entity` →
+`person`, metadata key cleared. **0 residue.**
+
+**Not built in this pass, named rather than silently dropped:** the 21-row (not 18) full census with
+predicted-vs-actual for every row (only Gardner was walked end-to-end); `v_lcc_entity_role_ambiguity` and the
+14-co-claimed re-verification; a full mutation-pass count for every guard assertion (spot-checked one). Two
+"Research In Progress" placeholder rows sit in the lane view at `$0` current rent — worth a `junk_entity_review`
+question before anyone retypes them, not answered here.
+
+## 9g. ✅ C13g-min-lane-mutation SHIPPED 2026-09-09 — the guard is now mutation-verified; the two §9f gaps closed
+
+`test/c13g-min-lane.test.mjs` is now **14 tests, 46/46 targeted mutations RED** (16 planner-behaviour
+mutations + 18 admin.js/ops.js/dc-lanes.js/review-shared.js structural mutations + 12 SQL-migration
+mutations, run with comments stripped first, per OCR1c order). Two assertions **survived their first
+mutation and were rewritten, not deleted**:
+
+- **The ordering test's own data was the defect.** The three no-block rows (`no-block-low`/`-high`/
+  `-null`) happened to sort in the SAME order alphabetically as by rent, so deleting the rent-desc
+  tiebreak from `orderEntityRetypeRows` left the test green. Renamed to `aaa-low-rent` / `mmm-null-rent`
+  / `zzz-high-rent` — anti-alphabetical to their rent rank — so a comparator that fell through to the
+  name compare produces a visibly different order.
+- **The registry-membership regex matched the WRONG occurrence.** `/'entity_type_review',/` also matches
+  the unrelated `research_type: 'entity_type_review',` literal inside the verdict branch's own
+  research-task payload, so renaming the actual `FEDERATED_DECISION_TYPES` entry to
+  `'entity_type_review_x'` left the assertion passing against the OTHER string — the exact "a guard that
+  matches a shape is defeated by a name that legitimately appears elsewhere" class this file cites for
+  OCR2/UXT0/UXT1a-gates. Re-anchored on `'sponsor_family_confirm',[\s\S]{0,400}'entity_type_review',`,
+  the same adjacency the registries-ordering note above already documents.
+
+Two new assertions cover the same-day hotfixes' repo-side twins: the candidate-view migration must
+reference `lcc_ownt0e_sponsor_family_proposals_cache` and never the bare (slow)
+`v_lcc_ownt0e_sponsor_family_proposals`; `lcc_retype_entity`'s `p_decision_id` must be `bigint` (matching
+`lcc_decisions.id`), with the old `uuid` overload DROPPED (N15d/B1: a defaulted overload left standing
+makes the old call shape 42725-ambiguous) — this is the migration's own apply-time DO block, now also
+checked from the repo side rather than only at apply time.
+
+**The two §9f-named measurements, done, rolled back:**
+
+- **`v_lcc_entity_role_ambiguity` before/after a retype:** round-tripped `Foulger Pratt`
+  (person → `lcc_unretype_entity` → person → `lcc_retype_entity` → organization, 0 residue). It carries
+  **0 rows for this entity in either state** — the ambiguity view's arms (`one_off_owner`
+  corroboration, `user_owner`) never fired on Foulger Pratt person-typed or organization-typed. Not
+  every retype moves that view; this one didn't.
+- **The Tier 0 `people` bench:** Foulger Pratt carried **1** Tier 0 candidate card as organization,
+  **0** as person (confirmed by the same round trip) — Tier 0 requires an `owner_id`/`person_id` match
+  against an organization-typed owner, so a person-typed row is structurally invisible to it. Read
+  across all 11 non-tombstoned retyped entities (2 of the 13 — Gardner-Tanenbaum, MassMutual Life —
+  have since been merged away via the OWN-T0e-b `same_party` lane and are excluded): **`UIRC` 7 cards,
+  `Global Net Lease` 2, `Foulger Pratt` 1, the other 8 zero — 10 Tier 0 cards total that could not have
+  existed before this arc's retypes.** §9f's builder measured only Gardner/MassMutual (both negative on
+  the corroboration column); the corroboration-column check was right for those two and incomplete as a
+  claim about the lane — the bench moved for three others.
+
+**Not done, deliberately (budget):** the placeholder-guard unit (`C13g-min-lane-placeholder`) — two
+"Research In Progress" rows still reach the lane where neither verdict fits; left as its own backlog row.
+
+## §9h — C13g: the capture-path producer fix (2026-09-10)
+
+C13c named the producer (`rca/contact` 115 of 142, `costar/contact` 32) but did not build the fix.
+Traced precisely: **`unpackContacts()`** in `api/_handlers/sidebar-pipeline.js` is the ONE code path
+both RCA and CoStar sidebar capture route through for a deal-party "contact" entry — they differ only
+in `metadata.source` (`rca` vs `costar`), which becomes the `external_identities` prefix. It calls
+`contactEntityType(contact)` → `ensureEntityLink({sourceType: entityType === 'person' ? 'contact' :
+'company', ...})`, and `entity-link.js`'s `inferEntityType('contact', ...)` treats `sourceType==='contact'`
+as an unconditional person signal (no further name check inside that function for this path).
+
+- **RCA's deed-party `owner` slot sends NO `contact.type` at all** (`extension/content/rca.js`:
+  `data.contacts.push({name: ownerName, role: 'owner', address: ...})`), so the backend's name-shape
+  FALLBACK was the sole signal for the 115-of-142 majority — and it was a narrow inline regex
+  (`LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|ASSOCIATES|ADVISORS`), missing Trust, Holdings, Properties,
+  Capital, Realty, Company/Co, REIT and every other real org marker present in this population.
+- **CoStar's own scanners mostly set `type` explicitly and correctly** — `Recorded Owner`/`Recorded
+  Seller`/`True Owner`/etc. push `type:'entity'`/`'organization'`. The 32-of-142 `costar/contact`
+  residue traces to the trailing-label "For-Sale/For-Lease Contacts panel" parser
+  (`extension/content/_forsale-contacts-parse.js`), whose own `looksLikePerson()` uses a MUCH BROADER
+  stoplist (`trust|holdings|properties|group|capital|ventures|management|realty|advisors|newmark|
+  cbre|jll|colliers`) than the backend fallback — so even where CoStar DOES set `type`, its scanner's
+  own classification could disagree with what the backend would have said on the same name.
+- **Fix:** `contactEntityType()` now routes its no-explicit-type fallback through the already-graded,
+  already-shared **`hasFirmSuffix()`** guard (`entity-link.js`) — the same org-marker list used for
+  the identical person-vs-org judgement everywhere else in the repo — instead of maintaining a second,
+  narrower, drifting copy. This is the P189/A2/N15c "hazard travels with the technique, not the name"
+  class applied to this specific producer: the hazard (a too-narrow org-marker list) had already been
+  documented and fixed once (`hasFirmSuffix` itself, and the P158a `&`-is-a-couple lesson baked into
+  it), and nobody had checked whether the sidebar contact-entry mint used the same list.
+- **RCA's client-side extension code was deliberately NOT touched.** Adding a second regex copy in
+  `extension/content/rca.js` to pre-classify the owner name would recreate exactly the drift this fix
+  removes on the backend — the backend fallback (now `hasFirmSuffix`) already covers the no-type case
+  for every capture source, RCA included.
+- **Scope: forward-mint only.** This does not bulk-retype the ~1,950-entity existing population C13c
+  sized — that population is (and stays) `entity_type_review` lane material, per the standing rule that
+  a repair must not silently sweep a lane's own review population (P176's *"clear the producer's seed
+  predicate, don't just close the items"* one direction; here, don't manufacture a second retype path
+  outside the lane in the other direction). New RCA/CoStar contact-slot mints going forward should stop
+  adding to the backlog.
+- Guard: `test/c13g-contact-entity-type.test.mjs` (10 tests) — pins the widened coverage on named rows
+  (Trust/Holdings/Properties/Capital/Realty/Company suffixes → organization; real two-token individual
+  names stay person; an explicit vendor `type` still wins), and asserts the function body calls
+  `hasFirmSuffix(` and can never again contain the narrow inline alternation.
+
+## §9i — C13g-costar-stoplist: the "never reads it back" claim above was WRONG (2026-09-10)
+
+§9h's own bullet said CoStar's scanner-set `type` "could disagree with what the backend would have
+said... and `contactEntityType()` never reads the scanner's own verdict back." **Re-traced precisely,
+and that is false: `contactEntityType()` checks `contact.type` FIRST, before ever falling back to
+`hasFirmSuffix`.** CoStar's `_forsale-contacts-parse.js` (`looksLikePerson`/`parseTrailingLabelBlock`/
+`mapForSaleFigures`) always stamps an explicit `type` on every contact it emits, and that snapshot
+`contacts[]` array flows unmodified from `content/costar.js` → the stored `entity.metadata.contacts` →
+`unpackContacts()` → `contactEntityType(contact)` — no field is dropped or renamed in transit. So the
+scanner's verdict was already winning outright; the backend's list was never consulted for this path.
+
+- **The two lists were never independently-drifting copies of the same population.** `hasFirmSuffix()`
+  (`entity-link.js`) already covers nearly the ENTIRE extension stoplist — Trust, Holdings, Properties,
+  Capital, Realty, Ventures, Management, Company/Co, Group — missing only 4 brokerage BRAND names
+  (newmark/cbre/jll/colliers) the extension additionally screens for (those never mattered for the
+  32-row residue: a brand name appearing inside a *contact's own name* is a vanishingly narrow case).
+- **The real, load-bearing gap ran the OTHER direction.** The extension's list is missing several terms
+  `hasFirmSuffix()` has: **Bancorp, Investments, Development/Developers, Fund, Ptnrs, Cos, Property
+  (singular), Enterprises, Bank, Mgmt (abbreviated).** A name like `Sentinel Bancorp` or `Meridian
+  Investments` trips `hasFirmSuffix()` but not the extension's `looksLikePerson()` — so the extension
+  stamps `type:'person'` on a real firm, and (before this fix) that explicit-but-wrong verdict was
+  trusted absolutely, minting the firm as a person entity. **This is case (a)** from the residue's own
+  framing (a genuine stoplist-coverage gap) — but inverted: it is the CoStar list under-covering, not
+  the backend under-covering the CoStar terms.
+- **Fix, shipped:** `contactEntityType()` now treats an explicit `type:'person'` as a FLOOR rather than
+  an absolute — `hasFirmSuffix(name)` still overrides it to `'organization'` when the two disagree. This
+  is one-directional only: an explicit `'organization'`/`'entity'` type is NEVER second-guessed by a
+  name heuristic (the same P158a discipline — a name test can produce a false ORG positive on a person,
+  e.g. two capitalised tokens, so downgrading an explicit org verdict on a heuristic would be the
+  mistake; upgrading a person verdict to org on the SAME already-graded firm-suffix guard used
+  everywhere else in the repo is the safe direction). No second stoplist was created and no extension
+  code was touched — same precedent as RCA in §9h: the shared `hasFirmSuffix()` guard is now the single
+  floor under every capture path's classification, explicit-type-present or not.
+- **Scope: forward-mint only, same as §9h.** Existing mistyped entities from before this fix are not
+  bulk-retyped — they remain `entity_type_review` lane population.
+- Guard: `test/c13g-contact-entity-type.test.mjs` (11 tests) — the old "explicit type wins" assertion
+  (`{name:'ACME LLC', type:'person'} → 'person'`) was itself the bug pinned as correct behaviour;
+  replaced with the floor assertion (`Sentinel Bancorp`/`Meridian Investments`/`Ashford Development`,
+  all `type:'person'` → `'organization'`), plus a separate assertion that an explicit `'organization'`
+  type is never downgraded.

@@ -1,5 +1,10 @@
 # Error triage — 2026-08-01 (morning error wave)
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Dated incident triage ("morning error wave"); item marked FIXED in-file. Point-in-time record.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 Five signals came in together and are connected. Most trace to two roots: (a) the app-boot crash (already
 fixed), and (b) broken connector / field-priority infrastructure that *also* explains the cap-rate error and
 the empty deal spine. This is the single most useful diagnostic pass we've had — the failures are a map of the

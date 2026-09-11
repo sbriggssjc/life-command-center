@@ -1,6 +1,7 @@
 # Property Identity and Address Resolution Contract v0.1
 
-**Status:** Design contract and staged backlog; no shared service, schema, promotion, or production write is authorized
+**Status:** ASC proving-ground source collection complete; aggregate review pending. No shared service, schema,
+promotion, or production write is authorized.
 
 **Date:** 2026-08-28
 
@@ -126,6 +127,15 @@ enrollment-organization tenant, and cites both an official facility registry and
 record. Parcel agreement without tenant corroboration is insufficient. The capture preserves both addresses,
 the parcel identifier, and any square-footage disagreement, and always requires second review.
 
+A multi-address parcel is a stricter form of that conflict, not an address-normalization rule. Where the
+official facility location, the assessor situs label, and the licensed property's displayed address are three
+different civic numbers, an approval must preserve and pin all three tokens, one parcel identifier, one source
+record ID, the exact frozen facility identity, and an allow-listed operating tenant observed in the current
+source roster. The assessor token must share the frozen city, state, and postal components and must differ from
+both the frozen and captured tokens. Missing or substituted tenant, record, parcel, address, evidence class,
+authorization metadata, or second-review metadata blocks the attachment. No value becomes a canonical address
+correction merely because the candidate-scoped research capture is allowed.
+
 ## 5. Shared component boundaries
 
 | Component | Responsibility | Must not do |
@@ -241,7 +251,14 @@ This contract does not authorize ingestion of a full candidate universe, canonic
 promotion, Salesforce writes, outreach, production opportunities, unattended licensed-source scraping,
 evidence deletion, IDTF activation, or weakening fail-closed matching.
 
-Finish and review the frozen 50-property ASC sample first. Its aggregate mismatch inventory, source coverage,
-research time, false-block/false-accept evidence, and second-review burden will determine whether Phase B is
-worth building and which rule classes enter the first shadow evaluation. That is the next gated architecture
-decision; it is not pre-authorized by this document.
+The frozen 50-property ASC sample's source-collection pass finished on 2026-09-11: 44 licensed-source captures,
+6 reviewed source exceptions, and 0 pending candidates. The latest captured records use 15 governed identity
+modes; 16 captured resolutions and all 6 exceptions require second review. None of those 22 second reviews is
+recorded yet. Two historical captures lack a stored identity mode and must remain explicit instrumentation
+missingness unless preserved evidence supports a governed classification.
+
+Finish the governed row-level and second-review pass next. Its aggregate mismatch inventory, source coverage,
+research time, false-block/false-accept evidence, and reviewer agreement will determine whether Phase B is
+worth building and which rule classes enter the first shadow evaluation. Collection completion does not pass
+the Phase B gate and does not authorize PI2–PI3, shared aliases, lane activation, or promotion. Aggregate
+checkpoint: `docs/audits/HEALTHCARE_ASC_50_PROPERTY_CAPTURE_CHECKPOINT_2026-09-11.md`.

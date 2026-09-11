@@ -360,6 +360,24 @@ Four things the fix turned up that the invariant should carry:
   its own outcome class (`lost`) — *ask what happens to a request that is neither answered nor
   answerable.*
 
+### I13 — One real-world entity, one canonical row; group and join on its id, never on a display string (2026-09-11)
+
+Operators, agencies, owners, brokers, guarantors, tenants, properties. Aliases live in an alias table with
+provenance; legal entities LINK to parents rather than merge into them (a guarantor's legal identity is a credit
+fact). A `canonical_name`/`normalized_name` column that detects duplicates but has no merge consumer is an I6
+violation. **Found by:** ID1 (dialysis operator split), ID0 probe (gov agency split, owner/broker duplicate groups).
+
+### I14 — Low-cardinality attribute domains are controlled vocabularies, enforced at write (2026-09-11)
+
+County, city, state, property_type, status, source. A reference list per domain, with the write path resolving to
+it (or failing to a review status). **Found by:** ID0 probe — gov `properties.county` has 832 county/state pairs split by
+case alone; dia `medicare_clinics.city` has 766 collapsed values; dia `property_type` has 96 values.
+
+### I15 — A bulk load reconciles its row count to the source; truncation fails the load (2026-09-11)
+
+Round-number caps, or tied counts across partitions loaded together, are truncation signatures. **Found by:** MB-a3 —
+DaVita = Fresenius = 2,450 CMS rows, one batch, 17 s apart (B6d-cms).
+
 ### I10 — A one-shot backfill is not a producer
 
 If the mechanism that filled a store was a migration or a script, the store **decays from the moment
@@ -400,6 +418,9 @@ Supabase project"; it is a new set of connections that must be asserted on day o
 | I6 | divergence consumer | ⚠️ `parcel_owner_xref.diverges` has none → **B6h** (renamed from B6d 2026-08-29) |
 | I1 | producer/consumer registry | ❌ **none** — still the biggest hole. ⚠️ **B6c-dup (2026-08-29) shows the sub-class a registry would have to catch: TWO STORES FOR ONE FACT, each naming itself canonical.** `detail.js` vs 77 gov views. A registry keyed on *tables* would not have caught it — both tables had real consumers; it needs to record **which store is authoritative for a FACT**. Partially guarded now by `test/b6cdup-sale-store-canonical.test.mjs`, which is a one-instance pin, not a detector. | ⚠️ **OWN-T0 (2026-09-02) is the same class at the FACT grain, and it is live: four stores name the owner of a property and nothing reconciles them.** The panel printed the resolved owner in the headline and the domain true_owner two lines below — they disagree on **1,260 of 7,678 (16.4%)** — while **756 properties carry two CURRENT owners** in one store, because every writer of `lcc_entity_portfolio_facts` asks *does THIS OWNER already have a fact* and none asks *does this PROPERTY already have a current owner*. `v_lcc_property_ownership_reconciled` is the reconciled read; `v_lcc_property_multi_current` is the detector (the standing one read **0**). **The registry a full I1 would need has to record the GRAIN a fill-blanks predicate is asked at, not just which store is authoritative** — here both stores were authoritative for different levels of the same fact (sponsor and SPE) and neither was wrong.
 | I8 | fill-forward trigger audit | ❌ **none** — one instance fixed (B5), others unaudited |
+| **I13** | identity: normalized-collapse probe + identical-canonical groups | ⚠️ **manual, 2026-09-11** (`docs/audits/ID0_IDENTITY_VALUE_DOMAIN_PROBE_2026-09-11.md`) → standing detector in **ID4** |
+| **I14** | controlled-vocabulary drift | ⚠️ **manual, 2026-09-11** (same probe) → **ID4** |
+| **I15** | import count reconciliation / truncation signature | ❌ **none** → **ID4** |
 | I9 | fact stores lacking `created_at` | ❌ **none** |
 | **I13** | identity collapse (byte-identical entity under case/punctuation/format variants) | ❌ **none — baseline measured, not shipped.** `docs/audits/ID4_IDENTITY_INTEGRITY_BASELINE_2026-09.md`: gov `true_owners` 991 groups/2,004 rows collapse on a naive key; gov agency FK is 0%/0.12% wired against an already-working 45-code normalizer; dia `operators` (14 rows) mostly settled; dia `brokers.broker_name` (147 alnum-strip groups) is a **measured negative result** — the discovery key is unsafe on this population (bare surnames/brands collide) and must not become a detector until BR1–BR5's composite-field comparator lands. **The lesson this baseline adds to I13's design: no shared normalizer across entity kinds — a per-(table,column) registered comparator, proven on named rows, or the detector manufactures false duplicates on exactly the columns it was meant to protect.** |
 | **I14** | attribute-vocabulary format drift (case/whitespace splits, no identity question) | ❌ **none — one instance measured.** gov county/state pairs: 834 of 2,445 (34%) collapse on `lower(trim())` alone — cheapest class in the identity program, no review lane needed. |

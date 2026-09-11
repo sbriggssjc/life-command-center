@@ -23,7 +23,11 @@ import {
   OWNERSHIP_LANE_ACTIONS, OWNERSHIP_LANE_PENDING_STATES, OWNERSHIP_LANE_ACTIONS_VIEW,
   OWNERSHIP_LANE_SPLIT_VIEW, isOwnershipLaneBucket, fetchOwnershipLaneTaskIds, reorderByIds,
 } from './_shared/ownership-lane-split.js';
+import {
+  WORKBENCH_LANES, isWorkbenchLane, workbenchLaneResearchTypes, fetchWorkbenchLaneTaskIds,
+} from './_shared/workbench-lane.js';
 import { opsQuery, paginationParams, pgFilterVal, requireOps, withErrorHandler, isOpsConfigured } from './_shared/ops-db.js';
+import { domainQuery } from './_shared/domain-db.js';
 import { getAiConfig } from './_shared/ai.js';
 import {
   canTransitionInbox, inboxTransitionEffects, buildTransitionActivity,
@@ -85,6 +89,16 @@ export default withErrorHandler(async function handler(req, res) {
   // Dispatch to inbox handler if routed via _route=inbox
   if (req.query._route === 'inbox') {
     return handleInbox(req, res, user, workspaceId);
+  }
+
+  // UX-T1b (2026-09-08): the "Flag for research" buttons on the dia CMS/NPI/
+  // Lease-Watchlist tabs used to POST straight to research_queue_outcomes from
+  // the browser with no server-side validation and no bridge to the unified
+  // research workbench. This is that bridge — a guarded write plus a linked
+  // research_tasks row so the flag surfaces in the Follow-ups tab instead of
+  // living only in dia's own isolated queue.
+  if (req.query._route === 'flag-for-research') {
+    return handleFlagForResearch(req, res, user, workspaceId);
   }
 
   if (req.method !== 'GET') {
@@ -192,10 +206,43 @@ export default withErrorHandler(async function handler(req, res) {
         }
       }
 
+      // UX-T1b: the workbench tab picker. `owner_contact` filters through the
+      // decidability view (same server-side id-page shape as lane_action, so a
+      // chip reading 5 pages through exactly 5 — the P139 lesson); `npi` and
+      // `followups` filter directly on research_type IN (...). Mutually
+      // exclusive with `lane_action` (that param only ever means something
+      // inside `establish_ownership_history`, which the `ownership_history`
+      // workbench value maps onto by research_type alone — the existing lane
+      // picker UI on that page already narrows further).
+      const workbench = String(req.query.workbench || '').trim();
+      let wbTypes = null;
+      if (workbench) {
+        if (!isWorkbenchLane(workbench)) {
+          return res.status(400).json({ error: `workbench must be one of: ${WORKBENCH_LANES.join(', ')}` });
+        }
+        if (workbench === 'owner_contact' && !laneIds) {
+          const sel = await fetchWorkbenchLaneTaskIds(opsQuery, {
+            lane: 'owner_contact', status: req.query.status, limit: rPer, offset: rOffset,
+          });
+          if (!sel.ok) return res.status(sel.status).json({ error: sel.error });
+          laneIds = sel.ids;
+          laneCount = sel.count;
+          if (!laneIds.length) {
+            return res.status(200).json({
+              items: [], count: laneCount, view: 'research', workbench,
+              pagination: researchPagination(rPage, rPer, laneCount),
+            });
+          }
+        } else {
+          wbTypes = workbenchLaneResearchTypes(workbench);
+        }
+      }
+
       let path = `research_tasks?workspace_id=eq.${workspaceId}&select=*,entities(name),assignee:users!research_tasks_assigned_to_fkey(display_name),creator:users!research_tasks_created_by_fkey(display_name)`;
       if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
       if (req.query.assigned_to) path += `&assigned_to=eq.${pgFilterVal(req.query.assigned_to)}`;
-      if (req.query.research_type) path += `&research_type=eq.${pgFilterVal(req.query.research_type)}`;
+      if (wbTypes) path += `&research_type=in.(${wbTypes.map(pgFilterVal).join(',')})`;
+      else if (req.query.research_type) path += `&research_type=eq.${pgFilterVal(req.query.research_type)}`;
       if (req.query.status === 'active') path += `&status=in.(queued,in_progress)`;
       else if (req.query.status) path += `&status=eq.${pgFilterVal(req.query.status)}`;
       if (laneIds) {
@@ -223,7 +270,7 @@ export default withErrorHandler(async function handler(req, res) {
       const total = laneIds ? laneCount : (result.count ?? withDrafts.length);
       return res.status(200).json({
         items: withDrafts, count: total, view: 'research',
-        lane_action: laneAction || null,
+        lane_action: laneAction || null, workbench: workbench || null,
         pagination: researchPagination(rPage, rPer, total),
       });
     }
@@ -253,6 +300,18 @@ export default withErrorHandler(async function handler(req, res) {
         return res.status(result.status || 500).json({ error: 'Failed to fetch research lanes' });
       }
       return res.status(200).json({ items: result.data || [], view: 'research_lanes' });
+    }
+
+    // UX-T1b: the workbench flow dashboard. One row per genuine-human-queue
+    // tab, reading v_lcc_research_workbench_flow — the raw pre-split queue
+    // size next to the human_needed count, so the front door can show the
+    // drop the split actually bought instead of a raw badge.
+    case 'research_workbench_lanes': {
+      const result = await opsQuery('GET', 'v_lcc_research_workbench_flow?select=*');
+      if (!result.ok) {
+        return res.status(result.status || 500).json({ error: result.data?.message || 'Failed to fetch workbench lanes' });
+      }
+      return res.status(200).json({ items: result.data || [], view: 'research_workbench_lanes' });
     }
 
     case 'entity_timeline': {
@@ -585,13 +644,37 @@ async function v2GetResearch(req, user, workspaceId) {
     }
   }
 
+  // UX-T1b: workbench tab picker, kept in exact parity with the v1 branch —
+  // per the P132/A1 lesson, a query param added to one branch and not the
+  // other is a filter that silently stops filtering the moment queue_v2
+  // flips on.
+  const workbench = String(req.query.workbench || '').trim();
+  let wbTypes = null;
+  if (workbench) {
+    if (!isWorkbenchLane(workbench)) {
+      return { view: 'research', items: [], error: `workbench must be one of: ${WORKBENCH_LANES.join(', ')}`, pagination: v2PaginationMeta(page, perPage, 0) };
+    }
+    if (workbench === 'owner_contact' && !laneIds) {
+      const sel = await fetchWorkbenchLaneTaskIds(opsQuery, { lane: 'owner_contact', status, limit: perPage, offset });
+      if (!sel.ok) return { view: 'research', items: [], error: sel.error, pagination: v2PaginationMeta(page, perPage, 0) };
+      laneIds = sel.ids;
+      laneCount = sel.count;
+      if (!laneIds.length) {
+        return { view: 'research', items: [], workbench, pagination: v2PaginationMeta(page, perPage, laneCount) };
+      }
+    } else {
+      wbTypes = workbenchLaneResearchTypes(workbench);
+    }
+  }
+
   let path = `research_tasks?workspace_id=eq.${workspaceId}&select=*,entities(name),assignee:users!research_tasks_assigned_to_fkey(display_name),creator:users!research_tasks_created_by_fkey(display_name)`;
   if (status) {
     if (status === 'active') path += `&status=in.(queued,in_progress)`;
     else path += `&status=eq.${pgFilterVal(status)}`;
   }
   if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
-  if (research_type) path += `&research_type=eq.${pgFilterVal(research_type)}`;
+  if (wbTypes) path += `&research_type=in.(${wbTypes.map(pgFilterVal).join(',')})`;
+  else if (research_type) path += `&research_type=eq.${pgFilterVal(research_type)}`;
   if (laneIds) path += `&id=in.(${laneIds.map(pgFilterVal).join(',')})&limit=${laneIds.length}`;
   else path += `&limit=${perPage}&offset=${offset}&order=${order}`;
 
@@ -609,7 +692,7 @@ async function v2GetResearch(req, user, workspaceId) {
   const ordered = laneIds ? reorderByIds(items, laneIds) : items;
   const withDrafts = await attachOwnershipChainDrafts(ordered);
   return {
-    view: 'research', items: withDrafts, lane_action: laneAction || null,
+    view: 'research', items: withDrafts, lane_action: laneAction || null, workbench: workbench || null,
     pagination: v2PaginationMeta(page, perPage, laneIds ? laneCount : (result.count || 0)),
   };
 }
@@ -1112,6 +1195,82 @@ async function attachListingBdNames(items) {
     } catch (_e) { /* soft-fail: cards fall back to their existing labels */ }
   }
   applyListingBdEntityNames(items, entityById);
+}
+
+// UX-T1b — the guarded "Flag for research" code path (2026-09-08).
+//
+// Was: three raw client-side `applyInsertWithFallback` calls straight into
+// `research_queue_outcomes` (dia), unguarded, invisible to the unified
+// workbench. Per UX35's prescription this narrows the button into a code
+// path + review lane: validated input, an idempotent upsert on the table's
+// own `UNIQUE(queue_type, clinic_id)` constraint (the real dedup, already at
+// the DB, per dialysis.js's own comment on that constraint), and a linked
+// `research_tasks` row so the flag lands on the workbench Follow-ups tab
+// instead of only in dia's isolated queue.
+//
+// ⚠️ NOT a general escape hatch — this ONLY writes `outcome='flagged_for_review'`
+// on `research_queue_outcomes` (dia) + a `clinic_manual_flag` research_task.
+// It does not resolve, dismiss, or touch any other queue_type/status value;
+// the client's confirm/dismiss flows are unaffected.
+const FLAG_FOR_RESEARCH_DOMAINS = new Set(['dialysis', 'dia', 'government', 'gov']);
+const FLAG_FOR_RESEARCH_QUEUE_TYPES = new Set([
+  'property_review', 'cms_data', 'npi_intel', 'lease_watchlist',
+]);
+
+async function handleFlagForResearch(req, res, user, workspaceId) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'flag-for-research accepts POST only' });
+  }
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const domain = String(body.domain || '').trim().toLowerCase();
+  const clinicId = String(body.clinic_id || '').trim();
+  const queueType = String(body.queue_type || '').trim();
+  const clinicName = body.clinic_name != null ? String(body.clinic_name).slice(0, 300) : null;
+  const notes = body.notes != null ? String(body.notes).slice(0, 2000) : 'Flagged for research';
+
+  if (!FLAG_FOR_RESEARCH_DOMAINS.has(domain)) {
+    return res.status(400).json({ error: `domain must be one of: ${[...FLAG_FOR_RESEARCH_DOMAINS].join(', ')}` });
+  }
+  if (!clinicId) return res.status(400).json({ error: 'clinic_id is required' });
+  if (!FLAG_FOR_RESEARCH_QUEUE_TYPES.has(queueType)) {
+    return res.status(400).json({ error: `queue_type must be one of: ${[...FLAG_FOR_RESEARCH_QUEUE_TYPES].join(', ')}` });
+  }
+
+  const domCanon = (domain === 'dia' || domain === 'dialysis') ? 'dialysis' : 'government';
+
+  // Idempotent write: the table's own UNIQUE(queue_type, clinic_id) is the
+  // real dedup, so an upsert on-conflict merges rather than duplicating —
+  // never guess at row identity in application code when the DB already
+  // states the key.
+  const upsert = await domainQuery(domCanon, 'POST', 'research_queue_outcomes?on_conflict=queue_type,clinic_id',
+    [{ clinic_id: clinicId, queue_type: queueType, status: 'flagged_for_review', notes, source_name: 'workbench_flag' }],
+    { Prefer: 'resolution=merge-duplicates,return=representation' });
+
+  if (!upsert.ok) {
+    return res.status(upsert.status || 500).json({
+      error: (upsert.data && (upsert.data.message || upsert.data.error)) || 'Failed to write research_queue_outcomes',
+    });
+  }
+
+  // Bridge into the unified workbench so this flag is not stranded on a
+  // surface the Research page never reads. Best-effort: a failure here must
+  // never undo the queue write above (the human-visible flag already landed).
+  let researchTaskId = null;
+  try {
+    const rt = await opsQuery('POST', 'research_tasks', {
+      workspace_id: workspaceId, created_by: user.id || null,
+      research_type: 'clinic_manual_flag', domain: domCanon === 'dialysis' ? 'dia' : 'gov',
+      source_table: 'research_queue_outcomes', source_record_id: `${queueType}:${clinicId}`,
+      title: clinicName ? `Review flagged: ${clinicName}` : `Review flagged clinic ${clinicId}`,
+      instructions: notes, status: 'queued', priority: 50,
+    });
+    if (rt.ok && Array.isArray(rt.data) && rt.data[0]) researchTaskId = rt.data[0].id;
+  } catch (_e) { /* best-effort bridge; the queue write already succeeded */ }
+
+  return res.status(200).json({
+    ok: true, domain: domCanon, clinic_id: clinicId, queue_type: queueType,
+    research_task_id: researchTaskId,
+  });
 }
 
 async function handleInbox(req, res, user, workspaceId) {

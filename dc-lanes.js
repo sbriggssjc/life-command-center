@@ -79,6 +79,12 @@ const _DC_FED_META = {
     intro: 'A geocoded dia property with NO Medicare CCN sitting on top of a CMS-anchored clinic — the same building captured twice (the shadow carries the CRE/deal data; the anchor carries the census). The blank-operator husks already auto-merged; these have a competing identity (operator conflict, a distinct clinic name, or multiple anchors), so YOU decide. Merge folds the shadow into the CCN anchor via the REVERSIBLE wrapper (snapshot-before-delete, undoable). Not a twin = distinct co-located clinics (e.g. a Fresenius and a DaVita in one plaza). Research sends it out for confirmation.' },
   tier0_owner_contact: { title: 'Tier 0 — confirm the owner’s firm domain',
     intro: 'Prompt 188. People we ALREADY hold whose email domain matches an owner’s name — Boyd Watterson, RMR (incl. Adam Portnoy), Realty Income (incl. Sumit Roy). One card per (owner, email DOMAIN), not per person: “do the people at rmrgroup.com work for RMR?” is ONE judgement, and picking who to call is a second decision on the same card. ⚠ Read the evidence line before attaching. Salesforce campaign membership, a Salesforce contact record, Outlook and correspondence all answer “is this person real and known to us?” — they say NOTHING about whether they work for THIS owner. Only “company name matches THIS OWNER” corroborates the link. Gary George at georgesinc.com (a poultry company) passes three of the four for George Washington University. The match key is shown for exactly this reason: “matched on the token ‘george’” is what makes that card an obvious reject. ⚠ Precision is a curve — measured ~91% only for owners at roughly $16M+ of rent and ~60–70% in the ~$2M SPE band, with everything between never graded — so WORK THIS LANE TOP-DOWN. Brokers are never attachable at any deal size. Attach writes the owner’s active contact + a person→owner edge (reversible via lcc_tier0_confirm_log); Reject is terminal for that owner+domain only; Research spawns a task. Every verdict is recorded (won’t re-ask).' },
+  sponsor_family_confirm: { title: 'Sponsor ↔ SPE families — confirm',
+    intro: 'OWN-T0e. A property whose ownership store holds TWO live owner candidates with no recorded fact relating them (the `unclassified_rival` conflict class — 1,617 properties at build). Read on named rows the class is dominated by sponsor ↔ SPE: the sponsor is who we prospect, the SPE is on the deed and the GSA lease, both are true. ONE card per (sponsor, brand token) — A3 measured `boyd` clearing 20 of 24 chains on a single confirm — value-ranked by rent, breadth-decided groups first. The SPONSOR is the side holding MORE current properties (a recorded fact, never a name rule); a TIED group makes you name the sponsor. ⚠ Read the token line: the count is how many live entities carry that word — `realty`, `federal`, a given name — and a generic word is the weakest proposal in the set (shown, never filtered; a confirm on one is your call and is recorded as such). ⚠ An “SPE” holding 2+ properties of its own is usually a DUPLICATE ENTITY of the sponsor (Gardner Tanenbaum Holdings ~ Gardner-Tanenbaum) — that is “same party”: pick the duplicate and either merge it now (ONE reversible lcc_merge_entity call, second confirm) or route to the duplicate-entities merge lane — 5 of the 13 duplicate pairs have no card there, which is why the direct merge exists; a family row over a duplicate would paper over the merge. “Also confirmed for contacts” is evidence about a DIFFERENT question (who to call) and settles nothing here. Confirm writes ONE row into lcc_ownership_sponsor_family (reversible by deleting it) and every covered pair reads sponsor_family_confirmed on the property panel; Not a family is terminal for this card; Research spawns a task. Cards come from a 4-hourly snapshot — counts may lag, the guards do not.' },
+  entity_type_review: { title: 'Entity type — person or organization?',
+    intro: 'C13g-min-lane. A recorded PERSON-typed entity holding 2+ current ownership facts (18 rows / $69.4M at build) — a pattern real people almost never show, but neither name-shape instrument helps here: 0 of the 18 carry an org marker and 7 of the 18 fail the person-name check, so it is a human call, not a rule. ⚠ Read the evidence line before deciding — Salesforce Contact/Account, RCA and CoStar contact-slot counts are shown but settle nothing on their own; a company IS sometimes filed as a Salesforce "Contact". Some cards also BLOCK an OWN-T0e sponsor-family "same party" merge — that is named on the card. Retype writes entity_type = organization via ONE reversible RPC (rpc/lcc_retype_entity, undo rpc/lcc_unretype_entity) and stamps a reason; Keep as person is terminal for this card; Research spawns a task.' },
+  ambiguous_entity_resolution: { title: 'Ambiguous entity — pick the merge target',
+    intro: 'PDR1 / P13#1. A Salesforce opportunity-sync placeholder minted 2026-07-28..08-04 when the sync could not disambiguate an address among several candidate assets in the same city (a documented, CLOSED population — nothing minted since). The auto-merge sweep already drained the clear cases (one candidate with a real, normalized address and no close second); these are the ones it could not decide — either every candidate is thin (no real address anywhere) or two candidates are close enough that guessing risks corrupting bd_opportunities/activity_events. Candidates are shown best-to-worst by the SAME scoring the sweep used. Merge repoints everything on the placeholder onto your chosen candidate (via rpc/reconcile_entity — the SAME writer the sweep uses); Keep as new marks the placeholder as a genuinely distinct asset; Research spawns a task.' },
   npi_dedup_autoapprove: { title: 'NPI duplicates → approve',
     intro: 'W5.2. A dia duplicate-NPI cluster the deterministic gate scored auto-resolvable — a proposed survivor is shown. A human APPROVES the deterministic survivor (fill-blanks / never-guess applies to destructive dedup too), or rejects it. Approval spawns the reconcile task; the actual merge stays human/worker-driven — NEVER a silent auto-collapse.' },
 };
@@ -778,6 +784,126 @@ function _fedCardHTML(it, i, isNext) {
     actions = '<button class="q-action primary" onclick="dcTier0Attach(' + i + ')">Attach as owner contact</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject — not this owner’s firm</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'entity_type_review') {
+    // C13g-min-lane. A single-entity card -- no picker, generic dcFed verdicts.
+    const badges = '<div class="q-item-badges">'
+      + (Number(c.current_rent) > 0 ? '<span class="q-badge pri-high">' + _fedMoney(c.current_rent) + ' rent</span>' : '')
+      + '<span class="q-badge">' + esc(String(c.current_facts || 0)) + ' current fact' + (Number(c.current_facts) === 1 ? '' : 's') + '</span>'
+      + (c.blocks_own_t0e_sponsor_id ? '<span class="q-badge type" title="Retyping this entity unblocks an OWN-T0e sponsor-family same-party merge.">⚠ blocks OWN-T0e (' + esc(String(c.blocks_own_t0e_token || '')) + ')</span>' : '')
+      + (c.has_org_marker ? '<span class="q-badge">org marker</span>' : '')
+      + (c.looks_like_person_warning ? '<span class="q-badge" title="Name-shape check flags this as a person -- documented unreliable on this population.">name-check: person-shaped</span>' : '')
+      + '</div>';
+    const evLine = '<div class="q-item-meta">Evidence: '
+      + 'SF Contact ' + (c.has_salesforce_contact ? 'yes' : 'no')
+      + ' · SF Account ' + (c.has_salesforce_account ? 'yes' : 'no')
+      + ' · RCA contact ids ' + esc(String(c.n_rca_contact_ids || 0))
+      + ' · CoStar contact ids ' + esc(String(c.n_costar_contact_ids || 0))
+      + ' · relationships ' + esc(String(c.relationship_count || 0))
+      + ' · resolved owner of ' + esc(String(c.resolved_owner_of || 0)) + ' propert' + (Number(c.resolved_owner_of) === 1 ? 'y' : 'ies')
+      + '</div>';
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(String(c.name || 'entity')) + '</span>' + badges + '</div>' + evLine;
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'retype_organization\')">Retype as organization</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'keep_person\')">Keep as person</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'ambiguous_entity_resolution') {
+    // PDR1 / P13#1. Best-to-worst scored candidates, exactly what the
+    // auto-merge planner saw before it abstained.
+    const ranked = Array.isArray(c.ranked) ? c.ranked : [];
+    const opts = ranked.map(function (r) {
+      const cand = r.candidate || {};
+      const label = esc(String(cand.name || cand.id || 'candidate'))
+        + ' (score ' + esc(String(r.score)) + (r.has_address ? '' : ' — no address') + ')';
+      return '<option value="' + esc(String(cand.id || '')) + '">' + label + '</option>';
+    }).join('');
+    const badges = '<div class="q-item-badges">'
+      + '<span class="q-badge">' + esc(String(ranked.length)) + ' candidate' + (ranked.length === 1 ? '' : 's') + '</span>'
+      + (c.reason ? '<span class="q-badge type" title="Why the auto-merge sweep abstained.">' + esc(String(c.reason).replace(/^needs_human:/, '')) + '</span>' : '')
+      + '</div>';
+    const detail = ranked.slice(0, 6).map(function (r) {
+      const cand = r.candidate || {};
+      return '<div class="q-item-meta" style="opacity:.8">· <b>' + esc(String(cand.name || cand.id || '')) + '</b>'
+        + ' — score ' + esc(String(r.score))
+        + (cand.address ? ' <span style="opacity:.7">' + esc(String(cand.address)) + '</span>'
+                         : ' <span style="opacity:.7">no address on file</span>')
+        + (r.has_normalized_address ? ' <span style="opacity:.6">(normalized)</span>' : '')
+        + '</div>';
+    }).join('');
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(String(c.placeholder_name || 'placeholder'))
+      + (c.city ? ' <span style="opacity:.6">— ' + esc(String(c.city)) + (c.state ? ', ' + esc(String(c.state)) : '') + '</span>' : '')
+      + '</span>' + badges + '</div>' + detail
+      + '<div class="q-item-meta">Merge into: <select id="dc-amb-' + i + '" class="q-select">' + opts + '</select></div>';
+    actions = '<button class="q-action primary" onclick="dcAmbiguousMerge(' + i + ')">Merge</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'keep_new\')">Keep as new</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
+  } else if (_dcFedType === 'sponsor_family_confirm') {
+    // OWN-T0e. Three things the card must make impossible to miss: WHICH word
+    // linked the names (and how many entities carry it), whether the "SPE" is
+    // really a duplicate entity (spe_props_max >= 2), and that the contact-side
+    // confirmation answers a different question.
+    const tied = c.sponsor_side === 'tied';
+    const spes = Array.isArray(c.spe_names) ? c.spe_names : [];
+    const members = Array.isArray(c.member_ids) ? c.member_ids : [];
+    const memberNames = Array.isArray(c.member_names) ? c.member_names : [];
+    const badges = '<div class="q-item-badges">'
+      + (Number(c.annual_rent) > 0 ? '<span class="q-badge pri-high">' + _fedMoney(c.annual_rent) + ' rent</span>' : '')
+      + '<span class="q-badge">' + esc(String(c.properties || 0)) + ' pair' + (Number(c.properties) === 1 ? '' : 's') + '</span>'
+      + (Number(c.gov_properties) ? '<span class="q-badge">gov ' + esc(String(c.gov_properties)) + '</span>' : '')
+      + (Number(c.dia_properties) ? '<span class="q-badge">dia ' + esc(String(c.dia_properties)) + '</span>' : '')
+      + (tied ? '<span class="q-badge type" title="Both sides hold the same number of current properties — name the sponsor.">tied — you name the sponsor</span>' : '')
+      + (c.duplicate_entity_suspect ? '<span class="q-badge type" title="The SPE side holds ' + esc(String(c.spe_props_max)) + ' properties of its own — usually a duplicate entity of the sponsor, not a family member.">⚠ duplicate entity?</span>' : '')
+      + (c.token_is_generic_word ? '<span class="q-badge type" title="The linking token is a generic word — the weakest proposal in this lane.">⚠ generic token</span>' : '')
+      + '</div>';
+    const title = tied ? esc(String(memberNames.length ? memberNames.slice(0, 4).join(' ~ ') + (memberNames.length > 4 ? ' ~ +' + (memberNames.length - 4) : '') : (c.tied_pair || 'tied pair')))
+      : esc(String(c.sponsor_name || 'sponsor')) + ' <span style="opacity:.6">(' + esc(String(c.sponsor_props || 0)) + ' props)</span>';
+    const speLine = spes.length
+      ? '<div class="q-item-meta">SPE side: <b>' + esc(spes.slice(0, 6).join(' · ')) + '</b>' + (spes.length > 6 ? ' <span style="opacity:.6">+' + (spes.length - 6) + ' more</span>' : '')
+        + (Number(c.spe_props_max) > 0 ? ' <span style="opacity:.7">(largest holds ' + esc(String(c.spe_props_max)) + ')</span>' : '') + '</div>'
+      : '';
+    const tokLine = '<div class="q-item-meta">Linked on the token <b>' + esc(String(c.sponsor_token || '')) + '</b>'
+      + ' <span style="opacity:.7">— ' + esc(String(c.token_entities_fleetwide || 0)) + ' live entit' + (Number(c.token_entities_fleetwide) === 1 ? 'y carries' : 'ies carry') + ' this word</span>'
+      + (c.also_confirmed_for_contacts ? ' <span style="opacity:.6">· also confirmed for CONTACT matching (a different question — settles nothing here)</span>' : '')
+      + '</div>';
+    const flip = '<div class="q-item-meta" style="opacity:.7">Confirm covers ' + esc(String(c.flips_unclassified_rival_pairs || c.properties || 0))
+      + ' owner pair' + (Number(c.flips_unclassified_rival_pairs || c.properties) === 1 ? '' : 's') + ' (≤ that many properties) — each reads sponsor_family_confirmed on the property panel.</div>';
+    // A tied group needs the operator to name the sponsor: a picker over the
+    // group's members (ids validated server-side against the same list).
+    var pick = '';
+    if (tied && members.length) {
+      // member_names is ALIGNED with member_ids (both ordered by id in the view);
+      // tied_pair names only ONE pair and a tied group can hold 9 members.
+      pick = '<div class="q-item-meta">Sponsor: <select id="dc-t0e-' + i + '" class="q-select">'
+        + members.map(function (id, k) {
+          return '<option value="' + esc(String(id)) + '">' + esc(memberNames[k] || ('member ' + String(id).slice(0, 8))) + '</option>';
+        }).join('') + '</select></div>';
+    }
+    // OWN-T0e-b: a duplicate picker over the members that are NOT the sponsor
+    // (on a tied group the sponsor is whatever the sponsor picker says, so all
+    // members are offered and the server refuses dup == winner). "Merge now" is
+    // ONE reversible lcc_merge_entity call behind a confirm; "route to merge
+    // lane" is the no-write alternative.
+    var dupPick = '';
+    if (members.length > 1) {
+      dupPick = '<div class="q-item-meta">Duplicate of the sponsor: <select id="dc-t0e-dup-' + i + '" class="q-select">'
+        + members.map(function (id, k) {
+          if (!tied && String(id) === String(c.sponsor_id)) return '';
+          return '<option value="' + esc(String(id)) + '">' + esc(memberNames[k] || ('member ' + String(id).slice(0, 8))) + '</option>';
+        }).join('') + '</select></div>';
+    }
+    // OWN-T0e-c: this card's OWN sponsor was itself recognised as a duplicate
+    // of a DIFFERENT sponsor's card (annotated server-side, never guessed here).
+    const dupOf = c.duplicate_of_sponsor_id ? esc(String(c.duplicate_of_sponsor_name || 'the other sponsor')) : '';
+    const dupOfLine = c.duplicate_of_sponsor_id
+      ? '<div class="q-item-meta" style="opacity:.85">⚠ This sponsor is itself a recognised duplicate of <b>' + dupOf
+        + '</b> (token <b>' + esc(String(c.duplicate_of_sponsor_token || '')) + '</b>) — see that card, or merge directly below.</div>'
+      : '';
+    body = '<div class="q-item-header"><span class="q-item-title">' + title + '</span>' + badges + '</div>'
+      + speLine + tokLine + dupOfLine + flip + pick + dupPick;
+    actions = '<button class="q-action primary" onclick="dcSponsorFamilyConfirm(' + i + ')">Confirm family (writes 1 registry row)</button>'
+      + (members.length > 1 ? '<button class="q-action" onclick="dcSponsorFamilyMergeNow(' + i + ')">Merge duplicate now (reversible)</button>' : '')
+      + (c.duplicate_of_sponsor_id ? '<button class="q-action" onclick="dcSponsorFamilyMergeIntoSponsor(' + i + ')">Merge THIS sponsor into "' + dupOf + '" (reversible)</button>' : '')
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'same_party\')">Same party — route to merge lane</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'not_family\')">Not a family</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
   } else if (_dcFedType === 'comms_owner_attribution_review') {
     // W9.6: a correspondence→owner attribution. Path A (property_bridge, arithmetic
     // owns-edge) or Path B (person_match, verbatim correspondent header). Confirm
@@ -1321,6 +1447,13 @@ async function dcFed(i, verdict, payload) {
       fwd = ' <button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(nx.domain) + '\', {property_id: ' + esc(String(nx.property_id)) + '}, {}, \'Overview\')">Open property →</button>';
     } else if (nx && nx.action === 'bad_rent_lane') {
       fwd = ' <button class="q-action primary" onclick="renderFederatedLane(\'bad_rent_lease\')">Open bad-rent lane →</button>';
+    } else if (nx && nx.action === 'merge_lane') {
+      // OWN-T0e same_party: the pair is an entity-merge question, worked there.
+      fwd = ' <button class="q-action primary" onclick="renderFederatedLane(\'merge_duplicate_entities\')">Open duplicate-entities lane →</button>';
+    } else if (nx && nx.action === 'sponsor_family_lane') {
+      // C13g-min-lane retype_organization: this retype unblocked an OWN-T0e
+      // sponsor-family card -- send the operator straight there.
+      fwd = ' <button class="q-action primary" onclick="renderFederatedLane(\'sponsor_family_confirm\')">Open sponsor-family lane →</button>';
     }
     if (typeof showToast === 'function') showToast('Recorded', 'success');
     if (row) {
@@ -1367,6 +1500,64 @@ window.dcFedU3Pick = dcFedU3Pick;
 // sent explicitly rather than defaulting server-side — validateTier0Verdict
 // refuses an attach with no person_entity_id, and refuses one that is not on the
 // freshly re-read card, so a stale select cannot write an arbitrary entity.
+// OWN-T0e: confirm_family. On a tied group the operator's sponsor pick rides in
+// the payload; the server validates it against the group's member_ids.
+function dcSponsorFamilyConfirm(i) {
+  const it = _dcFedArr[i]; if (!it) return;
+  const c = it.context || {};
+  const payload = {};
+  if (c.sponsor_side === 'tied') {
+    const sel = document.getElementById('dc-t0e-' + i);
+    const pick = sel ? sel.value : '';
+    if (!pick) { if (typeof showToast === 'function') showToast('Name the sponsor first', 'error'); return; }
+    payload.sponsor_entity_id = pick;
+  }
+  return dcFed(i, 'confirm_family', payload);
+}
+window.dcSponsorFamilyConfirm = dcSponsorFamilyConfirm;
+
+// OWN-T0e-b: same_party with merge_now — the operator-named duplicate is merged
+// INTO the sponsor through lcc_merge_entity (reversible). Second confirm here,
+// because it is the one verdict on this lane that moves an entity.
+function dcSponsorFamilyMergeNow(i) {
+  const it = _dcFedArr[i]; if (!it) return;
+  const c = it.context || {};
+  const dupSel = document.getElementById('dc-t0e-dup-' + i);
+  const dup = dupSel ? dupSel.value : '';
+  if (!dup) { if (typeof showToast === 'function') showToast('Pick which member is the duplicate', 'error'); return; }
+  const payload = { merge_now: true, duplicate_entity_id: dup };
+  if (c.sponsor_side === 'tied') {
+    const sel = document.getElementById('dc-t0e-' + i);
+    const pick = sel ? sel.value : '';
+    if (!pick) { if (typeof showToast === 'function') showToast('Name the sponsor (survivor) first', 'error'); return; }
+    if (pick === dup) { if (typeof showToast === 'function') showToast('Survivor and duplicate are the same entity', 'error'); return; }
+    payload.sponsor_entity_id = pick;
+  }
+  const dupName = dupSel && dupSel.options[dupSel.selectedIndex] ? dupSel.options[dupSel.selectedIndex].text : dup;
+  const winName = c.sponsor_side === 'tied'
+    ? (function () { const s2 = document.getElementById('dc-t0e-' + i); return s2 && s2.options[s2.selectedIndex] ? s2.options[s2.selectedIndex].text : 'the sponsor'; })()
+    : (c.sponsor_name || 'the sponsor');
+  if (typeof window.confirm === 'function' && !window.confirm('Merge "' + dupName + '" INTO "' + winName + '"? Reversible via lcc_unmerge_entity.')) return;
+  return dcFed(i, 'same_party', payload);
+}
+window.dcSponsorFamilyMergeNow = dcSponsorFamilyMergeNow;
+
+// OWN-T0e-c: the reverse direction — THIS card's own sponsor is itself a
+// recognised duplicate of a DIFFERENT sponsor's card, so merge IT into the
+// other, already-canonical sponsor. No picker: the target is computed
+// server-side (c.duplicate_of_sponsor_id) and never sent from the client
+// (P188) — the payload carries nothing.
+function dcSponsorFamilyMergeIntoSponsor(i) {
+  const it = _dcFedArr[i]; if (!it) return;
+  const c = it.context || {};
+  if (!c.duplicate_of_sponsor_id) { if (typeof showToast === 'function') showToast('No recognised duplicate-of target on this card', 'error'); return; }
+  const loser = c.sponsor_name || 'this sponsor';
+  const winner = c.duplicate_of_sponsor_name || 'the other sponsor';
+  if (typeof window.confirm === 'function' && !window.confirm('Merge "' + loser + '" INTO "' + winner + '"? Reversible via lcc_unmerge_entity.')) return;
+  return dcFed(i, 'merge_into_sponsor', {});
+}
+window.dcSponsorFamilyMergeIntoSponsor = dcSponsorFamilyMergeIntoSponsor;
+
 function dcTier0Attach(i) {
   const sel = document.getElementById('dc-t0-' + i);
   const personId = sel && sel.value ? String(sel.value) : '';
@@ -1377,6 +1568,18 @@ function dcTier0Attach(i) {
   return dcFed(i, 'attach', { person_entity_id: personId });
 }
 window.dcTier0Attach = dcTier0Attach;
+
+// PDR1 / P13#1 — merge into the operator-chosen candidate.
+function dcAmbiguousMerge(i) {
+  const sel = document.getElementById('dc-amb-' + i);
+  const candidateId = sel && sel.value ? String(sel.value) : '';
+  if (!candidateId) {
+    if (typeof showToast === 'function') showToast('Pick which candidate to merge into', 'error');
+    return;
+  }
+  return dcFed(i, 'merge', { candidate_id: candidateId });
+}
+window.dcAmbiguousMerge = dcAmbiguousMerge;
 
 // Unit 2 — merge with an operator-chosen survivor. Reads the survivor dropdown
 // (default = the view winner) and only sends winner_id on a real override, so

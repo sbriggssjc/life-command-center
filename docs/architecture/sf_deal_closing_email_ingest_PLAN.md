@@ -1,5 +1,10 @@
 # Deal Closing Announcement email → recorded sale (PLAN, 2026-06-23)
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Explicit "Status: PLAN (no code written yet)" from 2026-06-23; verify still-unbuilt against CURRENT-STATE.md/PLANNED-BACKLOG.md before treating as live design.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 > Status: **PLAN (no code written yet)**. Scott approved approach = **Both**
 > (build the email path **and** diagnose/fix the automated SF pull — Part B is
 > `docs/setup/PA_FLOW_get_deals_closed_stage_fix.md`). Depth = **plan first**.

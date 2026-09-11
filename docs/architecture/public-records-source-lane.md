@@ -686,3 +686,150 @@ real; what is linked is mostly generated.
 | the ladder mechanics | `docs/architecture/data_quality_self_learning_loop.md` |
 | open rows | `docs/os/PLANNED-BACKLOG.md` — `PR1`–`PR4` |
 | the fabrication doctrine | `CLAUDE.md` → *Data-write discipline* |
+
+## 7. The free-source manual research workflow, and what already exists to automate it (2026-09-10, Scott)
+
+Scott's framing, recorded close to verbatim because the design follows from it directly: before the
+LCC existed, ownership research was 100% manual and 100% free (CoStar excepted). The playbook, in
+order: start at the property → netronline.com to find the right county's assessor and recorder of
+deeds (site, phone, address, by zip) → the assessor gives the recorded-owner entity's notice address
+(where the tax bill goes) → the recorder's deed/loan documents give signing authority and other notice
+addresses → if the recorded owner is an LLC/LP, the state Secretary of State site gives members and
+the state of incorporation (cross-referenced against what the county already showed) → names and
+addresses get cross-referenced in Salesforce and a quick Google search, which usually turns up a phone
+number, email, or website → those get cross-verified the same way → the most likely in-control person
+starts the 7-touch BD cadence as a new lead (or updates an existing contact) and is added to the
+appropriate Salesforce group/list as an NM Type opportunity; other named partners go on the prospect
+list too, pursued if the first contact doesn't pan out. **This should become a living, priority-ranked
+queue that keeps re-checking its own conclusions as more data arrives — not a one-time determination**,
+and if a lightweight county-level capture adapter for Chrome/Edge is needed, build it.
+
+**Checked before designing anything further, per standing doctrine — and the news is much better than
+§8 assumed:** a scanner doing almost exactly this already exists in the extension, unwired.
+
+### 4a. What already exists
+
+- **`extension/content/public-records.js`** — a real, fairly mature content script, injected on-demand
+  when the sidepanel's "Scan This Page" is used on a county/SOS/recorder site. It classifies the page
+  (assessor / recorder / SOS / unknown) and runs a dedicated heuristic parser for each: `scanAssessor()`
+  pulls `owner_name`, **`mailing_address`** (the tax-bill address Scott described), `assessed_value`,
+  `tax_amount`, parcel/lot/zoning facts; `scanRecorder()` pulls `grantor`/`grantee`, `document_type`,
+  `book_page`, sale price/date — exactly the signing-authority and notice-address data from deed/loan
+  documents; `scanSOS()` pulls `registered_agent`, `agent_address`, `principal_address`, and
+  **`officers`** (the members/managers list). A separate, DOM-anchored parser exists specifically for
+  CA's `bizfileonline.sos.ca.gov` (`scanBizfileFromRoot`), including a guard against a documented false
+  match (`isStandingLabel`) — this is not a rough sketch, it has already paid for a real bug fix.
+- **`api/_shared/county-portal-resolver.js` + `county_authority_cache`** — a 926-county table of
+  `assessor_url, recorder_url, tax_collector_url, clerk_url, gis_url`, explicitly commented
+  `recorder_url → assessor_url → netronline_url` — **this is netronline's own index, already ingested
+  as data**, Scott's literal starting point. Currently imported only by `api/admin.js` — not surfaced
+  to the extension or sidepanel as a "here's where to look next" helper.
+- **`api/_handlers/sidebar-pipeline.js::upsertPublicRecords`** — the real, working writer into
+  `parcel_records`/`tax_records`/`property_public_records`, already proven live for CoStar captures
+  (PR2, 2026-09-02: 767 `building_sf`, 734 `lot_sf`, 714 `year_built` written from real CoStar sidebar
+  scans, field-provenance-ranked, guarded, reversible).
+
+### 4b. The actual gap — and it is one wire, not a missing subsystem
+
+`extension/sidepanel.js`'s save handler for a scanned public-records/SOS capture calls
+`POST /api/entities` with **only `name`, `org_type`, `description`** — every other field the scanner
+captured (`mailing_address`, `registered_agent`, `officers`, `grantor`/`grantee`, `tax_amount`, the
+whole structured payload) **is read into memory and then discarded at save time.** This is the same
+defect class as `unpackContacts()`/`contactEntityType()` earlier in this session — a rich structured
+capture reduced to a thin generic write — except here the write path was never built at all, not
+mis-typed. The scanner is not a stub; the *sink* is.
+
+**This changes the plan §8 committed to.** §8 said the LLC-member/mailing-address chain needs paid
+APIs (OpenCorporates, Regrid) because no free capture path exists. That was wrong in one specific,
+correctable way: a free capture path exists and half-works today — it just writes to `/dev/null` past
+the point of capture. Scott's original ask (build the free-source chain, mirror the manual workflow)
+is not blocked on a budget decision after all; it is blocked on finishing a wire that CoStar's
+equivalent path (`upsertPublicRecords`) already proves works.
+
+### 4c. Revised scope — supersedes §8's "wait for paid data" framing
+
+Do not wait for OpenCorporates/Regrid to build the individual-owner control chain. Build:
+
+1. **Route the public-records scanner's captured payload through `upsertPublicRecords`** (assessor →
+   `parcel_records`/`tax_records`, `mailing_address` included) and a new equivalent writer for the
+   recorder (`deed_records` — `grantor`/`grantee`/signing-authority) and SOS (`officers`/
+   `registered_agent`/`principal_address` → the new `llc_member`/`llc_manager` `entity_relationships`
+   edge type §8 already specified). Reuse `upsertPublicRecords`'s existing field-priority/provenance
+   discipline — do not build a second writer with its own rules.
+2. **Surface `county-portal-resolver.js`/`county_authority_cache` in the sidepanel** as the literal
+   "go here next" step Scott starts every research session with — given a property, show its county's
+   assessor/recorder URLs (source: netronline, already ingested). This is the automatable equivalent of
+   opening netronline.com by hand.
+3. **The cross-reference and verification steps (SF + Google search for phone/email, cross-verify)**
+   are a DIFFERENT, already-partly-scoped problem — `contact-authority.js`, `web-search-enrich.js`
+   exist; read them before assuming a new build is needed.
+4. **The priority/merit-weighted "what to research next" queue** Scott described should NOT be a new
+   subsystem — `research_workbench` (UX-T1b, shipped 2026-09-08) already ranks and surfaces exactly
+   this shape of work (`establish_ownership_history`, `owner_contact_manual` lanes). Extend it with a
+   `county_records_needed`/`sos_research_needed` research_type rather than building a parallel queue.
+5. **The living/re-check loop applies to ownership determinations too, not only contacts** — §4c/AC4
+   already commit to re-running on new correspondence/transactions/replies for the contact side; this
+   extends the same doctrine to a recorded-owner or true-owner conclusion itself, so a stale
+   determination gets re-opened as new county/SOS/deed data lands, not left standing forever. Reuse the
+   `as_of`/confidence-travels discipline already adopted (P181), never a silent overwrite.
+6. **The Salesforce write-back (NM Type opportunity, group/list membership) for a newly-identified
+   contact** is Stage 5 territory (`ownership-truth-pipeline-state.md` — "the thinnest stage," mostly
+   aspirational doctrine, not built machinery) — size what exists (`sf-list-import.js` reads FROM
+   Salesforce; nothing found yet that WRITES a new opportunity/list membership TO it) before promising
+   this is a small addition. Likely its own unit, possibly its own prompt.
+
+**Net effect on `ACI-phase1-2`:** hold Unit D as drafted — it undersells what's buildable. A revised
+prompt (`PR-scanner-writeback`) should ship first, since Units A-C (Tier 0 completion, the REIT/fund
+taxonomy) are unaffected by this finding and can proceed independently.
+
+## 7a. ✅ PR-scanner-writeback SHIPPED (2026-09-10) — the sidepanel scan captures now write real tables
+
+Item 1's premise ("the sidepanel discards everything except `name` and a description on save") is
+now false for the assessor / recorder / SOS scan paths. New shared module
+**`api/_shared/public-records-writeback.js`** (source-tagged **`assessor_sidebar_manual`** /
+**`recorder_sidebar_manual`** / **`sos_sidebar_manual`** — distinct from `costar_sidebar` and from
+the gpt-4o `ai_gpt4o_presumed` leg §2a describes; neither of those is touched by this unit, per its
+own explicit scope). Route: `POST /api/public-records-capture` (mounted directly in `server.js`,
+also reachable as `/api/admin?_route=public-records-capture`), called from the sidepanel's new
+`loadPublicRecordPropertyView` (assessor/recorder) and the rebuilt `saveOrgBtn` handler (SOS,
+no-active-worklist-target path).
+
+- **Assessor scan → `parcel_records` + `tax_records`** (`applyAssessorCapture`). Fill-blanks against
+  an existing row via `filterByFieldPriority`; a NEW row is inserted with the scan's own
+  `apn/county/state/assessed_value/land_value/improvement_value/tax_amount/year_built/square_footage/
+  lot_size/zoning/property_type/owner_name/mailing_address`. `owner_name` rides through **unmodified
+  from the scan** — never backfilled from a property record we already hold, the exact gov ORE
+  Phase A1 "echo" defect §2 and §2a document on the automated legs. Requires an operator-supplied
+  domain `property_id` (no address→property auto-match — never guess).
+- **Recorder scan → `deed_records`** (`applyRecorderCapture`). Extends the existing
+  `deed-parser.js` dedup/DTO pattern (`buildDeedDataHash`, `validateDeedIngest`, PK-per-domain,
+  `grantor_address`/`grantee_address` per ORE Phase 1 Unit C) rather than forking a second insert
+  shape; a duplicate `data_hash` is a no-op, never a second row.
+- **SOS scan → `llc_member` / `llc_manager` entity_relationships edges** (`applySosEntityCapture`,
+  new module, new edge types — the vocabulary is free-text, not a closed CHECK enum, so no migration
+  was needed to add them). Resolves/mints the LLC as an `organization` entity and each named officer
+  / the registered agent as a `person` entity through the SAME choke point every other writer in this
+  repo uses (`ensureEntityLink`), then writes the edge. **The residential-vs-agent-service classifier
+  in `address-reverse.js` (`classifyReverseAddress` — not re-derived) gates whether an address is ever
+  recorded as that person's residence**; a CSC/registered-agent-service address still gets its edge
+  (association is still true) but is never patched onto the person's `entities.address`. Positively
+  tested both directions in `test/pr-scanner-writeback.test.mjs`.
+- **All three are human-triggered only** — the operator reviews the editable form and clicks Save;
+  no crawler, no polling, no autonomous fetch anywhere in the module.
+- **County-portal-resolver is now sidepanel-reachable**: `GET /api/recorder-portal?domain=gov&
+  property_id=<id>` was already implemented in `api/admin.js` (imported `county-portal-resolver.js`)
+  but had no dedicated mount — added `app.all('/api/recorder-portal', …)` in `server.js` so the
+  sidepanel can call it directly without going through the internal `_route=` param. Read-only, gov-
+  only (per the resolver's own design — dia has no `county_authorities` table).
+- **NOT shipped, sized instead:**
+  - **A `county_records_needed` research_type / value-gated queue** for the scanner's own backlog
+    (what properties/owners still need a manual county lookup) — the task's Unit 3. Every value-gate
+    shipped in this repo (A5c, P161, B1, C2a — all the `$500k` floor instances) was calibrated against
+    a LIVE population read from the production databases; this session has no Supabase/DB access, so
+    predicting an admitted-row count or picking a floor here would be exactly the "we must acquire the
+    data" / unmeasured-migration mistake this file documents paying for repeatedly (B4/B5, N18, A2's
+    `on conflict do nothing` count). Sized in `research-workbench.md` §7b instead of shipped blind.
+  - **A Salesforce write-back for a newly-captured LLC/contact** — item 6 above, this repo's Unit 4.
+    Re-confirmed this session: `api/_shared/salesforce.js` is read-only (Power Automate proxy, no
+    Connected App), and a repo-wide grep for `sobjects` / `/services/data/v` / any Salesforce POST
+    still returns nothing. Sized as backlog, not built — see `PLANNED-BACKLOG.md`.

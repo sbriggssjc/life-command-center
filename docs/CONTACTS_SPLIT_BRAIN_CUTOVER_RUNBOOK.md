@@ -1,5 +1,12 @@
 # unified_contacts split-brain — cutover runbook (2026-07-21)
 
+> 🚨 **STALE (DOCMAP3, 2026-09-08): step 3 below ("Flip the routing: set `CONTACTS_HUB=ops`") reads
+> as a still-open procedure. It is not — the flip happened on 2026-08-17** (root `CLAUDE.md`:
+> *"It is currently set to `ops`"*, LCC Opps live at 31,038+ rows, gov copy is a frozen
+> pre-cutover snapshot). Read this doc as a historical record of the pre-cutover plan, not a
+> checklist with remaining steps — re-verify steps 4/5 (write-lands-together, gov read-only) against
+> live state before treating them as still-outstanding.
+
 Companion to `CONTACTS_SPLIT_BRAIN_DELTA_2026-07-21.md` (the Phase-0a delta). Tracks
 what is applied, the remaining Gate-1 cutover steps, reversal, and the gated Phase 1.
 

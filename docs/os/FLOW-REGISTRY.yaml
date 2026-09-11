@@ -111,7 +111,7 @@ flows:
     exported_at: "2026-08-11T03:07:10Z"
     package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-opportunity-sync__SF-Deal-LCC-Opportunity-Sync__7657a3bc-8761-4d2e-b385-ed112411bc42__2026-08-11.zip
     sha256: 67b610a174c32ea3ebb03c0c1ba63c4924ae9fed2ed320711923628c8c865dc0
-    runbook: docs/os/architecture/BUILD-01B-sf-deal-sync-flow.md
+    runbook: docs/architecture/BUILD-01B-sf-deal-sync-flow.md
   - logical_id: sf-deal-team-roster
     display_name: "SF Deal Team → LCC Roster"
     flow_guid: 9879c0fd-2dc0-4304-a82b-d68de3fcc991
@@ -124,7 +124,7 @@ flows:
     exported_at: "2026-08-11T03:08:06Z"
     package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-deal-team-roster__SF-Deal-Team-LCC-Roster__9879c0fd-2dc0-4304-a82b-d68de3fcc991__2026-08-11.zip
     sha256: 89d62b1133c9ce99a9bbbaf082536c16832fdf2efca5b849797c93349c078930
-    runbook: docs/os/architecture/deal-party-roster-source.md
+    runbook: docs/architecture/deal-party-roster-source.md
     route_triage_2026_08_11:
       verified_from: retained_export_and_read_only_live_probe
       exported_endpoint: "POST https://life-command-center-production.up.railway.app/api/pipeline/ingest-deal-parties"
@@ -142,7 +142,7 @@ flows:
     exported_at: "2026-08-11T03:08:50Z"
     package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-deal-contact-roster__SF-Deal-Contacts-LCC-Roster__a50d3f56-3891-4d8f-8636-b9b09e58c2ee__2026-08-11.zip
     sha256: ac2c177ffb4fa7f85ab8c5a03f588cb190e0bc7f389d336d6672e2dfcdf0eb1a
-    runbook: docs/os/architecture/deal-party-roster-source.md
+    runbook: docs/architecture/deal-party-roster-source.md
     route_triage_2026_08_11:
       verified_from: retained_export_and_read_only_live_probe
       exported_endpoint: "POST https://life-command-center-production.up.railway.app/api/pipeline/ingest-deal-contacts"
@@ -173,7 +173,7 @@ flows:
     exported_at: "2026-08-11T03:10:38Z"
     package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-queue-drainer__LCC-SF-Queue-Drainer__2d5a0bb0-3948-4d14-9282-056ea923781e__2026-08-11.zip
     sha256: 314dcfe4765129f2fb4837bbd653f7581f5cd01ed897ebac68db7ef70b4ec7a9
-    runbook: docs/os/architecture/SF-WRITEBACK-AND-DOSSIER-BUILD-STATE.md
+    runbook: docs/architecture/SF-WRITEBACK-AND-DOSSIER-BUILD-STATE.md
   - logical_id: sf-retry-dead-letter
     display_name: "SF -> LCC: Retry & Dead-letter"
     flow_guid: f7e7bc07-6cbe-4638-b4c6-09a5f3206930
@@ -252,7 +252,7 @@ flows:
     exported_at: "2026-08-11T03:15:40Z"
     package_path: private/power-automate/exports/production/2026-08-11/03-outlook-task-loop/outlook-intake-hardened__LCC-Outlook-Intake-to-Teams-Hardened__45faffcc-a96c-4ca3-a62d-c2fa150386ed__2026-08-11.zip
     sha256: bed5f3d88c0cd09f6cb2e69474a7f8693fcde1bbe13f8dc4102cb12eb25646c8
-    runbook: docs/os/architecture/scott-pa-flows-reference.md
+    runbook: docs/architecture/scott-pa-flows-reference.md
   - logical_id: outlook-processing-complete
     display_name: "LCC Processing Complete → Move Message"
     flow_guid: 4e51f33d-dc56-47d0-8065-66e9a6e82961
@@ -302,11 +302,56 @@ flows:
     trigger: request
     connectors: [salesforce]
     endpoint_families: [lcc-flow-failure-ledger]
-    exported_at: "2026-08-11T03:16:18Z"
-    package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-http-switch-lookup__HTTP-Switch-Salesforce-Lookup__c3744e93-5e95-4b6f-a839-d4308389d21f__2026-08-11.zip
-    sha256: dc6c0785aa18924fa135fd0d99ab29767045a76bb8d984f1efcd1b8429336708
+    exported_at: "2026-09-09T16:36:00Z"
+    package_path: private/power-automate/exports/production/2026-09-09/sf-http-switch-lookup__HTTP-Switch-Salesforce-Lookup__2026-09-09.zip
+    sha256: c461ff8e79c961dc0defdca2075124bd43e73a45875f98e135b95c9e8790d530
+    previous_exports:
+      - exported_at: "2026-08-11T03:16:18Z"
+        package_path: private/power-automate/exports/production/2026-08-11/01-salesforce-backbone/sf-http-switch-lookup__HTTP-Switch-Salesforce-Lookup__c3744e93-5e95-4b6f-a839-d4308389d21f__2026-08-11.zip
+        sha256: dc6c0785aa18924fa135fd0d99ab29767045a76bb8d984f1efcd1b8429336708
     runbook: docs/architecture/flows/http-switch-salesforce-lookup.md
+    notes: >-
+      2026-09-09 (SF-DIRECT-b): added read-only `soql` Switch case (SELECT-only + no ';' guard, max_rows
+      clamped to 500, Execute_a_SOQL_query_1, 200/400 Responses). Consumers: api/_shared/salesforce.js
+      (Railway) and supabase/functions/_shared/salesforce-gateway.ts (Dialysis_DB edge, via SF_LOOKUP_WEBHOOK_URL).
+      Measured connector latency 48-49 s per call at steady state (SF-GW-LATENCY). Residual: Secure
+      Inputs/Outputs is on the trigger only, not yet on the SOQL action - re-export after that checkbox.
 
+  - logical_id: briefing-daily-teams-v2
+    display_name: "LCC - Daily Briefing to Teams"
+    flow_guid: cfd7f087-e50d-4e15-8b63-9d74a19817de
+    group: briefing
+    priority: B
+    state: verified_from_export
+    trigger: recurrence
+    connectors: [teams]
+    endpoint_families: [railway-daily-briefing-snapshot]
+    exported_at: "2026-09-09T12:25:33Z"
+    package_path: private/power-automate/exports/production/2026-09-09/briefing/LCCDailyBriefingtoTeams_20260909122533.zip
+    runbook: docs/architecture/flows/lcc-daily-briefing.md
+    notes: >-
+      Created 2026-07-16 as the replacement for the v1 Teams flow. Daily 12:30 UTC recurrence with an
+      in-flow Condition; GET https://tranquil-delight-production-633f.up.railway.app/api/daily-briefing
+      ?action=snapshot&role_view=broker with x-lcc-key / x-lcc-workspace; card links also on Railway.
+      ⚠️ The export carries the API key in plaintext in the HTTP header — set Secure Inputs on that action
+      (hygiene item, 2026-09-09) and keep the zip under private/, never in docs/.
+  - logical_id: briefing-morning-email-v2
+    display_name: "LCC Morning Briefing v2"
+    flow_guid: 63156e98-82c2-421a-97c2-c4049f8668b6
+    group: briefing
+    priority: B
+    state: verified_from_export
+    trigger: recurrence
+    connectors: [office365, teams]
+    endpoint_families: [railway-briefing-email, lcc-flow-failure-ledger]
+    exported_at: "2026-09-09T12:02:31Z"
+    package_path: private/power-automate/exports/production/2026-09-09/briefing/LCCMorningBriefingv2_20260909120231.zip
+    runbook: docs/architecture/flows/lcc-weekday-briefing-email.md
+    notes: >-
+      Mon-Fri 12:30 UTC. Gets calendar (V4) + To Do tasks, POSTs to
+      https://tranquil-delight-production-633f.up.railway.app/api/briefing-email, sends the email;
+      on failure posts a dead-letter row via lcc_record_flow_failure (p_flow_name "LCC Weekday Briefing
+      Email"). Already on Railway — NOT the J13 caller, despite sharing its schedule.
 retired_flows:
   - logical_id: retired-todo-lcc-sync
     display_name: "To Do - Life Command Center Sync"
@@ -316,3 +361,25 @@ retired_flows:
     display_name: "Unflag Completed Email Tasks"
     flow_guid: null
     state: retired
+  - logical_id: retired-daily-briefing-teams-v1
+    display_name: "LCC Daily Briefing to Teams"
+    flow_guid: null
+    state: retired
+    retired_at: "2026-09-09"
+    retired_by: scott
+    reason: >-
+      May-2026 original (no hyphen in the name). Still ON and still GETting the RETIRED Vercel host
+      /api/daily-briefing?action=snapshot&role_view=broker every weekday at 12:30 UTC — the caller
+      behind the J13 preflight's AWS `node` burst with 3 x 400 (v_my_work, mv_user_work_counts,
+      action_items). Superseded by briefing-daily-teams-v2 (2026-07-16), which already targets
+      Railway. Turned OFF 2026-09-09 (not deleted; run history kept as evidence). Never in this
+      registry until now — the PA5 gap. Was exported 2026-05-11 as LCCDailyBriefing_20260511215104.zip.
+  - logical_id: retired-morning-briefing-v1
+    display_name: "LCC Morning Briefing"
+    flow_guid: null
+    state: unknown_not_seen
+    reason: >-
+      May-2026 weekly email flow documented in docs/architecture/flows/lcc-morning-briefing.md as
+      GETting the retired Vercel /api/briefing-email. Not present in the 2026-09-09 "briefing" search of
+      My flows (four results: the two v2 flows, the v1 Teams flow above, and the Instant webhook
+      flow) — presumably already deleted. Recorded so nobody goes looking for it again.

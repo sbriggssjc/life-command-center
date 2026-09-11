@@ -1,5 +1,14 @@
 # SOS-Direct Scraper — Build Spec
 
+> 🚨 **STALE (DOCMAP3, 2026-09-08): superseded by the actual build.** This spec (2026-05-21)
+> proposes a `?_route=sos-research-tick` Vercel/edge worker in THIS repo. The real implementation
+> lives in the **government-lease** repo as `src/sos_detail_fetcher.py` (Python, per-state adapters
+> FL/AZ/CA) behind the `sos-proxy/` residential-egress proxy (CLAUDE.md §25, W9.1 Stage 2) —
+> a different mechanism entirely, and Vercel itself was retired 2026-07-20 (root `CLAUDE.md`).
+> `W9_1_SOS_DIRECT` is currently **off** (every adapter honest-blocked at a Cloudflare/Incapsula
+> bot-wall from CI; residential-IP retest pending client-fidelity work). Treat this doc as the
+> historical first-draft proposal, not the build reference.
+
 **Date:** 2026-05-21
 **Why:** `recorded_owners.registered_agent_name / manager_name / filing_id / state_of_incorporation` are **0 / ~0** on both DBs. The `llc_research_queue` has **461 gov + 1,235 dia rows stuck `queued`, 0 completed** — the enrichment was gated on a paid OpenCorporates key and the free SOS-direct path was deferred. This is the universal unlock: it supplies the manager/member → true-owner → decision-maker chain *and* the registered-agent address that gives the address matcher its fuel.
 

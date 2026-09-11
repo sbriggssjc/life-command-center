@@ -24,8 +24,12 @@ import { mountLccMcp } from './mcp/server.js';
 import { makeOpportunitySyncRoute } from './mcp/opportunity-sync.js';
 import { makeDealRosterRoute } from './mcp/deal-roster.js';
 import { handleDealEmailMatchCron } from './api/_handlers/deal-email-match-cron.js';
+import { handleOperatorNoteIntake } from './api/_handlers/operator-notes-intake.js';
+import { handleOperatorTriageTick } from './api/_handlers/operator-triage-tick.js';
 import { handleDealCommsPropagateTick } from './api/_handlers/deal-comms-propagate-tick.js';
 import { handleCommsOwnerAttributionTick } from './api/_handlers/comms-owner-attribution-tick.js';
+import { handleMarketBriefPsqlTick } from './api/_handlers/market-brief-psql-tick.js';
+import { handleMarketBriefRssTick } from './api/_handlers/market-brief-rss-tick.js';
 
 // ── Import the core 9 API handlers (Phase 4b consolidated) ─────────────────
 // daily-briefing, data-proxy, diagnostics absorbed into admin.js
@@ -198,6 +202,8 @@ app.all('/api/geocode-tick', (req, res) => { req.query._route = 'geocode-tick'; 
 app.all('/api/intake-rematch', (req, res) => { req.query._route = 'intake-rematch'; adminHandler(req, res); });
 app.all('/api/intake-promote-drain', (req, res) => { req.query._route = 'intake-promote-drain'; adminHandler(req, res); });
 app.all('/api/priority-band', (req, res) => { req.query._route = 'priority-band'; adminHandler(req, res); });
+app.all('/api/recorder-portal', (req, res) => { req.query._route = 'recorder-portal'; adminHandler(req, res); });
+app.all('/api/public-records-capture', (req, res) => { req.query._route = 'public-records-capture'; adminHandler(req, res); });
 app.all('/api/priority-queue', (req, res) => { req.query._route = 'priority-queue'; adminHandler(req, res); });
 app.all('/api/seller-prospect-queue', (req, res) => { req.query._route = 'seller-prospect-queue'; adminHandler(req, res); });
 app.all('/api/priority-trigger-properties', (req, res) => { req.query._route = 'priority-trigger-properties'; adminHandler(req, res); });
@@ -215,8 +221,13 @@ app.all('/api/link-coverage-tick', (req, res) => { req.query._route = 'link-cove
 app.all('/api/match-disambig-assist-tick', (req, res) => { req.query._route = 'match-disambig-assist-tick'; adminHandler(req, res); });
 app.all('/api/property-twin-assist-tick',  (req, res) => { req.query._route = 'property-twin-assist-tick';  adminHandler(req, res); });
 app.all('/api/ownership-chain-draft-tick', (req, res) => { req.query._route = 'ownership-chain-draft-tick'; adminHandler(req, res); });
+app.all('/api/ownt0j-sponsor-classify-tick', (req, res) => { req.query._route = 'ownt0j-sponsor-classify-tick'; adminHandler(req, res); });
 app.all('/api/briefing-analyst-take-tick', (req, res) => { req.query._route = 'briefing-analyst-take-tick'; adminHandler(req, res); });
+app.all('/api/dia-property-link-tick', (req, res) => { req.query._route = 'dia-property-link-tick'; adminHandler(req, res); });
 app.all('/api/tier0-auto-attach-tick',    (req, res) => { req.query._route = 'tier0-auto-attach-tick';    adminHandler(req, res); });
+app.all('/api/broker1-assign-tick',       (req, res) => { req.query._route = 'broker1-assign-tick';       adminHandler(req, res); });
+app.all('/api/ambiguous-entity-automerge-tick', (req, res) => { req.query._route = 'ambiguous-entity-automerge-tick'; adminHandler(req, res); });
+app.all('/api/bench-rank-tick',           (req, res) => { req.query._route = 'bench-rank-tick';           adminHandler(req, res); });
 app.all('/api/sf-link-assist-tick',        (req, res) => { req.query._route = 'sf-link-assist-tick';        adminHandler(req, res); });
 app.all('/api/sf-link-rescore-tick',       (req, res) => { req.query._route = 'sf-link-rescore-tick';       adminHandler(req, res); });
 app.all('/api/sf-donor-handoff-tick',      (req, res) => { req.query._route = 'sf-donor-handoff-tick';      adminHandler(req, res); });
@@ -417,6 +428,17 @@ app.all('/api/intake-log-call', (req, res) => { req.query._route = 'log-call'; i
 // W7.3 path C: Outlook category-tagging receiver (Power Automate). The
 // correspondence design names this receiver /api/intake-tagged-comm.
 app.all('/api/intake-tagged-comm', (req, res) => { req.query._route = 'tagged-comm'; intakeHandler(req, res); });
+// OC-a — operator-note funnel (spec EXEC-BRIEFS-SPEC.md §6): one intake
+// endpoint for every channel (in-app Note, MCP log_operator_note, Cowork,
+// Teams/PA) + the OC2 triage tick. Mounted directly (not via intakeHandler's
+// _route dispatch) — each handler is its own auth boundary.
+app.all('/api/operator-notes', handleOperatorNoteIntake);
+app.all('/api/operator-triage-tick', handleOperatorTriageTick);
+// MB-a — market brief producers, dialysis lane first (spec EXEC-BRIEFS-SPEC.md
+// §2, MB1/MB2). Flag-gated (MARKET_BRIEF_PSQL / MARKET_BRIEF_PRSS), both off
+// until live-verified. GET is always a dry run.
+app.all('/api/market-brief-psql-tick', handleMarketBriefPsqlTick);
+app.all('/api/market-brief-rss-tick', handleMarketBriefRssTick);
 // W7.6 Mailbox Mirror: deterministic worklist of closed-loop flagged emails +
 // the PA mover's ack endpoint. Flag-gated (MAILBOX_MIRROR).
 app.all('/api/mailbox-reconcile-worklist', (req, res) => { req.query._route = 'mailbox-reconcile-worklist'; intakeHandler(req, res); });

@@ -51,6 +51,19 @@ import {
   buildTier0Card, tier0SubjectRef, validateTier0Verdict, rentBand as tier0RentBand,
 } from './_shared/tier0-confirm-planner.js';
 import {
+  SPONSOR_FAMILY_CACHE_TABLE, SPONSOR_FAMILY_REGISTRY_TABLE,
+  sponsorFamilySubjectRef, buildSponsorFamilyCard, validateSponsorFamilyVerdict, orderSponsorFamilyRows,
+  annotateSponsorDuplicates,
+} from './_shared/sponsor-family-planner.js';
+import {
+  ENTITY_RETYPE_SOURCE_VIEW,
+  entityRetypeSubjectRef, buildEntityRetypeCard, validateEntityRetypeVerdict, orderEntityRetypeRows,
+} from './_shared/entity-retype-planner.js';
+import {
+  planAmbiguousEntityMerge, ambiguousEntitySubjectRef, buildAmbiguousEntityCard,
+  validateAmbiguousEntityVerdict,
+} from './_shared/ambiguous-entity-merge-planner.js';
+import {
   applyTier0Attach, tier0BatchTag, TIER0_SOURCE_CONFIRM,
 } from './_shared/tier0-attach-effect.js';
 import {
@@ -93,6 +106,7 @@ import { openResearchTask } from './_shared/research-task.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
 import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared/county-portal-resolver.js';
+import { applyAssessorCapture, applyRecorderCapture, applySosEntityCapture } from './_shared/public-records-writeback.js';
 import { reconcilePropertyOwnership, propagateDeedGranteeToOwner, reconcileSaleAndOwnershipForNewOwner } from './_handlers/sidebar-pipeline.js';
 import { lookupLlc } from './_shared/llc-research.js';
 import { handleFlSosEnrichLink } from './_shared/fl-sos-enrich-link.js';
@@ -104,6 +118,7 @@ import * as RS from './_shared/sf-link-rescore-planner.js';
 import * as DH from './_shared/sf-donor-handoff-planner.js';
 import * as SA from './_shared/sf-link-assist-planner.js';
 import * as PT from './_shared/property-twin-assist-planner.js';
+import * as DPR from './_shared/dia-property-redirect-planner.js';
 import * as CA from './_shared/clean-assist-context.js';
 import { enrichCleanAssistItems } from './_shared/clean-assist-enrich.js';
 import { handleDealCorrespondenceBackfill } from './_handlers/deal-correspondence-backfill.js';
@@ -112,13 +127,18 @@ import { buildNameBackfillPatch, reverseNameBackfillPatch, senderEmailFromMetada
 import { artifactSafeName } from './_shared/artifact-storage.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
 import { handleOwnershipChainDraftTick } from './_handlers/ownership-chain-draft-tick.js';
+import { handleOwnT0jSponsorClassifyTick } from './_handlers/ownt0j-sponsor-classify-tick.js';
 import { handleTier0AutoAttachTick } from './_handlers/tier0-auto-attach-tick.js';
+import { handleBroker1AssignTick } from './_handlers/broker1-assign-tick.js';
+import { handleAmbiguousEntityAutomergeTick } from './_handlers/ambiguous-entity-automerge-tick.js';
+import { handleBenchRankTick } from './_handlers/bench-rank-tick.js';
 import { handleBriefingAnalystTakeTick } from './_handlers/briefing-analyst-take-tick.js';
 import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
 import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
 import {
   isNonDealSnapshot, hasFullDealSignature, normalizeDocType,
   snapshotLooksLikeListing, LISTING_DOCUMENT_TYPES, classifyStagedIntake,
+  pageIntakeReviewRows,
 } from './_shared/intake-classify.js';
 import { normalizeState, parseContactFromJunk, normalizeCanonicalName, recordContactFieldWrites } from './_shared/entity-link.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
@@ -207,6 +227,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'gov-buyer-sync':          return handleGovBuyerSync(req, res);
     case 'next-best-action':        return handleNextBestAction(req, res);
     case 'recorder-portal':         return handleRecorderPortal(req, res);
+    case 'public-records-capture':  return handlePublicRecordsCapture(req, res);
     case 'client-error':            return handleClientErrorReport(req, res);
     case 'llc-research-queue':      return handleLlcResearchQueueList(req, res);
     case 'resolve-llc-research':    return handleResolveLlcResearch(req, res);
@@ -229,6 +250,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'junk-prescreen-tick':        return handleJunkPrescreenTick(req, res);
     case 'tm-misparse-seed':           return handleTmMisparseSeed(req, res);
     case 'junk80-seed':                return handleJunk80Seed(req, res);
+    case 'entity-retype-placeholder-seed': return handleEntityRetypePlaceholderSeed(req, res);
     case 'naming-hygiene-tick':        return handleNamingHygieneTick(req, res);
     case 'dup-pair-tick':              return handleDupPairTick(req, res);
     case 'link-propagation-tick':      return handleLinkPropagationTick(req, res);
@@ -237,8 +259,13 @@ export default withErrorHandler(async function handler(req, res) {
     case 'link-coverage-tick':         return handleLinkCoverageTick(req, res);
     case 'match-disambig-assist-tick': return handleMatchDisambigAssistTick(req, res);
     case 'property-twin-assist-tick': return handlePropertyTwinAssistTick(req, res);
+    case 'dia-property-link-tick': return handleDiaPropertyLinkTick(req, res);
     case 'ownership-chain-draft-tick': return handleOwnershipChainDraftTick(req, res);
+    case 'ownt0j-sponsor-classify-tick': return handleOwnT0jSponsorClassifyTick(req, res);
     case 'tier0-auto-attach-tick':    return handleTier0AutoAttachTick(req, res);
+    case 'broker1-assign-tick':       return handleBroker1AssignTick(req, res);
+    case 'ambiguous-entity-automerge-tick': return handleAmbiguousEntityAutomergeTick(req, res);
+    case 'bench-rank-tick':          return handleBenchRankTick(req, res);
     case 'briefing-analyst-take-tick': return handleBriefingAnalystTakeTick(req, res);
     case 'sf-link-assist-tick':        return handleSfLinkAssistTick(req, res);
     case 'sf-link-rescore-tick':       return handleSfLinkRescoreTick(req, res);
@@ -2124,6 +2151,182 @@ async function handlePropertyTwinAssistTick(req, res) {
 }
 
 // ============================================================================
+// PDR14b — GET/POST /api/dia-property-link-tick
+//
+// Recurring self-heal sweep for dia-domain entity metadata.domain_property_id
+// pointers that have gone dangling (dia merged/dropped the property row). See
+// api/_shared/dia-property-redirect-planner.js for the resolution order and
+// its doctrine. domain='dia' ONLY.
+//
+// GET  -> ungated dry run: scans, classifies, reports counts. NEVER writes.
+// POST -> gated behind PDR14B_DIA_REDIRECT_SWEEP (feature_flags_registry).
+//         Self-heals the resolvable subset (PDR14a redirect, then an
+//         unambiguous parcel_number match), and upserts the unresolved
+//         residue into lcc_dia_property_link_review — never guessed.
+//
+// Bounded (limit, default 200) + resumable (each run re-scans the current
+// dangling population, so a capped night simply resumes next run) + every
+// correction is reversible via metadata.domain_property_id_corrected_from.
+// ============================================================================
+
+const DPR_TICK_DEFAULT_LIMIT = 200;
+
+async function fetchDiaLinkedEntities() {
+  // Only entities carrying a dia domain_property_id pointer are in scope.
+  // metadata->>'domain_property_id' is a text column so a numeric compare
+  // must cast; PostgREST paging caps at 1000/page (documented repo footgun),
+  // so page explicitly rather than trusting a single request.
+  const out = [];
+  let offset = 0;
+  for (;;) {
+    const r = await opsQuery('GET',
+      `entities?domain=eq.dia&metadata->>domain_property_id=not.is.null` +
+      `&select=id,metadata&order=id.asc&limit=1000&offset=${offset}`);
+    if (!r.ok || !Array.isArray(r.data)) break;
+    out.push(...r.data);
+    if (r.data.length < 1000) break;
+    offset += 1000;
+  }
+  return out;
+}
+
+async function diaPropertiesExist(pids) {
+  // Membership probe against the LIVE dia properties table — the anti-join
+  // that decides which candidates are actually dangling. Chunked to stay
+  // well under any URL-length/1000-row PostgREST limits.
+  const live = new Set();
+  const CHUNK = 200;
+  for (let i = 0; i < pids.length; i += CHUNK) {
+    const chunk = pids.slice(i, i + CHUNK);
+    const r = await domainQuery('dia', 'GET',
+      `properties?property_id=in.(${chunk.join(',')})&select=property_id`);
+    if (r.ok && Array.isArray(r.data)) {
+      for (const row of r.data) live.add(String(row.property_id));
+    }
+  }
+  return live;
+}
+
+async function diaResolveRedirect(pid) {
+  const r = await domainQuery('dia', 'POST', 'rpc/dia_resolve_property_id',
+    { p_property_id: Number(pid) });
+  if (!r.ok) return null;
+  const v = Array.isArray(r.data) ? r.data[0] : r.data;
+  // The RPC returns a bare bigint (or null); PostgREST wraps a scalar RPC's
+  // result in { dia_resolve_property_id: <value> } OR returns it bare
+  // depending on the PostgREST version — handle both.
+  if (v == null) return null;
+  if (typeof v === 'object') return v.dia_resolve_property_id ?? null;
+  return v;
+}
+
+async function diaParcelFallbackMatch(parcelToken) {
+  // PDR13-style unambiguous exact match: a single candidate row wins, more
+  // than one is refused (surfaced, never guessed) — mirrors
+  // dia_find_property_twins_strong_id's `distinct on` + anchor selection,
+  // simplified to "exactly one live property carries this parcel_number".
+  const r = await domainQuery('dia', 'GET',
+    `properties?parcel_number=eq.${encodeURIComponent(parcelToken)}&select=property_id&limit=2`);
+  if (!r.ok || !Array.isArray(r.data)) return { n_match: 0, candidate_pid: null };
+  return {
+    n_match: r.data.length,
+    candidate_pid: r.data.length === 1 ? r.data[0].property_id : null,
+  };
+}
+
+async function handleDiaPropertyLinkTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchW93Flag('PDR14B_DIA_REDIRECT_SWEEP');
+  const enabled = w93FlagEnabled('PDR14B_DIA_REDIRECT_SWEEP', flag);
+  const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit || req.body?.limit || String(DPR_TICK_DEFAULT_LIMIT), 10)));
+
+  const entities = await fetchDiaLinkedEntities();
+  const distinctPids = [...new Set(entities.map(e => String(e.metadata?.domain_property_id || '')).filter(Boolean))];
+  const liveSet = distinctPids.length ? await diaPropertiesExist(distinctPids) : new Set();
+
+  const dangling = entities.filter(e => {
+    const pid = String(e.metadata?.domain_property_id || '');
+    return pid && !liveSet.has(pid);
+  }).slice(0, limit);
+
+  // Resolve each dangling entity's candidates (I/O), then hand the pure
+  // planner the whole batch so the decision logic is identical whether run
+  // here or under test.
+  const resolvedInput = [];
+  for (const e of dangling) {
+    const dead_pid = String(e.metadata?.domain_property_id);
+    const redirectResolved = await diaResolveRedirect(dead_pid);
+    let parcelMatch = null;
+    if (redirectResolved == null) {
+      const token = DPR.usableParcelToken(e.metadata?.parcel_number);
+      if (token) parcelMatch = await diaParcelFallbackMatch(token);
+    }
+    resolvedInput.push({ id: e.id, dead_pid, redirectResolved, parcelMatch });
+  }
+  const plan = DPR.planDiaPropertyRedirectSweep(resolvedInput);
+
+  // ---- GET dry-run ----------------------------------------------------------
+  if (req.method === 'GET') {
+    return res.status(200).json({
+      ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+      surface: 'dia_property_link', limit,
+      linked_total: entities.length, distinct_pids: distinctPids.length,
+      dangling_this_scan: dangling.length,
+      would_resolve_via_redirect: plan.resolved_via_redirect,
+      would_resolve_via_parcel_match: plan.resolved_via_parcel,
+      would_flag: plan.flagged,
+      note: 'domain=dia only. Resolution order: PDR14a dia_resolve_property_id redirect, ' +
+        'then an unambiguous parcel_number match (>=6 chars, single candidate). ' +
+        'No confident match -> lcc_dia_property_link_review, never guessed. NO writes in dry-run.',
+    });
+  }
+
+  // ---- POST apply (flag-gated) -----------------------------------------------
+  if (!enabled) {
+    return res.status(200).json({
+      ok: true, skipped: 'feature_flag_off', enabled: false,
+      dangling_this_scan: dangling.length,
+      would_resolve_via_redirect: plan.resolved_via_redirect,
+      would_resolve_via_parcel_match: plan.resolved_via_parcel,
+      would_flag: plan.flagged,
+    });
+  }
+
+  let applied = 0, apply_failed = 0, flagged = 0, flag_failed = 0;
+  for (const item of plan.toApply) {
+    // entities.metadata is a shared jsonb column with many writers; a
+    // PostgREST PATCH replaces the whole column (the documented OCR2
+    // footgun), so the correction goes through a single-merge-owner RPC
+    // that fills only the PDR14b keys and races safely against every other
+    // writer via a row lock.
+    const rpc = await opsQuery('POST', 'rpc/lcc_pdr14b_apply_dia_redirect', {
+      p_entity_id: item.entity_id,
+      p_resolved_property_id: item.resolved,
+      p_dead_property_id: item.dead_pid,
+      p_via: item.via,
+    });
+    if (rpc.ok) applied += 1; else apply_failed += 1;
+  }
+  for (const item of plan.toFlag) {
+    const rpc = await opsQuery('POST', 'lcc_dia_property_link_review', {
+      entity_id: item.entity_id, dangling_property_id: item.dead_pid, reason: item.reason,
+    }, { Prefer: 'resolution=merge-duplicates,return=minimal' });
+    if (rpc.ok) flagged += 1; else flag_failed += 1;
+  }
+
+  return res.status(200).json({
+    ok: true, mode: 'apply', enabled,
+    dangling_this_scan: dangling.length,
+    resolved_via_redirect: plan.resolved_via_redirect,
+    resolved_via_parcel_match: plan.resolved_via_parcel,
+    applied, apply_failed, flagged, flag_failed,
+  });
+}
+
+// ============================================================================
 // W8 U1 (Prompt 62, 2026-08-07): Ollama junk-entity pre-screen.
 //
 // Extends the prompt-32 clean-assist machinery. A deterministic pre-filter finds
@@ -2714,6 +2917,61 @@ async function handleJunk80Seed(req, res) {
       { headers: { Prefer: 'return=minimal,resolution=merge-duplicates' } });
     if (ur.ok) summary.seeded += 1;
     else summary.errors.push({ id: r.id, detail: ur.data });
+  }
+  return res.status(200).json({ ok: true, ...summary });
+}
+
+// ---------------------------------------------------------------------------
+// C13g-min-lane-placeholder (2026-09-09) — one-shot: a PLACEHOLDER entity
+// (e.g. "Research In Progress") is not a real party, so neither
+// `entity_type_review` verdict fits ("Retype to organization" asserts a
+// firm; "Keep as person" asserts a person). `v_lcc_entity_retype_candidates`
+// now excludes `lcc_is_placeholder_owner_name(name)` (migration
+// 20261101150000); this seeds the excluded row(s) into the EXISTING
+// junk_entity_review lane (retire, never merge — same machinery as the
+// TrafficMetrix/junk80 sweeps above) so the fact that they held 2 current
+// portfolio facts is not silently dropped.
+//
+// Deterministic (provider 'none'), `dismiss` — a placeholder name is not a
+// judgement call. Idempotent (on_conflict=subject_ref). Dry-run by default;
+// ?apply=1 (POST) writes.
+//
+// GET  /api/admin?action=entity-retype-placeholder-seed            -> dry run
+// POST /api/admin?action=entity-retype-placeholder-seed&apply=true -> seed
+const ENTITY_RETYPE_PLACEHOLDER_HEURISTIC = 'entity_retype_placeholder';
+
+async function handleEntityRetypePlaceholderSeed(req, res) {
+  const apply = String(req.query.apply || '') === 'true' && req.method === 'POST';
+  const sourceRunId = 'retype_ph_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+
+  // v_lcc_entity_retype_placeholder_excluded mirrors v_lcc_entity_retype_candidates'
+  // fact_pop CTE (person-typed, live, >= 2 current facts) restricted to the
+  // placeholder subset the candidates view now EXCLUDES — SQL is the single
+  // owner of that judgement (lcc_is_placeholder_owner_name); this handler never
+  // re-derives it in JS.
+  const vr = await opsQuery('GET', 'v_lcc_entity_retype_placeholder_excluded?select=entity_id,name,current_facts&limit=1000');
+  if (!vr.ok) return res.status(502).json({ error: 'placeholder_view_query_failed', detail: vr.data });
+  const candidates = (Array.isArray(vr.data) ? vr.data : []).map((r) => ({ id: r.entity_id, name: r.name, current_facts: r.current_facts }));
+
+  const summary = { apply, source_run_id: sourceRunId, candidates: candidates.length, seeded: 0, errors: [], sample: candidates };
+  if (!apply) return res.status(200).json({ ok: true, ...summary });
+
+  for (const c of candidates) {
+    const body = {
+      subject_ref: junkSubjectRef('lcc', 'entities', c.id), domain: 'lcc', table_name: 'entities',
+      pk_value: String(c.id), entity_name: c.name == null ? '' : String(c.name),
+      heuristic: ENTITY_RETYPE_PLACEHOLDER_HEURISTIC, proposed_verdict: 'dismiss', confidence: 1,
+      evidence_quote: String(c.name || '').slice(0, 200),
+      reason: 'Placeholder entity name (lcc_is_placeholder_owner_name), not a real party — held '
+        + c.current_facts + ' current portfolio facts. Excluded from entity_type_review '
+        + '(C13g-min-lane-placeholder) — neither verdict fits a placeholder.',
+      model_provider: 'none', model_name: null, source_run_id: sourceRunId, scan_batch_id: null,
+      status: 'proposed',
+    };
+    const ur = await opsQuery('POST', 'junk_entity_review?on_conflict=subject_ref', body,
+      { headers: { Prefer: 'return=minimal,resolution=merge-duplicates' } });
+    if (ur.ok) summary.seeded += 1;
+    else summary.errors.push({ id: c.id, detail: ur.data });
   }
   return res.status(200).json({ ok: true, ...summary });
 }
@@ -7387,6 +7645,41 @@ const FEDERATED_DECISION_TYPES = new Set([
   // an owner. The server re-runs the pure shape gate (tier0-confirm-planner)
   // before writing and refuses a person that is not on the card.
   'tier0_owner_contact',
+  // OWN-T0e (2026-09-09): the sponsor-family confirm lane over the OWN-T0
+  // `unclassified_rival` conflict store. Source = lcc_ownt0e_sponsor_family_
+  // proposals_cache (a 4-hourly snapshot of the ~20 s proposals view), ONE card
+  // per (sponsor entity, brand token) — A3 measured `boyd` clearing 20 of 24
+  // chains on one confirm. Sponsor = the side holding MORE current properties (a
+  // recorded fact); a tied group makes the operator name the sponsor. Verdicts:
+  // confirm_family (the ONE write: an INSERT into lcc_ownership_sponsor_family,
+  // reversible by DELETE), same_party (record + forward to
+  // merge_duplicate_entities — a family row over a duplicate entity papers over
+  // the merge), not_family (record-only), research. No lexical sponsor guess
+  // ever decides (A3: 3 of 74 on GSA SPEs; P198: 7%). Nothing here writes a
+  // portfolio fact, end-dates a row, or touches gov/dia owner tables.
+  'sponsor_family_confirm',
+  // C13g-min-lane (2026-09-09): the human verdict over C13g-min's retype write
+  // (lcc_retype_entity, service_role-only, migration 20261101120000). Source =
+  // v_lcc_entity_retype_candidates -- live person-typed entities holding >=2
+  // current portfolio facts, plus any person-typed OWN-T0e spe_props_max>=2
+  // member whose sponsor is an organization. Both name-shape instruments are
+  // documented useless on this population (owner-role-classification.md
+  // sec 9b) -- retype_organization is the ONE write, keep_person is
+  // record-only, research spawns a task. Reverse: rpc/lcc_unretype_entity.
+  'entity_type_review',
+  // PDR1 / P13#1 (2026-09-10) — the needs_human half of the ambiguous-entity
+  // automerge lane (api/_shared/ambiguous-entity-merge-planner.js). Source =
+  // `entities` rows carrying `metadata.ambiguous_resolution` whose planner
+  // score does not clear the documented auto-merge threshold (no single
+  // candidate, or the top two are too close). Card shows the placeholder plus
+  // its scored candidate list, best-to-worst, EXACTLY what the auto-merge
+  // tick's planner saw. Verdicts: merge (repoint to the human-chosen
+  // candidate, via rpc/reconcile_entity -- the SAME writer the auto-merge tick
+  // uses, never a second one) / keep_new (reconcile_entity's p_keep_new path)
+  // / research. Population is CLOSED (documented 189 entities, nothing minted
+  // since 2026-08-04) -- see PLANNED-BACKLOG.md P17/P13#1 and STATUS.md for
+  // the "DB access unavailable at build time" caveat on any real count.
+  'ambiguous_entity_resolution',
   'intake_disposition', 'property_merge', 'provenance_conflict',
   // dia geospatial "address twin" review (2026-08-14). The dia_merge_twins engine
   // auto-merges only blank-operator husks; every twin with a competing clinical
@@ -7556,6 +7849,16 @@ function federatedSubjectRef(type, s) {
     // RMR at rmrgroupinc.com must not also close rmrgroup.com, which is a
     // different judgement about a different firm domain.
     case 'tier0_owner_contact': return tier0SubjectRef(s.owner_entity_id || s.owner_id, s.domain);
+    // OWN-T0e: keyed on the (sponsor, token) QUESTION — t0e:<sponsor_id>:<tok>,
+    // or t0e:tied:<group_key_id>:<tok> when no side is decided. Deciding a tied
+    // group under a chosen sponsor keeps its `tied` ref: the ref names the
+    // question, the verdict payload names the answer.
+    case 'sponsor_family_confirm': return sponsorFamilySubjectRef(s);
+    // C13g-min-lane: etype:<entity_id> -- the question is scoped to one entity.
+    case 'entity_type_review': return entityRetypeSubjectRef(s);
+    // PDR1 / P13#1: keyed on the placeholder entity alone (amb:<id>).
+    case 'ambiguous_entity_resolution':
+      return ambiguousEntitySubjectRef(s.placeholder_id || s.subject_entity_id);
   }
   return null;
 }
@@ -8319,12 +8622,23 @@ async function fetchFederatedSource(type, cap, opts) {
     // classify in JS — the alias normalization (offering_memorandum→om) can't be
     // a clean server-side count filter. `cap` only bounds the items RETURNED.
     const view = opts.intakeView === 'all' ? 'all' : 'create';
-    const r = await opsQuery('GET', 'staged_intake_items?select=' + INTAKE_LANE_SELECT
-      + '&status=in.(review_required,failed)&order=created_at.desc&limit=1000');
-    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    // UX-T1c-intake-cap (2026-09-08): PAGE the population at the PostgREST cap
+    // and stop on the RETURNED count. A single `limit=1000` silently dropped the
+    // oldest rows once the population passed 1,000 (measured 1,011 that day —
+    // 11 rows, 5 of them create_candidate, never shown). See pageIntakeReviewRows.
+    const paged = await pageIntakeReviewRows(
+      (path) => opsQuery('GET', path),
+      'staged_intake_items?select=' + INTAKE_LANE_SELECT
+      + '&status=in.(review_required,failed)&order=created_at.desc,intake_id.desc');
+    const rows = paged.rows;
+    out.intake_pages = paged.pages;
+    if (paged.truncated) out.intake_truncated = true;
+    if (paged.failed) out.intake_fetch_failed = true;
     const wanted = (view === 'all')
       ? (k) => k !== 'no_data'   // show-all surfaces every workable klass; the
-                                 // no-data empties are auto-retired, not shown
+                                 // no-data empties are hidden here by filter —
+                                 // NOT retired (they stay review_required/failed;
+                                 // 111 on 2026-09-08). Backlog UX-T1c-intake-cap.
       : (k) => k === 'create_candidate';
     const classified = rows.map((row) => {
       const cls = _intakeRowClass(row);
@@ -8451,8 +8765,14 @@ async function fetchFederatedSource(type, cap, opts) {
       + 'latest_deed_grantee,latest_deed_date,deed_conflict_kind,deed_auto_fixable,'
       + 'suspected_grantor,suspected_grantee,suspected_sale_date,lessor_signal_source,'
       + 'discrepancy_source,discrepancy_proposed,has_deed_signal,has_lessor_signal,has_discrepancy_signal';
-    const r = await domainQuery('gov', 'GET', 'v_ownership_resolution?select=' + sel
-      + '&order=recency_rank.asc,annual_rent.desc.nullslast,property_id&limit=' + cap);
+    // RO1 (UX-T1c §10, 2026-09-08): 836 of 1,597 rows proposed the owner ALREADY
+    // recorded (the lessor of record changed *to* the party we hold) — a
+    // confirmation presented as a question. `proposal_is_recorded` is an
+    // appended view column; the lane reads only the genuine disputes, and the
+    // badge counts the same population (never the raw view count).
+    const roFilter = '&proposal_is_recorded=eq.false';
+    const r = await domainQuery('gov', 'GET', 'v_ownership_resolution?select=' + sel + ',proposal_is_recorded'
+      + roFilter + '&order=recency_rank.asc,annual_rent.desc.nullslast,property_id&limit=' + cap);
     const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
     out.items = rows.map((row) => ({
       subject_ref: 'resolveown:gov:' + row.property_id,
@@ -8478,7 +8798,7 @@ async function fetchFederatedSource(type, cap, opts) {
         has_discrepancy_signal: row.has_discrepancy_signal,
       },
     }));
-    out.total = await domCnt('gov', 'v_ownership_resolution');
+    out.total = await domCnt('gov', 'v_ownership_resolution?proposal_is_recorded=eq.false');
     return out;
   }
 
@@ -8888,6 +9208,147 @@ async function fetchFederatedSource(type, cap, opts) {
       context: card,
     }));
     out.complete = out.items.length === cards.length;
+    return out;
+  }
+
+  // ---- sponsor_family_confirm (OWN-T0e, 2026-09-09) ------------------------
+  // Reads the CACHE, never the view: v_lcc_ownt0e_sponsor_family_proposals
+  // costs ~20 s (it scans the whole OWN-T0 reconciled store) and this function
+  // runs for every federated type on /api/decisions?summary=1. The cache is
+  // refreshed 4-hourly (cron lcc-ownt0e-proposals-refresh) — so
+  // `already_confirmed` is re-derived LIVE from the registry here, because a
+  // family confirmed five minutes ago must not be re-asked for four hours. The
+  // registry is tiny (6 rows at build); the whole thing is read.
+  //
+  // Universe is 182 rows at build, far under the PostgREST cap, but the read
+  // still asks for the cap and flags a full page (A5a: a returned count equal
+  // to the request window is a truncation, never a total).
+  if (type === 'sponsor_family_confirm') {
+    const [cr, rr] = await Promise.all([
+      opsQuery('GET', SPONSOR_FAMILY_CACHE_TABLE + '?select=*&limit=1000'),
+      opsQuery('GET', SPONSOR_FAMILY_REGISTRY_TABLE + '?select=sponsor_entity_id,sponsor_token&limit=1000'),
+    ]);
+    const rows = (cr.ok && Array.isArray(cr.data)) ? cr.data : [];
+    const reg = new Set(((rr.ok && Array.isArray(rr.data)) ? rr.data : [])
+      .map((f) => String(f.sponsor_entity_id) + ':' + String(f.sponsor_token)));
+    const live = rows.filter((r) => !(r.sponsor_id && reg.has(String(r.sponsor_id) + ':' + String(r.sponsor_token))));
+    // OWN-T0e-c: annotate over the WHOLE live population before ordering/paging,
+    // so a card's own sponsor can be recognised as a duplicate of a sponsor that
+    // sits anywhere else in the lane (never only the page being served).
+    const annotated = annotateSponsorDuplicates(live);
+    const ordered = orderSponsorFamilyRows(annotated);
+    out.total = ordered.length;
+    out.parts = {
+      breadth: ordered.filter((r) => r.sponsor_side !== 'tied').length,
+      tied: ordered.filter((r) => r.sponsor_side === 'tied').length,
+      duplicate_entity_suspect: ordered.filter((r) => Number(r.spe_props_max) >= 2).length,
+      sponsor_is_duplicate_of: ordered.filter((r) => r.duplicate_of_sponsor_id).length,
+      cache_refreshed_at: rows.length ? rows[0].refreshed_at : null,
+      cache_truncated: rows.length >= 1000,
+      cache_fetch_failed: !cr.ok,
+    };
+    out.items = ordered.slice(0, cap).map((row) => {
+      const card = buildSponsorFamilyCard(row);
+      return {
+        subject_ref: sponsorFamilySubjectRef(row),
+        subject_domain: null, subject_property_id: null,
+        subject_entity_id: card.sponsor_id || card.group_key_id,
+        rank_value: card.annual_rent,
+        context: card,
+      };
+    });
+    out.complete = out.items.length === ordered.length;
+    return out;
+  }
+
+  // ---- entity_type_review (C13g-min-lane, 2026-09-09) -----------------------
+  // Reads v_lcc_entity_retype_candidates live -- 18 rows at build, far under
+  // any pagination concern, so no cache is needed (unlike sponsor_family_confirm,
+  // which reads a ~20s view). lcc_decisions exclusion works the same as every
+  // other federated lane (already-decided subject_refs are filtered upstream).
+  if (type === 'entity_type_review') {
+    const vr = await opsQuery('GET', ENTITY_RETYPE_SOURCE_VIEW + '?select=*&limit=1000');
+    const rows = (vr.ok && Array.isArray(vr.data)) ? vr.data : [];
+    const ordered = orderEntityRetypeRows(rows);
+    out.total = ordered.length;
+    out.parts = {
+      blocks_own_t0e: ordered.filter((r) => r.blocks_own_t0e_sponsor_id).length,
+      has_salesforce_contact: ordered.filter((r) => r.has_salesforce_contact === true).length,
+      fetch_failed: !vr.ok,
+      truncated: rows.length >= 1000,
+    };
+    out.items = ordered.slice(0, cap).map((row) => {
+      const card = buildEntityRetypeCard(row);
+      return {
+        subject_ref: entityRetypeSubjectRef(row),
+        subject_domain: null, subject_property_id: null,
+        subject_entity_id: card.entity_id,
+        rank_value: card.current_rent,
+        context: card,
+      };
+    });
+    out.complete = out.items.length === ordered.length;
+    return out;
+  }
+
+  // ---- ambiguous_entity_resolution (PDR1 / P13#1, 2026-09-10) --------------
+  // Reads `entities` directly (metadata.ambiguous_resolution IS NOT NULL and
+  // not yet merged), enriches each raw {id,name} candidate with address/
+  // normalization from `entities`, and re-runs the SAME pure planner the
+  // auto-merge tick uses (planAmbiguousEntityMerge) -- only the needs_human
+  // rows are surfaced here; the tick drains the auto-mergeable rows on its
+  // own, flag-gated pass. Population is documented as ~189 at build time
+  // (PLANNED-BACKLOG.md P17/P13#1) and read live here, never assumed.
+  if (type === 'ambiguous_entity_resolution') {
+    const er = await opsQuery('GET', 'entities?select=id,name,city,state,metadata'
+      + '&metadata->>ambiguous_resolution=not.is.null'
+      + '&metadata->>merged_into=is.null&order=name.asc&limit=1000');
+    const entRows = (er.ok && Array.isArray(er.data)) ? er.data : [];
+    const allCandidateIds = new Set();
+    for (const row of entRows) {
+      for (const c of (row?.metadata?.ambiguous_resolution || [])) {
+        if (c && c.id) allCandidateIds.add(c.id);
+      }
+    }
+    let candidateById = new Map();
+    if (allCandidateIds.size) {
+      const inList = [...allCandidateIds].map((id) => encodeURIComponent(id)).join(',');
+      const cr = await opsQuery('GET', 'entities?select=id,name,address,normalized_address'
+        + '&id=in.(' + inList + ')');
+      if (cr.ok && Array.isArray(cr.data)) {
+        candidateById = new Map(cr.data.map((c) => [c.id, c]));
+      }
+    }
+    const needsHuman = [];
+    for (const entity of entRows) {
+      const rawCandidates = entity?.metadata?.ambiguous_resolution || [];
+      const enriched = rawCandidates.map((c) => {
+        const found = candidateById.get(c.id) || {};
+        return {
+          id: c.id, name: c.name || found.name || null,
+          address: found.address ?? null, normalized_address: found.normalized_address ?? null,
+          entity_relationships_count: null, portfolio_facts_count: null, external_identities_count: null,
+        };
+      });
+      const plan = planAmbiguousEntityMerge(entity, enriched);
+      if (!plan.eligible) needsHuman.push({ entity, plan });
+    }
+    out.total = needsHuman.length;
+    out.parts = {
+      scanned: entRows.length, needs_human: needsHuman.length,
+      fetch_failed: !er.ok, truncated: entRows.length >= 1000,
+    };
+    out.items = needsHuman.slice(0, cap).map(({ entity, plan }) => {
+      const card = buildAmbiguousEntityCard(entity, plan);
+      return {
+        subject_ref: ambiguousEntitySubjectRef(entity.id),
+        subject_domain: null, subject_property_id: null,
+        subject_entity_id: entity.id,
+        rank_value: null,
+        context: card,
+      };
+    });
+    out.complete = out.items.length === needsHuman.length;
     return out;
   }
 
@@ -12894,6 +13355,390 @@ async function handleDecisionVerdict(req, res) {
         person_entity_id: person.person_id, person_name: person.person_name,
         relationship: eff.relationship,
         log_id: logId, batch_tag: batchTag,
+      });
+    }
+
+    // ---- entity_type_review (C13g-min-lane, 2026-09-09) ---------------------
+    // The human verdict on a single person-typed entity. THE CARD IS RE-READ
+    // FROM v_lcc_entity_retype_candidates AT VERDICT TIME, never trusted from
+    // the request (P188); the write goes through rpc/lcc_retype_entity, the
+    // single writer -- this branch never PATCHes `entities` itself.
+    // ---- ambiguous_entity_resolution (PDR1 / P13#1, 2026-09-10) -------------
+    // THE CARD IS RE-READ FROM `entities` AT VERDICT TIME (P188) -- the raw
+    // candidate list stored on the placeholder is enriched fresh, never
+    // trusted from the request. Both verdicts route through rpc/reconcile_entity
+    // -- the SAME writer the auto-merge tick calls, so there is exactly one
+    // merge writer in the system regardless of which path decided. Placed at
+    // the END of this dispatcher (after every other decision_type's own block)
+    // so it cannot be swept into a block-slice test anchored on an earlier
+    // decision_type pair (a footgun this repo documents repeatedly).
+    if (decision.decision_type === 'ambiguous_entity_resolution') {
+      const placeholderId = decision.subject_entity_id
+        || (decision.context && decision.context.placeholder_id) || null;
+      if (!placeholderId) return res.status(400).json({ error: 'ambiguous_entity_resolution: placeholder_id required' });
+
+      const entR = await opsQuery('GET', 'entities?select=id,name,city,state,metadata'
+        + '&id=eq.' + pgFilterVal(placeholderId) + '&limit=1');
+      const entity = (entR.ok && Array.isArray(entR.data)) ? entR.data[0] : null;
+      if (!entity) return res.status(400).json({ error: 'ambiguous_entity_resolution: placeholder not found' });
+
+      const rawCandidates = entity?.metadata?.ambiguous_resolution || [];
+      let candidateById = new Map();
+      const ids = rawCandidates.map((c) => c && c.id).filter(Boolean);
+      if (ids.length) {
+        const inList = ids.map((id) => encodeURIComponent(id)).join(',');
+        const cr = await opsQuery('GET', 'entities?select=id,name,address,normalized_address'
+          + '&id=in.(' + inList + ')');
+        if (cr.ok && Array.isArray(cr.data)) candidateById = new Map(cr.data.map((c) => [c.id, c]));
+      }
+      const enriched = rawCandidates.map((c) => {
+        const found = candidateById.get(c.id) || {};
+        return {
+          id: c.id, name: c.name || found.name || null,
+          address: found.address ?? null, normalized_address: found.normalized_address ?? null,
+          entity_relationships_count: null, portfolio_facts_count: null, external_identities_count: null,
+        };
+      });
+      const plan = planAmbiguousEntityMerge(entity, enriched);
+      const card = buildAmbiguousEntityCard(entity, plan);
+
+      const gate = validateAmbiguousEntityVerdict(card, verdict, payload);
+      if (!gate.ok) return res.status(400).json({ error: 'ambiguous_entity_resolution: ' + gate.error, placeholder_id: placeholderId });
+      const action = gate.verdict;
+      const verdictCtx = {
+        placeholder_id: placeholderId, placeholder_name: entity.name,
+        city: entity.city, state: entity.state, ranked: card.ranked,
+      };
+
+      if (action === 'research') {
+        const rt = await createResearchTask({
+          research_type: 'ambiguous_entity_resolution',
+          title: 'Which asset does "' + (entity.name || placeholderId) + '" merge into?',
+          instructions: 'Decision Center: ambiguous Salesforce-sync placeholder ' + (entity.name || placeholderId)
+            + ' has ' + rawCandidates.length + ' candidate asset(s) and no clear planner winner. '
+            + 'Confirm the correct merge target, or that this is genuinely a new asset.',
+        });
+        if (!rt.ok) {
+          await recordEffectFailure({ research_task: false, error: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data });
+        }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        const rr = await record('research', 'decided', verdictCtx, { research_task: true, research_task_id: rid });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+
+      // ---- merge / keep_new: the one write, via rpc/reconcile_entity ---------
+      // No second merge writer -- this is the SAME database function
+      // api/_handlers/ambiguous-entity-automerge-tick.js and
+      // mcp/entity-reconcile.js's HTTP route both call.
+      const rpcArgs = action === 'keep_new'
+        ? { p_placeholder: placeholderId, p_canonical: null, p_keep_new: true }
+        : { p_placeholder: placeholderId, p_canonical: gate.candidate.id, p_keep_new: false };
+      const rc = await opsQuery('POST', 'rpc/reconcile_entity', rpcArgs);
+      const rcRow = (rc.ok && Array.isArray(rc.data)) ? rc.data[0] : rc.data;
+      if (!rc.ok || !rcRow || rcRow.ok !== true) {
+        await recordEffectFailure({ reconcile: false, error: (rcRow && rcRow.error) || rc.data });
+        return res.status(502).json({ error: 'ambiguous_entity_resolution: reconcile_failed', detail: (rcRow && rcRow.error) || rc.data });
+      }
+      const rr = await record(action, 'decided', verdictCtx, {
+        ambiguous_entity_resolution: action === 'keep_new' ? 'kept_as_new' : 'merged',
+        canonical_id: action === 'merge' ? gate.candidate.id : null,
+        reconcile_result: rcRow,
+      });
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({
+        ok: true, verdict: action, placeholder_id: placeholderId,
+        canonical_id: action === 'merge' ? gate.candidate.id : null,
+        detail: rcRow,
+      });
+    }
+
+    if (decision.decision_type === 'entity_type_review') {
+      const entityId = decision.subject_entity_id || (decision.context && decision.context.entity_id) || null;
+      if (!entityId) return res.status(400).json({ error: 'entity_type_review: entity_id required' });
+      const rowR = await opsQuery('GET', ENTITY_RETYPE_SOURCE_VIEW + '?select=*&entity_id=eq.' + pgFilterVal(entityId) + '&limit=1');
+      const row = (rowR.ok && Array.isArray(rowR.data)) ? rowR.data[0] : null;
+      // A card that has left the candidate view (already retyped, or its facts
+      // dropped below 2) is still closeable for keep_person / research, but
+      // retype_organization needs the live row to build the card from.
+      const ctxFallback = decision.context || {};
+      const card = buildEntityRetypeCard(row || { entity_id: entityId, name: ctxFallback.name });
+
+      let live = { not_found: false, is_tombstone: false, recorded_type: null };
+      if (verdict === 'retype_organization') {
+        const entR = await opsQuery('GET', 'entities?select=id,merged_into_entity_id,entity_type&id=eq.' + pgFilterVal(entityId) + '&limit=1');
+        const ent = (entR.ok && Array.isArray(entR.data)) ? entR.data[0] : null;
+        live = {
+          not_found: !ent,
+          is_tombstone: !!(ent && ent.merged_into_entity_id != null),
+          recorded_type: ent ? (ent.entity_type || null) : null,
+        };
+      }
+      const gate = validateEntityRetypeVerdict(card, verdict, payload, live);
+      if (!gate.ok) return res.status(400).json({ error: 'entity_type_review: ' + gate.error, entity_id: entityId });
+      const action = gate.verdict;
+      const verdictCtx = {
+        entity_id: entityId, name: card.name, current_facts: card.current_facts, current_rent: card.current_rent,
+        blocks_own_t0e_sponsor_id: card.blocks_own_t0e_sponsor_id, blocks_own_t0e_token: card.blocks_own_t0e_token,
+      };
+
+      if (action === 'keep_person') {
+        const rr = await record('keep_person', 'decided', verdictCtx, { entity_type_review: 'kept_person' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'keep_person', entity_id: entityId });
+      }
+      if (action === 'research') {
+        const rt = await createResearchTask({
+          research_type: 'entity_type_review',
+          title: 'Is "' + (card.name || entityId) + '" really an organization?',
+          instructions: 'Decision Center: person-typed entity ' + (card.name || entityId)
+            + ' holds ' + card.current_facts + ' current portfolio fact(s), $' + (card.current_rent || 0) + ' current rent'
+            + (card.blocks_own_t0e_token ? ('; it also blocks an OWN-T0e sponsor-family confirm on token "' + card.blocks_own_t0e_token + '"') : '')
+            + '. Confirm whether it should be retyped organization.',
+        });
+        if (!rt.ok) {
+          await recordEffectFailure({ research_task: false, error: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data });
+        }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        const rr = await record('research', 'decided', verdictCtx, { research_task: true, research_task_id: rid });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+
+      // ---- retype_organization: the one write -------------------------------
+      const rt2 = await opsQuery('POST', 'rpc/lcc_retype_entity', {
+        p_entity: entityId, p_to: 'organization', p_decision_id: decisionId,
+        p_reason: gate.reason, p_actor: String(user.email || user.id || 'decision-center'),
+      });
+      const rt2row = (rt2.ok && Array.isArray(rt2.data)) ? rt2.data[0] : null;
+      if (!rt2.ok || !rt2row || rt2row.ok !== true) {
+        await recordEffectFailure({ retype: false, error: (rt2row && rt2row.error) || rt2.data });
+        return res.status(502).json({ error: 'entity_type_review: retype_failed', detail: (rt2row && rt2row.error) || rt2.data });
+      }
+      const rr = await record('retype_organization', 'decided', verdictCtx, {
+        entity_type_review: 'retyped_organization', log_id: rt2row.log_id,
+        reverse: 'select lcc_unretype_entity(\'' + entityId + '\')',
+      });
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({
+        ok: true, verdict: 'retype_organization', entity_id: entityId, log_id: rt2row.log_id,
+        next: card.blocks_own_t0e_sponsor_id
+          ? { action: 'sponsor_family_lane', sponsor_entity_id: card.blocks_own_t0e_sponsor_id, sponsor_token: card.blocks_own_t0e_token }
+          : undefined,
+      });
+    }
+
+
+    // ---- sponsor_family_confirm (OWN-T0e, 2026-09-09) ----------------------
+    // The human verdict on a (sponsor entity, brand token) card.
+    //
+    //   confirm_family -> ONE write: INSERT lcc_ownership_sponsor_family
+    //                     (sponsor_entity_id, sponsor_token, confirmed_by, notes).
+    //                     v_lcc_property_ownership_reconciled reads the registry
+    //                     through lcc_ownership_sponsor_family_token, so every
+    //                     covered pair flips unclassified_rival ->
+    //                     sponsor_family_confirmed on the next read. Nothing is
+    //                     end-dated, merged or repointed. Reverse = DELETE the
+    //                     row (the registry IS the ledger; the decision id rides
+    //                     in `notes`).
+    //   same_party     -> no write. Recorded, and the operator is forwarded to the
+    //                     merge_duplicate_entities lane (lcc_merge_entity, reversible).
+    //   not_family     -> record-only, terminal for this subject_ref.
+    //   research       -> a research_task.
+    //
+    // THE CARD IS RE-READ FROM THE CACHE, NOT TRUSTED FROM THE REQUEST (P188), and
+    // the two facts that can refuse the write — registry membership and the
+    // sponsor being a tombstone — are read LIVE, never from the snapshot.
+    if (decision.decision_type === 'sponsor_family_confirm') {
+      const ctx = decision.context || {};
+      const tok = String(ctx.sponsor_token || '').trim().toLowerCase();
+      const tied = ctx.sponsor_side === 'tied';
+      const keyId = tied ? (ctx.group_key_id || null) : (ctx.sponsor_id || decision.subject_entity_id || null);
+      if (!tok || !keyId) {
+        return res.status(400).json({ error: 'sponsor_family_confirm: sponsor_token and ' + (tied ? 'group_key_id' : 'sponsor_id') + ' required' });
+      }
+      const rowR = await opsQuery('GET', SPONSOR_FAMILY_CACHE_TABLE + '?select=*'
+        + '&' + (tied ? 'group_key_id' : 'sponsor_id') + '=eq.' + pgFilterVal(keyId)
+        + '&sponsor_token=eq.' + pgFilterVal(tok)
+        + '&sponsor_side=eq.' + (tied ? 'tied' : 'breadth') + '&limit=1');
+      const row = (rowR.ok && Array.isArray(rowR.data)) ? rowR.data[0] : null;
+      // A vanished card (cache refreshed it away) must still be CLOSEABLE for the
+      // record-only verdicts; only confirm_family needs the live row.
+      let card = buildSponsorFamilyCard(row || {
+        group_key_id: ctx.group_key_id, sponsor_id: ctx.sponsor_id, sponsor_name: ctx.sponsor_name,
+        sponsor_side: ctx.sponsor_side, sponsor_token: tok, member_ids: [], spe_names: ctx.spe_names,
+      });
+      if (verdict === 'confirm_family' && !row) {
+        return res.status(404).json({ error: 'sponsor_family_confirm: card no longer in the proposal set', sponsor_token: tok });
+      }
+
+      // OWN-T0e-c: merge_into_sponsor re-derives duplicate_of_sponsor_id LIVE
+      // from the cache (never from a value the client sent — P188). Same signal
+      // as annotateSponsorDuplicates: another breadth row, not this card's own
+      // sponsor, whose spe_ids CONTAINS this card's sponsor_id and whose
+      // spe_props_max already reads as a duplicate suspect (>= 2).
+      if (verdict === 'merge_into_sponsor' && !tied && card.sponsor_id) {
+        const dupR = await opsQuery('GET', SPONSOR_FAMILY_CACHE_TABLE
+          + '?select=sponsor_id,sponsor_token,sponsor_name,spe_props_max,spe_ids'
+          + '&sponsor_side=eq.breadth&spe_props_max=gte.2'
+          + '&sponsor_id=neq.' + pgFilterVal(card.sponsor_id)
+          + '&spe_ids=cs.{' + pgFilterVal(card.sponsor_id) + '}&limit=1');
+        const dupRow = (dupR.ok && Array.isArray(dupR.data)) ? dupR.data[0] : null;
+        card = Object.assign({}, card, dupRow ? {
+          duplicate_of_sponsor_id: String(dupRow.sponsor_id),
+          duplicate_of_sponsor_token: dupRow.sponsor_token || null,
+          duplicate_of_sponsor_name: dupRow.sponsor_name || null,
+        } : { duplicate_of_sponsor_id: null, duplicate_of_sponsor_token: null, duplicate_of_sponsor_name: null });
+      }
+
+      // Live guard inputs. The sponsor to test is the card's for a breadth group,
+      // the operator's pick for a tied one — resolved by the planner, so read
+      // both facts for whichever id the planner will name. For merge_into_sponsor
+      // the "sponsor" under test is the TARGET (the winner) and the "duplicate"
+      // is THIS card's own sponsor (the loser) — the reverse of same_party.
+      const mergeIntoSponsor = verdict === 'merge_into_sponsor';
+      const candidateSponsor = mergeIntoSponsor ? (card.duplicate_of_sponsor_id || null)
+        : tied ? (payload.sponsor_entity_id ? String(payload.sponsor_entity_id) : null)
+        : (card.sponsor_id ? String(card.sponsor_id) : null);
+      const mergeNow = verdict === 'same_party' && payload.merge_now === true;
+      const candidateDup = mergeIntoSponsor ? (card.sponsor_id ? String(card.sponsor_id) : null)
+        : (mergeNow && payload.duplicate_entity_id ? String(payload.duplicate_entity_id) : null);
+      let live = { registry_has: false, sponsor_is_tombstone: false };
+      if ((verdict === 'confirm_family' || mergeNow || mergeIntoSponsor) && candidateSponsor) {
+        const [regR, entR, dupR] = await Promise.all([
+          opsQuery('GET', SPONSOR_FAMILY_REGISTRY_TABLE + '?select=sponsor_entity_id'
+            + '&sponsor_entity_id=eq.' + pgFilterVal(candidateSponsor) + '&sponsor_token=eq.' + pgFilterVal(tok) + '&limit=1'),
+          opsQuery('GET', 'entities?select=id,merged_into_entity_id,entity_type&id=eq.' + pgFilterVal(candidateSponsor) + '&limit=1'),
+          candidateDup
+            ? opsQuery('GET', 'entities?select=id,merged_into_entity_id,entity_type&id=eq.' + pgFilterVal(candidateDup) + '&limit=1')
+            : Promise.resolve({ ok: true, data: [] }),
+        ]);
+        const ent = (entR.ok && Array.isArray(entR.data)) ? entR.data[0] : null;
+        const dupEnt = (dupR.ok && Array.isArray(dupR.data)) ? dupR.data[0] : null;
+        live = {
+          registry_has: !!(regR.ok && Array.isArray(regR.data) && regR.data[0]),
+          // an entity we cannot read is treated as a tombstone: fail CLOSED on a write
+          sponsor_is_tombstone: !ent || ent.merged_into_entity_id != null,
+          sponsor_type: ent ? (ent.entity_type || null) : null,
+          // OWN-T0e-b: the loser of a merge_now must be live and the same recorded type
+          duplicate_is_tombstone: candidateDup ? (!dupEnt || dupEnt.merged_into_entity_id != null) : false,
+          duplicate_type: dupEnt ? (dupEnt.entity_type || null) : null,
+        };
+      }
+      const gate = validateSponsorFamilyVerdict(card, verdict, payload, live);
+      if (!gate.ok) {
+        return res.status(400).json({ error: 'sponsor_family_confirm: ' + gate.error, sponsor_token: tok });
+      }
+      const action = gate.verdict;
+      const verdictCtx = {
+        sponsor_entity_id: gate.sponsor_entity_id, sponsor_token: tok, sponsor_side: card.sponsor_side,
+        properties: card.properties, token_is_generic_word: card.token_is_generic_word,
+        token_entities_fleetwide: card.token_entities_fleetwide,
+      };
+
+      if (action === 'not_family') {
+        const rr = await record('not_family', 'decided', verdictCtx, { sponsor_family: 'not_family' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'not_family', sponsor_token: tok });
+      }
+      if (action === 'same_party' && !gate.merge_now) {
+        const rr = await record('same_party', 'decided',
+          Object.assign({}, verdictCtx, { duplicate_entity_id: gate.duplicate_entity_id || null }),
+          { sponsor_family: 'routed_to_merge', merge_lane: 'merge_duplicate_entities' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'same_party', sponsor_token: tok,
+          next: { action: 'merge_lane', winner_id: gate.sponsor_entity_id, duplicate_entity_id: gate.duplicate_entity_id || null } });
+      }
+      if (action === 'same_party' && gate.merge_now) {
+        // OWN-T0e-b: ONE reversible merge — the operator-named duplicate INTO the
+        // sponsor — through the single merge writer (lcc_merge_entity, snapshot +
+        // lcc_entity_merge_log since P196; reverse with lcc_unmerge_entity(loser)).
+        // Same refresh set as the merge_duplicate_entities verdict. Never more than
+        // one loser per verdict; the rest of a group stays on the card.
+        const mr = await opsQuery('POST', 'rpc/lcc_merge_entity', { p_loser: gate.duplicate_entity_id, p_winner: gate.sponsor_entity_id });
+        if (!mr.ok) {
+          await recordEffectFailure({ merge: false, error: mr.data });
+          return res.status(502).json({ error: 'sponsor_family_confirm: merge_failed', detail: mr.data });
+        }
+        try { await opsQuery('POST', 'rpc/lcc_refresh_buyer_spe_resolved', {}); } catch (_e) { /* soft */ }
+        try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+        const rr = await record('same_party', 'decided',
+          Object.assign({}, verdictCtx, { duplicate_entity_id: gate.duplicate_entity_id, merge_now: true }),
+          { sponsor_family: 'merged', lcc_merge_entity: 'merged', winner_id: gate.sponsor_entity_id, loser_id: gate.duplicate_entity_id,
+            reverse: 'select lcc_unmerge_entity(<loser_id>)' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'same_party', merged: 1, sponsor_token: tok,
+          winner_id: gate.sponsor_entity_id, loser_id: gate.duplicate_entity_id });
+      }
+      if (action === 'merge_into_sponsor') {
+        // OWN-T0e-c: the missing other direction of same_party/merge_now — THIS
+        // card's own sponsor (gate.duplicate_entity_id, the loser) merges INTO the
+        // already-canonical sponsor named on the card (gate.sponsor_entity_id, the
+        // winner), re-derived live above from the cache, never from the request.
+        // Same writer, same refresh set, same reversal as OWN-T0e-b.
+        const mr = await opsQuery('POST', 'rpc/lcc_merge_entity', { p_loser: gate.duplicate_entity_id, p_winner: gate.sponsor_entity_id });
+        if (!mr.ok) {
+          await recordEffectFailure({ merge: false, error: mr.data });
+          return res.status(502).json({ error: 'sponsor_family_confirm: merge_failed', detail: mr.data });
+        }
+        try { await opsQuery('POST', 'rpc/lcc_refresh_buyer_spe_resolved', {}); } catch (_e) { /* soft */ }
+        try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+        const rr = await record('merge_into_sponsor', 'decided',
+          Object.assign({}, verdictCtx, { duplicate_entity_id: gate.duplicate_entity_id, merge_now: true }),
+          { sponsor_family: 'merged', lcc_merge_entity: 'merged', winner_id: gate.sponsor_entity_id, loser_id: gate.duplicate_entity_id,
+            reverse: 'select lcc_unmerge_entity(<loser_id>)' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'merge_into_sponsor', merged: 1, sponsor_token: tok,
+          winner_id: gate.sponsor_entity_id, loser_id: gate.duplicate_entity_id });
+      }
+      if (action === 'research') {
+        const rt = await createResearchTask({
+          research_type: 'sponsor_family_confirm',
+          title: 'Is "' + tok + '" a sponsor family of ' + (card.sponsor_name || card.tied_pair || 'this owner') + '?',
+          instructions: 'Decision Center OWN-T0e: ' + (card.sponsor_name || card.tied_pair || '') + ' and '
+            + (card.spe_names || []).join('; ') + ' are both current owner candidates on ' + card.properties
+            + ' propert' + (card.properties === 1 ? 'y' : 'ies') + ', sharing the name token "' + tok + '"'
+            + (card.token_is_generic_word ? ' (a generic word — weak evidence)' : '')
+            + '. Confirm whether the SPE(s) are the sponsor\'s family, a duplicate entity, or unrelated.',
+        });
+        if (!rt.ok) {
+          await recordEffectFailure({ research_task: false, error: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data });
+        }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        const rr = await record('research', 'decided', verdictCtx, { research_task: true, research_task_id: rid });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+
+      // ---- confirm_family: the one write -----------------------------------
+      const confirmedBy = String(user.email || user.id || 'decision-center');
+      const notes = 'decision:' + decisionId + '; lane:sponsor_family_confirm; sponsor_side:' + card.sponsor_side
+        + '; properties:' + card.properties + '; token_is_generic_word:' + (card.token_is_generic_word ? 'true' : 'false')
+        + '; token_entities_fleetwide:' + card.token_entities_fleetwide;
+      const ins = await opsQuery('POST', SPONSOR_FAMILY_REGISTRY_TABLE, {
+        sponsor_entity_id: gate.sponsor_entity_id, sponsor_token: tok, confirmed_by: confirmedBy, notes,
+      });
+      if (!ins.ok) {
+        // A 409 here is a (sponsor, token) that landed between the live check and
+        // the insert — the family IS confirmed, so the decision closes as such.
+        const dup = ins.status === 409;
+        if (!dup) {
+          await recordEffectFailure({ registry_insert: false, error: ins.data });
+          return res.status(502).json({ error: 'sponsor_family_confirm: registry_insert_failed', detail: ins.data });
+        }
+      }
+      const rr = await record('confirm_family', 'decided', verdictCtx, {
+        sponsor_family: 'confirmed', registry_table: SPONSOR_FAMILY_REGISTRY_TABLE,
+        registry_row_created: ins.ok, confirmed_by: confirmedBy,
+        reverse: 'delete from ' + SPONSOR_FAMILY_REGISTRY_TABLE + ' where sponsor_entity_id = <id> and sponsor_token = <tok>',
+      });
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({
+        ok: true, verdict: 'confirm_family', sponsor_entity_id: gate.sponsor_entity_id, sponsor_token: tok,
+        registry_row_created: ins.ok, flips_unclassified_rival_pairs: card.flips_unclassified_rival_pairs,
       });
     }
 
@@ -17892,6 +18737,77 @@ async function handleRecorderPortal(req, res) {
   } catch (e) {
     console.warn('[recorder-portal] resolution failed:', e && e.message);
     return res.status(200).json({ ok: true, property_id: propertyId, portal_url: null });
+  }
+}
+
+// ============================================================================
+// PUBLIC-RECORDS SCANNER SAVE — routes the sidepanel's "Scan This Page"
+// capture (extension/content/public-records.js) through real structured
+// writers instead of discarding it. Human-triggered only — the operator
+// clicks Save after reviewing the editable form; nothing here crawls or
+// polls. See api/_shared/public-records-writeback.js for the write logic.
+//
+// POST /api/admin?_route=public-records-capture
+//   Body: {
+//     site_type: 'assessor'|'recorder'|'sos',
+//     domain?: 'government'|'dialysis',   // required for assessor/recorder
+//     property_id?: <domain property id>, // required for assessor/recorder
+//     owner_entity_id?: <LCC entities.id>,// optional, sos only
+//     source_url?: string,
+//     capture: { ...scanner fields, operator-edited }
+//   }
+// ============================================================================
+async function handlePublicRecordsCapture(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const body = req.body || {};
+  const siteType = String(body.site_type || '').toLowerCase();
+  const capture = body.capture && typeof body.capture === 'object' ? body.capture : {};
+  const sourceUrl = body.source_url ? String(body.source_url).slice(0, 1000) : null;
+
+  try {
+    if (siteType === 'assessor') {
+      const domain = String(body.domain || '').toLowerCase();
+      if (!['government', 'dialysis'].includes(domain)) {
+        return res.status(400).json({ error: "domain must be 'government' or 'dialysis'" });
+      }
+      const propertyId = body.property_id;
+      if (propertyId == null || propertyId === '') {
+        return res.status(400).json({ error: 'property_id required for an assessor capture' });
+      }
+      const result = await applyAssessorCapture(domain, propertyId, capture,
+        { sourceUrl, entityState: body.state || capture.state || null });
+      return res.status(result.ok ? 200 : 422).json({ ok: result.ok, site_type: siteType, ...result });
+    }
+
+    if (siteType === 'recorder') {
+      const domain = String(body.domain || '').toLowerCase();
+      if (!['government', 'dialysis'].includes(domain)) {
+        return res.status(400).json({ error: "domain must be 'government' or 'dialysis'" });
+      }
+      const propertyId = body.property_id;
+      if (propertyId == null || propertyId === '') {
+        return res.status(400).json({ error: 'property_id required for a recorder capture' });
+      }
+      const result = await applyRecorderCapture(domain, propertyId, capture,
+        { sourceUrl, entityState: body.state || capture.state || null });
+      return res.status(result.ok ? 200 : 422).json({ ok: result.ok, site_type: siteType, ...result });
+    }
+
+    if (siteType === 'sos') {
+      const result = await applySosEntityCapture(capture, {
+        sourceUrl,
+        ownerEntityId: body.owner_entity_id || null,
+      });
+      return res.status(result.ok ? 200 : 422).json({ ok: result.ok, site_type: siteType, ...result });
+    }
+
+    return res.status(400).json({ error: "site_type must be 'assessor', 'recorder', or 'sos'" });
+  } catch (err) {
+    console.error('[public-records-capture]', err?.message || err);
+    return res.status(500).json({ error: 'public_records_capture_failed', message: err?.message });
   }
 }
 

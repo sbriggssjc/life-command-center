@@ -833,6 +833,171 @@ test('candidate-scoped CoStar record and parcel pin resolves a tenantless same-a
   );
 });
 
+test('candidate-scoped multi-address parcel binds an approved operating tenant to one CoStar record', () => {
+  const conflict = {
+    status: 'approved',
+    reason_code: 'service_location_multi_address_same_parcel_operating_identity',
+    cms_facility_name: 'Synthetic Risser Surgery Center LLC',
+    operating_names: ['Synthetic Risser Orthopedic Group'],
+    frozen_address_token: '2615 E WASHINGTON BLVD|TESTVILLE|CA|91107',
+    assessor_address_token: '2611 E WASHINGTON BLVD|TESTVILLE|CA|91107',
+    captured_address_token: '2627 WASHINGTON BLVD|TESTVILLE|CA|91107',
+    parcel_number: '5751-005-004',
+    costar_property_id: '5750756',
+    authorized_by: 'research_owner',
+    authorized_at: '2026-09-10T12:00:00Z',
+    second_review_required: true,
+    evidence_citations: [
+      { source: 'official_facility_registry', url: 'https://registry.example/asc-location' },
+      { source: 'licensed_property_public_record', url: 'https://property.example/public-record' },
+    ],
+  };
+  const target = {
+    candidate_fingerprint: sha('4'),
+    address_token: conflict.frozen_address_token,
+    cms_identity: {
+      facility_name: conflict.cms_facility_name,
+      address: '2615 E Washington Blvd', city: 'Testville', state: 'CA', zip: '91107',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Risser Surgery Center'],
+      approved_same_parcel_address_conflicts: [conflict],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://product.costar.com/detail/all-properties/5750756/tenant',
+    costar_property_id: '5750756',
+    address: '2627 Washington Blvd', city: 'Testville', state: 'CA', zip: '91107',
+    parcel_number: '5751-005-004',
+    tenant_name: 'Unrelated Primary Tenant',
+    tenants: [{ name: 'Synthetic Risser Orthopedic Group' }],
+    square_footage: '6,964',
+  };
+
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.identity_match.mode, 'approved_same_parcel_address_conflict');
+  assert.equal(built.identity_match.corroboration_basis,
+    'approved_operating_identity_multi_address_parcel');
+  assert.equal(built.identity_match.assessor_address_preserved,
+    conflict.assessor_address_token);
+  assert.equal(built.identity_match.costar_property_id, '5750756');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  const blockedContexts = [
+    { ...context, costar_property_id: '5750757' },
+    { ...context, parcel_number: '5751-005-005' },
+    { ...context, address: '2629 Washington Blvd' },
+    { ...context, city: 'Other City' },
+    { ...context, zip: '91108' },
+    { ...context, tenants: [{ name: 'Unrelated Orthopedic Group' }] },
+    { ...context, source: 'rca' },
+  ];
+  for (const blocked of blockedContexts) {
+    assert.throws(() => buildAscStructuredCapture(target, blocked), /does not match/);
+  }
+
+  for (const invalidEvidence of [
+    { assessor_address_token: '' },
+    { assessor_address_token: conflict.frozen_address_token },
+    { assessor_address_token: '2611 E WASHINGTON BLVD|OTHER CITY|CA|91107' },
+    { cms_facility_name: 'Unrelated Surgery Center LLC' },
+    { second_review_required: false },
+    { evidence_citations: [conflict.evidence_citations[0]] },
+  ]) {
+    assert.throws(() => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: {
+        ...target.cms_evidence,
+        approved_same_parcel_address_conflicts: [{ ...conflict, ...invalidEvidence }],
+      },
+    }, context), /does not match/);
+  }
+});
+
+test('candidate-scoped multi-address parcel accepts exact CMS recorded-owner identity without tenant identity', () => {
+  const conflict = {
+    status: 'approved',
+    reason_code: 'service_location_multi_address_same_parcel_recorded_owner_identity',
+    frozen_address_token: '155 TIMBERWOLF PKWY|KALISPELL|MT|59901',
+    assessor_address_token: '155 TIMBERWOLF PKWY|KALISPELL|MT|59901',
+    captured_address_token: '165 TIMBERWOLF PKWY|KALISPELL|MT|59901',
+    owner_mailing_address_token: '175 TIMBERWOLF PKWY|KALISPELL|MT|59901',
+    recorded_owner_name: 'GLACIER SURGICAL INC',
+    parcel_number: '07-4077-36-1-10-31-4321',
+    costar_property_id: '19297271',
+    authorized_by: 'research_owner',
+    authorized_at: '2026-09-11T12:00:00Z',
+    capture_authorized: true,
+    second_review_required: true,
+    evidence_citations: [
+      { source: 'official_facility_registry', url: 'https://registry.example/glacier-surgical' },
+      { source: 'licensed_property_public_record', url: 'https://product.costar.com/detail/all-properties/19297271/map' },
+    ],
+  };
+  const target = {
+    candidate_fingerprint: sha('5'),
+    address_token: conflict.frozen_address_token,
+    cms_identity: {
+      facility_name: 'GLACIER SURGICAL INC',
+      address: '155 Timberwolf Parkway', city: 'Kalispell', state: 'MT', zip: '59901',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['GLACIER SURGICAL INC.'],
+      approved_same_parcel_address_conflicts: [conflict],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://product.costar.com/detail/all-properties/19297271/map',
+    costar_property_id: '19297271',
+    address: '165 Timberwolf Pky', city: 'Kalispell', state: 'MT', zip: '59901',
+    parcel_number: '07-4077-36-1-10-31-4321',
+    tenants: [{ name: 'Torrent Technologies, Inc' }, { name: 'Marsh McLennan' }],
+    square_footage: '17,359',
+  };
+
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.identity_match.mode, 'approved_same_parcel_address_conflict');
+  assert.equal(built.identity_match.corroboration_basis,
+    'approved_recorded_owner_identity_multi_address_parcel');
+  assert.equal(built.identity_match.assessor_address_preserved,
+    conflict.assessor_address_token);
+  assert.equal(built.identity_match.owner_mailing_address_preserved,
+    conflict.owner_mailing_address_token);
+  assert.equal(built.identity_match.recorded_owner_name_preserved,
+    conflict.recorded_owner_name);
+  assert.equal(built.identity_match.costar_property_id, '19297271');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const blocked of [
+    { ...context, costar_property_id: '19297272' },
+    { ...context, parcel_number: '07-4077-36-1-10-31-4322' },
+    { ...context, address: '166 Timberwolf Pky' },
+    { ...context, source: 'rca' },
+  ]) assert.throws(() => buildAscStructuredCapture(target, blocked), /does not match/);
+
+  for (const invalidEvidence of [
+    { assessor_address_token: '156 TIMBERWOLF PKWY|KALISPELL|MT|59901' },
+    { owner_mailing_address_token: '' },
+    { owner_mailing_address_token: conflict.captured_address_token },
+    { recorded_owner_name: 'UNRELATED OWNER LLC' },
+    { capture_authorized: false },
+    { second_review_required: false },
+    { evidence_citations: [conflict.evidence_citations[0]] },
+  ]) {
+    assert.throws(() => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: {
+        ...target.cms_evidence,
+        approved_same_parcel_address_conflicts: [{ ...conflict, ...invalidEvidence }],
+      },
+    }, context), /does not match/);
+  }
+});
+
 test('building ranges contain a frozen street number only with exact location and tenant corroboration', () => {
   const target = {
     candidate_fingerprint: sha('9'),
@@ -1110,4 +1275,70 @@ test('CoStar value-first tenancy cards preserve the explicit single-tenant gate'
     costar,
     /\/\^\(single\|multi\)\$\/i\.test\(line\)[\s\S]+\/\^tenancy\$\/i\.test\(next\)[\s\S]+data\.tenancy_type\s*=\s*line/,
   );
+});
+
+test('parcel-owner evidence completion advances with zero captures and mandatory second review', async () => {
+  const [migration, handler, sidepanel] = await Promise.all([
+    readFile(new URL('../supabase/migrations/20261002100000_lcc_asc_parcel_evidence_completion.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
+    readFile(new URL('../extension/sidepanel.js', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(migration, /service_location_multi_address_same_parcel_recorded_owner_identity/);
+  assert.match(migration, /capture_authorized' = 'false'/);
+  assert.match(migration, /candidate_completion_authorized' = 'false'/);
+  assert.match(migration, /second_review_required' = 'true'/);
+  assert.match(migration, /regexp_replace\(upper\(c\.address_token\)[\s\S]*PARKWAY\|PKY[\s\S]*PKWY/);
+  assert.doesNotMatch(migration, /set\s+address_token\s*=/i);
+  assert.match(migration, /v_capture_count <> 0/);
+  assert.match(migration, /final_disposition[\s\S]*parcel_owner_evidence_only/);
+  assert.match(migration,
+    /on conflict on constraint healthcare_research_reviews_pkey do update/i);
+  assert.doesNotMatch(migration, /on conflict\s*\(run_id,\s*candidate_fingerprint\)/i);
+  assert.match(migration, /set status = 'reviewed'/);
+  assert.match(migration, /security invoker/i);
+  assert.match(migration, /revoke all[\s\S]*from public, anon, authenticated/i);
+  assert.doesNotMatch(migration, /insert into public\.healthcare_research_captures/i);
+  assert.doesNotMatch(migration, /canonical_write_authorized\s*=\s*true/i);
+
+  assert.match(handler, /completion_mode === 'parcel_evidence_only'/);
+  assert.match(handler, /lcc_complete_asc_candidate_parcel_evidence/);
+  assert.match(handler, /capture_created: false/);
+  assert.match(handler, /canonical_write_performed: false/);
+  assert.match(handler, /exact_parcel_evidence_completion_required/);
+
+  assert.match(sidepanel, /Complete parcel evidence only/);
+  assert.match(sidepanel, /completion_mode: 'parcel_evidence_only'/);
+  assert.match(sidepanel, /capture_authorized === false/);
+  assert.match(sidepanel, /second_review_required === true/);
+});
+
+test('parcel-situs evidence completion excludes adjacent CoStar property capture', async () => {
+  const [migration, handler, sidepanel] = await Promise.all([
+    readFile(new URL('../supabase/migrations/20261002110000_lcc_asc_parcel_situs_evidence_completion.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
+    readFile(new URL('../extension/sidepanel.js', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(migration, /service_location_exact_parcel_situs_adjacent_context_record/);
+  assert.match(migration, /adjacent_context_only' = 'true'/);
+  assert.match(migration, /parcel_situs_address_token' = c\.address_token/);
+  assert.match(migration, /context_property_address_token'[\s\S]*<> c\.address_token/);
+  assert.match(migration, /context_parcel_number'[\s\S]*<>[\s\S]*parcel_number/);
+  assert.match(migration, /capture_authorized' = 'false'/);
+  assert.match(migration, /second_review_required' = 'true'/);
+  assert.match(migration, /v_capture_count <> 0/);
+  assert.match(migration, /parcel_situs_evidence_only/);
+  assert.match(migration, /on conflict on constraint healthcare_research_reviews_pkey do update/i);
+  assert.match(migration, /security invoker/i);
+  assert.match(migration, /revoke all[\s\S]*from public, anon, authenticated/i);
+  assert.doesNotMatch(migration, /insert into public\.healthcare_research_captures/i);
+  assert.doesNotMatch(migration, /canonical_write_authorized\s*=\s*true/i);
+
+  assert.match(handler, /completion_mode === 'parcel_situs_evidence_only'/);
+  assert.match(handler, /lcc_complete_asc_candidate_parcel_situs_evidence/);
+  assert.match(handler, /exact_parcel_situs_evidence_completion_required/);
+  assert.match(sidepanel, /Complete parcel situs evidence only/);
+  assert.match(sidepanel, /completion_mode: 'parcel_situs_evidence_only'/);
+  assert.match(sidepanel, /adjacent_context_only === true/);
 });

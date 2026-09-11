@@ -95,13 +95,19 @@ Frame: `LCC-SYSTEM-MAP.md`
 - 🟢 **E3. RLS hardening** on the 34 exposed tables — run in a Supabase branch first (`architecture/rls-hardening.sql`).
 
 ## F. Property identity resolver  (ASC proving ground)
-- 🟡 **F1. Finish the frozen 50-property ASC sample** under the restricted workflow; preserve missingness and second-review flags.
-- 🟡 **F2. Extract the approved ASC rules into a lane-neutral pure matcher and de-identified golden corpus.** Include building designators, candidate-scoped legal/operating-name aliases, and same-parcel service-location/mailing-address conflicts; no fuzzy matching or canonical promotion.
+- 🟡 **F1. Finish the frozen 50-property ASC sample review.** ✅ Source collection completed 2026-09-11:
+  44 captured + 6 reviewed source exceptions + 0 pending. ⏳ Complete 22 mandatory second reviews, populate
+  exactly 50 scorecards, and run the privacy-safe aggregate gate receipt; preserve missingness and disagreement.
+- ⏳ **F2. After F1's aggregate gate is accepted, extract the approved ASC rules into a lane-neutral pure
+  matcher and de-identified golden corpus.** Include building designators, candidate-scoped legal/operating-name
+  aliases, same-parcel service-location/mailing-address conflicts, and three-token multi-address parcels pinned
+  to a source record and observed operating tenant; no fuzzy matching or canonical promotion. Not authorized
+  merely by completion of source collection.
 - ⚪ **F3. Add sidebar component diagnostics and explicit worklist refresh/advance state.** Show the failed address/facility component and safe next action.
 - ⚪ **F4. Run read-only shadow replay across approved lanes.** Measure collisions, changed decisions, and second-review burden before any additional activation.
 
 ## Suggested pickup order (when we resume the build)
-1. **C0 git push** (bank the session).
+1. **F1 governed ASC review:** 22 second reviews → 50 exact-once scorecards → aggregate receipt and lane decision.
 2. **A2 cadence-scan** (engine, testable now) → **A1 SF Opportunity sync** → **A3 weekly email** = the pipeline monitor Phase 1.
 3. **A4 mail-intake** (completes the dossier's self-update loop).
 4. Finish the **execution/reasoning rollout** (C1/C2) in parallel — independent of the monitor.

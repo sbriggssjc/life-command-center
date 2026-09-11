@@ -1,5 +1,13 @@
 # Content-aware next-step engine — scope + AI hosting options
 
+> ⚠️ **VERIFY BEFORE TRUSTING (DOCMAP1 follow-up, 2026-09-08).** Self-labeled "no
+> build yet" as of 2026-07-30. Several AI-drafting / on-prem-generation surfaces have
+> since shipped in this repo (the Analyst's Take on-box narrative, EXT1/EXT1b/EXT2
+> quoted-extraction, the Tier 0 confirm-lane drafters) — this scope doc's "no build
+> yet" framing and its AI-hosting-options comparison may already be superseded by one
+> of those. Re-check against `docs/architecture/briefing-analyst-take-onprem.md` and
+> the EXT1/EXT2 sections of root `CLAUDE.md` before treating this as the current plan.
+
 **Date:** 2026-07-30 · **Status:** scope (no build yet) · **Author:** LCC/Claude session
 **Companion:** `contact-reconciliation.md` (§"Self-updating to-do engine") — this doc plans the AI half.
 

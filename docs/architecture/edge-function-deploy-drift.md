@@ -10,6 +10,45 @@
 > properties while three separate investigations read the stale committed
 > file and correctly-but-wrongly concluded there was no write path.
 
+## ⚠️ `ai-copilot` (dia) — v79 shipped with NO authentication, gated v80 (COPILOT-OPEN-gate, 2026-09-09)
+
+The census below lists `ai-copilot` (v77 at the time) as "committed, not in scope" — correct on
+drift, wrong on safety. Re-read from the **deployed body** (not the repo) on 2026-09-09: `verify_jwt:
+false` and **zero** calls to `authenticateWebhook()` anywhere in the six source files. All 25 routes
+— including the write routes `/sync/activities`, `/sync/accounts`, `/sync/log-to-sf`,
+`/sync/sf-tasks`, `/sync/flagged-emails`, `/sync/calendar-events`, `/enrich`, `/bd/*` — were reachable
+with no credential of any kind, CORS `*`. Found by accident: CI runners hit `POST /chat` 798 times in
+24h with no key (TEST-NET-LEAK). Full caller inventory + backlog row: `docs/os/PLANNED-BACKLOG.md`
+**COPILOT-OPEN**.
+
+- **v80 adds the SAME door `intake-salesforce` already sits behind** —
+  `authenticateWebhook()` from `../_shared/auth.ts` (`X-PA-Webhook-Secret` against
+  `PA_WEBHOOK_SECRET`), gating every route except `GET /health`.
+- **Shipped in LOG-ONLY mode** — `COPILOT_AUTH_MODE=log` (the default; unset behaves identically).
+  An unauthenticated non-`/health` request is logged as `[copilot-auth] DENY-WOULD <method> <path>
+  <ua_class> <ip_class>` in `function_logs` and allowed through unchanged. `COPILOT_AUTH_MODE=enforce`
+  is the flip that actually refuses — 401, no body detail beyond `{"error":"unauthorized"}` — and it
+  is deliberately NOT flipped in this change.
+- **Env vars this version reads (new):** `COPILOT_AUTH_MODE` (`log` default / `enforce`),
+  `COPILOT_KNOWN_IPS` (comma list of `class:ip-prefix` pairs, e.g.
+  `railway:152.55.,railway:162.220.232.,scott:<home-ip-prefix>` — Scott sets this from the caller
+  inventory; the log line's `ip_class` is only as good as this list). `PA_WEBHOOK_SECRET` was already
+  present on this project (used by `intake-salesforce`) — confirmed via `supabase secrets list`
+  (names only), not re-created.
+- **Three legitimate callers, per the 24h inventory:** the browser (`app.js`/`detail.js`, now routed
+  through Railway's `/api/sync?_route=copilot-read` proxy instead of the edge URL directly — see
+  `api/sync.js::handleCopilotRead` and `connectorHeaders()`, which now sends the secret on every
+  Railway→edge call); four Power Automate flows (`docs/architecture/flows/ai-copilot-sync-callers.md`
+  — none carry the header yet, 👤 Scott); Railway itself (0 calls seen in the 24h window, now
+  patched regardless so it doesn't silently start failing at the enforce flip).
+- **Flip procedure:** after ≥3 days with zero `DENY-WOULD` lines from anything but the browser class
+  (which no longer reaches the edge function at all post-Unit-2) — i.e. genuinely zero unknown
+  callers — Scott sets `COPILOT_AUTH_MODE=enforce`. Do not flip on a shorter window; the whole point
+  of log-only is to let a caller nobody named show up before it is refused.
+- **Out of scope for this change:** `salesforce-enrichment` (DRIFT1-sfenrich) needs the identical
+  gate pattern later, deliberately not touched here; `AI_EXTRACTION_PRIMARY` on Railway is unread —
+  👤 Scott to report whether it's set.
+
 ## Unit 1 — Census (as of 2026-09-07)
 
 | project | slug | version | updated_at | committed_dir_exists | source_drift | writes_db | live | verdict | reason |
@@ -123,6 +162,45 @@ running with a service-role key. Specifically:
   immediately, and `GET /diagnostics` reports table-level row counts —
   neither requires any credential.
 
+> ⚠️ **SEVERITY CORRECTED 2026-09-07 (Cowork, measured): the RPCs are `service_role`-only, so this
+> is NOT "arbitrary SQL from the internet".** Live on dia, both `exec_sql(query text)` and
+> `execute_sql(sql text)` read `anon` **false**, `authenticated` **false**, `service_role` **true**,
+> `proacl = {postgres=X/postgres,service_role=X/postgres}` — an outside caller cannot reach them
+> directly. **The real exposure is one step removed and still real: an unauthenticated public
+> endpoint that holds a service-role key and, when called, performs that key's writes.** The SQL
+> executed is the function's own sixteen fixed steps.
+>
+> ✅ **ANSWERED 2026-09-07 by reading the DEPLOYED body (`get_edge_function`): NO caller-supplied
+> input reaches any query string.** All sixteen steps are static template literals with zero
+> interpolation; the only request data the function reads is `searchParams.get("dry_run")` (compared
+> to the string `"true"`) and `url.pathname`. **There is no SQL-injection path.** Combined with the
+> `service_role`-only RPCs above, the "arbitrary-effect SQL execution" framing is retired.
+>
+> **The confirmed exposure, stated exactly:** `POST /run` — or a bare `POST /` — with **no
+> credential of any kind** runs a 15-step write pipeline against dia `contacts`, `true_owners`,
+> `salesforce_activities`, `contact_links` and `touchpoint_schedule`, then inserts a
+> `crm_enrichment_logs` row; and `GET /diagnostics` returns table row counts and linkage-gap counts
+> to anyone. CORS is `*`. **Mitigating and worth stating: every write is fill-blanks or
+> idempotent** (`COALESCE`, `WHERE … IS NULL`, `NOT EXISTS`, `IS DISTINCT FROM`), so a hostile
+> trigger costs load and unwanted state transitions — **not destruction.** That is why this is
+> "close it deliberately", not "pull the plug tonight".
+>
+> 🚨 **Two findings the auth question was hiding, both worse than the auth question for data
+> quality:**
+> 1. **Step 3 and Step 8 Pass B link identity by NAME** — `lower(trim(t.name)) = lower(trim(sa.name))`
+>    writes `true_owners.sf_company_id` / `salesforce_id`, and `lower(trim(c.company)) =
+>    lower(trim(t.name))` sets `contacts.true_owner_id`. **Name-equality deciding an identity write
+>    is the technique this repo bans outright** (`lcc_normalize_entity_name`, `ownerCore`,
+>    `strictOwnerCore` — grouping-for-review, never identity-for-write).
+> 2. **It writes curated BD columns with NO provenance ladder** — `contacts.contact_email`/`_phone`,
+>    `true_owners.contact_1_name`/`contact_2_name`, `is_prospect`. Sixteen steps, zero
+>    `field_provenance` rows. It is a ladder-invisible writer to the same tables the CONTACT1 arc
+>    has spent a week instrumenting.
+>
+> ✅ For contrast, the sibling on the same project **is** authenticated: `intake-salesforce`'s
+> now-committed body calls `authenticateWebhook(req)` and 401s without `X-PA-Webhook-Secret`. The
+> gap is specific to this function, not the pattern.
+
 This is a materially larger exposure than "an old function nobody
 remembers": it is a standing, callable, unauthenticated path from the public
 internet to arbitrary-effect SQL execution on a live production database,
@@ -207,6 +285,36 @@ listing.
    the repo to the deployment (not the reverse), and only redeploy when a
    human has reviewed the actual code change being shipped.
 
+## DRIFT1-routing-gap — what the merge-blocking test failure found (2026-09-08, CLOSED repo-side)
+
+**Not a drift item, but discovered by one** — syncing `intake-salesforce` to its deployed body broke
+three tests, and the third was real. **Two definitions of "gov" existed in one pipeline family:**
+deployed `intake-salesforce/sf-config.ts`'s `GOV_SIGNALS` (**federal only**) and
+`_shared/sf-deal-promotion.ts`'s `GOV_STATE_SIGNALS` (state agencies). `routeVertical` returns
+`{vertical: null, resolved: false, reason: "no_match"}`, so a state-agency property was **skipped at
+intake with no row, no error and no queue entry** — Class 20.
+
+⚠️ **Correcting the framing this document's first write-up carried (a Cowork error):
+`GOV_STATE_SIGNALS` was NOT "used by `sf-promotion-worker`."** That worker imports only
+`planDealSalePromotion`; the constant had **zero production consumers** and was referenced only by
+its test file. **The two-implementations finding was right; "which one runs where" was wrong** — and
+the error came from verifying the MODULE import and inferring the SYMBOL was used. *Grep the symbol,
+not the file.* The correction strengthens the case for merging: there was no second live consumer
+whose behaviour could change.
+
+**Resolution (PR #2157):** one canonical `GOV_SIGNALS` exported from `sf-deal-promotion.ts` and
+imported by `sf-config.ts`; the local fork is gone. ✅ **Not a blanket union — every state term kept
+has an independent live precedent** in `api/_handlers/sidebar-pipeline.js`'s `GOV_TENANT_PATTERNS`,
+already minting gov properties from that vocabulary in production. ✅ **`"motor vehicles"` was
+deliberately EXCLUDED** — the one term with no such precedent, and this list matches by plain
+substring, so private auto dealers would collide. It survives only as a comment explaining the
+exclusion. Verified on `origin/main`: fork removed, canonical list in place, `"motor vehicles"` in
+comments only, `GOV_STATE_SIGNALS` retired to comments. Tests 24/24; suite 5,450 pass / 0 fail.
+
+🚨 **NOT DEPLOYED.** `intake-salesforce` is a Supabase edge function — **this repo change does nothing
+in production until an operator redeploys it.** That is this document's own lesson running the other
+way: the repo is now *ahead* of the deployment, deliberately and with the header saying so.
+
 ## Limitation: this direction cannot be a repo-side test
 
 A test suite living in this repo can assert one direction cheaply: *"every
@@ -232,3 +340,108 @@ scheduled job that calls `list_edge_functions` from *somewhere with
 credentials* and diffs it against `git ls-tree` of `supabase/functions/`.
 Do not claim "CI covers this" — it does not, and cannot, without that
 external credentialed step.
+
+## DRIFT1-routing-gap — a downstream defect this reconciliation surfaced (2026-09-08)
+
+Syncing `intake-salesforce/sf-config.ts` to the deployed body (Unit 2) exposed a second, unrelated
+defect: `routeVertical` (the deployed function's `GOV_SIGNALS`) and `_shared/sf-deal-promotion.ts`'s
+`GOV_STATE_SIGNALS` were two independent judgements of "does this Salesforce row belong to gov?",
+and they disagreed — the same shape as this document's committed-vs-deployed drift, but at MODULE
+level inside one already-synced repo, not at the deploy boundary.
+
+- **Resolved 2026-09-08, repo-side:** merged into one canonical `GOV_SIGNALS`, exported from
+  `sf-deal-promotion.ts`, imported by `sf-config.ts`. Full writeup, sizing method, and the per-term
+  decision: `docs/claude-code/STATUS.md` (2026-09-08 entry) and `test/sf-deal-promotion.test.mjs`.
+- **⚠️ Still pending: the redeploy.** Per this document's own rule 5 above (never redeploy without a
+  human reviewing the change) — this session made the code change and explicitly did NOT deploy it.
+  `routeVertical`'s live behavior is unchanged until an operator redeploys `intake-salesforce`
+  (project `zqzrriwuavgrquhisnoa`) and confirms via `get_edge_function` that the new body matches.
+- **The sizing hit this document's own Limitation from a different angle.** The population of
+  Salesforce rows that route to `null` and get silently skipped leaves no row in either domain's
+  staging tables — a re-route replay of what IS staged cannot see what never arrived, exactly as
+  the Limitation above says a repo-side check cannot see a deployment it was never told about.
+
+## 2026-09-09 — DRIFT1-retire executed; intake-salesforce v24 deployed with the routing fix
+
+Scott ran the four deletions and the redeploy from the Supabase CLI; Cowork verified live (both function
+lists re-read, gateway `NOT_FOUND` for the deleted slugs, `intake-salesforce` v24 `verify_jwt=false`, bare
+GET answering `sf-2026-05-v8`). Two things worth keeping from the pre-flight: (1) the redeploy was safe only
+because the repo file was the 2026-09-07 sync of the live body and `git log` showed no touch since — re-diff
+with `get_edge_function` before any future redeploy, exactly as this page's runbook says; (2)
+**`intake-salesforce` was never pinned in `supabase/config.toml`** — a bare `functions deploy` would have
+re-enabled the gateway JWT check and 401'd the hourly Object Sync, the trap `intake-salesforce-files` and
+`lead-ingest` already fell into. Pinned the same day. The `SF_*` secrets `sf-test` used now have no consumer
+(backlog `DRIFT1-retire-secrets`).
+
+## 2026-09-09 — SF-DIRECT: `sf-test`'s SOAP-login capability rebuilt as an authenticated helper
+
+`sf-test` was deleted the same day (above) with its ~40-line body unrecovered (the 2026-05 audit's
+"source is on record in git history" claim was false — nothing had ever committed it). Scott's rule
+that no planned or built capability is lost applies: the capability it proved — SOAP login to
+Salesforce with `SF_USERNAME`/`SF_PASSWORD`+`SF_SECURITY_TOKEN`, no Connected App — is rebuilt as
+`supabase/functions/_shared/salesforce-soap.ts` (`sfLogin`/`sfQuery`, `SF_LOGIN_HOST` sandbox
+toggle) plus `intake-salesforce?action=sf-ping`, an authenticated GET diagnostic behind the same
+`authenticateWebhook()` gate every other action in that function uses — **never** a standalone
+unauthenticated endpoint, and no new function slug (`intake-salesforce` v24 → v25). Read-only:
+`SELECT Id, Subject, Status FROM Task WHERE IsClosed = false LIMIT 5`. The `SF_*` secrets now have
+a consumer again — `DRIFT1-retire-secrets` closes as "kept, and used."
+
+## 2026-09-09 — SF-DIRECT-b: `sf-ping` gains a PA-gateway fallback (`intake-salesforce` v25 → v26)
+
+SOAP login was proven at v25 to be refused at the org's door (`INVALID_SSO_GATEWAY_URL` — the
+integration user's Salesforce profile is under corporate SSO). Rather than wait on an IT change,
+`sf-ping` now falls back to the already-working PA gateway ("HTTP Switch Salesforce Lookup",
+`sf-http-switch-lookup`) via `supabase/functions/_shared/salesforce-gateway.ts::sfGatewayQuery`, on
+exactly two named SOAP fault codes (`INVALID_SSO_GATEWAY_URL`, `INVALID_LOGIN`) — any other SOAP
+failure (network, malformed response, missing env) is reported as-is, never masked by a fallback
+that happened to work for an unrelated reason. Response gains `via: "soap" | "pa_gateway"` and, on
+fallback, `soap_fault_code`. Same auth gate, same function slug, no new secret shape — the flow's
+new `soql` operation reuses `SF_LOOKUP_WEBHOOK_URL`, now also set on Dialysis_DB (see
+`AI-SURFACES-OPERATIONAL-REFERENCE.md`). Deploy: `intake-salesforce` v25 → v26. 👤 Scott: build the
+flow's `soql` case per `docs/architecture/flows/http-switch-salesforce-lookup.md`, re-export, set the
+secret, deploy, then run `sf-ping` — record the returned `open_tasks` count and `via` value only.
+
+## 2026-09-09 — SFENRICH-gate: `salesforce-enrichment` body committed verbatim, gated log-only (v26 → v27)
+
+`salesforce-enrichment` (dia) was the second sourceless-and-open function named alongside
+`ai-copilot` in DRIFT1-sfenrich: deployed `verify_jwt:false` with no `authenticateWebhook()` call
+anywhere in the body, and — unlike `ai-copilot` — **never committed to this repo at all**. Fetched
+verbatim via `get_edge_function` (`ezbr_sha256 8d993301…`, version 26) and committed as
+`supabase/functions/salesforce-enrichment/index.ts` in its own commit, no edits, before touching it
+— the `sf-test` lesson (capture the body before you change or delete anything).
+
+The gate is the same COPILOT-OPEN-gate pattern, not a redesign: `authenticateWebhook()` before
+dispatch, `SFENRICH_AUTH_MODE` (`log` default / `enforce`), a `DENY-WOULD` log line naming the UA
+and IP class. Two differences from `ai-copilot`'s gate:
+
+- **No `/health` exemption.** This function's only GET route is `/diagnostics`, and `/diagnostics`
+  itself leaks row and gap counts — it is the leak, not a health probe. Every route is gated.
+- **The UA/IP classifier is now a shared module, `_shared/caller-class.ts`**, factored out of
+  `ai-copilot/index.ts` (which used to define `copilotUaClass`/`copilotIpClass`/`copilotRequestIp`
+  inline) so a second gated function does not grow a second copy of the same regexes. Both
+  functions keep their own `*_KNOWN_IPS` env var (their caller sets are not asserted identical,
+  only the classifier code); `ai-copilot`'s wrapper functions are kept for call-site compatibility
+  and delegate to the shared module. `test/salesforce-enrichment-auth-gate.test.mjs` proves the
+  classifier's output is byte-identical after the move on a fixed set of UA/IP pairs.
+
+**Confirmed before shipping the gate:** `dry_run` and the path are the ONLY request-derived values
+the function reads — every one of the 15 step queries is a fixed template literal with no `${...}`
+interpolation of request data (asserted by the guard, with a positive control). No SQL-injection
+surface, no widening of scope.
+
+**Not fixed here, filed as their own PLANNED-BACKLOG lines under DRIFT1-sfenrich:** steps 3 and 8B
+decide identity by bare name equality (`lower(trim(name)) = lower(trim(...))`, the technique this
+repo bans for identity writes onto `true_owners.sf_company_id` / `contacts.true_owner_id`), and the
+function writes curated BD columns (`contact_email`, `contact_1_name`/`_2_name`, `is_prospect`) with
+no `field_source_priority` ladder entry. Both are data-quality findings independent of the auth gate
+and need the CONTACT1 provenance machinery, not a gate, to close.
+
+`SFENRICH_AUTH_MODE` ships `log`. Zero callers were seen in `function_edge_logs` over the prior 24h,
+which per DRIFT1-sfenrich's own note is a reason to read a longer window before enforcing, not a
+reason to skip logging — an unauthenticated caller pattern that only fires monthly is invisible in
+one day and would be silently unblocked by shipping straight to `enforce`.
+
+Deploy: 👤 Scott, `supabase functions deploy salesforce-enrichment --project-ref
+zqzrriwuavgrquhisnoa --no-verify-jwt` → v27. Verify with one `curl POST .../salesforce-enrichment/run?dry_run=true`
+with no header (expect the dry-run body plus a `DENY-WOULD` line in the function log) and one with
+`X-PA-Webhook-Secret` set (expect no `DENY-WOULD` line).

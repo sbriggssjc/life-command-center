@@ -1,8 +1,10 @@
 # Account-Based Contact Intelligence — design brief
 
-> **Status:** design, not built. Written 2026-08-26 from Scott's doctrine statement plus the
-> live evidence that prompted it. Supersedes the narrower "pivot promoter" framing in
-> `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md` item 5d.
+> **Status:** Tier 0 partially built and live (`TIER0_AUTO_ATTACH` on since 2026-08-28); Tiers 1-4
+> still design, not built. Written 2026-08-26 from Scott's doctrine statement plus the live evidence
+> that prompted it. Supersedes the narrower "pivot promoter" framing in
+> `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md` item 5d. **Re-checked 2026-09-10, phased build plan added
+> — read §7 before building anything here; it corrects a stale claim in §5a.**
 
 ---
 
@@ -200,7 +202,7 @@ a buyer's rep, and where competitors are winning their business).
 Scott asked whether LinkedIn or similar public/social sources can be ingested. Honest answer,
 ranked by legitimacy and effort:
 
-### ⚠️ FIRST: Scott already syncs LinkedIn → Outlook contacts. **That data is NOT in the LCC.**
+### ⚠️ FIRST: Scott already syncs LinkedIn → Outlook contacts. **This data IS now flowing into the LCC — see §7a, corrected 2026-09-10. The rest of this subsection is the 08-26 measurement that prompted building it; read as history, not current state.**
 
 Scott (2026-08-26): *"I already sync LinkedIn with my contacts in Outlook so we should have
 that data already reflected in our Outlook connections."* The sync into Outlook is real; the
@@ -265,3 +267,280 @@ overwrites** a fact we hold from correspondence.
 4. **7 competitor-broker edges on Easterly wear role `prospecting_contact`** — real, wrong per
    doctrine, and not the cause of the suppression. Re-role, don't delete: they are the
    Tier-4 intelligence.
+
+## 7. Status check + phased build plan (2026-09-10, Cowork)
+
+Scott's direction 2026-09-10: automate owner→contact linkage end to end with minimal human-in-the-
+loop, split by owner type — individual/small-firm owners get deterministic linkage (Tier 0); large
+institutional buyers (REITs, funds) get the role-taxonomy treatment already designed in §3a (website +
+Salesforce + prior correspondence to find the person in charge of the *right function*, not just any
+person at the firm).
+
+**This section does not redesign anything below — Tiers 0–4 above are still the adopted shape.** It
+re-measures live state against the design (some of it has moved since 08-26/08-31, one claim below
+was flatly wrong and needs correcting), and lays out the build order.
+
+### 7a. Correction — §5a's "the receiver has never been fed" is now FALSE
+
+Re-measured live 2026-09-10: `unified_contacts.outlook_contact_id` is populated on **2,835 of 32,858**
+rows (was 0), `last_synced_outlook` ranges 2026-08-26 → **today**, and **2,829 rows synced in the last
+7 days** — a Power Automate flow is running and current, not the dormant gap §5a described. Whoever
+built this did not update this doc to say so; do not assume it is still 0, and do not re-propose
+building the flow §5a called for — it exists. `title` coverage moved with it: **1,723 of 32,858 (5.2%)**,
+up from 1.9%, but still the binding constraint on Tier 2 (§3a's role taxonomy needs a title to tell
+acquisitions from disposition from DD).
+
+### 7b. Live re-check of the open AC items
+
+- **`TIER0_AUTO_ATTACH`** — `state='on'` since 2026-08-28, owner Scott. Confirms live, not re-verified
+  further here (re-verify write counts before building on top of it).
+- **`owner_contact_pivot.active_contact_entity_id` populated** — **1,440** rows today (was near-zero at
+  the 08-27 "27 human attaches" measurement) — Tier 0 has been running and accumulating for two weeks.
+  **Re-measure AC10's 11-owner/$240.5M suppressed-and-invisible population before building its fix** —
+  the number is two weeks stale and pivot volume has grown 50×+ since it was taken.
+- **AC7 (Andrew Pulliam duplicate)** — still live: two `entities` rows named "Andrew Pulliam" exist
+  today. Not auto-resolved by anything since 08-26.
+
+> ✅ **AC1b / AC7 / AC10 CLOSED 2026-09-10 (`build/aci-phase0`).** The stale-count warning above is now
+> history, not a live blocker — re-measured before building, per its own instruction:
+> **251 owners / $329,379,804.64** were suppressed-and-invisible (14 with no pivot row at all, 237 with
+> a pivot row missing `active_contact_entity_id`) — up from the August 11/$240.5M, exactly as the ~50×
+> pivot-growth warning predicted. `lcc_promote_linked_owner_contacts` (fill-blanks, ledger-before-write,
+> reversible via `lcc_ac10_unpromote`) promoted **249 of 251** (2 carry no candidate surviving the
+> junk/brokerage guards and are correctly left unpromoted rather than guessed at) —
+> `v_lcc_ac10_promote_candidates` **251 → 0**. Forward-running daily cron at 06:12 UTC, not a one-shot.
+> AC7's Pulliam duplicate merged (survivor `d6b0d27e-…`, 37 edges + the existing Easterly pivot
+> reference; loser `537ecdd2-…`, 1 edge, merged via `lcc_merge_entity`, `lcc_entity_merge_log` id 170).
+> AC1b's university-scope drift closed on both views. See `STATUS.md` 2026-09-10 for the full writeup;
+> migrations `20261010120000_lcc_ac1b_*.sql` / `20261010140000_lcc_ac10_*.sql`; guards
+> `test/ac1b-university-scope.test.mjs` / `test/ac10-promote-linked-owner-contacts.test.mjs`.
+
+### 7c. Phased build order
+
+**Phase 0 — small mechanical fixes that unblock or clean the rest (do first, cheap):**
+- `AC1b` — two-line scope-drift fix (universities leaking into two views via the wrong predicate).
+- `AC10` — promote an owner's already-linked person into `owner_contact_pivot` when one exists; re-measure
+  the suppressed population first (§7b).
+- `AC7` — merge the Andrew Pulliam duplicate through the existing reversible `lcc_merge_entity` path
+  (same machinery as the C13g/OWN-T0e arc just closed — no new merge path).
+
+**Phase 1 — finish Tier 0 (deterministic linkage, the individual/small-owner majority of the 87% gap):**
+- `AC1d` remaining pieces (b: un-park signals from correspondence/SF/title/sponsor map; c: learning
+  from `lcc_tier0_confirm_log` rejects) and `AC1e` (SPE-subsidiary inheritance — 19 of 107 cards are
+  one question asked three times).
+- This phase is what actually moves the 13%→higher owner-linkage number for the bulk of owners, since
+  most of the 5,633 unlinked owners are not REIT-scale accounts.
+
+**Phase 2 — the REIT/fund "who's in charge" treatment (Tiers 1–2, `AC2`/`AC3`):**
+This is what Scott asked for by name today — large institutional buyers need the *right person for
+the task*, not just any linked person. Now buildable where it wasn't in August: title coverage exists
+and is growing (7a), correspondence and SF campaign membership are both already live inputs. Build:
+- `AC2` — bench ranking (score each candidate person on correspondence volume, recency, two-way vs
+  one-way, seniority signal, inferred function; keep a bench, never collapse to one winner).
+- `AC3` — Ollama function/remit inference over subjects (+bodies where available), the four-bucket
+  taxonomy from §3a (acquisitions / disposition / transaction-DD / broker), confidence carried per
+  P181, gated surface.
+- Value-gate by owner rent per the existing P161/P180 doctrine (never per-task, per-owner).
+
+**Phase 3 — the standing loop + broker intelligence (`AC4`/`AC5`), plus the input-quality spin-offs
+(`AC6`/`AC8`/`AC9`) that would otherwise corrupt Phase 2's correspondence signal:**
+- `AC4` re-runs on new correspondence/transactions/replies; a reply redirect ("talk to X") is the
+  strongest signal and should update the bench directly.
+- `AC5` keeps broker relationships as Tier-4 market intelligence, never a pursuit target.
+- `AC6` (professional emails misfiled as personal — corrupts the Tier 2 input corpus), `AC8`
+  (`v_lcc_prospecting_edge_review` narrower than its name, returns false negatives on broker tests),
+  `AC9` (7 competitor-broker edges on Easterly still wear the wrong role) should land before or
+  alongside Phase 2/3, since they are measured defects in the exact signal Phase 2 depends on.
+
+**Sequencing note:** Phase 0 and Phase 2 are the two genuinely separate asks in Scott's message today
+(individual-owner automation vs. REIT/fund person-in-charge) — Phase 1 serves the first, Phase 2 the
+second. They can build in parallel once Phase 0 clears; Phase 2 does not depend on Phase 1 finishing.
+
+### 7d. ✅ `ACI-phase1-2` returned 2026-09-10 — Phase 1 units A/B measured and partially shipped, Phase 2 (C) not attempted this pass
+
+Live DB access to `xengecqvemvfknjvbvrq` was available. Full writeup: `STATUS.md` 2026-09-10.
+
+- **AC1d(c)** (reject-learning) shipped as pure logic (`api/_shared/tier0-domain-demote.js`),
+  deliberately unwired — `lcc_tier0_confirm_log` re-measured at 0 of 27 rows `verdict='reject'`, so
+  there is nothing to learn from yet. AC1d(a) and (b) not built.
+- **AC1e** (SPE inheritance) shipped a pure planner (`api/_shared/entity-parent-inheritance-planner.js`)
+  after re-measuring `v_lcc_entity_tier0_parent` at **227** proposals (was 330) and confirming every
+  subsidiary already resolves to one parent — the ambiguity is at the parent's Tier 0 bench, not the
+  mapping. The live call site (fetch + Decision Center wiring + `applyTier0Attach`) was not built.
+- **AC2/AC3 (Phase 2, the REIT/fund bench + role taxonomy)** was **not attempted** this pass — it is
+  a large, novel surface (correspondence scoring, a new Ollama prompt, a value-gated federated lane)
+  that could not be built and mutation-guarded to this repo's own standard in the time available.
+  Remains 🟡/🟢 per `PLANNED-BACKLOG.md` — unbuilt, not regressed.
+- **AC6/AC8/AC9** — AC9 re-measured (Easterly `prospecting_contact` edges: 17 live today, not the
+  "7" cited in August; confirming broker-shape needs the C11 role/company join, not re-run this
+  pass). AC6/AC8 not re-measured.
+- **Unit D** (§8 below) was sized and correctly NOT built — see §8d0.
+
+### 7e. ✅ `ACI-phase2-unitC` SHIPPED 2026-09-10 — AC2 bench ranking + AC3 role inference, right-sized and built
+
+The follow-up prompt (`docs/claude-code/prompts/ACI-phase2-unitC.md`) came back the same day.
+Full record: `STATUS.md` 2026-09-10 (search `ACI-phase2-unitC SHIPPED`).
+
+- **AC2** shipped as a pure planner, `api/_shared/bench-ranking-planner.js::rankBench()`. Extends the
+  existing `owner_contact_pivot.bench` jsonb shape (confirmed live:
+  `{name, role, source, n_props, authority, contact_entity_id, is_named_individual}`) rather than
+  redefining it. Sort order: `two_way` (absolute) → inferred-function priority → volume → recency
+  (the tiebreak on a volume tie) → seniority → name. Never collapses the bench to one winner.
+- **AC3** shipped as `api/_shared/bench-role-inference-planner.js`. Deterministic title-hint path
+  first (no LLM call when a title maps cleanly); falls to `invokeExtractionAI` (the same seam
+  `ownership-chain-draft-planner.js`/`property-twin-assist-planner.js` use) only when title evidence
+  is absent, with a P181 confidence CAP — a correspondence-only verdict can never report `'high'`,
+  even if the model claims it — and a verbatim-quote guard on `evidence_quote` (W8-U3/EXT1 doctrine:
+  drop the whole verdict if the quote isn't a literal substring of a supplied subject line).
+- **Write path**: `api/_handlers/bench-rank-tick.js` (GET dry-run ungated / POST flag-gated
+  `BENCH_RANK_WRITE`), value-gated via the EXISTING `cadenceSignalFloor()` knob (no new threshold).
+  Reversible: a ledger row carrying the full prior `bench` array is written before every PATCH.
+  **The ledger migration (`20261010150000_lcc_bench_rank_run_log.sql`) was written but deliberately
+  NOT applied live** — an operator must apply it + register the `BENCH_RANK_WRITE` flag before any
+  real write can occur; until then POST is a safe no-op end to end.
+- **Re-confirmed live** (2026-09-10, same session): the 1,622/5,488 bench-population figure; the
+  bench jsonb shape above, read verbatim off a populated row; Andrew Pulliam resolves at
+  `unified_id=2330d585-…`, `title=NULL`, `total_emails_sent=132`, `last_email_date=2023-02-27`,
+  `company_name='Easterly Partners'`; `email_bodies` for `apulliam@easterlyreit.com` shows **48
+  inbound (`is_sent=false`) / 3 outbound (`is_sent=true`)** — a genuine two-way signal, and the
+  concrete evidence that `email_bodies.is_sent` is the right column for AC2's two-way input.
+  "Shuler"/"Ryan Shuler" does NOT resolve by name in `unified_contacts`, confirming the doc's
+  warning; test fixtures model him as thin/absent rather than guessing a resolution.
+- **Not built, named honestly**: the write-path handler does not yet populate AC3's `sf_context`
+  input from `lcc_sf_list_membership` (§3b's email-domain-keyed join) — the planner accepts and uses
+  the field when present, the handler simply never fills it yet. Filed as **AC2-sf-context**. AC6,
+  AC8, AC9 untouched, per the prompt's explicit exclusion.
+- **Tests**: 67 assertions across three new files, all passing; the sort-order and confidence-cap
+  rules were hand-mutation-checked (both mutations correctly went red). A positive control on the
+  Pulliam/Shuler pair uses live-confirmed facts as fixture data.
+
+## 8. The recorded-owner → true-owner control-chain logic (2026-09-10, Scott's framing)
+
+> ⚠️ **CORRECTED THE SAME DAY — §8a below is too pessimistic.** Scott's full manual research workflow
+> (netronline → assessor → recorder → SOS → cross-reference) revealed that a free capture path for
+> most of this chain already exists in the extension, unwired — see
+> `public-records-source-lane.md` §7 for the finding. **Do not build the control chain on the "wait
+> for paid APIs" premise below; §7 there supersedes it.** Left in place as the dated record of what
+> was checked and why the correction matters, per this repo's own doctrine (never delete a wrong
+> verdict, correct it in place).
+
+Scott's direction, close to verbatim, because the design follows from it: most of the recorded-owner
+→ true-owner resolution is going to end up being logic and matching over addresses, names, emails,
+and phone numbers. **If a recorded-owner LLC has a member whose address is a residence, the assessor
+sends the tax bill to that same address, and that address is owned by another entity or directly by
+that member, that member is the true owner in control for our purposes.** One member (or one family)
+→ probably an individual owner, and the company and the contact are the same. Multiple members →
+probably a partnership/company, and the contact is whichever member's address demonstrates control
+(receives the tax bill, etc.). Ollama should review and improve this as the data works through the
+pipeline, and the human-in-the-loop footprint should shrink over time, not stay fixed.
+
+**This section formalizes that as a decision chain and states plainly what can run on data already
+held for free versus what needs a paid source not yet turned on** (Scott's call, 2026-09-10: build
+the logic now against free/existing data; accept it will under-cover the LLC-member scenario until
+real member/mailing-address data is added later — do not silently degrade the design to fit, name
+the gap instead).
+
+### 8a. What the chain needs, and what actually exists today
+
+| link in the chain | what it needs | what we hold, measured 2026-09-10 |
+|---|---|---|
+| Is the recorded owner an LLC/company or already a person? | `entities.entity_type` | Live — this is C13g's whole arc, now closed |
+| Who are the LLC's members/managers? | SOS filing officer/member list | **Effectively nothing.** `llc-research.js` (OpenCorporates) is coded and gated on `OPENCORPORATES_API_KEY`, unset. Direct SOS scraping (`sos-proxy`, a residential-IP proxy Scott already runs) is live infrastructure but bot-wall-blocked on FL/CA/TX/AZ (Cloudflare/Incapsula), honest-blocked not silently zero. `entity_relationships` has **no member/manager edge type today** (`owns, associated_with, brokers, deal_party, developed, finances, guaranteed_by, leases, purchases, sells` — nothing modeling "person is a member of this LLC"). |
+| Does a member's address match a residence? | a home address per member, classified residential-vs-registered-agent-service | `entities.address`/`normalized_address` exist as columns but are populated on **40 of 13,212 person entities (0.3%)** and **101 of 45,637 organizations (0.2%)** — the column exists, the data essentially doesn't. `true_owners.notice_address_1` is the one REAL, non-fabricated address field at scale (deed/SOS-derived, populated for the dia contactless population `address-reverse.js` was built against) and already has a built, tested classifier (`address-reverse.js::isRegisteredAgentServiceAddress`) that correctly excludes CSC/CT/Cogency/law-firm/PO-box addresses so a service address is never mistaken for a residence. |
+| Does the assessor's tax bill go to that same address? | real `tax_records.mailing_address` / `mailing_owner` | **Fabricated for all practical purposes.** `public-records-source-lane.md` §2: the model leg (25,334 of 25,621 dia tax rows) is GPT-4o inventing plausible county records, not a county fetch — confirmed, not suspected. The one real leg (CoStar sidebar capture, 287 rows) has never once carried a `tax_amount` — a **measured ceiling of zero**, not a gap. Regrid (`Dialysis/src/regrid_client.py`) is a complete, never-run vendor client gated on `REGRID_API_KEY`, unset. |
+| Does that address belong to another entity we already hold, or directly to the member? | cross-reference against `entities` | Buildable today wherever an address string exists on either side — but per the row above, the population to run it against is tiny until a real address source is wired. |
+
+**Honest summary: the chain's LOGIC is sound and partly already built (the residential-vs-agent-service
+classifier exists and is tested); the chain's DATA is not there yet for the specific mailing-address
+corroboration Scott described.** Two of five links (member list, tax-bill mailing address) are
+blocked on paid APIs or bot-walled scraping, per Scott's decision not pursued this round.
+
+### 8b. What can be built now, on free/existing data, and what it will actually resolve
+
+Per Scott's decision (build the logic now, free data only, accept under-coverage), Phase 1/2's build
+should add a **Tier 0.5 — the control-chain classifier**, sitting between Tier 0 (email-domain match)
+and Tier 1-2 (institutional bench + role inference), covering the individual/small-owner population
+Tier 0 alone does not resolve:
+
+1. ✅ **SHIPPED 2026-09-10 (PR-scanner-writeback) — the `llc_member`/`llc_manager` edge type
+   this step called for now exists**, and source (b) below is exactly what got wired: the sidepanel's
+   SOS scan (officers/registered-agent text the operator is already reading off a real SOS page) is
+   the free, human-verified source this section asked for, routed through `applySosEntityCapture`
+   (`api/_shared/public-records-writeback.js`) → `ensureEntityLink` (the same choke point every other
+   writer here uses) → `insertEntityRelationship`. **It is human-triggered, not a silent auto-mint** —
+   the operator reviews the parsed officer/agent list in the sidepanel before Save, satisfying this
+   step's own "never a silent auto-mint" requirement. Source (a) (a bare human verdict with no SOS
+   page behind it) and OpenCorporates/direct-SOS-scrape as an AUTOMATED source remain unbuilt — this
+   ships the manual-capture half only. Full state, including the safety test for the
+   residential-vs-agent-service gate below, in `public-records-source-lane.md` §7a.
+   ~~A new `entity_relationships` edge type is needed first — `llc_member`/`llc_manager`~~
+   (person → owner LLC), because none exists. Without SOS/OpenCorporates, the only sources able to
+   populate it today are: (a) a human verdict recorded through the existing lane pattern (never a
+   silent auto-mint — an unverified member claim is worse than no claim); (b) whatever member names
+   already surface incidentally in correspondence, Salesforce, or deed grantor/grantee text and can be
+   matched with the same discipline `entity-link.js` already applies elsewhere. Size this population
+   before building — do not assume it is large. **(historical — see the ✅ note above; struck, not
+   deleted, per this repo's own doctrine of correcting a stale claim in place.)**
+2. **The single-member/family inference runs on `one_off_owner` (C13b/C13c) as its starting signal**,
+   not a member count we cannot get for free — `one_off_owner` already exists as a classification and
+   is the closest thing this repo has to "probably not an institution." Corroborate, don't invent a
+   second classifier for the same question.
+3. **`address-reverse.js`'s residential-vs-agent-service classifier runs against `true_owners.notice_address_1`**
+   (the one real address field at scale) — where it resolves to a genuine residential address (not an
+   agent-service address), that is a real, free signal worth a real confidence weight; where the owner
+   has no `notice_address_1` or it resolves to an agent-service address, the chain stops there and says
+   so rather than guessing.
+4. **Cross-reference against `entities.address`/`normalized_address` wherever either side has a value**
+   — small population today (§8a), but free, and it grows for free every time another part of the
+   system (Tier 0, Outlook sync, a manual attach) fills in an address, so it should run as a standing
+   check, not a one-time sweep.
+5. **Everything this DOES resolve should be gated at the same confidence discipline as Tier 2 (P181)** —
+   a residential-address match with no corroborating link is weaker evidence than a residential-address
+   match PLUS an existing Tier-0 email-domain link to the same owner, and the two should not render
+   identically on a card.
+
+### 8c. Where Ollama fits, and the standing-improvement loop Scott asked for
+
+Scott: *"we can use Ollama to help review as we work the data through the pipeline"* and the process
+should improve over time with a shrinking human footprint — this is the same doctrine `account-based-
+contact-intelligence.md` §4 Tier 2/3 already committed to for the institutional side, and it applies
+here identically, not as a separate design:
+
+- Ollama's job is not to invent the member list or the mailing address — it has none of that data
+  either. Its job is **triage and rationale over what the deterministic chain above already produced**:
+  when 8b's steps disagree (e.g., the address chain suggests one person, Tier 0's email-domain match
+  suggests another), Ollama drafts the one-line "why these are/aren't the same control chain" the way
+  `L10` (owner-resolution rationale) already scopes for the ownership-history side, carrying a
+  confidence, never resolving silently.
+- Every verdict — human or Ollama-assisted — writes to a ledger the same way `lcc_tier0_confirm_log`
+  already does, so a reject demotes that signal for similar owners (the same living-loop mechanism
+  §4 Tier 3 specifies) and the system's precision compounds instead of resetting each time.
+- **The human-in-the-loop budget should be measured, not assumed** — the same `UX-process` doctrine
+  (`app-ux-review-2026-09-02.md` §3) already adopted elsewhere: track how many cards a human actually
+  had to touch per period and whether that count is falling as the ledger accumulates. If it isn't,
+  that's a build defect worth surfacing, not a shrug.
+
+### 8d0. ✅ SIZED 2026-09-10 (`ACI-phase1-2`) — the population on `notice_address_1` alone is ZERO, and building was correctly refused
+
+Per 8b step 1's own instruction ("size this population before building"), measured live before
+touching code:
+
+- `one_off_owner` entities (C13b/C13c): **142** total.
+- Resolve to a dia `true_owners` row (via `external_identities`, `source_system='dia'`,
+  `source_type='true_owner'`): **19 of 142**. Resolve to a gov `true_owners` row: **0 of 142** (LCC
+  Opps has no gov path for this role today).
+- Of those 19: `notice_address_1` non-null: **0 of 19**. `name` containing "LLC"/"L.L.C": **0 of 19**.
+
+**The population this section's build was scoped to is zero.** No `entity_relationships` edge type
+(`llc_member`/`llc_manager`), no write, no lane was built — building one for a population that does
+not exist would be worse than doing nothing (per this section's own instruction). `PR-scanner-
+writeback` had not shipped at measurement time (checked: no `llc_member`/`sos_officer`/
+`recorder_capture` symbol anywhere in `extension/` or `api/`) — re-run this exact sizing the moment
+that lands, since it changes the input population this section is scoped against, not the logic.
+
+### 8d. What this section does NOT change
+
+Tiers 0-4 of the institutional design (§§1-7) are unchanged — REITs and funds do not have "members"
+in this sense and stay on the role-taxonomy path. This section is additive, for the individual/
+small-owner majority of the linkage gap that Tier 0 alone (email-domain match) does not reach because
+no domain signal exists for a personal LLC with no public web presence.

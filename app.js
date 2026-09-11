@@ -8,7 +8,12 @@ function _setText(id, text) { const el = document.getElementById(id); if (el) el
 // ============================================================
 // CONFIG & STATE
 // ============================================================
-const API = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
+// COPILOT-OPEN-gate: a browser can never hold PA_WEBHOOK_SECRET, so reads of
+// the ai-copilot edge function route through Railway's user-authenticated
+// proxy (/api/sync?_route=copilot-read&what=...) instead of the edge URL
+// directly. See api/sync.js::handleCopilotRead + docs/architecture/
+// edge-function-deploy-drift.md.
+const COPILOT_READ = '/api/sync?_route=copilot-read';
 const CHAT_API = '/api/chat';
 
 // ============================================================
@@ -6453,7 +6458,7 @@ async function applyInsertWithFallback(opts) {
 let activitiesLoaded = false;
 async function loadActivities() {
   try {
-    const res = await fetch(`${API}/sync/sf-activities?limit=2000&sort_dir=desc&assigned_to=all`);
+    const res = await fetch(`${COPILOT_READ}&what=sf-activities&limit=2000&sort_dir=desc&assigned_to=all`);
     if (!res.ok) { console.warn('Activities API returned', res.status); return; }
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch (_) { console.warn('Activities API returned non-JSON'); return; }
@@ -6516,7 +6521,7 @@ async function loadEmails() {
 
 async function loadCalendar() {
   try {
-    const res = await fetch(`${API}/sync/calendar-events?days_back=1&days_forward=14&limit=200`);
+    const res = await fetch(`${COPILOT_READ}&what=calendar-events&days_back=1&days_forward=14&limit=200`);
     if (!res.ok) throw new Error('API returned ' + res.status);
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch (_) { throw new Error('Calendar API returned non-JSON'); }
@@ -6533,7 +6538,7 @@ async function loadCalendar() {
 
 async function loadHealth() {
   try {
-    const res = await fetch(`${API}/health`);
+    const res = await fetch(`${COPILOT_READ}&what=health`);
     if (!res.ok) throw new Error(res.status);
     const text = await res.text();
     const data = JSON.parse(text);
@@ -7775,7 +7780,7 @@ async function loadCalendarFull(force) {
   const calEl = document.getElementById('calendarFull');
   if (calEl && !calFullLoaded) calEl.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   try {
-    const res = await fetch(`${API}/sync/calendar-events?days_back=${CAL_DAYS_BACK}&days_forward=${CAL_DAYS_FORWARD}&limit=500`);
+    const res = await fetch(`${COPILOT_READ}&what=calendar-events&days_back=${CAL_DAYS_BACK}&days_forward=${CAL_DAYS_FORWARD}&limit=500`);
     if (!res.ok) throw new Error('API returned ' + res.status);
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch (_) { throw new Error('Calendar API returned non-JSON'); }
@@ -8057,7 +8062,7 @@ let personalTodoLists = ['Personal', 'Family', 'Kids', 'Health', 'Finance', 'Hou
 
 async function loadPersonalCalendar() {
   try {
-    const res = await fetch(`${API}/sync/calendar-events?days_back=1&days_forward=30&limit=200&calendar=personal`);
+    const res = await fetch(`${COPILOT_READ}&what=calendar-events&days_back=1&days_forward=30&limit=200&calendar=personal`);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     personalCalEvents = data.events || [];

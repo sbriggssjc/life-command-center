@@ -1,5 +1,10 @@
 # Round 76 Final Deploy Checklist (76m → 76p)
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Round-numbered deploy checklist for a completed round.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 **Period:** 2026-04-27
 **Trigger:** Task #91 audit — 0 MISMATCH but 107 duplicate_property_address issues + 13 NO_PROPERTY intakes whose 18:xx re-promotes created fresh duplicates instead of finding the property the 16:xx run had created.
 

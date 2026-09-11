@@ -20,7 +20,7 @@
     "ai:apply-balanced": "node scripts/apply-ai-chat-preset.mjs AI_CHAT_BALANCED_PRESET.env.example --target .env.local",
     "ai:apply-low-cost": "node scripts/apply-ai-chat-preset.mjs AI_CHAT_LOW_COST_PRESET.env.example --target .env.local",
     "ai:apply-manual": "node scripts/apply-ai-chat-preset.mjs AI_CHAT_MANUAL_EDGE_PRESET.env.example --target .env.local",
-    "test": "node --test test/*.test.js test/*.test.mjs",
+    "test": "node --import ./test/_helpers/net-guard.mjs --test test/*.test.js test/*.test.mjs",
     "test:watch": "node --test --watch test/*.test.js test/*.test.mjs",
     "cm:refresh-catalog-snapshot": "node scripts/cm-refresh-catalog-snapshot.mjs",
     "spec:chatgpt": "node scripts/generate-chatgpt-spec.mjs",

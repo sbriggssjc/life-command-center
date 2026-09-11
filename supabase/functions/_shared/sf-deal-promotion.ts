@@ -134,11 +134,58 @@ export function planDealSalePromotion(
   return { promote: true, reason: "ok", saleRow };
 }
 
-// ── State-government routing cues (Topic 1 vocabulary) ───────────────────────
-// Mirrors api/_handlers/sidebar-pipeline.js GOV_TENANT_PATTERNS state additions
-// so a state-agency deal routes to gov instead of defaulting to dia. Anchored /
-// scoped so a dialysis operator (DaVita/Fresenius) never trips a gov cue.
-export const GOV_STATE_SIGNALS = [
+// ── Government routing cues — SINGLE canonical list (DRIFT1-routing-gap) ────
+// This used to be TWO lists that disagreed about a state-agency deal:
+//   - intake-salesforce/sf-config.ts's own `GOV_SIGNALS` (federal-only, the
+//     list that has actually been DEPLOYED — sf-2026-05-v8/v23)
+//   - this module's `GOV_STATE_SIGNALS` ("Topic 1 vocabulary"), exported and
+//     tested but never imported by anything that routes — a dead constant.
+// Sizing the gap (2026-09-08): the population of SKIPPED rows leaves no row
+// anywhere (Class 20 — a missing feeder has no representation), so it cannot
+// be counted from either domain's staging tables. Confirmed empirically: a
+// re-route replay of every `sf_property_staging`/`sf_comp_staging`/
+// `sf_listing_staging`/`sf_deal_staging` row in BOTH the dia (zqzrriwuavgrquhisnoa)
+// and gov (scknotsqkcheojiaewwh) projects (1,064 dia-side rows, all already
+// dia-routed by construction) produces zero flips — not because there is no
+// gap, but because a staging table can only ever contain rows that ALREADY
+// resolved to that table's own vertical. Live Salesforce access (Method 2)
+// was not reachable from this session (no SF connector attached) — say so
+// rather than substitute the under-counting proxy silently.
+//
+// Absent a direct measurement, the state-agency vocabulary below is adopted
+// on a DIFFERENT kind of evidence: every term (bar one, noted below) already
+// has a live production precedent in api/_handlers/sidebar-pipeline.js's
+// `GOV_TENANT_PATTERNS` ("Gap Memo 2026-06-23, Topic 1" — an audit against a
+// real Texas Facilities Commission lease corpus, 1,179 leases, that found 54%
+// of state-agency tenants fell to `no_domain` under a federal-only list).
+// That list runs today, word-boundary anchored, creating gov properties from
+// the CoStar sidebar with no reported false-positive incident. This routing
+// widens a CREATION path too (`autoCreateProperty`, GOVDUP1-a), so the same
+// caution applies — hence the exclusion below is deliberate, not an oversight.
+//
+// EXCLUDED: "motor vehicles" — the only GOV_STATE_SIGNALS term with NO
+// sidebar-pipeline precedent (no `\bmotor vehicles\b`/`\bdmv\b` pattern
+// exists there either). Unlike the phrases kept, "motor vehicles" collides
+// with ordinary private business names (used-car dealers, auto auctions) and
+// this module matches by plain substring, not word-boundary regex, so it
+// carries more false-positive risk than the vetted list. Filed as
+// DRIFT1-routing-gap-motorvehicles: measure before adding it.
+//
+// Every consumer of "which vertical does a SF row belong to" imports THIS
+// list. Do not fork a second copy — that is the exact defect being fixed.
+export const GOV_SIGNALS = [
+  // Federal (matches deployed intake-salesforce sf-2026-05-v8/v23 GOV_SIGNALS)
+  "gsa",
+  "federal",
+  "government",
+  "department of",
+  "veterans affairs",
+  "social security",
+  "united states of america",
+  "u.s. government",
+  "u.s. department",
+  // State/local (Topic 1 vocabulary; each has a sidebar-pipeline.js
+  // GOV_TENANT_PATTERNS precedent — see the header note above)
   "state of ",
   "department of ",
   "human services",
@@ -154,7 +201,6 @@ export const GOV_STATE_SIGNALS = [
   "railroad commission",
   "workforce commission",
   "public safety",
-  "motor vehicles",
   "secretary of state",
   "attorney general",
   "health and human services",

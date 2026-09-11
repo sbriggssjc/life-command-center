@@ -1,5 +1,11 @@
 # Vercel Secret Usage Audit (LCC)
 
+> 🚨 **STALE / HISTORICAL (DOCMAP1, 2026-09-08): Vercel was retired 2026-07-20** (root
+> `CLAUDE.md`). Its action items ("Set `LCC_API_KEY` in Vercel (staging + production)...") describe
+> a deployment target that no longer exists — the equivalent secret today lives in the Railway
+> project env. Kept as the historical record of the audit; do not act on its Vercel-specific
+> recommendations.
+
 Date: 2026-04-02  
 Repo: `life-command-center`  
 Scope: code references and runtime behavior for:

@@ -1,5 +1,10 @@
 # Activity-coverage audit — active-deal "going cold" signal (2026-07-31)
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Dated audit (2026-07-31) of one signal; superseded in practice by data-coherence-invariants.md / data-availability-map.md as the living references.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 ## Question
 My Day flags ~21 of 23 active deals as stale/going-cold. How much of that is genuine neglect
 vs. a data/linkage gap?

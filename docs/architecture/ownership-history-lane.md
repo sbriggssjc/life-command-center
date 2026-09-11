@@ -428,5 +428,39 @@ growth that does not happen.
 `OWN-T0b` no LCC mirror of `v_ownership_transitions_portfolio` · `OWN-T0c` 417 duplicate-entity
 merges (and `lcc_entity_canonical_key` keeps a trailing `(The)`) · `OWN-T0d` 11 tombstone duplicates ·
 **`OWN-T0e` ~1,550 unconfirmed sponsor/SPE pairs — one confirm clears a family; the highest-leverage
-follow-up** · `OWN-T0f` per-row UUIDs in `ownership_source` · `OWN-T0g`
+follow-up** (✅ **BUILT 2026-09-09** — Decision Center lane `sponsor_family_confirm`, one write = `INSERT lcc_ownership_sponsor_family`, reversible by DELETE; JS ships on the next Railway redeploy. The lane reads the 4-hourly cache `lcc_ownt0e_sponsor_family_proposals_cache` — the proposals view `v_lcc_ownt0e_sponsor_family_proposals` costs ~20 s because it scans this whole reconciled store, which is built for point-queries — and re-derives `already_confirmed` live. 182 groups / **317 pairs, not props** (a property with three candidates carries two; NGP Capital's 30 pairs flipped 28 properties in a rolled-back control); 13 breadth groups (19 incl. tied) carry a "SPE" that holds ≥2 properties — usually a sponsor DUPLICATE → `same_party`, which since OWN-T0e-b can merge the named pair here (`merge_now`, `lcc_merge_entity`, reversible; refused when the recorded `entity_type` differs — that refusal found `Gardner-Tanenbaum` typed `person`). ⚠️ Read the pair: Truist Bank ↔ Truist Financial is parent/subsidiary, not a duplicate. **LIVE 2026-09-09 (`/version` 87b631e8): 5 cards worked — registry 6→8 (`ngp`, `uirc`), 3 reversible merges, `sponsor_family_confirmed` 64→102, exactly the predicted 28+10; re-measure `unclassified_rival` before quoting it (two reads 13 min apart said 1,575 and 1,516 with no write between — OWN-T0h). Design + build + live record `docs/audits/OWN_T0e_SPONSOR_FAMILY_LANE_DESIGN_2026-09-08.md` §4/§6/§8. ✅ **`OWN-T0h` DECIDED 2026-09-11: the reconciled store's conflict count is canonical, not `v_lcc_property_multi_current`'s 756** — `multi_current` only checks the fact ledger against itself; the reconciled store also admits the resolver's proposal and the domain true_owner mirror, which is what the panel actually reads ("one door"). ⚠️ A same-day re-measurement first (wrongly) reported this had doubled to 4,478 — that was a counting bug (`count(*)` counts owner-candidate ROWS, not properties, on a view where every conflict property carries ≥2 rows by construction). **Corrected: `count(distinct property)` gives 2,065 today (gov 1,752 / dia 313) — essentially flat vs. 2,097 on 2026-09-02**, the small drop fully explained by OWN-T0e's confirm lane (`unclassified_rival` 1,617→1,508, `sponsor_family_confirmed` 64→142) plus a few merges (`duplicate_entity` 417→415). No mystery growth. Always count distinct property on this view.) · `OWN-T0f` per-row UUIDs in `ownership_source` · `OWN-T0g`
 `lcc_finalize_entity_portfolios` supersedes only within its own payload (gov) and not at all (dia).
+
+**`OWN-T0j` — the gov-side classifier `OWN-T0a` calls for is SHIPPED (2026-09-11, branch
+`claude/own-t0j-sponsor-classifier`, pushed, not yet merged).** `OWN-T0a` measures gov's OWN latest
+ownership-transition-grantee vs `properties.true_owner_id` disagreement directly against gov's tables
+(43–49%), which is a different, upstream comparison from this file's `v_lcc_property_ownership_reconciled`
+store and from `OWN-T0e`'s confirm lane — confirming a sponsor family in `lcc_ownership_sponsor_family`
+(LCC Opps) never writes back to gov, so it cannot move `OWN-T0a`'s number by itself. `OWN-T0j` is the
+missing cross-database read: a Node tick (`api/_handlers/ownt0j-sponsor-classify-tick.js` +
+`api/_shared/ownt0j-sponsor-classifier.js`) fetches gov's disagreement population and LCC Opps' confirmed
+sponsor tokens (two separate Supabase projects — no SQL join possible), name-keys them with a byte-for-byte
+port of gov's own `v_ownership_transitions_portfolio` key expression, and splits the population into
+`sponsor_family_confirmed` (a confirmed sponsor family already explains it — expected, not a defect) vs
+`unclassified_rival` (the honest residual). Cache table `lcc_ownt0j_sponsor_disagreement_cache` + reporting
+view `v_lcc_ownt0j_sponsor_disagreement_report` on LCC Opps (migration `20260911190000`, applied live);
+refresh cron `lcc-ownt0j-sponsor-classify-refresh` (`39 */4 * * *`). **Measured 2026-09-11 against both live
+projects: 5,133 comparable / 2,462 disagree; `sponsor_family_confirmed` = 482 (19.6%), `unclassified_rival`
+= 1,980 (80.4%)** — Boyd Watterson's 192 gov properties classify entirely `sponsor_family_confirmed` as the
+positive control. It does NOT make gov's two sides agree (refused per `OWN-T0`/`RO2` above) and does NOT
+build a second confirm mechanism — a genuinely `unclassified_rival` pair routes to `OWN-T0e`'s existing
+`sponsor_family_confirm` lane. ⚠️ The confirmed token `gov` is a 3-char generic substring worth watching
+before curating more short tokens. See `docs/os/PLANNED-BACKLOG.md` row `OWN-T0j` and
+`docs/claude-code/STATUS.md` 2026-09-11 for the full measurement.
+
+### The `resolve_ownership` Decision Center lane vs this store (UX-T1c §10, 2026-09-08)
+
+The gov DC lane `resolve_ownership` reads gov `v_ownership_resolution`, which compares deed / lessor /
+discrepancy proposals against **`recorded_owners`** — not `true_owners`, and not this store. Measured
+on its 1,597 rows: **836 propose the owner already recorded** (no-ops), **217 deed proposals are
+already gov's `true_owner`** (a recorded-owner sync), and against this store **470 of the 1,597 are
+`conflict`** (29.4%, vs 9.4% fleet-wide) with 409 primaries ≠ gov `true_owner`. The lane has 0 human
+verdicts ever. ✅ **RO1 (same day) filters the 836 at the source** (`proposal_is_recorded`, appended to the view) — the lane now holds 761 (verified live). ⚠️ The 217 "deed grantee = gov true_owner" rows are NOT a sync population — read, they are sponsor↔SPE pairs, name variants and capture artifacts (RO2 refuted, §10.7). **It is the last consumer still reasoning on `recorded_owners` alone**; the panel an
+operator opens from its card reads this view and will disagree. Backlog **RO1–RO5**; the
+family-shaped deed rows (≥124) belong to **OWN-T0e**. Full measurement:
+`docs/audits/UX_T1c_DECISION_CENTER_BUCKET_AUDIT_2026-09-08.md` §10.

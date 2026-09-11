@@ -432,15 +432,61 @@ function approvedSameParcelAddressConflict(target, context, frozenAddressToken, 
   return aliases.find((alias) => {
     const reasonCode = clean(alias?.reason_code);
     const sourceRecordPinned = reasonCode === 'service_location_mailing_address_same_parcel_source_record';
+    const multiAddressOperatingIdentity = reasonCode
+      === 'service_location_multi_address_same_parcel_operating_identity';
+    const multiAddressRecordedOwnerIdentity = reasonCode
+      === 'service_location_multi_address_same_parcel_recorded_owner_identity';
+    const pinnedCostarRecord = sourceRecordPinned || multiAddressOperatingIdentity
+      || multiAddressRecordedOwnerIdentity;
+    const assessorAddressParts = clean(alias?.assessor_address_token).split('|');
+    const assessorLocationMatches = assessorAddressParts.length === 4
+      && assessorAddressParts.slice(1).join('|') === frozenAddressToken.split('|').slice(1).join('|')
+      && alias.assessor_address_token !== frozenAddressToken
+      && alias.assessor_address_token !== capturedAddressToken;
+    const facilityName = normalizeTenantIdentityName(target.cms_identity?.facility_name);
+    const capturedNames = new Set(contextTenantNames(context));
+    const operatingNames = (Array.isArray(alias?.operating_names) ? alias.operating_names : [])
+      .map(normalizeTenantIdentityName).filter(Boolean);
+    const operatingIdentityMatches = operatingNames.some((name) => capturedNames.has(name));
+    const evidence = target.cms_evidence || {};
+    const enrollmentOrganizations = (Array.isArray(evidence.enrollment_org_names)
+      ? evidence.enrollment_org_names : [])
+      .map(normalizeEnrollmentOrganizationName).filter(Boolean);
+    const recordedOwner = normalizeEnrollmentOrganizationName(alias?.recorded_owner_name);
+    const recordedOwnerIdentityMatches = evidence.enrollment_corroborated === true
+      && Boolean(recordedOwner)
+      && normalizeEnrollmentOrganizationName(target.cms_identity?.facility_name) === recordedOwner
+      && enrollmentOrganizations.includes(recordedOwner);
+    const ownerMailingAddressParts = clean(alias?.owner_mailing_address_token).split('|');
+    const ownerMailingLocationMatches = ownerMailingAddressParts.length === 4
+      && ownerMailingAddressParts.slice(1).join('|') === frozenAddressToken.split('|').slice(1).join('|')
+      && alias.owner_mailing_address_token !== frozenAddressToken
+      && alias.owner_mailing_address_token !== capturedAddressToken;
+    const recordedOwnerAssessorAddressMatches = alias?.assessor_address_token === frozenAddressToken;
     if (alias?.status !== 'approved'
-      || (reasonCode !== 'service_location_mailing_address_same_parcel' && !sourceRecordPinned)
+      || (reasonCode !== 'service_location_mailing_address_same_parcel'
+        && !sourceRecordPinned && !multiAddressOperatingIdentity
+        && !multiAddressRecordedOwnerIdentity)
       || alias?.frozen_address_token !== frozenAddressToken
       || alias?.captured_address_token !== capturedAddressToken
       || normalizeParcelNumber(alias?.parcel_number) !== capturedParcel
-      || (sourceRecordPinned && (
+      || (pinnedCostarRecord && (
         clean(context.source).toLowerCase() !== 'costar'
         || !clean(alias?.costar_property_id)
         || clean(alias?.costar_property_id) !== clean(context.costar_property_id)
+      ))
+      || (multiAddressOperatingIdentity && (
+        normalizeTenantIdentityName(alias?.cms_facility_name) !== facilityName
+        || !assessorLocationMatches
+        || !operatingIdentityMatches
+        || alias?.second_review_required !== true
+      ))
+      || (multiAddressRecordedOwnerIdentity && (
+        !recordedOwnerAssessorAddressMatches
+        || !ownerMailingLocationMatches
+        || !recordedOwnerIdentityMatches
+        || alias?.capture_authorized !== true
+        || alias?.second_review_required !== true
       ))
       || !clean(alias?.authorized_by)
       || !/^\d{4}-\d{2}-\d{2}T/.test(clean(alias?.authorized_at))) return false;
@@ -448,8 +494,9 @@ function approvedSameParcelAddressConflict(target, context, frozenAddressToken, 
     const sources = new Set(citations
       .filter((citation) => /^https:\/\//i.test(clean(citation?.url)))
       .map((citation) => clean(citation?.source).toLowerCase()));
-    return sources.has('official_facility_registry')
+    const evidenceClassesPresent = sources.has('official_facility_registry')
       && sources.has('licensed_property_public_record');
+    return evidenceClassesPresent;
   }) || null;
 }
 
@@ -608,8 +655,14 @@ export function buildAscStructuredCapture(target, context = {}) {
       );
     const sameParcelAddressConflictSourceRecordPinned = sameParcelAddressConflict?.reason_code
       === 'service_location_mailing_address_same_parcel_source_record';
+    const sameParcelMultiAddressOperatingIdentity = sameParcelAddressConflict?.reason_code
+      === 'service_location_multi_address_same_parcel_operating_identity';
+    const sameParcelMultiAddressRecordedOwnerIdentity = sameParcelAddressConflict?.reason_code
+      === 'service_location_multi_address_same_parcel_recorded_owner_identity';
     const sameParcelAddressConflictMatch = sameParcelAddressConflict
-      && (exactTenantCorroboration || sameParcelAddressConflictSourceRecordPinned);
+      && (exactTenantCorroboration || sameParcelAddressConflictSourceRecordPinned
+        || sameParcelMultiAddressOperatingIdentity
+        || sameParcelMultiAddressRecordedOwnerIdentity);
     const rangeContainment = capturedRangeContainsFrozenNumber(frozenComparisonToken, addressToken);
     const rangeContainmentMatch = rangeContainment && corroboration;
     const operatingIdentityRangeMatch = rangeContainment && operatingIdentityAlias;
@@ -646,9 +699,32 @@ export function buildAscStructuredCapture(target, context = {}) {
       captured_property_address_preserved: clean(context.address),
       frozen_address_token: frozenComparisonToken,
       captured_address_token: addressToken,
-      corroboration_basis: exactTenantCorroboration?.basis || 'costar_source_record_and_parcel_pin',
-      corroborated_name: exactTenantCorroboration?.matched_name || null,
-      costar_property_id: sameParcelAddressConflictSourceRecordPinned
+      corroboration_basis: exactTenantCorroboration?.basis
+        || (sameParcelMultiAddressOperatingIdentity
+          ? 'approved_operating_identity_multi_address_parcel'
+          : sameParcelMultiAddressRecordedOwnerIdentity
+            ? 'approved_recorded_owner_identity_multi_address_parcel'
+            : 'costar_source_record_and_parcel_pin'),
+      corroborated_name: exactTenantCorroboration?.matched_name
+        || (sameParcelMultiAddressOperatingIdentity
+          ? (Array.isArray(sameParcelAddressConflict.operating_names)
+            ? sameParcelAddressConflict.operating_names.find((name) => new Set(contextTenantNames(context))
+              .has(normalizeTenantIdentityName(name)))
+            : null)
+          : null),
+      assessor_address_preserved: (sameParcelMultiAddressOperatingIdentity
+        || sameParcelMultiAddressRecordedOwnerIdentity)
+        ? clean(sameParcelAddressConflict.assessor_address_token)
+        : null,
+      recorded_owner_name_preserved: sameParcelMultiAddressRecordedOwnerIdentity
+        ? clean(sameParcelAddressConflict.recorded_owner_name)
+        : null,
+      owner_mailing_address_preserved: sameParcelMultiAddressRecordedOwnerIdentity
+        ? clean(sameParcelAddressConflict.owner_mailing_address_token)
+        : null,
+      costar_property_id: (sameParcelAddressConflictSourceRecordPinned
+        || sameParcelMultiAddressOperatingIdentity
+        || sameParcelMultiAddressRecordedOwnerIdentity)
         ? clean(context.costar_property_id)
         : null,
       second_review_required: true,

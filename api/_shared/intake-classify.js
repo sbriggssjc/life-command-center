@@ -490,3 +490,43 @@ export function priorityTierFromScore(score) {
   if (n >= 20) return 'MED';
   return 'LOW';
 }
+
+// ── UX-T1c-intake-cap (2026-09-08) — page the review population, never cap it ──
+// PostgREST caps every response at 1000 rows regardless of `limit=`. The
+// intake_disposition lane used to fetch `staged_intake_items` with a single
+// `limit=1000` ordered `created_at.desc`; the moment the review population
+// passed 1,000 (measured 1,011 on 2026-09-08) the OLDEST rows were never
+// fetched, never classified and never shown — the A5a class (a requested limit
+// compared against a capped response). This pager strides at exactly the cap
+// and stops on the RETURNED count, so the population is complete up to
+// `maxPages`; past that it reports `truncated: true` rather than silently
+// dropping rows (P182: a silent zero is not a finding).
+export const INTAKE_REVIEW_PAGE_SIZE = 1000;
+export const INTAKE_REVIEW_MAX_PAGES = 20;
+
+/**
+ * @param {(path: string) => Promise<{ok: boolean, data: any}>} fetchPage
+ *   GET a PostgREST path (already carrying select/filter/order) with
+ *   `&limit=&offset=` appended by this function.
+ * @param {string} basePath  path WITHOUT limit/offset
+ * @returns {Promise<{rows: any[], pages: number, truncated: boolean, failed: boolean}>}
+ */
+export async function pageIntakeReviewRows(fetchPage, basePath, opts) {
+  const pageSize = (opts && opts.pageSize) || INTAKE_REVIEW_PAGE_SIZE;
+  const maxPages = (opts && opts.maxPages) || INTAKE_REVIEW_MAX_PAGES;
+  const rows = [];
+  let pages = 0;
+  let truncated = false;
+  let failed = false;
+  for (let offset = 0; ; offset += pageSize) {
+    if (pages >= maxPages) { truncated = true; break; }
+    const r = await fetchPage(basePath + '&limit=' + pageSize + '&offset=' + offset);
+    pages += 1;
+    if (!r || !r.ok || !Array.isArray(r.data)) { failed = true; break; }
+    for (const row of r.data) rows.push(row);
+    // Stop on the RETURNED count (never the requested one): a short page is the
+    // end of the population; a full page may or may not be.
+    if (r.data.length < pageSize) break;
+  }
+  return { rows, pages, truncated, failed };
+}

@@ -1,5 +1,9 @@
 # Flow Detail: ToDo-LCCSync
 
+> 🚨 **RETIRED (DOCMAP3, 2026-09-08): this flow is `retired-todo-lcc-sync` in
+> `docs/os/FLOW-REGISTRY.yaml` (`state: retired`).** This doc describes the flow as it ran before
+> retirement; treat it as historical build detail, not a live operational reference.
+
 Last updated: 2026-05-11
 Flow export: `ToDo-LCCSync_20260511215037.zip`
 Definition path: `Microsoft.Flow/flows/.../definition.json`

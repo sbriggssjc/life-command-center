@@ -37,12 +37,20 @@ artifacts per §1 (Northmarq→_WORKFLOW prompt, Personal→skills). They are st
 to carry a managed `CANON:BEGIN…END` region + a portable render target. Today only Copilot + ChatGPT auto-render.
 
 ## 2. Deployment architecture — TWO servers (+ BOV), and what "deploy" means
-There are **two Railway deployments from this repo** (`docs/os/architecture/mcp-server-unification.md`):
+There are **two Railway deployments from this repo** (`docs/architecture/mcp-server-unification.md`):
 - **`tranquil-delight-production-633f.up.railway.app`** = root web app (`server.js`). Since prompt 22 it ALSO
   mounts `/mcp` + OAuth + the 9 bounded `/api/*` read/comps routes (`mountLccMcp` at `server.js:162`, before the
   `/api/*` 404 at `server.js:559`). This is the URL ChatGPT (`/api/*`) and Copilot Studio MCP (`/mcp`) use.
 - **A separate standalone MCP service** (`mcp/server.js`) = what the personal-Claude connector AND this Cowork
   session's `mcp__LCC__*` tools talk to.
+  **Railway service `life-command-center` → `https://life-command-center-production.up.railway.app` (port 3100).**
+  *(Named here 2026-09-09 after backlog I16/I16b had this service marked "dormant — delete": it is the MCP.
+  `/health` → `lcc-mcp-server`. It also mounts the engine routes the six `api/*.js` `GOV_API_URL` fallbacks call.)*
+- **`gracious-radiance-production-eeaf.up.railway.app`** = the **record-linkage resolver** (splink / libpostal /
+  gliner; models `owner_sf`, `owner_owner`, `contact`; `no_db_writes: true`) — the w44 retrain stack. Referenced in
+  `docs/architecture/comps-data-integrity-and-canonical-record.md`; recorded here 2026-09-09 so the full Railway
+  service map is in one place: **four web services + five cron services** (`cms-ingestion`, `county-ingest`,
+  `public-record-ingest`, `government-lease`, `Dialysis`) in project `handsome-luck`.
 - **`pacific-love-production-f6b9.up.railway.app`** = BOV Generator (hosts `/generate-comps`, `/generate-bov`).
   The workbook export (`/api/comps` → proxies it) needs `BOV_API_KEY` (distinct from `LCC_API_KEY`) on
   tranquil-delight.
@@ -55,6 +63,24 @@ service + every connector or auth 401s.
 
 **A "deploy" of engine changes = redeploy tranquil-delight AND the standalone MCP service** (both build from `main`).
 Instruction/canon changes do NOT need a deploy — they're paste/upload.
+
+**Env on Dialysis_DB (`zqzrriwuavgrquhisnoa`) edge functions** (Supabase secrets, not Railway): the
+`intake-salesforce` function reads `SF_USERNAME` / `SF_PASSWORD` / `SF_SECURITY_TOKEN` (SF-DIRECT,
+2026-09-09 — `_shared/salesforce-soap.ts`'s SOAP login, password = `SF_PASSWORD`+`SF_SECURITY_TOKEN`
+concatenated) + the optional `SF_LOGIN_HOST` (defaults `login.salesforce.com`; set to
+`test.salesforce.com` to point at a sandbox) and `SF_API_VERSION` (defaults `61.0`). These are the
+same three secrets `sf-test` held before its 2026-09-09 deletion — kept by decision, now consumed by
+`intake-salesforce?action=sf-ping`.
+
+- ⚠️ **`SF_LOOKUP_WEBHOOK_URL` is now needed on Dialysis_DB too (SF-DIRECT-b, 2026-09-09).** Until
+  now it lived only in the Railway env, read by `api/_shared/salesforce.js` (Node). SOAP login was
+  proven to fail at the org's door (`INVALID_SSO_GATEWAY_URL` — the integration user's Salesforce
+  profile is under corporate SSO), so `sf-ping` falls back to the same PA gateway flow ("HTTP Switch
+  Salesforce Lookup", `sf-http-switch-lookup`) via `supabase/functions/_shared/salesforce-gateway.ts`
+  — same signed URL, same secret value, set a second time on the Supabase project:
+  `supabase secrets set SF_LOOKUP_WEBHOOK_URL="<the flow's HTTP POST URL>" --project-ref zqzrriwuavgrquhisnoa`.
+  The URL carries a `?sig=...` signature — never log it, never put it in a doc; treat both copies
+  (Railway env var, Supabase secret) identically as secrets.
 
 ## 3. Comps engine — operational reference (`mcp/comps-tools.js`)
 - **Data is NOT the problem.** Dialysis_DB (`zqzrriwuavgrquhisnoa`) holds **3,022 live sold dialysis comps
@@ -107,6 +133,60 @@ PASS). A "deploy" of engine changes = redeploy **tranquil-delight + the standalo
 confirm `BOV_API_KEY` + the `pacific-love` BOV service for one-shot workbooks; ChatGPT re-imports
 `lcc-openapi.yaml` on tool-shape changes. Still pending: **rotate `LCC_API_KEY`**; Census key (invalid) for
 prompt 19.
+
+## 4a. `ai-copilot` edge function (dia) — auth gate env vars (COPILOT-OPEN-gate, 2026-09-09)
+
+`ai-copilot` (Dialysis_DB `zqzrriwuavgrquhisnoa`) is gated behind `authenticateWebhook()` on every
+route but `GET /health` since v80. It now reads two new env vars on top of the existing
+`PA_WEBHOOK_SECRET` (already present — shared with `intake-salesforce`, confirmed via
+`supabase secrets list`, names only):
+
+| var | default | meaning |
+|---|---|---|
+| `PA_WEBHOOK_SECRET` | ~~(already set)~~ set on **Supabase** Dialysis_DB (that is what `secrets list` confirmed); **on Railway it appears UNSET as of 2026-09-09 — RAILWAY-PA-SECRET** | the shared secret; `X-PA-Webhook-Secret` must match. Two environments, one value: Supabase (edge functions check it) and Railway (`api/sync.js` checks it AND sends it) |
+| `COPILOT_AUTH_MODE` | `log` | `log` = an unauthenticated request is logged as `DENY-WOULD` and allowed through; `enforce` = 401 |
+| `COPILOT_KNOWN_IPS` | unset | comma list of `class:ip-prefix` pairs for the DENY-WOULD log's `ip_class` field, e.g. `railway:152.55.,railway:162.220.232.,scott:<prefix>` |
+
+Full state + the flip procedure: `docs/architecture/edge-function-deploy-drift.md`
+§"`ai-copilot` (dia) — v79 shipped with NO authentication". Callers that need the header:
+`docs/architecture/flows/ai-copilot-sync-callers.md` (four PA flows, 👤 Scott).
+
+`salesforce-enrichment` (dia) got the identical gate (SFENRICH-gate, v27), and its UA/IP classifier
+is now the SAME shared module `ai-copilot` uses (`supabase/functions/_shared/caller-class.ts`) — the
+two functions' env vars are named per-function (`SFENRICH_AUTH_MODE`/`SFENRICH_KNOWN_IPS`, same
+format as the `COPILOT_*` pair above) because their caller sets are not asserted identical, only the
+classifier code:
+
+| var | default | meaning |
+|---|---|---|
+| `SFENRICH_AUTH_MODE` | `log` | same semantics as `COPILOT_AUTH_MODE` |
+| `SFENRICH_KNOWN_IPS` | unset → falls back to `COPILOT_KNOWN_IPS` | same `class:ip-prefix` format as `COPILOT_KNOWN_IPS`; set only if the two functions' known callers diverge |
+
+This function has no `/health`-equivalent bypass — its only GET route, `/diagnostics`, is itself the
+leak, so every route is gated. Full state: `docs/architecture/edge-function-deploy-drift.md`
+§"SFENRICH-gate".
+
+### 4a-Railway. `api/sync.js` PA webhook gate — the SAME env vars, on Railway (RAILWAY-PA-SECRET-log, 2026-09-10)
+
+`PA_WEBHOOK_SECRET` is checked in **two** environments — Supabase (the edge functions above) and
+**Railway** (`api/sync.js::authenticateWebhook`, the seven `webhookAuth()` call sites: RCM ingest,
+RCM backfill, LoopNet ingest, processing-complete, todo-completion-poll, listing-webhook,
+cross-domain-match). As of 2026-09-09 it read UNSET on Railway (`connectorHeaders()` only attaches
+`X-PA-Webhook-Secret` when the var is present), which is the whole reason this is a log-only gate:
+setting it turns the check ON for every one of those seven routes at once, and nothing here has
+ever audited who calls them without the header.
+
+| var | default | meaning |
+|---|---|---|
+| `PA_WEBHOOK_SECRET` | unset on Railway as of 2026-09-09 | to be **set** — one value, shared with the Supabase side above |
+| `PA_WEBHOOK_AUTH_MODE` | `log` | `log` = a caller the fallback (`authenticate()` + operator role) would also deny is logged `[pa-webhook] DENY-WOULD <route> <fallback-path> <ua_class> <ip_class>` and still let through; `enforce` = the fallback's own 401/403 stands |
+| `PA_WEBHOOK_KNOWN_IPS` | unset | same `class:prefix,class:prefix` format as `COPILOT_KNOWN_IPS`/`SFENRICH_KNOWN_IPS` above — mirrors `supabase/functions/_shared/caller-class.ts`'s classifier in plain JS (this service is Node/Railway, not Deno, so the module isn't imported, only the shape) |
+
+Operator order: merge → redeploy → set `PA_WEBHOOK_SECRET` (+ `PA_WEBHOOK_KNOWN_IPS` if the known
+caller IPs are known) → read `[pa-webhook] DENY-WOULD … none` for a few days → fix each `none`
+caller (starting with the To Do Completion Poll flow's second, header-less call — flagged in the
+unit's own brief, not yet re-exported) → flip `PA_WEBHOOK_AUTH_MODE=enforce`. Backlog
+**RAILWAY-PA-SECRET**, `docs/os/PLANNED-BACKLOG.md`.
 
 ## 5. The bigger architecture (pointers)
 - Request-understanding layer (why plain-language handling is a cross-tool gap): `docs/architecture/request-

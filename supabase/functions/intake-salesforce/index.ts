@@ -35,6 +35,8 @@ import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { authenticateWebhook } from "../_shared/auth.ts";
 import { queryParams, parseBody, isoNow } from "../_shared/utils.ts";
 import { OBJECT_CONFIG, resolveObjectKey, mapRecord, routeVertical, normalizeAddress, type Vertical } from "./sf-config.ts";
+import { sfLogin, sfQuery, SfAuthError } from "../_shared/salesforce-soap.ts";
+import { sfGatewayQuery, SfGatewayError } from "../_shared/salesforce-gateway.ts";
 const PAYLOAD_VERSION = "sf-2026-05-v8";
 const MAX_RETRY = 5;
 function dbEnv(vertical: Vertical): { url: string; key: string } | null { const map: Record<Vertical, [string, string]> = { ops: ["OPS_SUPABASE_URL", "OPS_SUPABASE_SERVICE_KEY"], gov: ["GOV_SUPABASE_URL", "GOV_SUPABASE_KEY"], dia: ["DIA_SUPABASE_URL", "DIA_SUPABASE_KEY"] }; const [u, k] = map[vertical]; const url = Deno.env.get(u), key = Deno.env.get(k); return url && key ? { url, key } : null; }
@@ -74,7 +76,7 @@ async function autoCreateProperty(vertical: Vertical, stagingRow: Record<string,
   return Number(newPropertyId);
 }
 
-Deno.serve(async (req: Request) => { const cors = handleCors(req); if (cors) return cors; const params = queryParams(req); const action = params.get("action"); if (req.method === "GET" && !action) { return jsonResponse(req, { service: "intake-salesforce", version: PAYLOAD_VERSION, actions: ["objects", "crawl-complete", "link-all", "retry", "dead-letter", "watermark", "file-targets", "retry-queue", "backfill-pending-updates"], features: { auto_create_unmatched_properties: true, pending_updates_dashboard_integration: true, dia_status: "needs_match", gov_status: "pending", silent_failure_auditing: true } }); } if (!authenticateWebhook(req)) return errorResponse(req, "Unauthorized — missing or invalid X-PA-Webhook-Secret", 401); try { if (req.method === "GET") { if (action === "watermark") return await handleWatermark(req); if (action === "file-targets") return await handleFileTargets(req, params); if (action === "retry-queue") return await handleRetryQueue(req); return errorResponse(req, `Unknown GET action: ${action}`, 400); } if (req.method === "POST") { const body = (await parseBody(req)) as Record<string, unknown> | null; if (action === "objects") return await handleObjects(req, body); if (action === "crawl-complete") return await handleCrawlComplete(req, body, params); if (action === "link-all") return await handleLinkAll(req, params); if (action === "backfill-pending-updates") return await handleBackfillPendingUpdates(req, params); if (action === "retry") return await handleRetry(req, body); if (action === "dead-letter") return await handleDeadLetter(req, body); return errorResponse(req, `Unknown POST action: ${action}`, 400); } return errorResponse(req, `Method ${req.method} not allowed`, 405); } catch (err) { console.error("[intake-salesforce]", err); return errorResponse(req, `Internal error: ${err instanceof Error ? err.message : String(err)}`, 500); } });
+Deno.serve(async (req: Request) => { const cors = handleCors(req); if (cors) return cors; const params = queryParams(req); const action = params.get("action"); if (req.method === "GET" && !action) { return jsonResponse(req, { service: "intake-salesforce", version: PAYLOAD_VERSION, actions: ["objects", "crawl-complete", "link-all", "retry", "dead-letter", "watermark", "file-targets", "retry-queue", "backfill-pending-updates", "sf-ping"], features: { auto_create_unmatched_properties: true, pending_updates_dashboard_integration: true, dia_status: "needs_match", gov_status: "pending", silent_failure_auditing: true } }); } if (!authenticateWebhook(req)) return errorResponse(req, "Unauthorized — missing or invalid X-PA-Webhook-Secret", 401); try { if (req.method === "GET") { if (action === "watermark") return await handleWatermark(req); if (action === "file-targets") return await handleFileTargets(req, params); if (action === "retry-queue") return await handleRetryQueue(req); if (action === "sf-ping") return await handleSfPing(req); return errorResponse(req, `Unknown GET action: ${action}`, 400); } if (req.method === "POST") { const body = (await parseBody(req)) as Record<string, unknown> | null; if (action === "objects") return await handleObjects(req, body); if (action === "crawl-complete") return await handleCrawlComplete(req, body, params); if (action === "link-all") return await handleLinkAll(req, params); if (action === "backfill-pending-updates") return await handleBackfillPendingUpdates(req, params); if (action === "retry") return await handleRetry(req, body); if (action === "dead-letter") return await handleDeadLetter(req, body); return errorResponse(req, `Unknown POST action: ${action}`, 400); } return errorResponse(req, `Method ${req.method} not allowed`, 405); } catch (err) { console.error("[intake-salesforce]", err); return errorResponse(req, `Internal error: ${err instanceof Error ? err.message : String(err)}`, 500); } });
 async function handleObjects(req: Request, body: Record<string, unknown> | null): Promise<Response> { if (!body) return errorResponse(req, "Missing JSON body", 400); const batchId = String(body.batch_id || ""); const objectType = String(body.object_type || ""); const records = Array.isArray(body.records) ? body.records as Record<string, unknown>[] : null; if (!batchId) return errorResponse(req, "batch_id is required", 400); if (!records) return errorResponse(req, "records[] is required", 400); const objectKey = resolveObjectKey(objectType); if (!objectKey) return errorResponse(req, `Unrecognized object_type: ${objectType}`, 400); const cfg = OBJECT_CONFIG[objectKey]; const ledger: Record<string, unknown>[] = []; const stagingByVertical: Record<string, Record<string, unknown>[]> = {}; let errors = 0; let skipped = 0; for (const record of records) { try { const mapped = await mapRecord(objectKey, record); const routing = routeVertical(mapped.row); if (routing.vertical === null) { skipped++; ledger.push({ sync_type: "object_intake", target_database: null, sf_object_type: objectType, sf_object_id: mapped.sfId, import_batch: batchId, payload: { skip_reason: routing.reason, sf_id: mapped.sfId }, status: "skipped" }); continue; } const vertical = routing.vertical; ledger.push({ sync_type: "object_intake", target_database: vertical, sf_object_type: objectType, sf_object_id: mapped.sfId, import_batch: batchId, payload: mapped.raw, status: "ok" }); const stagingRow = { ...mapped.row, source_system: "salesforce", import_batch: batchId, process_status: "pending", process_notes: `routed via ${routing.reason}`, match_method: null, imported_at: isoNow(), updated_at: isoNow() }; (stagingByVertical[vertical] ??= []).push(stagingRow); } catch (err) { errors++; ledger.push({ sync_type: "object_intake", target_database: null, sf_object_type: objectType, sf_object_id: (record?.Id as string) ?? null, import_batch: batchId, payload: record, status: "error", error_message: err instanceof Error ? err.message : String(err) }); } } if (ledger.length) { const lr = await ledgerRows(ledger); if (!lr.ok) console.error(`[handleObjects] ledger write failed status=${lr.status}:`, lr.data); } const byVertical: Record<string, number> = {}; for (const [vertical, rows] of Object.entries(stagingByVertical)) { const onConflict = `${cfg.sfIdColumn},source_system,import_batch`; const result = await dbFetch(vertical as Vertical, "POST", `${cfg.stagingTable}?on_conflict=${onConflict}`, rows, "resolution=merge-duplicates,return=minimal"); byVertical[vertical] = result.ok ? rows.length : 0; if (!result.ok) { errors += rows.length; await ledgerRows([{ sync_type: "object_intake", target_database: vertical, sf_object_type: objectType, import_batch: batchId, payload: { staging_table: cfg.stagingTable, count: rows.length }, status: "error", error_message: `staging upsert failed: ${JSON.stringify(result.data)}` }]); } } return jsonResponse(req, { ok: errors === 0, batch_id: batchId, object_type: objectType, object_key: objectKey, received: records.length, staged: Object.values(byVertical).reduce((a, b) => a + b, 0), skipped, errors, by_vertical: byVertical }); }
 async function handleCrawlComplete(req: Request, body: Record<string, unknown> | null, params: URLSearchParams): Promise<Response> { if (!body) return errorResponse(req, "Missing JSON body", 400); const batchId = String(body.batch_id || ""); if (!batchId) return errorResponse(req, "batch_id is required", 400); const scope = (params.get("scope") || "batch").toLowerCase(); const scanAll = scope === "all"; const autoCreate = (params.get("auto_create") || "true").toLowerCase() !== "false"; const limit = Math.min(parseInt(params.get("limit") || "500", 10), 2000); const failures = Array.isArray(body.failures) ? body.failures : []; await ledgerRows([{ sync_type: "crawl_run", sf_object_id: batchId, import_batch: batchId, payload: { ...body, scope, auto_create: autoCreate }, status: failures.length ? "error" : "ok" }]); const probe: Record<string, unknown> = {}; for (const vertical of ["dia", "gov"] as Vertical[]) { for (const [objectKey, cfg] of Object.entries(OBJECT_CONFIG)) { if (!("city" in cfg.parsed) || !("state" in cfg.parsed)) continue; const linked = await linkProbe(vertical, cfg.stagingTable, scanAll ? null : batchId, limit, autoCreate && objectKey === "property"); if (linked.scanned > 0) probe[`${vertical}.${objectKey}`] = linked; } } return jsonResponse(req, { ok: true, batch_id: batchId, scope, limit, auto_create: autoCreate, link_probe: probe }); }
 async function handleLinkAll(req: Request, params: URLSearchParams): Promise<Response> { const limit = Math.min(parseInt(params.get("limit") || "500", 10), 2000); const wantVertical = params.get("vertical"); const autoCreate = (params.get("auto_create") || "true").toLowerCase() !== "false"; const runId = `linkall_${new Date().toISOString().replace(/[:.]/g, "").slice(0, 15)}Z`; await ledgerRows([{ sync_type: "link_all", sf_object_id: runId, import_batch: runId, payload: { limit, vertical: wantVertical, auto_create: autoCreate }, status: "ok" }]); const probe: Record<string, unknown> = {}; for (const vertical of ["dia", "gov"] as Vertical[]) { if (wantVertical && wantVertical !== vertical) continue; for (const [objectKey, cfg] of Object.entries(OBJECT_CONFIG)) { if (!("city" in cfg.parsed) || !("state" in cfg.parsed)) continue; const linked = await linkProbe(vertical, cfg.stagingTable, null, limit, autoCreate && objectKey === "property"); if (linked.scanned > 0) probe[`${vertical}.${objectKey}`] = linked; } } return jsonResponse(req, { ok: true, run_id: runId, limit, auto_create: autoCreate, link_probe: probe }); }
@@ -85,3 +87,82 @@ async function handleFileTargets(req: Request, params: URLSearchParams): Promise
 async function handleRetryQueue(req: Request): Promise<Response> { const res = await dbFetch("ops", "GET", `sf_sync_log?status=eq.error&retry_count=lt.${MAX_RETRY}&order=created_at.asc&limit=200&select=sync_id,sync_type,target_database,sf_object_type,sf_object_id,import_batch,payload,retry_count,error_message`); const items = Array.isArray(res.data) ? res.data : []; return jsonResponse(req, { items, count: Array.isArray(items) ? items.length : 0 }); }
 async function handleRetry(req: Request, body: Record<string, unknown> | null): Promise<Response> { const b = body || {}; const limit = Math.min(Number(b.limit) || 100, 200); const res = await dbFetch("ops", "GET", `sf_sync_log?status=eq.error&retry_count=lt.${MAX_RETRY}&order=created_at.asc&limit=${limit}&select=sync_id,sync_type,sf_object_type,sf_object_id,import_batch,payload,retry_count`); const items = (Array.isArray(res.data) ? res.data : []) as Record<string, unknown>[]; const stats = { scanned: items.length, retried_ok: 0, still_error: 0, dead_lettered: 0, skipped: 0 }; for (const item of items) { const syncId = String(item.sync_id); const objectType = String(item.sf_object_type || ""); const batchId = String(item.import_batch || ""); const payload = item.payload as Record<string, unknown> | null; const nextRetries = (Number(item.retry_count) || 0) + 1; const objectKey = resolveObjectKey(objectType); if (item.sync_type !== "object_intake" || !objectKey || !payload || !payload.Id) { stats.skipped++; continue; } let ok = false; let errMsg = ""; let skipReason = ""; try { const mapped = await mapRecord(objectKey, payload); const routing = routeVertical(mapped.row); if (routing.vertical === null) { skipReason = routing.reason; } else { const vertical = routing.vertical; const cfg = OBJECT_CONFIG[objectKey]; const stagingRow = { ...mapped.row, source_system: "salesforce", import_batch: batchId, process_status: "pending", process_notes: `routed via ${routing.reason}`, match_method: null, imported_at: isoNow(), updated_at: isoNow() }; const onConflict = `${cfg.sfIdColumn},source_system,import_batch`; const up = await dbFetch(vertical, "POST", `${cfg.stagingTable}?on_conflict=${onConflict}`, [stagingRow], "resolution=merge-duplicates,return=minimal"); ok = up.ok; if (!ok) errMsg = `staging upsert failed: ${JSON.stringify(up.data)}`; } } catch (err) { errMsg = err instanceof Error ? err.message : String(err); } if (skipReason) { await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=eq.${syncId}`, { status: "skipped", retry_count: nextRetries, retried_at: isoNow(), error_message: `skipped: ${skipReason}` }); stats.skipped++; } else if (ok) { await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=eq.${syncId}`, { status: "ok", retry_count: nextRetries, retried_at: isoNow(), error_message: null }); stats.retried_ok++; } else if (nextRetries >= MAX_RETRY) { await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=eq.${syncId}`, { status: "dead", retry_count: nextRetries, retried_at: isoNow(), error_message: `retry exhausted: ${errMsg}`.slice(0, 500) }); stats.dead_lettered++; } else { await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=eq.${syncId}`, { status: "error", retry_count: nextRetries, retried_at: isoNow(), error_message: errMsg.slice(0, 500) }); stats.still_error++; } } return jsonResponse(req, { ok: true, ...stats }); }
 async function handleDeadLetter(req: Request, body: Record<string, unknown> | null): Promise<Response> { const ids = Array.isArray(body?.sync_ids) ? body!.sync_ids as string[] : []; if (!ids.length) return errorResponse(req, "sync_ids[] is required", 400); const inList = ids.map((i) => `\"${i}\"`).join(","); const res = await dbFetch("ops", "PATCH", `sf_sync_log?sync_id=in.(${inList})`, { status: "dead", retried_at: isoNow() }); return jsonResponse(req, { ok: res.ok, dead_lettered: res.ok ? ids.length : 0 }); }
+
+// ============================================================================
+// sf-ping — authenticated diagnostic: SOAP login + a tiny SOQL query, falling
+// back to the PA gateway's `soql` operation when SOAP is refused by the org's
+// SSO policy. SF-DIRECT (2026-09-09) / SF-DIRECT-b (2026-09-09 fallback).
+// Behind the SAME authenticateWebhook() gate as every other action here —
+// never a standalone unauthenticated endpoint. No record bodies, no session
+// id, no credentials, no webhook URL in the response.
+//
+// FALLBACK RULE: only on the two named SOAP fault codes that mean "SOAP
+// itself is refused by org policy or config, not that Salesforce is down" —
+// INVALID_SSO_GATEWAY_URL (delegated-auth profile, password API login
+// refused) and INVALID_LOGIN (bad/stale credentials). Any other SfAuthError
+// (network failure, malformed response, missing env) is reported as-is —
+// falling back on those would mask a real infrastructure problem behind a
+// gateway that "worked" for an unrelated reason.
+// ============================================================================
+const SF_PING_FALLBACK_FAULT_CODES = new Set(["INVALID_SSO_GATEWAY_URL", "INVALID_LOGIN"]);
+// Salesforce returns SOAP fault codes namespaced (`sf:INVALID_SSO_GATEWAY_URL`,
+// `sf:INVALID_LOGIN`); parseLoginResponse keeps the raw text. Compare on the
+// bare code so the gate matches what Salesforce actually sends. Measured live
+// 2026-09-09: v26 answered `via:"soap", fault_code:"sf:INVALID_SSO_GATEWAY_URL"`
+// without falling back — the Set held bare names, the fault carried the prefix.
+export function bareFaultCode(code: unknown): string {
+  return String(code ?? "").trim().replace(/^[A-Za-z0-9_-]+:/, "");
+}
+
+async function handleSfPing(req: Request): Promise<Response> {
+  const startedAt = Date.now();
+  let soapFault: SfAuthError | null = null;
+  try {
+    const session = await sfLogin();
+    const result = await sfQuery(session, "SELECT Id, Subject, Status FROM Task WHERE IsClosed = false LIMIT 5");
+    return jsonResponse(req, {
+      ok: true,
+      via: "soap",
+      api_version: Deno.env.get("SF_API_VERSION") || "61.0",
+      instance_host: (() => { try { return new URL(session.instanceUrl).host; } catch { return null; } })(),
+      user_id_suffix: session.userId ? session.userId.slice(-4) : null,
+      open_tasks: result.totalSize,
+      elapsed_ms: Date.now() - startedAt,
+    });
+  } catch (err) {
+    if (err instanceof SfAuthError) soapFault = err;
+    if (!(err instanceof SfAuthError) || !SF_PING_FALLBACK_FAULT_CODES.has(bareFaultCode(err.faultCode))) {
+      const isAuth = err instanceof SfAuthError;
+      return jsonResponse(req, {
+        ok: false,
+        via: "soap",
+        error: isAuth ? err.message : "sf-ping failed",
+        fault_code: isAuth ? err.faultCode : "UNKNOWN",
+        elapsed_ms: Date.now() - startedAt,
+      }, isAuth ? 502 : 500);
+    }
+  }
+
+  // SOAP was refused for a reason the PA gateway (already authenticated
+  // under the org's SSO) is not affected by — fall back.
+  try {
+    const result = await sfGatewayQuery("SELECT Id, Subject, Status FROM Task WHERE IsClosed = false LIMIT 5", { maxRows: 5 });
+    return jsonResponse(req, {
+      ok: true,
+      via: "pa_gateway",
+      soap_fault_code: soapFault?.faultCode ?? null,
+      open_tasks: result.total_size,
+      elapsed_ms: Date.now() - startedAt,
+    });
+  } catch (err) {
+    const isGateway = err instanceof SfGatewayError;
+    return jsonResponse(req, {
+      ok: false,
+      via: "pa_gateway",
+      soap_fault_code: soapFault?.faultCode ?? null,
+      error: isGateway ? err.message : "sf-ping fallback failed",
+      reason: isGateway ? err.reason : "unknown",
+      elapsed_ms: Date.now() - startedAt,
+    }, 502);
+  }
+}

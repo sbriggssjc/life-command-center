@@ -360,6 +360,31 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
 
 ## Core doctrines (apply to every change)
 
+### 🧭 TRUTH IS FIXED AT ITS SOURCE OF RECORD — NEVER PATCHED WHERE IT SHOWS (Scott, 2026-09-11)
+
+Scott: *"for any of these factual errors, we want to track the source to ensure that the truth persists in all
+places, not just a patch for the purposes of these updates."* When a wrong, split, stale, or duplicated fact
+surfaces anywhere (a brief, a comps band, a CM chart, a dossier, an export), the fix is **not** in the surface that
+exposed it. Do these instead:
+
+1. **Trace it to the source of record.** That's the table and column that owns the fact, and **every writer**
+   that sets it: ingesters, sync jobs, sidebar capture, intake promoters, manual SQL, the Dialysis repo.
+2. **Fix it there, with provenance.** Repair or merge the record (reconcilable, never automatic truth). Ambiguous
+   cases go to a review lane, not a guess.
+3. **Guard every writer** so the defect cannot be re-minted. One resolver (JS plus a lock-step SQL mirror) that
+   every write path calls, and a CI or DB constraint that fails on a bypass.
+4. **Move every consumer to the canonical key** (an id, never a display string), then **measure every surface
+   that reads the fact** and confirm they agree.
+5. **Look one level deeper.** A naming split usually means a missing identity model, a stale number usually means
+   a dead feed, and a round-number cap usually means a truncated import. Name the underlying defect class and sweep
+   for its siblings before closing.
+
+A consumer-side normalizer (a map in the renderer, a `CASE` in a view) is allowed only as a **labelled, temporary
+bridge** with a backlog row pointing at the source fix. It is never the fix. *Worked example: the 2026-09-11
+operator split (backlog **ID1**): "Fresenius" vs "Fresenius Medical Care" in the market brief traced back to
+free-text `dia.properties.operator`, a duplicated `operators` registry, and two conflicting "canonical" spellings.*
+
+
 ### ⚠️ "MERGED" IS NOT "RUNNING" — CHECK THE FIX AGAINST THE DEPLOYED SHA BEFORE CALLING IT BROKEN (2026-08-26)
 
 Three assist fixes landed on 2026-08-26 and **the deploy cutoff cut straight through them.** The
@@ -612,6 +637,39 @@ merged today.
   row and understates a `cap_rate_history` loss.** Substantive / re-derivable / queue are three
   policies, and the fold must state which applies per table rather than infer it from the name.
 
+### ⚠️ A CANONICAL TOPIC PAGE GOES STALE ON ITS OWN TOPIC FIRST — UPDATE IT IN THE SAME CHANGE (2026-09-08)
+
+Twice in one week the arc's *canonical page* was the last thing to learn what the arc found, while
+STATUS and the backlog were current: `field-provenance-ladder.md` still justified a write "per the
+ladder's own `manual`@1 rung" **after** that rung was proven not to exist, and
+`edge-function-deploy-drift.md` carried nothing about DRIFT1-routing-gap **while that finding came
+out of DRIFT1 itself.** The failure mode is structural, not careless — a turn's work naturally lands
+in the running log and the task list, and the topic page is the one artifact nobody is prompted to
+touch.
+
+- **A topic page that is stale on its own topic is worse than no page**, because it is the artifact
+  a future reader trusts *instead of* re-measuring. Both instances were actively misleading: one
+  stated a rung that does not exist, the other omitted the reason its own subject changed.
+- **The rule: when a unit changes what a canonical page asserts, the page moves in the SAME change**
+  — not in the reconcile turn afterwards. `BUILD-TURN-PROTOCOL.md` already says a change is finished
+  when the canonical pages are true; this is the specific failure that rule exists to catch.
+- ⚠️ **And correct it IN PLACE with the measurement**, never by deleting the wrong sentence — the
+  wrong sentence is the record of why the next reader would have believed it.
+
+### ⚠️ GREP THE SYMBOL, NOT THE FILE (DRIFT1-routing-gap, 2026-09-08)
+
+Cowork recorded that `GOV_STATE_SIGNALS` was "used by `sf-promotion-worker`" — from
+`grep -rln sf-deal-promotion`, which showed the worker importing the **module**. The worker imports
+only `planDealSalePromotion`; the constant had **zero production consumers** and lived in its test
+file alone. **A module import is not a symbol import**, and the inference was published as fact in
+two documents.
+
+- **Read the import list, not the import path** — `import { X } from "./m.ts"` is the evidence.
+- The finding it supported (two definitions of "gov") was correct; the *mechanism* claim was not, and
+  the correction **strengthened** it: with no second live consumer, merging the lists could not
+  change anyone's behaviour. **A wrong supporting detail can make a right conclusion look
+  better-founded than it is** — which is why the detail has to be checked at the same standard.
+
 ### 🚨 A PRODUCER WHOSE DEPLOYED CODE IS AHEAD OF THE REPO IS INVISIBLE TO EVERY CODE SEARCH (GOVDUP1-a, 2026-09-05)
 
 The gov SF fan-out producer is **`intake-salesforce`, a Supabase edge function on Dialysis_DB,
@@ -638,6 +696,14 @@ genuinely has no insert path.**
   `sam-entity-lookup`. ⚠️ **`version` counts DEPLOYMENTS, not content** — to detect drift compare a
   content-derived marker, not the number. ⚠️ **Never "tidy up" by redeploying from the committed
   file** — where the repo is behind, that rolls production back.
+- ✅ **CLOSED 2026-09-07 (DRIFT1)** — all 38 deployments censused with a verdict each; five
+  sourceless functions committed with liveness proven from `cron.job`, `intake-salesforce`
+  committed verbatim at `sf-2026-05-v8`, **and its false "never writes a domain table" header
+  removed** — that sentence is what made the original "producer NOT FOUND" read as conclusive.
+  Canonical page: `docs/architecture/edge-function-deploy-drift.md`. ⚠️ **A repo-side test cannot
+  close this class** — it can assert every committed function is deployed, but is structurally
+  blind to a deployment with no committed source, which is the entire population. The unit shipped
+  an operator runbook instead of a guard implying coverage it lacks.
 - **When a producer cannot be found in source, enumerate the DEPLOYED artifacts before concluding
   it does not exist**: `list_edge_functions` on all three projects (compare `version` against what
   the repo last deployed), `cron.job` command text, Power Automate flows, and the Chrome extension.
@@ -1469,7 +1535,8 @@ All three converge on `api/_shared/intake-om-pipeline.js::stageOmIntake`:
   a comment explaining that *"the intake endpoints live on Vercel, not on the Railway MCP
   server."* That was true until **2026-07-20**, when Vercel was retired and `server.js` became
   the single source of `/api/*` routing. **Nobody tore the Vercel deployment down.** It still
-  serves, and it still holds the LCC Opps service key — so the extension's POSTs did not fail,
+  serves *(re-measured 2026-09-08 21:44 UTC: `/api/daily-briefing` → 200 with a briefing generated at that
+  instant; `/version` → Vercel NOT_FOUND only because the route postdates the frozen build)*, and it still holds the LCC Opps service key — so the extension's POSTs did not fail,
   they SUCCEEDED against a build frozen before Prompt 61, writing into the same table.
   - **The row shape is the fingerprint: the P61 key set MINUS exactly the 7 keys P61 added**
     (43 observed vs 50 in `EXTRACTION_SCHEMA_KEYS`), plus no `_provider` even though
@@ -1482,11 +1549,62 @@ All three converge on `api/_shared/intake-om-pipeline.js::stageOmIntake`:
     `/version` probe answers for the host you asked. Before trusting it, establish that the
     traffic in question actually reaches that host** — the P131 lesson ("check the fix against
     the deployed sha") has a prior step nobody wrote down: *which* deployed sha.
+  - **⚠️ GREP THE HOSTNAME, NOT THE BRAND — AND NEVER CASE-SENSITIVELY (DOCMAP2 reconcile, 2026-09-08).**
+    A sweep for docs still pointing at this deployment grepped `Vercel` (capitalised) and reported 2
+    defects. `grep -ri life-command-center-nine` over the same 855 files found **12**: six flow docs in
+    `docs/architecture/flows/` carry the host ONLY inside a lowercase URL and never say the word "Vercel".
+    The same sweep was scoped to `*.md`, so it could not see the three root `flow-*.json` Power Automate
+    definitions and the Copilot Studio `manifest.json`/`ai-plugin.json`/`LCC-Assistant.zip` that still name
+    the host — importable artifacts, which are worse than prose (J13a). **A retired dependency is found by
+    its machine identifier (hostname, table, function name), across every file type, case-insensitively;
+    the brand name is what the correctly-framed history mentions.** Same family: `docs/architecture/` "grew
+    181 → 232" was a non-recursive count — the 51 were subdirectories that had never been classified.
+    - ✅ **J13a-guard SHIPPED (2026-09-08) — this class is now a CI test, not a fourth sweep.**
+      `test/retired-identifiers-guard.test.mjs` scans every TRACKED file (`git ls-files`, all types,
+      case-insensitive, comment-stripped for JS/TS) for the identifiers in
+      `test/fixtures/retired-identifiers.json` and fails on any hit outside `docs/history/`,
+      `docs/audits/`, a `STALE (DOCMAP…`/`RETIRED`-bannered doc, or a named allowlist entry (BY PATH,
+      with a reason + re-measure date, itself asserted non-stale). **Add a newly-retired
+      host/path/symbol by editing the fixture — never by widening the exempt set to silence a hit.**
+      The three root `flow-*.json` files and the Copilot Studio `manifest.json`/`ai-plugin.json`/
+      `LCC-Assistant.zip`/Teams-Toolkit build artifacts that carried the retired host were moved to
+      `docs/archive/retired-vercel-artifacts/` (never hand-edited) — see that directory's README for
+      the live replacement of each.
+      - 🚨 **A WORD IS NOT A BANNER — AN EXEMPTION MUST BE SHAPED LIKE THE ARTIFACT IT EXCUSES (Cowork
+        reconcile, 2026-09-08).** The guard's first cut exempted any file whose first 40 lines matched
+        `/RETIRED/i`. Measured: **40+ tracked files rode the bare word** — live `api/_shared/*.js`,
+        `dc-lanes.js`, four `.github/workflows/*.yml`, `CURRENT-STATE.md`, `AGENTS.md`. Positive control:
+        a hardcoded retired host appended to `api/_shared/share-extractor.js` left the suite **GREEN** —
+        the P194 shape, the one thing the guard exists for, and it had already been "seen red" on an
+        allowlist removal. **Seen red on one path is not seen red on the path that matters.** Now
+        `.md`-only, blockquote-only; two positive controls pin it. When a guard passes, ask what its
+        exemptions would ALSO excuse, and try the defect you built it for inside one of them.
+      - ⚠️ **`life-command-center-production.up.railway.app` IS NOT DORMANT — it answers as the live
+        standalone MCP server** (`/health` → `lcc-mcp-server 1.0.0`, measured 2026-09-08 21:43 UTC via
+        `net.http_get` from LCC Opps). Two docs in this repo called it "the dormant Railway service
+        (I16b)" — both struck. Whether it is the same Railway *service* I16b wants deleted is a **Conflict**
+        only the Railway dashboard resolves; until then **I16/I16b's "delete it" is frozen** (see backlog
+        I16b). CC was right to refuse seeding it as retired — measure before you retire.
+        ✅ **RESOLVED 2026-09-09 — read off the Railway dashboard with Scott: service `life-command-center` IS
+        the MCP server (port 3100).** There is no dormant Railway service; I16/I16b retracted. **A "dormant"
+        label that nobody has probed is a hypothesis that can delete production.**
+      - ⚠️ **CAPTURE THE BODY BEFORE YOU DELETE A DEPLOYMENT — `get_edge_function` first, `functions delete`
+        second, every time (2026-09-09).** `sf-test` was deleted on a May "DELETE" verdict whose "source is on
+        record in git history" line was false; nothing had ever committed it. The two functions kept that day
+        had their bodies pulled first — the one deleted did not. A "scratch stub" can be the only working
+        instance of a capability (here: SOAP login to Salesforce with no Connected App). **Retire = commit the
+        body to `docs/archive/` + record the capability + then delete.** Secrets stay until the capability's
+        replacement consumes them.
   - **Diagnose it from Supabase `edge_logs`, not app logs.** Every PostgREST write carries the
     calling server's `request.headers.cf_connecting_ip`. Railway is a small set of STABLE
     addresses (`152.55.x`, `162.220.232.x`) carrying tens of thousands of requests; a serverless
     stand-in is a rotating pool of ephemeral AWS IPs each appearing for 40–255 requests with one
-    narrow path fingerprint. Joining those log lines to `created_at` separated 25 of 25 rows on
+    narrow path fingerprint. ⚠️ **IP class alone is HALF a fingerprint — read `request.headers.user_agent`
+    too (J13 preflight, 2026-09-09).** The Supabase edge runtime egresses from the SAME AWS pool; a
+    10:00 UTC upsert to `briefing_intel_snapshot` was attributed to the frozen Vercel build until the UA
+    read `Deno/2.1.4 (SupabaseEdgeRuntime/1.74.3)` — the `briefing-intel-snapshot` cron. The frozen
+    build's real tell is UA `node` plus **400s on views the schema has moved past** (`v_my_work`,
+    `mv_user_work_counts`), at 12:30:00 UTC on weekdays the desktop is awake. Joining those log lines to `created_at` separated 25 of 25 rows on
     2026-08-26 with **zero crossovers** — including two same-hour pairs (14:09 email hardened vs
     14:30 sidebar bare; 21:33 vs 21:37), which kills deploy-timing, model-drift and
     rate-limit-fallback in one stroke. **This works for any "two behaviours, one table" puzzle.**
@@ -1838,6 +1956,34 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
 
 ## Known footguns (read before the matching change)
 
+- **⚠️ `verify_jwt:false` + no `authenticateWebhook()` in the body = OPEN TO THE INTERNET — and the repo copy is not
+  the proof; the DEPLOYED body is.** Found 2026-09-09 on `ai-copilot` (Dialysis_DB v79): 25 routes, a service-role
+  client, zero auth, CORS `*` — reachable by CI runners with no key (TEST-NET-LEAK proved it by accident). Before
+  calling any edge function "gated", fetch its deployed body (`get_edge_function`) and grep it for the door;
+  before gating one, inventory its callers from `function_edge_logs` by path × user-agent × IP class and ship the
+  gate in log-only mode first (COPILOT-OPEN). A browser caller can never be given the secret — route it through
+  Railway (P194).
+  **A "Railway-first" resolver is not a Railway-only resolver** — P194 made Railway the default when nothing
+  was stored; a profile that still stored the retired origin kept using it for six weeks (EXT-HOST,
+  2026-09-10, found by writer IP on `staged_intake_items`). When a host is retired, the resolver must
+  *refuse* it, not merely stop *preferring* it — and the proof is the writer IP of a real capture, never the
+  installed version number.
+  **An edge function's `version` number is not its identity** — the counter moved +3 on every function in the
+  project overnight with no deploy (2026-09-10). Compare `ezbr_sha256` and `updated_at`; quote the version only
+  as the dashboard's label.
+- **⚠️ A TEST THAT "EXPECTS THE AI TO THROW" MAY BE PROVING THE NETWORK IS UP — the suite is
+  hermetic by guard since 2026-09-09 (TEST-NET-LEAK).** `test/lease-extractor.test.mjs` and
+  `test/dossier-generator.test.mjs` assumed *"no AI key in the test env → the extractor throws"*,
+  but `invokeChatProvider`'s default `edge` route needs no key — it POSTs straight to the live
+  `ai-copilot/chat` edge function on Dialysis_DB, gets a 400, and the fallback chain swallows it
+  before the assertion sees a difference. Measured: **14 live calls per `npm test` run**, matching
+  `function_edge_logs` bursts from GitHub-hosted CI runners. `npm test` now loads
+  `test/_helpers/net-guard.mjs` (`--import`, wraps `fetch`, throws on any non-loopback host) and
+  `api/_shared/ai.js::invokeChatProvider` refuses the edge route before fetching under
+  `NODE_TEST_CONTEXT`/`LCC_HERMETIC_TESTS`. **A NEW test that reaches a real host fails loudly
+  (`net-guard`) instead of silently phoning production** — stub `fetch` (the `marketing-reassign`
+  pattern) rather than relying on "there's no key so it'll fail." Guard:
+  `test/hermetic-suite.test.mjs`.
 - **Disk-full on LCC Opps = total sign-in lockout.** Auth (GoTrue) lives here; a full disk forces the DB
   read-only, so GoTrue can't INSERT session rows (`SQLSTATE 25006`) and *only sign-in appears broken* while
   reads work. Bloat is source-fixed + retention-pruned + autovacuum-hardened; `lcc_check_disk_health` +
@@ -4728,7 +4874,14 @@ owner vs domain true_owner · **667 of 5,964 (11.2%)** resolved owner absent fro
   human-confirmed `lcc_ownership_sponsor_family` clears a pair — **64 properties today against
   ~1,550 unconfirmed**. An unconfirmed sponsor/SPE pair stays `unclassified_rival`, an honest
   non-answer, and **one confirm clears a whole family** (A3 measured `boyd` at 20 of 24) — that lane
-  is the highest-leverage follow-up (**OWN-T0e**).
+  is the highest-leverage follow-up (**OWN-T0e**). ✅ **BUILT 2026-09-09 — Decision Center lane
+  `sponsor_family_confirm`** (one write, `INSERT lcc_ownership_sponsor_family`; `same_party` routes a
+  duplicate entity to the merge lane). ⚠️ **Its source scans this whole view: 64 s as first written,
+  20 s rewritten, so the lane reads a 4-hourly CACHE** (`lcc_ownt0e_sponsor_family_proposals_cache`)
+  and re-reads the two write-refusing facts live — the `lcc_priority_queue_resolved` pattern. A view
+  built for point-queries is not a population source; measure the whole-population read before
+  putting a lane on it. And **its `properties` column counts PAIRS** (30 pairs → 28 properties
+  flipped on NGP Capital) — say which grain. Build record: OWN-T0e design doc §6.
 - **⚠️ `not materialized` IS LOAD-BEARING ON A VIEW A PANEL POINT-QUERIES.** Without it the 3-row
   query is **1,013.9 ms / 216,947 buffers**; with it **20.1 ms / 674** — a multiply-referenced CTE is
   ALWAYS materialized so the predicate cannot push down (C13b §7.7), and `fact` was aggregating all

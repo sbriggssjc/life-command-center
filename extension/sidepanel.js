@@ -97,9 +97,22 @@ const DOMAIN_LABELS = {
   rca: 'RCA',
 };
 
+// EXT-HOST (2026-09-10): the side panel cannot import background.js, so it
+// carries the same one-line rule — a stored *.vercel.app origin is the retired
+// deployment (still serving a frozen build with live credentials) and is
+// replaced by the Railway default. Keep in sync with pickIntakeHost().
+const SIDEPANEL_DEFAULT_HOST = 'https://tranquil-delight-production-633f.up.railway.app';
+function normalizeLCCHost(raw) {
+  if (!raw) return raw;
+  try { if (/\.vercel\.app$/i.test(new URL(String(raw)).hostname)) return SIDEPANEL_DEFAULT_HOST; } catch (_) {}
+  return raw;
+}
+
 async function getLCCConfig() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get(['LCC_RAILWAY_URL', 'LCC_API_KEY'], resolve);
+    chrome.storage.sync.get(['LCC_RAILWAY_URL', 'LCC_API_KEY'], (cfg) => {
+      resolve({ ...cfg, LCC_RAILWAY_URL: normalizeLCCHost(cfg && cfg.LCC_RAILWAY_URL) });
+    });
   });
 }
 
@@ -314,6 +327,43 @@ async function wireAscResearchAction(ctx, actions) {
   missing.style.cssText = 'margin-left:5px;margin-top:5px;';
   missing.textContent = 'Complete: CoStar + RCA not found';
   wrap.appendChild(missing);
+  const parcelEvidenceAlias = (
+    Array.isArray(target.cms_evidence?.approved_same_parcel_address_conflicts)
+      ? target.cms_evidence.approved_same_parcel_address_conflicts : []
+  ).find((alias) =>
+    alias?.status === 'approved'
+    && alias?.reason_code === 'service_location_multi_address_same_parcel_recorded_owner_identity'
+    && alias?.capture_authorized === false
+    && alias?.second_review_required === true
+    && alias?.costar_property_id
+    && alias?.parcel_number
+  );
+  const parcelEvidence = parcelEvidenceAlias ? document.createElement('button') : null;
+  if (parcelEvidence) {
+    parcelEvidence.className = 'btn btn-sm btn-secondary';
+    parcelEvidence.style.cssText = 'margin-left:5px;margin-top:5px;';
+    parcelEvidence.textContent = 'Complete parcel evidence only';
+    wrap.appendChild(parcelEvidence);
+  }
+  const parcelSitusAlias = (
+    Array.isArray(target.cms_evidence?.approved_parcel_situs_evidence)
+      ? target.cms_evidence.approved_parcel_situs_evidence : []
+  ).find((alias) =>
+    alias?.status === 'approved'
+    && alias?.reason_code === 'service_location_exact_parcel_situs_adjacent_context_record'
+    && alias?.adjacent_context_only === true
+    && alias?.capture_authorized === false
+    && alias?.second_review_required === true
+    && alias?.context_costar_property_id
+    && alias?.parcel_number
+  );
+  const parcelSitus = parcelSitusAlias ? document.createElement('button') : null;
+  if (parcelSitus) {
+    parcelSitus.className = 'btn btn-sm btn-secondary';
+    parcelSitus.style.cssText = 'margin-left:5px;margin-top:5px;';
+    parcelSitus.textContent = 'Complete parcel situs evidence only';
+    wrap.appendChild(parcelSitus);
+  }
   actions.appendChild(wrap);
 
   const appendCaptureCompletion = () => {
@@ -345,6 +395,64 @@ async function wireAscResearchAction(ctx, actions) {
     });
   };
   if (Number(target.capture_count) > 0) appendCaptureCompletion();
+
+  parcelEvidence?.addEventListener('click', async () => {
+    const confirmed = window.confirm(
+      'Confirm this candidate has approved same-parcel recorded-owner evidence. This will advance the worklist with zero captures and mandatory second review.',
+    );
+    if (!confirmed) return;
+    parcelEvidence.disabled = true;
+    button.disabled = true;
+    missing.disabled = true;
+    parcelEvidence.textContent = 'Recording parcel evidence…';
+    const advanced = await apiCall('/api/asc-research-complete', {
+      run_id: target.run_id,
+      candidate_fingerprint: target.candidate_fingerprint,
+      completion_mode: 'parcel_evidence_only',
+    });
+    if (advanced.ok) {
+      parcelEvidence.textContent = 'Parcel evidence recorded ✓ — open next property';
+      detail.textContent = 'Candidate advanced with zero captures and mandatory second review. Reload the next property to load the next frozen candidate.';
+    } else {
+      parcelEvidence.disabled = false;
+      button.disabled = false;
+      missing.disabled = false;
+      parcelEvidence.textContent = 'Complete parcel evidence only';
+      detail.textContent = toErrorMessage(
+        advanced.data?.detail || advanced.data?.error || advanced.error
+      ) || 'Could not complete parcel evidence';
+    }
+  });
+
+  parcelSitus?.addEventListener('click', async () => {
+    const confirmed = window.confirm(
+      'Confirm this candidate has approved exact-situs parcel evidence and the open CoStar property is adjacent context only. This will advance the worklist with zero captures and mandatory second review.',
+    );
+    if (!confirmed) return;
+    parcelSitus.disabled = true;
+    button.disabled = true;
+    missing.disabled = true;
+    if (parcelEvidence) parcelEvidence.disabled = true;
+    parcelSitus.textContent = 'Recording parcel situs evidence…';
+    const advanced = await apiCall('/api/asc-research-complete', {
+      run_id: target.run_id,
+      candidate_fingerprint: target.candidate_fingerprint,
+      completion_mode: 'parcel_situs_evidence_only',
+    });
+    if (advanced.ok) {
+      parcelSitus.textContent = 'Parcel situs evidence recorded ✓ — open next property';
+      detail.textContent = 'Candidate advanced with zero captures and mandatory second review. Reload the next property to load the next frozen candidate.';
+    } else {
+      parcelSitus.disabled = false;
+      button.disabled = false;
+      missing.disabled = false;
+      if (parcelEvidence) parcelEvidence.disabled = false;
+      parcelSitus.textContent = 'Complete parcel situs evidence only';
+      detail.textContent = toErrorMessage(
+        advanced.data?.detail || advanced.data?.error || advanced.error
+      ) || 'Could not complete parcel situs evidence';
+    }
+  });
 
   missing.addEventListener('click', async () => {
     const label = identity.facility_name || identity.ccn || 'this frozen candidate';
@@ -990,6 +1098,16 @@ async function loadPropertyTab(opts) {
   // Organization entities (SOS / business search)
   if (entityType === 'organization') {
     loadOrgView(source, domainLabel);
+    return;
+  }
+
+  // Public-records assessor/recorder scans (entity_type 'property' but there is
+  // no CRE-site property match to resolve — the scanner classified the page as
+  // 'assessor'/'recorder', not a CoStar/LoopNet/CREXi listing). These need an
+  // explicit operator-supplied LCC property before the capture can be saved
+  // (we do not auto-match a county page's address to a domain property here).
+  if (source.domain === 'public-records' && (siteType === 'assessor' || siteType === 'recorder')) {
+    loadPublicRecordPropertyView(source, domainLabel, siteType);
     return;
   }
 
@@ -3976,20 +4094,35 @@ async function loadOrgView(source, domainLabel) {
     doSearch();
   });
 
+  // Backward-compat, no-worklist-target save. Previously this discarded
+  // everything the SOS scan captured except `name` — officers, registered
+  // agent and both addresses were thrown away. It now routes the full
+  // capture through applySosEntityCapture (api/_shared/public-records-
+  // writeback.js), which mints/resolves the org entity AND creates
+  // llc_member/llc_manager entity_relationships edges for named officers and
+  // the registered agent, gated by the same residential-vs-agent-service
+  // classifier the reachability worker uses (a CSC/registered-agent address
+  // is never recorded as a person's residence).
   const saveBtn = $('#saveOrgBtn');
   if (saveBtn) {
     saveBtn.addEventListener('click', async () => {
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving...';
-      const result = await apiCall('/api/entities', {
-        entity_type: 'organization',
-        name,
-        org_type: source.entity_type_detail || null,
-        description: `Imported from ${source.domain || 'public-records'}`,
+      const capture = {};
+      for (const [key] of SOS_CAPTURE_FIELDS) {
+        const v = $('#sosf_' + key)?.value;
+        if (v != null && String(v).trim() !== '') capture[key] = v.trim();
+      }
+      if (!capture.name) capture.name = name;
+      const result = await apiCall('/api/public-records-capture', {
+        site_type: 'sos',
+        source_url: source.page_url || null,
+        capture,
       });
-      if (result.ok) {
+      if (result.ok && result.data?.ok) {
+        const nEdges = Array.isArray(result.data.edges) ? result.data.edges.filter((e) => e.ok).length : 0;
         saveBtn.className = 'btn btn-sm btn-success';
-        saveBtn.textContent = 'Saved!';
+        saveBtn.textContent = `Saved!${nEdges ? ` (+${nEdges} contact${nEdges === 1 ? '' : 's'})` : ''}`;
       } else {
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save Failed — Retry';
@@ -3998,6 +4131,110 @@ async function loadOrgView(source, domainLabel) {
       }
     });
   }
+
+  $('#lastUpdated').textContent = `Entity: ${new Date().toLocaleTimeString()}`;
+}
+
+// ── Public-records assessor/recorder capture → real writers (PR-scanner, 2026-09-10) ─
+//
+// Until this, an assessor/recorder scan had NO save path at all — only the SOS
+// scan flow (loadOrgView) offered one, and even that fell back to a bare
+// "create an organization entity" write. This routes the scanner's structured
+// fields (assessed value, tax amount, deed parties/addresses) through real
+// domain writers (api/_shared/public-records-writeback.js), fill-blanks,
+// provenance-tagged, reversible by source tag + fetched_at. Human-triggered
+// only: the operator reviews the editable form and clicks Save.
+//
+// Requires the operator to name the domain property (address matching a county
+// page to a specific domain property row is out of scope here — never guess).
+const PR_ASSESSOR_FIELDS = [
+  ['parcel_number', 'Parcel / APN'], ['county', 'County'], ['state', 'State'],
+  ['owner_name', 'Owner (per county)'], ['mailing_address', 'Mailing Address'],
+  ['assessed_value', 'Assessed Value'], ['land_value', 'Land Value'],
+  ['improvement_value', 'Improvement Value'], ['tax_amount', 'Tax Amount'],
+  ['property_type', 'Property Type / Land Use'], ['year_built', 'Year Built'],
+  ['square_footage', 'Building SF'], ['lot_size', 'Lot Size'], ['zoning', 'Zoning'],
+];
+const PR_RECORDER_FIELDS = [
+  ['document_type', 'Document Type'], ['grantor', 'Grantor'], ['grantee', 'Grantee'],
+  ['sale_price', 'Sale Price / Consideration'], ['sale_date', 'Recording Date'],
+  ['book_page', 'Document / Instrument Number'], ['county', 'County'], ['state', 'State'],
+];
+
+function loadPublicRecordPropertyView(source, domainLabel, siteType) {
+  const header = $('#propertyHeader');
+  const body = $('#propertyBody');
+  const actions = $('#propertyActions');
+  const fields = siteType === 'recorder' ? PR_RECORDER_FIELDS : PR_ASSESSOR_FIELDS;
+
+  header.innerHTML = `
+    <div class="property-title">${escapeHtml(source.address || source.page_title || 'Public record')}</div>
+    <div class="property-source">${domainBadge(source.domain)} ${escapeHtml(domainLabel)} (${escapeHtml(siteType)})</div>
+  `;
+
+  const fieldHtml = fields.map(([key, label]) => {
+    const val = escapeHtml(source[key] != null ? String(source[key]) : '');
+    return `<div style="margin-bottom:6px;">
+      <label style="display:block;font-size:10px;color:var(--text-secondary);margin-bottom:2px;">${escapeHtml(label)}</label>
+      <input id="prf_${key}" type="text" class="sos-capture-input" value="${val}" style="width:100%;box-sizing:border-box;" />
+    </div>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div class="section-label">Save this capture to a specific property</div>
+    <div style="font-size:10px;color:var(--text-secondary);margin-bottom:6px;">
+      County pages aren't auto-matched to a property — enter the LCC domain property id
+      (open the property in the app to find it).
+    </div>
+    <div style="margin-bottom:6px;">
+      <label style="display:block;font-size:10px;color:var(--text-secondary);margin-bottom:2px;">Domain</label>
+      <select id="prf_domain" class="sos-capture-input" style="width:100%;box-sizing:border-box;">
+        <option value="government">Government</option>
+        <option value="dialysis">Dialysis</option>
+      </select>
+    </div>
+    <div style="margin-bottom:6px;">
+      <label style="display:block;font-size:10px;color:var(--text-secondary);margin-bottom:2px;">Property ID</label>
+      <input id="prf_property_id" type="text" class="sos-capture-input" style="width:100%;box-sizing:border-box;" />
+    </div>
+    <div class="section-label">${siteType === 'recorder' ? 'Deed / Recording Details' : 'Assessor Details'} (editable)</div>
+    ${fieldHtml}
+  `;
+
+  actions.innerHTML = `<button class="btn btn-sm btn-success" id="prfSaveBtn">Save to LCC</button>`;
+
+  $('#prfSaveBtn')?.addEventListener('click', async () => {
+    const btn = $('#prfSaveBtn');
+    const domain = $('#prf_domain')?.value;
+    const propertyId = $('#prf_property_id')?.value?.trim();
+    if (!propertyId) {
+      _sosToast('Enter the domain property id first.');
+      return;
+    }
+    const capture = {};
+    for (const [key] of fields) {
+      const v = $('#prf_' + key)?.value;
+      if (v != null && String(v).trim() !== '') capture[key] = v.trim();
+    }
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    const result = await apiCall('/api/public-records-capture', {
+      site_type: siteType,
+      domain,
+      property_id: propertyId,
+      source_url: source.page_url || null,
+      capture,
+    });
+    if (result.ok && result.data?.ok) {
+      btn.className = 'btn btn-sm btn-success';
+      btn.textContent = '✓ Saved';
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Save to LCC (retry)';
+      btn.className = 'btn btn-sm btn-danger';
+      _sosToast(toErrorMessage(result.error) || toErrorMessage(result.data?.error) || `HTTP ${result.status || 'error'}`);
+    }
+  });
 
   $('#lastUpdated').textContent = `Entity: ${new Date().toLocaleTimeString()}`;
 }
