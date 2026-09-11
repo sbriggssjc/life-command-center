@@ -46,7 +46,7 @@ notes` accepts every channel (in-app Note button on every page, MCP `log_operato
 on-box Ollama, dedupes vs prior notes + the PLANNED-BACKLOG index, routes via
 `docs/os/operator-note-routing.json`. `scripts/render-operator-inbox.mjs` + MCP `get_operator_inbox`
 read the one to-do list. ⚠️ **Not yet live-verified end to end (needs a Railway deploy)** — flag stays
-off, session-start hook not yet wired. → `docs/architecture/operator_note_contract.md`,
+off. Session-start hook **is** wired (`.claude/hooks/session-start.sh` L23, non-blocking; no-ops without `OPS_SUPABASE_*` creds). **Measured 2026-09-11 (Cowork):** 0 `operator_notes` rows; `OPERATOR_NOTE_TRIAGE` has **no row** in `feature_flags_registry`; no pg_cron job for the tick; the connected LCC MCP exposes neither `log_operator_note` nor `get_operator_inbox` → **standalone MCP not yet redeployed**. → `docs/architecture/operator_note_contract.md`,
 `docs/architecture/EXEC-BRIEFS-SPEC.md` §6, PLANNED-BACKLOG.md §P18 (EB1a/OC1–OC3).
 
 ### Deal-intelligence spine — LIVE end to end

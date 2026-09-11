@@ -1,7 +1,7 @@
 # Executive Briefs — Market Briefs per swimlane (MB) + CTO/CDO Build Brief (XB) + Operator Funnel (OC)
 
 **Spec v0.2 — decisions recorded 2026-09-11 (Scott), architecture recommended (Cowork). Design approved in
-principle; build proceeds prompt-by-prompt. EB1 (foundation) merged PR #2291 2026-09-11; next: `docs/claude-code/prompts/OCa-operator-funnel-v1.md`.**
+principle; build proceeds prompt-by-prompt. EB1 (foundation) merged PR #2291 2026-09-11; OC-a merged PR #2298; next: `docs/claude-code/prompts/MBa-market-brief-producers-dialysis.md`.**
 **Backlog:** `docs/os/PLANNED-BACKLOG.md` §P18. **Exemplars:** `docs/briefs/exemplars/2026-09-11-*.md`.
 
 ## 0. Scott's decisions (2026-09-11)
@@ -124,7 +124,7 @@ by measurement Z) and the next XB issue reports it back.
 ## 7. Build order (each step flag-gated OFF until verified live)
 
 1. ✅ **EB1 — foundation:** schema + contracts + seed (PR #2291). Migration **not yet applied live** → EB1a.
-2. **OC-a — funnel v1:** apply EB1 live, endpoint + in-app Note button + MCP `log_operator_note` + Outlook
+2. ✅ **OC-a — funnel v1 (PR #2298; not yet live — see OC-v):** apply EB1 live, endpoint + in-app Note button + MCP `log_operator_note` + Outlook
    `LCC-Note` branch + triage tick + OPERATOR-INBOX render (via session-start hook + MCP read, no bot commits).
    *First, because every later step then improves faster.* (prompt drafted)
 3. **MB-a — P-SQL + P-RSS producers** for dialysis, then gov / NL.
@@ -151,3 +151,8 @@ by measurement Z) and the next XB issue reports it back.
 
 **Routing table location (OC-a):** `docs/os/operator-note-routing.json` (data, versioned in the repo). Promote to a
 canon block only when a surface needs to read it.
+
+**Addendum 2026-09-11 (after OC-a, PR #2298):** EB1a applied — 16 live dialysis facts; `v_market_brief_staleness`
+20 cells (5 populated / 15 missing). Outlook dormancy cause found in code: `parseLccCategoryHint` could never match
+`LCC-Note` (hyphen) — fixed; whether the PA trigger fires is still unconfirmed. Funnel not live yet: 0 notes, no
+`OPERATOR_NOTE_TRIAGE` registry row, no cron job, standalone MCP not redeployed (backlog OC-v).
