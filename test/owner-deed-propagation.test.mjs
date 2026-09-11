@@ -64,6 +64,19 @@ describe('granteePassesOwnerGuards', () => {
     assert.equal(granteePassesOwnerGuards(''), false);
     assert.equal(granteePassesOwnerGuards(null), false);
   });
+  it('RO2b: rejects the property MANAGER captured as grantee (RMR)', () => {
+    assert.equal(granteePassesOwnerGuards('RMR'), false);
+    assert.equal(granteePassesOwnerGuards('The RMR Group'), false);
+    assert.equal(granteePassesOwnerGuards('RMR Group'), false);
+  });
+  it('RO2b: rejects the federal TENANT captured as grantee (USPS)', () => {
+    assert.equal(granteePassesOwnerGuards('USPS'), false);
+    assert.equal(granteePassesOwnerGuards('U.S. Postal Service'), false);
+  });
+  it('RO2b/OWN-T0i: rejects a hedge-phrase name (extractor uncertainty, not a party)', () => {
+    assert.equal(granteePassesOwnerGuards('CIM Group or affiliated investors'), false);
+    assert.equal(granteePassesOwnerGuards('Mercantil Servicios Financieros or related stakeholders'), false);
+  });
 });
 
 describe('latestDeedGranteeFromMetadata', () => {
