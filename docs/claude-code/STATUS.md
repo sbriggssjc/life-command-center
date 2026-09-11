@@ -65,6 +65,63 @@ added, caught immediately by `test/chatgpt-curated-spec.test.mjs`). Full suite: 
 6 skipped** (pre-existing skips, unrelated).
 
 PR opened: branch `claude/oca-operator-funnel-v1` → `main`. Not merged (CI + Scott's call).
+## 2026-09-11 — PRI4 merged and deployed live; no new prompt needed — next step is another live test run
+
+Scott confirmed `Dialysis` PR `#7407` merged and the redeploy live. `PLANNED-BACKLOG.md`'s `PRI4` row
+moved to ✅. **Not yet independently re-verified** — this fix hasn't been proven against a real run yet,
+same discipline as every other round in this arc (a green PR is not the same as a proven fix).
+
+**No new prompt is warranted right now.** Everything currently open in this arc — `PRI3`'s original
+live-fix proof (never exercised because every run so far died before reaching those call sites) and
+`PRI4`'s own open questions (the (b) tracker-close discrepancy, (c)'s unconfirmed root cause) — is best
+answered by **triggering another CMS ingestion run and watching what actually happens**, not by more
+code-reading. Recommended to Scott: trigger the run now. On the next report-back, verify directly against
+Dialysis_DB: does `facility_patient_counts`'s preflight step now succeed or retry-and-recover instead of
+failing outright; does the run get **past** preflight this time (the first real test of `PRI3`'s fixed
+call sites); if it still hits trouble, does the process now exit promptly via the new `os._exit(2)` path
+instead of hanging; and does whichever `ingestion_tracker` row this run creates actually close out
+(`finished_at` set, `run_status` not stuck at 'started') — directly answering the (b) discrepancy this
+round couldn't resolve from the code alone.
+
+## 2026-09-11 -- OWN-T0a re-investigated: the finding changed shape, nothing built, a real decision surfaced for Scott
+
+Picked OWN-T0a (gov's own 43.4% recorded-transition-grantee vs true_owner_id disagreement) as the next lever
+per the ownership/contact-propagation thread. Read the source audit first (OWN_T0_PROPERTY_OWNERSHIP_RECONCILED_2026-09-02.md,
+per this repo's own citation doctrine), then re-measured live against scknotsqkcheojiaewwh rather than re-quoting
+the 2026-09-02 number.
+
+**Re-measured, still real and if anything slightly larger**: plainest replication reads 48.9% (5,133 comparable /
+2,510 disagree) today vs 43.4% nine days ago -- consistent with population growth from ongoing ingestion, not a
+regression. The gsa_lease_diff/acquisition-restricted population (3,523 comparable) lands closest to the original
+3,474 and disagrees at 46.8%.
+
+**Read the actual disagreeing rows -- same sponsor<->SPE shape OWN-T0's own audit already named** (e.g. property 180:
+"GOVERNMENT PROPERTIES INCOME TRUST LLC" the SPE/transition-grantee vs "RMR" the sponsor/true_owner -- both true).
+Ruled out the boring explanations: only 3.3% tombstoned true_owner rows, only 2.2% hedge-phrase owner names
+(OWN-T0i's class). The sponsor population is a long tail -- 1,163 distinct sponsor names, only 22 with >=5
+properties each (21.4% of the disagreement) -- not concentrated the way OWN-T0e's boyd-family case was.
+
+**The real finding: OWN-T0e's sponsor-family confirms do not move this metric, even for big already-confirmed
+names.** Boyd Watterson (confirmed 2026-08-27), UIRC (2026-09-09/10), NGP (2026-09-09), Highwoods (2026-08-27) are
+all live rows in lcc_ownership_sponsor_family -- and still read 111, 24, 14, and 5 disagreeing gov properties
+respectively today. The confirm only changes how the LCC-facing reconciled view classifies the conflict; it never
+touches gov's properties.true_owner_id or the transition grantee, which is what OWN-T0a's raw comparison reads.
+So OWN-T0a as defined can never reach zero, and a fix that forced the two sides to agree would be wrong -- the
+same conclusion OWN-T0 (LCC side) and RO2 (gov's own v_ownership_resolution vs true_owner, an adjacent store)
+already reached on this identical shape.
+
+**Nothing built.** The correctly-scoped fix is a measurement fix, not a sweep: a domain-side reconciled view
+(gov mirror of v_lcc_property_ownership_reconciled's conflict_class logic, reading the existing
+lcc_ownership_sponsor_family registry) that would split the flat 43-49% into "sponsor_family_confirmed" (expected,
+not a problem) vs a genuinely unclassified residual -- turning an alarming-looking number into an honest, much
+smaller one. That's real scope, so it's surfaced to Scott as a decision rather than assumed or built blind.
+
+**Docs**: PLANNED-BACKLOG.md OWN-T0a row rewritten with the re-measurement, the root-cause read, and the OWN-T0e
+non-effect finding; cross-referenced to OWN-T0e, OWN-T0i, and RO2.
+
+**Next step.** Waiting on Scott: build the gov-side reconciled classifier, prioritize OWN-T0e confirms on the 22
+big-population sponsors even though it won't move this specific metric (it does fix what brokers actually see in
+the LCC panel), or move on to AC11's population re-measurement instead.
 
 ## 2026-09-11 — BUY0 cont.: Geller Phase 0 deliverables shipped; living-engagement design + sourcing audit added to spec
 
