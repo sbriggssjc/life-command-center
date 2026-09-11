@@ -46,6 +46,30 @@ today's fact. Spec §9 design rule 3 (source-as-of dating + feed gate); OPERATOR
 marked half-done. **Next:** send `prompts/MBa3-freshness-honest-facts-and-live-flip.md`; after it merges, redeploy BOTH
 services (carries OC-a's MCP tools).
 
+## 2026-09-11 — ASC frozen 50 source collection complete; review gate is now the named next step
+
+Read-only production reconciliation against the four healthcare research tables confirms Scott completed the
+full frozen collection pass: **50/50 resolved, 0 pending — 44 captured and 6 reviewed source exceptions**.
+The 44 captured candidates have 54 distinct payload rows (retry history retained); CoStar covers 44 candidates,
+RCA covers 1, and only 1 has both licensed sources. Exception dispositions are 4
+`licensed_sources_not_found`, 1 `parcel_owner_evidence_only`, and 1 `parcel_situs_evidence_only`.
+
+Latest-capture identity distribution is 22 exact-token and 22 governed/non-exact or historical-mode-missing.
+**Sixteen captured candidates plus all six exceptions require second review: 22/50, with 0 second reviewers
+recorded.** Two historical captures have no stored identity mode; that is instrumentation missingness and must
+not be silently backfilled. Structured collection coverage is strong for lot size (44/44), contacts and land SF
+(43/44), tenant fields (42/44), parcel (41/44), and building class/SF (40/44), but weak for occupancy (12/44),
+cap rate (10/44), and NOI (2/44). Those are availability measures, not commercial gate results.
+
+Canonical docs now distinguish **collection complete** from **aggregate review complete**. New aggregate-only
+checkpoint: `docs/audits/HEALTHCARE_ASC_50_PROPERTY_CAPTURE_CHECKPOINT_2026-09-11.md`. Updated the economics/
+sampling plan, property-identity contract, CURRENT-STATE, BUILD-BACKLOG, PLANNED-BACKLOG, and documentation map.
+
+**Next step:** complete the 22 independent second reviews, populate exactly one governed scorecard for each of
+the 50 frozen fingerprints using the latest capture per candidate while preserving retries and exceptions,
+run the existing privacy-safe aggregate-review contract, and apply the predeclared lane gates. Do not start
+PI2–PI3, IDTF, canonical/CRM writes, outreach, or production promotion on collection completion alone.
+
 ## 2026-09-11 -- OWN-T0j: URL-length fix confirmed live, then a SECOND bug found -- POST always 401'd
 
 Confirmed the previous fix (fix/ownt0j-true-owners-url-length) deployed: Railway /version now reads e42dbcb7,

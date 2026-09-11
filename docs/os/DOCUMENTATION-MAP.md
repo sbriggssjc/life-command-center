@@ -199,6 +199,10 @@ to enforce, and it applies to itself.
 
 ### Healthcare vertical expansion (design-only)
 
+The ASC frozen-sample source-collection checkpoint is
+`docs/audits/HEALTHCARE_ASC_50_PROPERTY_CAPTURE_CHECKPOINT_2026-09-11.md`; it records aggregate evidence and
+the review gate without publishing candidate identities or licensed payloads.
+
 - [`ADR-004-CANONICAL-PERSON-IDENTITY.md`](../architecture/ADR-004-CANONICAL-PERSON-IDENTITY.md) — Cited as the/an authoritative page for its topic by root CLAUDE.
 - [`HEALTHCARE-ASC-FIRST-STAGING-RUNBOOK-v0.1.md`](../architecture/HEALTHCARE-ASC-FIRST-STAGING-RUNBOOK-v0.1.md) — Tracked in PLANNED-BACKLOG.
 - [`HEALTHCARE-ASC-IDTF-ECONOMICS-AND-SAMPLING-v0.1.md`](../architecture/HEALTHCARE-ASC-IDTF-ECONOMICS-AND-SAMPLING-v0.1.md) — Tracked in PLANNED-BACKLOG.

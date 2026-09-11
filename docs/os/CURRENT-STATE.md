@@ -37,6 +37,16 @@
 
 Grouped by the thing it does, not by the wave that built it.
 
+### Healthcare ASC frozen sample — collection complete, governed review pending
+
+**Measured 2026-09-11 in LCC Opps:** all 50 frozen ASC candidates are resolved for source collection:
+44 licensed-source captures and 6 reviewed source exceptions, with 0 pending. This is not a lane-advance
+result. Twenty-two candidates require independent second review and none has a second reviewer recorded;
+exactly 50 governed scorecards and the aggregate gate receipt are still outstanding. Canonical plan:
+`docs/architecture/HEALTHCARE-ASC-IDTF-ECONOMICS-AND-SAMPLING-v0.1.md`. Aggregate checkpoint:
+`docs/audits/HEALTHCARE_ASC_50_PROPERTY_CAPTURE_CHECKPOINT_2026-09-11.md`. IDTF remains unactivated; canonical,
+Salesforce, outreach, and production-opportunity writes remain unauthorized.
+
 ### Operator-note funnel (OC-a) — LIVE schema, intake + triage built, flag OFF pending live-verify
 EB1 schema applied live to LCC Opps 2026-09-11 (`market_brief_facts`/`market_brief_issues`/
 `build_brief_snapshots`/`operator_notes`/`producer_runs` + 2 staleness/live views). `POST /api/operator-
