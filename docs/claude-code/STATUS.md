@@ -43,6 +43,139 @@ not assumed clean.
 **Next step.** `OWN-T0j` needs a Claude Code build session to pick it up. `AC11` stays filed, waiting on real
 SOS-scan usage rather than a rebuild. `B1b` (developer chain, gated behind `B5`) remains the one entirely
 untouched item on the ownership/contact-propagation thread.
+## 2026-09-11 — MB-a: MB1/MB2 market-brief producers built (dialysis lane), flags OFF, NOT live-verified
+
+Branch `claude/sweet-gates-83wyu7` → PR (see docs). Built `MB1` (P-SQL, `api/_handlers/market-brief-psql-tick.js`)
+and `MB2` (P-RSS, `api/_handlers/market-brief-rss-tick.js`) per `prompts/MBa-market-brief-producers-dialysis.md`,
+producers only — no rendering, no email, no UI, no cloud-model calls. Migration
+`20260911180000_lcc_mba_market_brief_producers.sql` adds `market_brief_facts.fact_key` (+ a partial unique index
+scoped to `status='live'`, the identity a source-url-less SQL derivation needs — EB1's own
+`uq_mbf_source_identity` only fires when `source_url`+`source_date` are both present), registers
+`MARKET_BRIEF_PSQL`/`MARKET_BRIEF_PRSS` in `feature_flags_registry` (both `off`), and schedules both crons
+(guarded `NOT EXISTS`, not flag-gated — the P138 pattern: an unscheduled job is invisible even when its flag is
+off). New shared modules `api/_shared/market-brief-facts.js` (fact builders + the pure `decideFactWrite`
+supersede/skip/conflict decision + the RSS verbatim-number check) and `api/_shared/market-brief-rss.js`
+(extraction prompt/parse/verbatim-filter, fails closed with no cloud fallback — mirrors the OC2/Analyst's-Take
+on-box pattern). 74 new tests (`market-brief-facts.test.mjs`, `market-brief-rss.test.mjs`,
+`market-brief-tick-handlers.test.mjs`), all fixture-based, no network. Full suite 5,890/0/6-skipped.
+
+**Measured (repo-only, no live Supabase/Railway reach this session):** dia sources wired are
+`sales_transactions` (TTM cap-rate band, per-operator with a 5-comp floor, and trades-since-last-run),
+`v_dia_on_market` (on-market count + median ask cap), `medicare_clinics` (top-8 operator counts + net-change vs.
+prior run). **NOT wired:** `cortex_market_intel` (writer still unlocated across two sessions — new row **MB1a**)
+and gov GSA lease events (dialysis-first per the prompt). CMS "closures" are a count net-change, not a real
+open/close event feed — no termination/status column could be confirmed from the repo (new row **MB1b**).
+PLANNED-BACKLOG §P18 rows MB1/MB2 updated with the full source list, gaps, and the exact live-verify steps.
+
+**What could NOT be done here, per this repo's own doctrine (dry-run-first, verify-live-then-flip):** running
+either tick against live Supabase/Railway, confirming `v_dia_on_market`'s actual column names (the GET dry run's
+`gaps[]` array is designed to surface a 400 there before any POST), the before/after `v_market_brief_staleness`
+snapshot for the dialysis lane, and sampling 5 real facts with citations. **Next: an operator/session with live
+reach runs the GET dry run for both ticks, reads `gaps[]`, runs one POST with the flag forced on, reports the
+five things above, then flips both flags and confirms the cron minutes (`7:15`/`10:10` UTC, picked without
+reach to `cron.job` — check for a collision before relying on them).**
+
+## 2026-09-11 — OC-a reconciled (PR #2298 merged): funnel built, NOT yet a live loop; MB-a prompt drafted
+
+Processed `responses/OC-a desktop response.docx` → `done/`; prompt → `prompts/done/`. OC-a shipped EB1a (applied
+live: 16 facts, staleness view 20 cells) + OC1 (endpoint, in-app Note button, MCP `log_operator_note`, Outlook
+`LCC-Note` — regex bug that silently dropped the category fixed), OC2 (triage tick, deterministic + Ollama, flag
+OFF), OC3 (OPERATOR-INBOX render + `get_operator_inbox` + session-start hook). 62 new tests, 5,839/0.
+**Live measurement (Cowork, read-only):** `operator_notes` = 0 rows; `OPERATOR_NOTE_TRIAGE` **absent** from
+`feature_flags_registry` (flag-flip step must insert it); no pg_cron job for the tick; the connected LCC MCP
+exposes neither new tool after refresh → **standalone MCP not redeployed**. Fixed `CURRENT-STATE.md` (claimed
+the hook was not wired — it is). New backlog row **OC-v** collects the six operator steps; `OPERATOR-ACTIONS.md`
+OCa rows annotated. **Next:** Scott redeploys both Railway services + runs OC-v; Claude Code gets
+`prompts/MBa-market-brief-producers-dialysis.md` (does not depend on OC-v or EB1b).
+
+## 2026-09-11 — BUY0 cont.: Geller Round 1 sourcing — 1,683 exported rows → 213 in-metro industrial → Focused 24
+
+Cowork. Scott's CoStar / CREXi ×5 / Salesforce Comps exports normalized, metro-assigned on OMB county lists,
+de-duped and screened; preliminary Derived leg scores; delivered `Jordan Geller - Buyer Showing - Sep 26 (Round 1
+draft).xlsx` (Focused = top 8 per DFW / Austin / Charlotte). Spec §4.6 records the import pipeline + per-source quirks;
+seed scripts saved to the client Data folder. Austin supply is thin (11 industrial) → re-pull requested.
+## 2026-09-11 — OC-a: operator funnel v1 shipped — EB1a applied live, intake + triage + inbox built
+
+`prompts/OCa-operator-funnel-v1.md` executed end to end on branch `claude/oca-operator-funnel-v1`.
+
+**EB1a — applied live to LCC Opps** (was not applied per the 2026-09-11 reconcile note): all 5 tables +
+2 views verified present via Supabase MCP; the dialysis exemplar's 16 facts inserted (11 `[UNVERIFIED]`
+items correctly excluded); `v_market_brief_staleness` returns 20 (lane, section) cells, 5 populated /
+15 `is_missing` (only the `dialysis` lane has facts yet — expected, MB producers are unbuilt). Re-run is
+idempotent (the migration's own `uq_mbf_source_identity` unique index — not re-verified by a second
+insert in this session, but the constraint is live).
+
+**OC1 — intake v1, three of four channels built:**
+- **In-app Note button** (`operator-note-client.js`, mounted in `index.html`): floating button + one-
+  textbox modal on every page, auto-captures `route` (hash), open entity id/type (best-effort off
+  `_detailStack`), and the last 10 client-side errors (a small ring buffer added to `index.html`'s
+  existing global error handler). POSTs to `POST /api/operator-notes`.
+- **MCP `log_operator_note`** (`mcp/server.js`), sibling of `log_memory`, same auth/session shape.
+  Write tool, no HTTP route (matches `log_memory`'s Claude/MCP-only convention).
+- **Outlook** (`intake-tagged-comm.js`) — **dormancy diagnosed and fixed, not just diagnosed.** The
+  pre-existing `LCC`/`LCC:<hint>` category gate (`parseLccCategoryHint`, regex `^lcc$` / `^lcc[:=](.+)$`)
+  structurally could never match a category literally named `LCC-Note` (the hyphen fails both patterns)
+  — every note tagged that way has always silently fallen through to `no_lcc_category` and been dropped.
+  This is a DIFFERENT, narrower defect than the broader "6 rows ever / dormant since 2026-08-07" finding
+  the 2026-09-11 reconcile recorded for the whole tagged-Outlook flow — that finding is about whether the
+  PA category-assigned trigger itself still fires at all, which this fix does not by itself prove (needs
+  a live post through the flow — see OPERATOR-ACTIONS.md). Added a second arm: a plain reply (`Re:`) to a
+  recognizable briefing subject with no LCC tag at all, per the contract's `outlook_reply` channel.
+- **Teams**: endpoint-ready only (`/api/operator-notes` accepts `channel:'teams'` authenticated via the
+  existing `PA_WEBHOOK_SECRET` pattern, mirroring `intake-tagged-comm.js`'s `authenticateWebhook()`
+  exactly) — the PA flow itself is an operator step (OPERATOR-ACTIONS.md), no bot built.
+
+**OC2 — triage tick built and flag-gated OFF** (`OPERATOR_NOTE_TRIAGE`, `/api/operator-triage-tick`,
+GET=dry-run/POST=apply). Deterministic rules first (error signatures → bug, "stuck loading" →
+not-connecting, "missing/no data" → data-gap, "would be nice"/idea language → idea, "confusing"/"hard to
+find" → ux, trailing `?` → question); on a miss, falls to on-box Ollama (`invokeOnPremGeneration` — fails
+closed, no cloud fallback, matching `briefing-analyst-take-tick.js`'s pattern) for type/lane/severity/
+title. Dedupes against prior open notes (Jaccard token overlap ≥0.5) AND a generated PLANNED-BACKLOG
+index (`scripts/generate-operator-note-backlog-index.mjs` → `docs/os/operator-note-backlog-index.json`,
+181 rows parsed). Routes via `docs/os/operator-note-routing.json` (7 threads seeded from the spec's own
+list). Logs to `producer_runs` (`producer='operator_triage'`) on the P123 open-before-work lifecycle.
+An unclassified note stays `open` with a named reason — never guessed at.
+
+**OC3 — the one to-do list built.** `scripts/render-operator-inbox.mjs --write` renders
+`docs/os/OPERATOR-INBOX.md` (GENERATED header) from `operator_notes`, grouped by `routed_to` thread
+(severity-sorted within a thread, unrouted last). MCP `get_operator_inbox` read tool (+ `/api/operator-
+inbox` HTTP route for ChatGPT/Copilot) reads the identical query, so every surface sees the same list.
+Not yet wired into `.claude/hooks/session-start.sh` or `NEW-CHAT-KICKOFF.md` — filed as a follow-up
+(the render script itself is done and tested; the hook wiring is a one-line addition once a live
+Railway deploy exists to read from).
+
+**What was NOT done, per the spec's own scope fence:** no market-brief producers/rendering/email
+changes; no cloud-model calls anywhere in triage; no canon edits; PLANNED-BACKLOG promotion from an
+inbox item stays a manual session-loop step. **Also deferred, stated plainly:** the live multi-channel
+verification (§6 — post one note through each channel, run the tick with the flag on, confirm a fresh
+inbox) could not be completed in this session — it needs a live Railway deploy of this branch's merged
+`main`, which has not happened yet. `OPERATOR_NOTE_TRIAGE` therefore stays off in
+`feature_flags_registry` until that live verify runs.
+
+**Tests:** 62 new (`test/operator-notes.test.mjs` 34, `test/operator-triage-tick.test.mjs` 6,
+`test/operator-inbox-render.test.mjs` 8, `test/operator-note-outlook-channel.test.mjs` 8, plus fixing
+one pre-existing guard — `mcp/server.js`'s `READ_ONLY_HTTP_TOOLS` allowlist needed `get_operator_inbox`
+added, caught immediately by `test/chatgpt-curated-spec.test.mjs`). Full suite: **5,839 pass / 0 fail /
+6 skipped** (pre-existing skips, unrelated).
+
+PR opened: branch `claude/oca-operator-funnel-v1` → `main`. Not merged (CI + Scott's call).
+## 2026-09-11 — PRI4 merged and deployed live; no new prompt needed — next step is another live test run
+
+Scott confirmed `Dialysis` PR `#7407` merged and the redeploy live. `PLANNED-BACKLOG.md`'s `PRI4` row
+moved to ✅. **Not yet independently re-verified** — this fix hasn't been proven against a real run yet,
+same discipline as every other round in this arc (a green PR is not the same as a proven fix).
+
+**No new prompt is warranted right now.** Everything currently open in this arc — `PRI3`'s original
+live-fix proof (never exercised because every run so far died before reaching those call sites) and
+`PRI4`'s own open questions (the (b) tracker-close discrepancy, (c)'s unconfirmed root cause) — is best
+answered by **triggering another CMS ingestion run and watching what actually happens**, not by more
+code-reading. Recommended to Scott: trigger the run now. On the next report-back, verify directly against
+Dialysis_DB: does `facility_patient_counts`'s preflight step now succeed or retry-and-recover instead of
+failing outright; does the run get **past** preflight this time (the first real test of `PRI3`'s fixed
+call sites); if it still hits trouble, does the process now exit promptly via the new `os._exit(2)` path
+instead of hanging; and does whichever `ingestion_tracker` row this run creates actually close out
+(`finished_at` set, `run_status` not stuck at 'started') — directly answering the (b) discrepancy this
+round couldn't resolve from the code alone.
 
 ## 2026-09-11 -- OWN-T0a re-investigated: the finding changed shape, nothing built, a real decision surfaced for Scott
 
@@ -84,6 +217,19 @@ non-effect finding; cross-referenced to OWN-T0e, OWN-T0i, and RO2.
 big-population sponsors even though it won't move this specific metric (it does fix what brokers actually see in
 the LCC panel), or move on to AC11's population re-measurement instead.
 
+## 2026-09-11 — BUY0 cont.: Geller Phase 0 deliverables shipped; living-engagement design + sourcing audit added to spec
+
+Cowork session (Jordan Geller 2026 industrial search). Delivered to the client folder: `Jordan Geller - Industrial
+MSA Ranking - Sep 26 (Draft v2).xlsx` (75 MSAs × 15 public factors — Census PEP V2025, ACS 2024, BLS QCEW 2019/2024,
+Tax Foundation 2026, CNBC Top States 2026; editable weights) and `Jordan Geller - Buyer Showing - Sep 26.xlsx`
+(lightweight client file on the Team Briggs Buyer Showing Template: static Market Ranking tab 1 + Focused / Broad
+Market / Passed with Credit / Lease / Real Estate leg scoring). Both restyled to BDPS (`bov_constants.py` palette,
+Calibri, role heights). Spec `BUYER-ENGAGEMENT-MODULE-SPEC-v0.1.md` gained §4.4 (living engagement = reuse deal
+spine + W7 matcher/propagation + Ollama proposals, no parallel pipeline), §4.5 (sourcing audit: email alerts lack
+location → **BUY-G1**; no SF path for industrial `Comp__c` → **BUY-G2**), §6a (Scott's answers: files-in-folder,
+query-on-demand, three-leg scoring, rent evidence hierarchy) and §7a (egress: census/bls/bea blocked from sandbox
+and local shell). **Next:** top-3 markets (DFW, Austin, Charlotte) sourcing — Scott exports CoStar/LoopNet/RCA + an
+SF report; Claude normalizes into Broad Market. No build authorized yet.
 ## 2026-09-11 — PRI4 response reviewed: uncovered preflight call site fixed, tracker close-out fixed for one path but a live check contradicts the other, and a genuine `safe_execute()` timeout defect found (possibly explaining PRI1's own unanswered Unit 4 mystery) — held pending `Dialysis` PR #7407 merge confirmation
 
 `PRI4`'s response (`"PRI4 surface response.docx"`, saved by Scott) read in full and transcribed to

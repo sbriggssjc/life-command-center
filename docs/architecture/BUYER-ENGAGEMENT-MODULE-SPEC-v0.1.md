@@ -83,10 +83,66 @@ feedback loop → Offers/LOI → PSA → Closing → Filing.**
   render surfaces → paste per SURFACE-SYNC-PROTOCOL.
 - Cowork skill: `buyer-showing` (build/update a client workbook from LCC data + manual adds).
 
+### 4.4 Living engagement — reuse the deal-dossier / Wave 7 comms spine (Scott, 2026-09-11)
+Goal: the engagement is a *living project* — new emails, calls and OMs about it update the workbook, candidates
+and to-dos without manual re-keying, exactly like the deal dossier. **Do not build a parallel pipeline — the
+machinery exists:**
+- **Anchor:** each engagement = a buy-side *deal* on the existing deal spine (entity + `sf_deal_id` if any), with
+  `metadata.engagement_type='buy_side'` and a pointer to the client folder. That is the thin index row from
+  Decision A — everything else stays in the folder.
+- **Attribution:** extend `mcp/deal-email-matcher.js` (W7.1, LIVE) with engagement match keys: client contacts +
+  related names/entities (e.g. Geller / Pearlman / Trigen / 3Gen / Blake Atkins), and every candidate property's
+  address + listing broker once it enters Broad Market. Matched mail/call notes land as deal-attributed
+  `activity_events` (W7.3 call notes use the same shape).
+- **Propagation:** the W7.2 hourly tick (+ W7.4 open-issues, W7.5 outbound loop closure) runs over those events
+  and, via local Ollama (`invokeExtractionAI`, private corpus never leaves GaryBuilt), **proposes** — never
+  auto-applies — typed updates: candidate status changes (new / shown / passed + reason / offered / under
+  contract), price/term/rent facts from broker replies or OMs (routed through `stageOmIntake`), criteria/weight
+  changes stated by the client, and next-step to-dos. Proposals queue in `lcc_clean_assist_proposals`-style review.
+- **Render:** on accept, regenerate the engagement files (showing workbook via the Railway generator; an
+  **engagement dossier** in the locked dossier format: criteria, market ranking, candidates by status,
+  correspondence summary, open issues, next steps) with the same no-fabrication contract and `source_hash`
+  reuse-if-fresh. Files are pushed to the client folder (SharePoint push path already used by dossiers).
+- **Health:** assert on the 7-day write delta (CURRENT-STATE doctrine), not the flag.
+
+### 4.5 Sourcing & ingestion — what the existing pipes actually carry (measured 2026-09-11)
+- **Email listing alerts → `cortex_market_intel` (LCC Opps):** 878 listing blasts since 2026-06-29 from 10+ broker
+  senders (SRS, Northmarq/RCM, C&W, Boulder, PropertySend, CBRE, JLL, CREXi, CoStar alerts, Brevitas). 41 are
+  industrial by headline, but **`city_state` is null on most rows** — the parser keeps the subject line, not the
+  location/size/price/cap. Gap **BUY-G1:** local-Ollama extraction of address, city/ST, SF, price, cap, lease term
+  from the alert body (reuse `invokeExtractionAI`), so alerts can be matched to engagement criteria.
+- **Salesforce Power Automate flows:** `sf-object-sync` / on-demand backfill carry `Comp__c` only for the dialysis
+  and government domains (into each domain's `sf_comp_staging`); LCC keeps just `On_Market_Date__c` for 1,712 comps
+  (`lcc_sf_comp_on_market`). **There is no path today for industrial / general net lease `Comp__c`.**
+  Gap **BUY-G2:** an on-demand, criteria-filtered SF query (extend the request-triggered `sf-http-switch-lookup`
+  or `sf-on-demand-backfill` flow) — SOQL on `Comp__c` with `Property_Type__c`, `On_Market__c`/`Status__c`,
+  `State__c`, `City__c`, returning `Name, Tenant__r.Name, City__c, State__c, Rentable_Square_Footage__c,
+  Listing_Price__c, Marketing_Cap_Rate__c, On_Market_Date__c, Status__c` — written as a CSV into the client
+  folder (Decision A: no new table). Until built: Salesforce report export (or Claude reading the report in Chrome).
+- **CoStar / LoopNet / CREXi / RCA:** operator exports dropped into `Clients\[Client]\[Engagement]\Imports\`,
+  normalized + de-duplicated by Claude into Broad Market (address-key dedupe; source + retrieval date per row).
+  CoStar For-Sale exports are the primary availables source; RCA supplies sold comps / cap-rate context.
+- **Public data egress:** see §7a — the market-metrics refresh must run where public-data hosts are reachable.
+
+### 4.6 Import normalization — Round 1 lessons (Geller, 2026-09-11)
+Operator exports are broad (all property types, all Scott's markets), so the pipeline is: type filter → metro
+assignment on the official OMB county lists (Census PEP county rows) → address + name/city/price de-dupe →
+criteria screen as *flags* (never silent drops) → within-metro percentile leg scores (Derived, broker-adjustable)
+→ Focused / Broad Market. Seed code: `Clients\Jordan Geller\2026 Industrial Search\Data\JG_pipeline_scripts_2026-09-11.zip`
+(normalize → stage2 → score → build_deals; BDPS styling in `tbstyle.py`). Source quirks to encode:
+- **CoStar For-Sale export** has no State/County/lat-long → metro needs ZIP/city inference; ask operators to add
+  those columns to the saved export layout. Portfolio rows appear as "Multiple - Portfolio" and may duplicate
+  component-address rows elsewhere (dedupe by name + city + price).
+- **CREXi inventory export** has county + lat/long + link (best for geography); header is on row 3.
+- **Salesforce Comps report** carries lease detail (expiration, escalation, options, guarantor, broker contact)
+  that neither CoStar nor CREXi exports have → it should win field-level merges.
+- Nothing carries clear height, dock count or market rent → deal-stage fields.
+
 ## 5. Phasing (draft)
 - **Phase 0 (now):** run Jordan Geller manually in Cowork; capture every step, data source and decision in the
   engagement log → this is the requirements trace.
 - **Phase 1:** canon block + Cowork skill + workbook generator (manual data in, branded workbook out).
+- **Phase 1b:** buy-side deal anchor + matcher keys + W7.2 proposal types (living engagement, §4.4).
 - **Phase 2:** `buyer_engagements` / `buyer_criteria` / `engagement_candidates` tables + MCP tools.
 - **Phase 3:** `market_metrics` refresh pipeline + MSA ranking.
 - **Phase 4:** general net lease / industrial on-market store + ingestion (Decision A) + matcher.
@@ -124,5 +180,18 @@ F. Salesforce: is the SF Deal/Opportunity the system of record for engagements?
 - [ ] Add `BuyerShowing` DocType + `Clients\` convention to canon filing block (canon bump + render)
 - [ ] Draft Claude Code prompt for Phase 1 (prefix `BUY1`)
 
+## 7a. Phase 0 lessons (Geller MSA ranking, 2026-09-11)
+- **Egress gap:** cloud container and local shell both get 403 from census.gov / bls.gov / bea.gov (org egress policy).
+  Only Chrome could reach them. → Either allowlist public-data hosts for the Railway/cron services, or run the
+  market-metrics pull server-side on Railway (it already reaches the internet for CMS/GSA ingest).
+- **Census API now requires a key** (`missing_key`); the www2 table-based ACS summary files and PEP CSVs work without one.
+- **BLS QCEW** per-MSA CSV slices work, but 2019 vs 2024 use different OMB metro delineations → growth must be
+  delineation-aware (flag Conflict), and supersector mfg is suppressed for ~11 of 75 metros.
+- **BEA** regional zips work (CAINC1 3.5 MB, CAGDP9 15 MB) but need unzip server-side.
+- Reusable artifact: `market_metrics` cache (MSA × metric × vintage × source) is worth persisting — it is shared
+  across every buyer engagement and cheap to refresh; per-engagement data stays in the client folder (Decision A).
+
 ## 8. Change log
 - 2026-09-11 — v0.1 drafted (Cowork session, Jordan Geller kickoff).
+- 2026-09-11 — §4.5 sourcing/ingestion audit (gaps BUY-G1 email-alert location extraction, BUY-G2 filtered SF Comp__c query).
+- 2026-09-11 — §4.4 living-engagement design (reuse deal spine + W7 comms + Ollama); Phase 1b added.
