@@ -44,6 +44,29 @@ ranking, the resolved seed/`cortex_market_intel` open items, and the new §9.4 e
 finding as a ranked sibling. **Still open, unchanged by this pass**: Scott's 👤 canonical-name
 decision (§5.2 of the audit), the `DaVita | ...` composite-string attribution gap, and the
 `cortex_market_intel` writer identity.
+## 2026-09-11 -- OWN-T0i sized and filed: 57 hedge-phrase entities queued to junk_entity_review
+
+Picked up OWN-T0i next (a small, well-scoped item OWN-T0e's design doc had already named but not
+run). Sized `entities.name ~* '\m(or|and/or) (affiliated|related)\M'` fleet-wide: 57 live entities
+(one match was already a merged tombstone, excluded) -- names like `GRE Partners LLC or affiliated
+individuals`, `FGF Management LLC or affiliated individuals`, `Mercantil Servicios Financieros or
+related stakeholders`. These are an extractor's stated uncertainty written as an owner name, never a
+real party -- the same class RO2b already named one database over (`CIM Group or affiliated
+investors`).
+
+Sized the blast radius before filing anything: these 57 touch 50 distinct properties in
+`lcc_entity_portfolio_facts` (38 current rows) and are a contributing owner-candidate on 24 of the
+2,065 conflict properties from today's corrected OWN-T0h count -- so clearing them where possible
+would shrink the real conflict count by up to that many.
+
+Filed all 57 to `junk_entity_review` (`entities`/`lcc` is already a registered JUNK_TARGET with an
+FK guard on `lcc_entity_portfolio_facts`) as `proposed_verdict='dismiss'`, `status='proposed'`,
+`source_run_id='own_t0i_sql_2026-09-11'` -- queued for the existing human-gated apply path in
+`api/admin.js` (`planJunkApply`), not auto-retired. That apply path's own FK guard means any of
+these still standing as a property's ONLY current owner will route to a conflict card for a human to
+pick a real replacement, rather than silently leaving the property with no owner on file.
+
+Updated `docs/os/PLANNED-BACKLOG.md`'s OWN-T0i row (closed, sized + filed).
 
 ## 2026-09-11 — ID1 shipped: the operator-identity audit, and a THIRD registry the queuing note above missed
 
