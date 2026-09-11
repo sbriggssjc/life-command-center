@@ -37,6 +37,18 @@
 
 Grouped by the thing it does, not by the wave that built it.
 
+### Operator-note funnel (OC-a) — LIVE schema, intake + triage built, flag OFF pending live-verify
+EB1 schema applied live to LCC Opps 2026-09-11 (`market_brief_facts`/`market_brief_issues`/
+`build_brief_snapshots`/`operator_notes`/`producer_runs` + 2 staleness/live views). `POST /api/operator-
+notes` accepts every channel (in-app Note button on every page, MCP `log_operator_note`, Outlook
+`LCC-Note` category + briefing replies via `intake-tagged-comm.js`, Teams-ready). Triage tick
+(`/api/operator-triage-tick`, flag `OPERATOR_NOTE_TRIAGE`, **OFF**) classifies deterministically then via
+on-box Ollama, dedupes vs prior notes + the PLANNED-BACKLOG index, routes via
+`docs/os/operator-note-routing.json`. `scripts/render-operator-inbox.mjs` + MCP `get_operator_inbox`
+read the one to-do list. ⚠️ **Not yet live-verified end to end (needs a Railway deploy)** — flag stays
+off, session-start hook not yet wired. → `docs/architecture/operator_note_contract.md`,
+`docs/architecture/EXEC-BRIEFS-SPEC.md` §6, PLANNED-BACKLOG.md §P18 (EB1a/OC1–OC3).
+
 ### Deal-intelligence spine — LIVE end to end
 SF Opportunity sync → `bd_opportunities` (592 deals) → Team-Briggs scope (roster edges) → deal-email
 matcher → cadence-scan → weekly pipeline email; deal dossier + link-only Salesforce write-back.

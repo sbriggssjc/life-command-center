@@ -911,7 +911,16 @@
 /* Global error handler — surfaces uncaught errors and unhandled rejections */
 (function() {
   var errCount = 0, MAX_ERRORS = 20;
+  /* OC1 — a small ring buffer of recent errors the in-app Note button reads
+     (operator-note-client.js) so a captured note carries the failing
+     endpoint/error automatically, per the operator_note_contract.md
+     "recent_errors" context field. Independent of errCount's toast throttle. */
+  window.__lccRecentErrors = window.__lccRecentErrors || [];
+  var RING_MAX = 10;
   function report(type, msg, source, line, col) {
+    var entry = type + ': ' + msg + (source ? ' @ ' + source + ':' + line + ':' + col : '');
+    window.__lccRecentErrors.push(entry);
+    if (window.__lccRecentErrors.length > RING_MAX) window.__lccRecentErrors.shift();
     if (errCount >= MAX_ERRORS) return;
     errCount++;
     console.error('[LCC ' + type + '] ' + msg + (source ? ' @ ' + source + ':' + line + ':' + col : ''));
@@ -943,6 +952,7 @@
 <script src="detail-entity-tabs.js?v=2026090902"></script>
 <script src="detail-openers.js?v=2026090902"></script>
 <script src="detail.js?v=2026090902"></script>
+<script src="operator-note-client.js?v=2026091100"></script>
 <script src="detail-lease-comps-fix.js?v=2026050903"></script>
 <script src="contacts-ui.js?v=2026062402"></script>
 <script src="dc-lanes.js?v=2026090902"></script>

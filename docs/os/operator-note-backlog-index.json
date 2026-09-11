@@ -1,0 +1,726 @@
+[
+  {
+    "row_id": "V8a",
+    "title": "FGF — HOLD, highest-risk deferred decision. Scott: *\"Both of these are also Boyd Watterson subsidiaries.\"* The sponsor map is forward-looking and gov holds 90 `<CITY> <ST> <ROMAN> FGF, LLC` SPEs, so confirming `fgf → FGF Management LLC` could misattribute a Boyd program at scale. No LCC relationship"
+  },
+  {
+    "row_id": "V8b",
+    "title": "Commonwealth — recommend NO, and Carrington/Sequoia are Scott's call. `Commonwealth Owner LLC` sits among 15 unrelated \"Commonwealth\" parties including government bodies (`Commonwealth Of Virginia Department`, `Commonwealth Ports Authority`) with no distinguishing element — the case the evidence con"
+  },
+  {
+    "row_id": "V8c",
+    "title": "Madison ×2 — merge the duplicate LCC entities, then it becomes one clean confirm. Both rows propose the same grantee (`MADISON-OFC WESTON POINTE FL LLC`). Scott: *\"merge this into one true company in the LCC.\"* Check whether A2a already resolved it before doing anything."
+  },
+  {
+    "row_id": "V6",
+    "title": "`_provider` stamp coverage is DECAYING, not fixed. Post-93 recorded \"100% (87/87 backfilled)\" — that was a backfill, not a repaired writer, and the daily new-row rate decays straight back to zero (2026-08-10: 64/64 after the backfill → 08-14 1/9 → 08-19 0/4 → 08-26 0 of 21). Assert on the 7-day new-"
+  },
+  {
+    "row_id": "V3",
+    "title": "~~Ownership-history lane drain.~~ MEASURED 2026-08-26 — and the lane will not drain as built, for a structural reason. 545 open / 0 completed in 68 days. The 545 drafts split into FOUR structurally different actions presented as one undifferentiated queue: 380 agree with the current owner (a confirm"
+  },
+  {
+    "row_id": "V4",
+    "title": "`briefing-intel-snapshot` edge-fn guard. The on-box Analyst's Take is live, but a manual snapshot re-fire will upsert NULL over it unless the deployed fn carries `if (row.analyst_take == null) delete row.analyst_take;`. Fn is v21 (updated 2026-08-26) — confirm the source. *Measured 2026-09-09: the f"
+  },
+  {
+    "row_id": "V5",
+    "title": "`PA_OUTLOOK_DRAFT_FLOW` reads `off` in the registry with `off_since` = 2026-08-21 — the same day the Outlook draft seam was proven working end to end. One of the two readings is stale."
+  },
+  {
+    "row_id": "N2",
+    "title": "Prompt 140 — grade `OWNERSHIP_CHAIN_ROLE_LABELS` before flipping. BUILT AND MERGED 2026-08-26 (PR #1788); the GRADE ITSELF IS STILL OUTSTANDING and the flag is still off (`off_since` 2026-08-26, confirmed in the registry). The grading endpoint ships with the Railway redeploy of merged `main` — the s"
+  },
+  {
+    "row_id": "N8",
+    "title": "The sidebar channel has NEVER run the hardened extraction prompt — 0 hardened rows of 350 in 30 days, and it is the LARGEST producer (56%). All seven Prompt-61 keys are structurally absent, `_provider` is unstamped, `stripNonSaleKeys` never runs. Ruled out, do not re-walk: stale deploy (live `/versi"
+  },
+  {
+    "row_id": "N8a",
+    "title": "Sidebar is two populations and only one was ever the story. 101 CoStar page captures (rich seed: asking_price, cap_rate, tenant_name, `domain_property_id`) produce 0 OM-class rows, 0% cap, 0% NOI; 249 document captures produce the 87%-cap OM rows. Open question: is the page-capture structured data r"
+  },
+  {
+    "row_id": "N3c",
+    "title": "Bank / trustee owners in the prospecting scope — a scope question, not a person-pick. Surfaced while ranking the live lane: `Truist Bank → truist.com` ($6.2M, 15 candidates), `Wells Fargo Bank, National Association`, `JP Morgan Chase … CMBS Trust`. A bank appearing as owner-of-record is usually a tr"
+  },
+  {
+    "row_id": "N10",
+    "title": "The 4 byte-identical owner groups P195 HELD — a junk/name-repair job, not a merge. `partnersgroup` (18 entities, 17 of them empty husks minted 2026-06-24/26 with no domain/identity/relationship/portfolio), `capital` (3 entities across dia+gov with three DIFFERENT external identities — three real par"
+  },
+  {
+    "row_id": "N12",
+    "title": "Four tests fail on Windows and pass on Linux/CI — the tests are over-specified, not the code. `lease-ocr-backfill`, `sf-deal-promotion`, `sf-file-collector`, `sf-file-discovery` assert hardcoded POSIX path literals against `path.join`, which is platform-native (`\\` on Windows). Verified: all four pa"
+  },
+  {
+    "row_id": "N15",
+    "title": "Should the 1,475 Salesforce-campaign orphans get `unified_contacts` rows? — SIZED, NOT DECIDED (P197). 5,193 live person entities with an email have no hub row at all (⚠️ the widely-quoted 5,440 is 247 too high — those DO have one, linked by `entity_id`, invisible to the email-keyed detector). The p"
+  },
+  {
+    "row_id": "A5d",
+    "title": "The ~1,306+ open research tasks that sit BELOW the A5c value gate. The A5a probe is ungated, so none of them is falsely closed — they simply stay open and un-actionable. Measured: dia `property_missing_recorded_owner` 11 of 185 admitted (exact census); gov `property_missing_recorded_owner` ≤656 of 1"
+  },
+  {
+    "row_id": "A5e",
+    "title": "`value_unknown` is 20,487 rows — the largest exclusion in the fleet, and it is a COVERAGE problem, not a value one. dia prices only 4,154 of 11,796 properties (35%) on the canonical `v_property_attributes_portfolio.annual_rent`; gov prices 3,366 of 11,180 in its biggest lane. Those subjects are gate"
+  },
+  {
+    "row_id": "A5f",
+    "title": "`dia.true_owners.is_operator_not_owner` is set on 25 owners; three recorded facts together catch 36. The 11 the boolean misses are real operators — Kaiser Permanente, Mayo Clinic Dialysis, Atlantis Healthcare Group, Wake Forest University, Centers for Dialysis Care, Greenfield Health Systems — carry"
+  },
+  {
+    "row_id": "A5g",
+    "title": "`owner_needs_sos` — 24,077 gap rows (gov 16,873 + dia 7,204) gated to `lane_no_consumer`. SOS-direct is blocked at the bot-wall (government-lease `CLAUDE.md` §25: `W9_1_SOS_DIRECT` off, every adapter honest-blocked, the weekly `--apply` schedule DISABLED). A5c makes that zero an explicit, per-row re"
+  },
+  {
+    "row_id": "A5h",
+    "title": "gov `owner_needs_salesforce` is 66% of everything the fleet will mint, and it is the lane's FIRST-EVER emission. 1,675 admitted rows / 1,674 distinct owners / $4.01B of gov rent, human-answerable in the CRM. Its gap was checked, not assumed: 40 of 40 sampled subjects exist on the LIVE contact hub wi"
+  },
+  {
+    "row_id": "N20",
+    "title": "gov `properties` holds duplicate rows for one building, and the N15c key now surfaces them. Of 4,618 entities minted 2026-08-27→29, 19 gov `asset` entities collided with a pre-existing live entity on an identical canonical key — and each pair carries a DIFFERENT `gov/asset/<property_id>` (`gov/asset"
+  },
+  {
+    "row_id": "N21",
+    "title": "`api/sync.js` and `api/domains.js` POST `entities` without a canonical-key lookup. N15c routed both through the one normalizer so they now write the RIGHT key, but neither checks whether a live entity already holds it. Measured over 4,618 mints: 3 rows (0.06%) — `Sukhpreet Sidhu`, `Alexander Moore`,"
+  },
+  {
+    "row_id": "N15g",
+    "title": "Cosmetic: `lcc_mint_gov_asset_entities` passes a `canonical_name` that is dead code. It computes `lcc_normalize_entity_name(m.name)`; the N15c `BEFORE INSERT` trigger overwrites it with `lcc_entity_canonical_key(name)` — measured on the T2a batch, all 2,570 rows carry the trigger's key and only 2,49"
+  },
+  {
+    "row_id": "C2f",
+    "title": "The 3,362 gov properties with NO `true_owner_id` — 54% of the non-resolving residue and the largest remaining lever. Untouched by C2e (which only mints where an owner resolves). This is a gov-side capture question, not an LCC one: the owner is not in the domain DB to resolve to. Sized, not scoped."
+  },
+  {
+    "row_id": "C2d",
+    "title": "FIX THE \"one number, not three\" CLAIM — the $500k floor is FIVE independent knobs. `CLAUDE.md` (P161) says the reachability floor is *\"the same $500k knob as the gov asset-mint and `CADENCE_SIGNAL_MIN_VALUE`.\"* Measured 2026-08-28: false as implemented. Five separate objects share the value — `lcc_m"
+  },
+  {
+    "row_id": "C2i",
+    "title": "Feed the 69 sponsor↔SPE pairs into the EXISTING confirm surfaces — do not build a third detector. `lcc_owner_sponsor_domain` (P190) and `lcc_ownership_sponsor_family` (A3) both exist and are human-confirm by design: A3 measured a lexical sponsor detector at ~25% precision raw, P196 at 4-of-6 even wi"
+  },
+  {
+    "row_id": "C2j",
+    "title": "Small owner-resolution data-quality residue found while reading C2h. (a) `Casa De Chupita` resolved to `Undisclosed` at confidence 0.57 — a placeholder won a resolution; `lcc_is_placeholder_owner_name` does not list `Undisclosed` (A2 added anchored `Previous Owner*` prefixes but not this). (b) `Chia"
+  },
+  {
+    "row_id": "C2g",
+    "title": "⭐ NEXT — why are 489 anchored owner-orgs still unresolved? 652 SF people sit behind them. These companies are gov/dia property owners, have Salesforce people attached, and their properties are not resolved to them in `lcc_property_owner`. ⚠️ 415 of the 489 are NOT reachable by minting (only 74 appea"
+  },
+  {
+    "row_id": "C2c",
+    "title": "Not measured — do not assume it was. Historical ownership depth on dia (the A-series covers gov only); the developer / investor / buyer prospecting-type split (`v_lcc_developer_classification_candidates` exists, coverage uncounted); Outlook per contact (`outlook_contact_id` 2,809) and WebEx, which i"
+  },
+  {
+    "row_id": "N19b",
+    "title": "The N19 residue, deliberately held — 24 husk pairs + 9 cross-`entity_type` pairs. The husks are $0 rent with ≤5 edges: no urgency, and holding them keeps each `auto_mergeable` delta explainable group by group. ⚠️ The 9 cross-type pairs must NOT be merged — `David Siegel`, `Dennis Needleman`, `Consta"
+  },
+  {
+    "row_id": "N17",
+    "title": "ASPIRATIONAL — fractional / beneficial ownership: individual investors as direct owners, and their partial positions in DST / TIC / JV structures. Scott 2026-08-27, recorded so it is not lost: *\"we would one day want to aspirationally include individual investors that own a property in our target ma"
+  },
+  {
+    "row_id": "N16",
+    "title": "Retire `r9_chain_connect`'s unattached output — 5,207 live entities, 4,943 with no portfolio fact and no owned asset, 2,017 duplicating an older live entity. Cron 104 mints a prior-owner entity per chain name and attaches it to nothing, so it is retirable on the gov feeder's own predicate (\"a minted"
+  },
+  {
+    "row_id": "N13",
+    "title": "Test-suite consolidation — MEASURE BEFORE PRUNING. Scott asked whether the suite can be trimmed \"so we're doing everything for a purpose, not just to check an arbitrary box.\" ⚠️ The honest counter-position, recorded so it is not lost: 270 files / ~4,606 tests run in ~3 minutes in CI, and nearly ever"
+  },
+  {
+    "row_id": "N3a",
+    "title": "Prompt 189 — duplicate owner entities. The byte-identical half is DONE (P195); the wording-difference half is not. P195 merged 66 entities into 56 survivors, $102.2M consolidated (NGP Capital 5→1, $59.8M→$68.3M, 29→38 assets) and scheduled the Class-8 re-sweep (cron 243). Still open: the wording-dif"
+  },
+  {
+    "row_id": "N4",
+    "title": "R8 Stage 2 — capital-markets book copy on-box. The quarterly ST-Market / NM-CapMarkets copy is templated, private and repetitive — the highest-value remaining on-box generation target after Stage 1 (the brief). Currently routes cloud / is hand-authored."
+  },
+  {
+    "row_id": "N5",
+    "title": "R8 (rest) — BOV/OM exhibit narrative first-drafts and comps narrative + reconciliation synthesis. Facts are already extracted; draft the cover-note/exhibit prose in Scott's voice, deal specifics stay on-box."
+  },
+  {
+    "row_id": "N6",
+    "title": "R4 (remaining half) — going-cold detection + suggested-touch prose. `NEXT_STEP_AI` is on; the missing half is Ollama reading the deal thread and drafting *who's quiet, why, suggested touch* into the cadence engine."
+  },
+  {
+    "row_id": "N7",
+    "title": "R2 (re-classified) — OM-economics write-back + owner-edge creation. Measured as category (a): the LLM already ran (3,955 staged items carry `asking_price`/`cap_rate`, `lcc_property_attributes` exists). What is missing is the deterministic write-back and the asset→owner edge from the extracted owner."
+  },
+  {
+    "row_id": "L1",
+    "title": "R5 — wrong-party edge substance-check. Role-string guards let 80 competitor/own-firm edges (CBRE/Eastdil/JLL/@northmarq), 27 owners, $340.7M through as `prospecting_contact`. Ollama classifies a contact's *substance* as a second look on edges the label guard clears. Low effort, annotation on an exis"
+  },
+  {
+    "row_id": "L2",
+    "title": "R6 — undecidable owner-attach residue. ~18 \"no lean — human call\" rows/run (acronym/subset cases); draft the same-party rationale + verbatim quote."
+  },
+  {
+    "row_id": "L3",
+    "title": "R7 — activate the `signals` learning loop. `writeSignal` fires in 9 producers; 3 static SQL views consume it; the draft-vs-sent edit distance (`template_refinements`) is captured and unfed. Weekly Ollama few-shot over the diffs → voice/template refinement proposals. Compounding."
+  },
+  {
+    "row_id": "L4",
+    "title": "R9 — named-lead → find-their-line matching. `v_lcc_named_lead_worklist` (SAM.gov POC name+title, no email) toward ~478 unreachable owners ($454.6M). High volume, but the acquisition half is still egress-blocked → partial."
+  },
+  {
+    "row_id": "L5",
+    "title": "W10 Stage 3 — template library. Cluster the sent corpus by draft-type, synthesize Scott-voiced parameterized templates + triggers (new listing → announcement; LOI → offer-submission). ⚠️ The leverage map points at a `⬜` in `ROLLOUT_STATUS.md` that does not exist; the intention lives in the W10.1 row"
+  },
+  {
+    "row_id": "L6",
+    "title": "W10 Stage 4 — LoRA fine-tune on the 10-yr sent corpus. Never started; explicitly optional (the RAG path was chosen precisely to avoid needing it)."
+  },
+  {
+    "row_id": "L7",
+    "title": "Research synthesis — summarize owner-contact / `research_task` results into structured payloads."
+  },
+  {
+    "row_id": "L8",
+    "title": "W5.3 intake re-grade — PREMISE CORRECTED 2026-08-26, the row was asking the wrong question. It read \"re-grade on ~50 fresh intakes post-Prompt-61.\" Two things measured: (a) the re-grade already happened on 2026-08-11 (102 extractions) and upgraded the verdict to \"validated\" — but (b) it averaged thr"
+  },
+  {
+    "row_id": "L9",
+    "title": "LOI/offer intake structuring — on-box extraction of buyer/price/terms from inbound LOI PDFs. Counterparty terms are exactly the private corpus the doctrine protects."
+  },
+  {
+    "row_id": "L10",
+    "title": "Owner-resolution rationale — draft the one-line \"why these are the same party\" on the residue the deterministic classifiers punt."
+  },
+  {
+    "row_id": "AC1b",
+    "title": "Closed 2026-09-10 (`build/aci-phase0`). `v_lcc_top_seller_prospects` and `v_lcc_owner_contact_decidability` now call `lcc_owner_name_is_not_prospected` in place of `lcc_owner_name_is_public_body` (predicate-only, column lists unchanged). Measured before/after: top-seller-prospects university rows 14"
+  },
+  {
+    "row_id": "AC1c",
+    "title": "Confirm or reject the two held sponsor entries — fcp→fcpdc.com (Federal Capital Partners, for MEPT/FCP PATRIOTS PLAZA, $14.2M) and tmg→tmgdc.com (The Meridian Group, for TMG 801 EYE STREET, $3.9M). Scott: *\"I'm unsure… would need to google and check SF and our records.\"* TMG also matched an unrelate"
+  },
+  {
+    "row_id": "AC1e",
+    "title": "⭐ Prompt 193 — SPE subsidiaries inherit the sponsor's contact. Scott from the lane: subsidiaries \"should be connected to the true owner parent once we have a connected domain and person.\" 19 of 107 cards are one question asked three times (ngp 13 SPEs, uirc 5, jbg 1). ⚠️ NOT prompt 189's merge probl"
+  },
+  {
+    "row_id": "AC1d",
+    "title": "⭐ Prompt 192 — the auto-attach sweep + the LIVING loop. P192 shipped the triage (255→109 cards, `parked_domain_only` computed live so it self-unparks). Still to build: (a) the sweep that attaches the 11 `exact`+single-candidate cards through the existing JS verdict path, never a new SQL writer that "
+  },
+  {
+    "row_id": "AC2",
+    "title": "Tier 1 — rank the bench, don't pick one winner (volume, recency, two-way, seniority, inferred function). The pivot already has a `bench` column. Scott 2026-08-26: this is the requirement, not a nicety — the active contact must be the current head of a re-derived ranking, not a decision recorded once"
+  },
+  {
+    "row_id": "AC3",
+    "title": "Tier 2 — Ollama infers function and drafts the account strategy, carrying confidence, with the surface gated on it (the P181 lesson). ⚠️ Bundled as Unit C in `ACI-phase1-2`, not attempted (see AC2 row). ✅ Follow-up prompt sent 2026-09-10 — `ACI-phase2-unitC.md`, alongside AC2 in the same right-sized"
+  },
+  {
+    "row_id": "AC2",
+    "title": "Tier 1 — rank the bench, don't pick one winner (volume, recency, two-way, seniority, inferred function). ✅ SHIPPED 2026-09-10 (`ACI-phase2-unitC`). Pure planner `api/_shared/bench-ranking-planner.js::rankBench()`, extends the existing `bench` jsonb shape (confirmed live), never collapses to one winn"
+  },
+  {
+    "row_id": "AC3",
+    "title": "Tier 2 — Ollama infers function and drafts the account strategy, carrying confidence, with the surface gated on it (the P181 lesson). ✅ SHIPPED 2026-09-10 (`ACI-phase2-unitC`), alongside AC2. `api/_shared/bench-role-inference-planner.js`: deterministic title-hint path first (no LLM call when title m"
+  },
+  {
+    "row_id": "AC4",
+    "title": "Tier 3 — the standing loop. Re-run on new correspondence/transactions/replies. A reply that redirects us (\"talk to X\") is the highest-quality signal available. Never one-and-done."
+  },
+  {
+    "row_id": "AC5",
+    "title": "Tier 4 — broker intelligence kept separately. Never a prospect target; surfaced as *who transacts with this buyer, where the gaps are for a buyer's-rep pitch, where competitors are winning*."
+  },
+  {
+    "row_id": "AC6",
+    "title": "Spin-off: professional emails landing in the \"personal\" bucket. Likely the same bucketing that produced P124's `cold_bd_outreach` catch-all. Needs its own measurement — it corrupts both the voice corpus and this engine's inputs. ⚠️ Not re-measured 2026-09-10 — `ACI-phase1-2` was scoped to prioritize"
+  },
+  {
+    "row_id": "AC7",
+    "title": "Closed 2026-09-10 (`build/aci-phase0`). Merged live: `d6b0d27e-…` (37 edges, already the Easterly pivot's `active_contact_entity_id`) survives, `537ecdd2-…` (1 edge, no pivot reference) merged into it via the existing reversible `lcc_merge_entity`. `lcc_entity_merge_log` id 170; `v_lcc_entity_merge_"
+  },
+  {
+    "row_id": "AC8",
+    "title": "Spin-off: `v_lcc_prospecting_edge_review` (P166) is narrower than its name — it does not contain the Easterly broker edges and returned a false zero when used as a broker test. Widen before trusting it again. ⚠️ Not re-measured 2026-09-10 — out of scope for `ACI-phase1-2` given the prompt's size; st"
+  },
+  {
+    "row_id": "AC9",
+    "title": "Spin-off: 7 competitor-broker edges on Easterly wear role `prospecting_contact`. Re-role, don't delete — they are the Tier-4 intelligence. ⚠️ Re-measured 2026-09-10 (`ACI-phase1-2`) — the \"7\" does not cleanly reproduce. A live query finds 17 `prospecting_contact` edges on Easterly-named entities (`x"
+  },
+  {
+    "row_id": "AC10",
+    "title": "Closed 2026-09-10 (`build/aci-phase0`). Re-measured before building (the Aug 11/$240.5M figure was stale): 251 owners / $329,379,804.64 suppressed. Built `v_lcc_ac10_promote_candidates` (ranks the winning linked-person candidate per owner, mirroring `owner-reachable-via.js` ordering) + `lcc_promote_"
+  },
+  {
+    "row_id": "AC11",
+    "title": "NEW 2026-09-10 — the individual-owner control-chain classifier (`account-based-contact-intelligence.md` §8). Scott's framing: an LLC member whose address is a residence, corroborated by the tax-bill mailing address and (if only one member/family) treated as the individual owner, is the true contact "
+  },
+  {
+    "row_id": "CR1",
+    "title": "Fix `pickBestEmail`'s primary selection. 98 contacts show a dead `@stanjohnsonco.com` primary; 56 already hold the live address. Largest correctness win available, hub-side only, no write surface."
+  },
+  {
+    "row_id": "CR2",
+    "title": "Run Probe B (`flow-lcc-probe-outlook-contact-write.json`) — sentinel write → re-read → restore → re-read. ~2 minutes; gates CR3 only."
+  },
+  {
+    "row_id": "CR3",
+    "title": "CREATE projector for the 487 named + touched-within-24-months contacts absent from the address book. Dry-run, junk-guarded, value-ranked, verified by re-read."
+  },
+  {
+    "row_id": "CR4",
+    "title": "Repoint the `contact_merge_queue` writer from `government` to the hub (producer and consumer are on different databases — it has never held a row on either), then work the 45 colliding contacts."
+  },
+  {
+    "row_id": "CR5",
+    "title": "Write down the Salesforce allowlist and get Scott's explicit per-entry sign-off."
+  },
+  {
+    "row_id": "CR6",
+    "title": "WebEx / Teams — record \"not used for external contacts here\" and close them, unless ingest proves worth building."
+  },
+  {
+    "row_id": "CR7",
+    "title": "DO NOT build a PATCH projector for the 2,809 Outlook contacts. Recorded as an explicit *anti*-item: it would re-send Outlook its own data, run green, and change ~144 fields."
+  },
+  {
+    "row_id": "D1",
+    "title": "Proactive Deal Monitor — the automation-plane loop reading `list_deal_checkpoints` on a schedule and acting on overdue/due-soon milestones (notify / draft / update). Foundation exists; loop not built."
+  },
+  {
+    "row_id": "D2",
+    "title": "Mail-intake → dossier — distil Outlook deal-mail into `activity_events` so correspondence auto-appends (broader than the matcher)."
+  },
+  {
+    "row_id": "D3",
+    "title": "Fold the pipeline digest into the daily LCC email as a leaner `cadence-section` variant."
+  },
+  {
+    "row_id": "D4",
+    "title": "Matcher recall — add address / escrow# / OM-PSA signals (misses e.g. Innovative Renal Care)."
+  },
+  {
+    "row_id": "D5",
+    "title": "Store SF `deal_name` on `bd_opportunities` — column added live, writer updated, populates on the next full refresh once redeployed."
+  },
+  {
+    "row_id": "D6",
+    "title": "Shared SF 15-char-id helper — the prefix-matching logic is duplicated today."
+  },
+  {
+    "row_id": "D7",
+    "title": "Contact-entity resolution backfill — 31,014 contacts, 5,696 linked, only 41 match by email; the gap is entity *creation* (~11,700 recoverable), a policy decision coupled to the roster question. ~13,505 are no-signal junk. No bulk create done, deliberately."
+  },
+  {
+    "row_id": "D8",
+    "title": "A1f — OM/document-ingestion address feed into the Deal-Address Resolution Engine. Highest-leverage automation for capturing TB's own listing addresses."
+  },
+  {
+    "row_id": "D9",
+    "title": "A1g — SF browser-read address feed. The Deal record PAGE renders `Property_Address__c` even though the API/connector cannot (FLS + no relationship traversal). Proven live on 5 addresses; automatable, bypasses the API block, needs no SF admin."
+  },
+  {
+    "row_id": "D10",
+    "title": "SF write-back drainer → more kinds (`create_task`, `advance_opportunity_stage`); `updateOpportunity` beyond stage (close_date/amount/probability/next_step); an idempotency key on `logActivity`; the connector write-action target description → \"deal or person\"; repeatable contact onboarding."
+  },
+  {
+    "row_id": "D11",
+    "title": "PSA milestone-timeline population at LOI-executed / In-Escrow (always carry an explicit Fresenius-style timeline)."
+  },
+  {
+    "row_id": "D12",
+    "title": "Account layer — new-prospect 7-touch (days 0/7/14/28/42/72/102) + tier nurture. OPEN red-line: tiering computed-vs-manual."
+  },
+  {
+    "row_id": "D13",
+    "title": "Draft-and-hold the due touches → Outlook drafts, never auto-sent."
+  },
+  {
+    "row_id": "D14",
+    "title": "Investor-outreach campaign manager (ELA broad marketing — buyer list, priority, revisit)."
+  },
+  {
+    "row_id": "D15",
+    "title": "Incremental SF sync optimization — a `LastModifiedDate` window instead of the 30-min full refresh."
+  },
+  {
+    "row_id": "NBA1",
+    "title": "All domains emit `action_items` — one universal action store (exists, barely used); adapters from reconcile/comps/BOV/lease/cadence/marketing."
+  },
+  {
+    "row_id": "NBA2",
+    "title": "Generalize the ranker — extend `v_priority_queue` bands to score every action type; expose `next_best_action(user, context)`."
+  },
+  {
+    "row_id": "NBA3",
+    "title": "App \"Today\" home — ranked next-best-action stream + one-tap execution; team→user→role lenses. Design H1 (RBAC) first."
+  },
+  {
+    "row_id": "NBA4",
+    "title": "Domain F feeds into the stream — listing-scoped likely-buyers + buyer-intent boost."
+  },
+  {
+    "row_id": "NBA5",
+    "title": "Cross-surface parity — every surface reads the same queue."
+  },
+  {
+    "row_id": "F1",
+    "title": "Ownership-of-similar \"likely buyers\" — rank likely acquirers for a listing from `entity_relationships` + owner-reconcile. Data exists; logic doesn't."
+  },
+  {
+    "row_id": "F2",
+    "title": "Buyer-intent ingestion — webhits / OM downloads / saved searches (CREXi/Buildout/LoopNet) → intent touchpoints. Genuinely unbuilt."
+  },
+  {
+    "row_id": "F4",
+    "title": "OM distribution + engagement tracking loop."
+  },
+  {
+    "row_id": "E1",
+    "title": "Reporting & Analytics — BI views/snapshots, RBAC-scoped, app Reports + scheduled emails."
+  },
+  {
+    "row_id": "E2",
+    "title": "Onboarding & Backfill — bulk backfill + repeatable contact/deal onboarding tools."
+  },
+  {
+    "row_id": "E3",
+    "title": "Compliance / Governance / Retention — PII+RBAC, retention config, audit view, a compliance canon module."
+  },
+  {
+    "row_id": "E4",
+    "title": "Integration Catalog — CoStar / CREXi-Buildout-LoopNet / county recorders / title-escrow, all via the LCC broker + fact fabric."
+  },
+  {
+    "row_id": "E5",
+    "title": "System QA & Trust Validation — fixtures + invariant checks + regression gate."
+  },
+  {
+    "row_id": "FP1",
+    "title": "Fact-propagation coverage audit — every learning point writes through `lcc_merge_field` and emits propagation; list the ad-hoc writers."
+  },
+  {
+    "row_id": "FP2",
+    "title": "Canonical lease record + lease-abstraction merge writer — lease structure becomes first-class and provenanced."
+  },
+  {
+    "row_id": "FP3",
+    "title": "Closing propagator — ownership edge + sale-comp creation + deal-close + SF + dossier from ONE closing event."
+  },
+  {
+    "row_id": "FP4",
+    "title": "Generalize propagation on the `sync_inflight`/`listing_events` rails with idempotency + dead-letter."
+  },
+  {
+    "row_id": "H1",
+    "title": "Identity, Users, Roles & Permissions (RBAC) — the biggest gap; design before the app \"Today\" home."
+  },
+  {
+    "row_id": "H2",
+    "title": "Feedback / learning loop — outcomes tune cadence/scoring/tiering; build the NBA ranker as configurable weights from day one."
+  },
+  {
+    "row_id": "H3",
+    "title": "Autonomy & Trust ladder — one policy for autonomous vs propose vs confirm, per action type."
+  },
+  {
+    "row_id": "H4",
+    "title": "Lifecycle off-ramps — lost / dormant / revived deals + account attrition."
+  },
+  {
+    "row_id": "H5",
+    "title": "Pipeline resilience & explainability — idempotency, dead-letter, reconciliation, self-monitoring, \"why\"."
+  },
+  {
+    "row_id": "R1",
+    "title": "Dossier `.md` = pure render of the LCC dossier (one writer; kill drift)."
+  },
+  {
+    "row_id": "R2",
+    "title": "Collapse the two-server topology (unification Phase 2), retire the standby."
+  },
+  {
+    "row_id": "R3",
+    "title": "Commit to the v4 connector repave (53 ops) — end v3/v4 drift."
+  },
+  {
+    "row_id": "G1",
+    "title": "Vertical-neutral build invariant — quarantine asset-type logic to 3 plug-in points (comps source, BOV skill, enrichment)."
+  },
+  {
+    "row_id": "G2",
+    "title": "Anti-overlap invariant — all domains read/write the shared substrates; no sibling stores."
+  },
+  {
+    "row_id": "W1",
+    "title": "Seller Response (counter) generator — on-request post-call; DDP (Genesis) vs standard (owner-of-record) template."
+  },
+  {
+    "row_id": "W2",
+    "title": "Close offer-context gaps — (a) reconcile fragmented deal entities; (b) capture ask/NOI/cap + `owner_entity_id` at listing-signing; (c) index the Team Briggs OM/lease/PSA docs to the deal. Makes the packet fill without a manual OM. Same root as N7."
+  },
+  {
+    "row_id": "W3",
+    "title": "Draft / file / log wiring — Outlook draft → Drafts (LOI attached); folder writer → deal folder; `activity_events` / To-Do / critical-date / SF loggers."
+  },
+  {
+    "row_id": "S1",
+    "title": "Paste the ChatGPT persona into the GPT (canon-migrated, parity ✓)."
+  },
+  {
+    "row_id": "S2",
+    "title": "Sync the surface bundles — Northmarq Claude project prompt; Personal Claude / Cowork skills (v1.4.3+ comps sync)."
+  },
+  {
+    "row_id": "S3",
+    "title": "Create the 2 Copilot specialists (Document Files Agent, Document Assembly Agent) in Studio, connect to the orchestrator, publish the delegation block."
+  },
+  {
+    "row_id": "S4",
+    "title": "Work IQ least-privilege config — enable set + pin the Team Briggs site via Inputs + end-user auth."
+  },
+  {
+    "row_id": "S5",
+    "title": "Office Script + its Power Automate flow (pro-forma lease-escalation fix)."
+  },
+  {
+    "row_id": "S6",
+    "title": "Correct the 4 SharePoint `_WORKFLOW` deployment docs (they still assert tranquil-delight *is* the MCP server)."
+  },
+  {
+    "row_id": "S7",
+    "title": "True one-command-updates-all — give each surface master (Northmarq prompt, the skills) a managed `CANON:BEGIN…END` region + a portable render target. Today only Copilot + ChatGPT auto-render."
+  },
+  {
+    "row_id": "S8",
+    "title": "Swap the regenerated blank BOV templates (NNN + MOB/MT, DSCR correct) into Northmarq/Copilot project knowledge + `Templates/`."
+  },
+  {
+    "row_id": "S9",
+    "title": "Northmarq admin connector — the Northmarq project has no live LCC connector; an admin adds it at `{MCP_BASE_URL}/mcp`."
+  },
+  {
+    "row_id": "S10",
+    "title": "D-drive triage + home the personal projects."
+  },
+  {
+    "row_id": "SEC1",
+    "title": "Rotate `LCC_API_KEY` — flagged P0 on 2026-08-03 after it was pasted in plaintext during a curl diagnostic. Threaded through the PA flows, so it is deliberately last. Must land identically on tranquil-delight + the standalone MCP + BOV, then ChatGPT / Copilot / the personal-Claude connector / every P"
+  },
+  {
+    "row_id": "SEC2",
+    "title": "Rotate the Supabase `service_role` key (it appeared in a PA run output) + enable Secure Inputs on the drainer's Supabase HTTP steps."
+  },
+  {
+    "row_id": "SEC3",
+    "title": "Function `search_path` hardening + revoke EXECUTE from anon/authenticated — ~130 (OPS) + 150 (GOV) + 228 (DIA) functions. WARN-level; safe (the engine calls via service_role)."
+  },
+  {
+    "row_id": "SEC4",
+    "title": "DIA Postgres upgrade (flagged `vulnerable_postgres_version`)."
+  },
+  {
+    "row_id": "SEC5",
+    "title": "`materialized_view_in_api` (OPS 2, GOV 5, DIA 13) — matviews can't take `security_invoker`; revoke from anon/authenticated instead."
+  },
+  {
+    "row_id": "SEC6",
+    "title": "`auth_leaked_password_protection` (OPS) — one toggle."
+  },
+  {
+    "row_id": "SEC7",
+    "title": "RLS hardening on the 34 exposed tables — run in a Supabase branch first."
+  },
+  {
+    "row_id": "SEC8",
+    "title": "Enforce `LCC_API_KEY` auth in production — set the key then `LCC_ENV=production`, in that order; verify `would_pass_in_production` first."
+  },
+  {
+    "row_id": "K1",
+    "title": "`lcc_reconcile_property_owner` scores an ownership CHAIN as competing claims. Recency decay floored at 0.25 means a thrice-sold building yields three near-equal candidates under the 0.55 gate. 876 assets have evidence and still read \"Unresolved.\" A strict-latest-purchase supersession tier would reso"
+  },
+  {
+    "row_id": "K2",
+    "title": "The SAM tier ladder vs the real quota. Tiers 0 (131) and 1 (514) run before tier 2 — and tier 2 holds 9,153 valued owners topping out at $62.3M. Sized for 600/day; the key actually delivers ~10/day, so the $62.3M owner is ~2 years out. Either interleave value across tiers or raise the SAM account ti"
+  },
+  {
+    "row_id": "K3",
+    "title": "`v_field_provenance_unranked` returns 35 rows for tables other than `entities.email/phone` — pre-existing writer/ladder drift. Should be 0."
+  },
+  {
+    "row_id": "K4",
+    "title": "`v_owner_contact_enrich_queue`'s exclusion never expires. All 316 `owner_contact_manual` tasks are `queued` and none has ever changed status, so the owners are permanently removed from automated processing — while 115 of them ($102.4M) already carry a genuine named active contact. *Ask what event se"
+  },
+  {
+    "row_id": "K5",
+    "title": "`v_lcc_weak_reach_worklist` — 93 owners ($153.8M of annual rent) gated out of \"reachable\" by P161 because their only route is a weak `works_at` edge. They are the contact-acquisition engine's queue, not a defect."
+  },
+  {
+    "row_id": "K6",
+    "title": "`v_lcc_portfolio_ownership_conflict` — 12 ghost-vs-survivor portfolio conflicts, never auto-resolved by design (deleting the ghost would resolve toward the stale side)."
+  },
+  {
+    "row_id": "K7",
+    "title": "gov firm-term tail — 625 sold-cap chart rows still lack a term; ~178 are STATE/municipal (no federal register can cover them; the state-lease producer has been silent since 2026-06-23), and 58 properties are OCR-pending. Surfaced in `v_gov_firm_term_backfill_queue` / `_reextract_queue`."
+  },
+  {
+    "row_id": "K8",
+    "title": "gov `listing_verification_history` records `prior_asking_price` but leaves `asking_price_at_check`/`price_delta` NULL on 5,636/5,637 rows. The reprice triggers made the chart writer-agnostic, but fixing the lvh writer would enrich the ledger."
+  },
+  {
+    "row_id": "K9",
+    "title": "gov FRPP↔property matching pass. The CoStar VA/SSA comp tail was never linked to its FRPP row (address-match ceiling ~29 of 533 distinct properties). FRPP holds `lease_expiration_date` on 19,756 leased assets — a geo/address matching pass is the real-volume unlock."
+  },
+  {
+    "row_id": "K10",
+    "title": "gov Phase A1b — per-county assessor fetchers. Mass owner-mailing capture needs them; the AI-extraction path only yields \"echoes\" for counties whose assessor URL is a search portal."
+  },
+  {
+    "row_id": "K11",
+    "title": "dia CMS `patient_month_backfill` — must run on a CMS-reachable runner (the sandbox has no data.cms.gov egress). Loads whatever months the current survival window covers; never fabricates a period."
+  },
+  {
+    "row_id": "K12",
+    "title": "W6.5 Stage 2 continues — `detail.js` decomposition by region; Stage 3 is mapped. Recipe + invariants in `docs/architecture/w6-5-frontend-decomposition-map.md`."
+  },
+  {
+    "row_id": "K13",
+    "title": "`cm_gov_sold_cap_by_term_dot` uses the OLD term ladder, not `firm_term_years_at_sale`. It prioritises `(gsa_leases.termination_date - sale_date)`, then `leases.firm_term_years - elapsed`, then the older `sales_transactions.firm_term_years` — the opposite of the dia R68/R66x pattern where the sale-fr"
+  },
+  {
+    "row_id": "K14",
+    "title": "`cm_gov_lease_termination_rate_m/_q` can select a CORRUPT partial snapshot as its active denominator. `gsa_snapshots` 2019-02 holds 11 lease keys against ~8,050 in adjacent months, so Feb-2019 plots `total_leases_active=11`. The view already builds a `clean_snap` set for departure endpoints but the "
+  },
+  {
+    "row_id": "K15",
+    "title": "Corrupt source snapshot months need re-ingest/repair — `gsa_snapshots` 2019-02; `gsa_inventory_snapshot_lines` 2019-02, 2022-10, 2022-11. Separate from K14: fixing the view stops this chart hitting them, but every other consumer still can."
+  },
+  {
+    "row_id": "K16",
+    "title": "`cm_gov_rent_price_psf_q` has no display policy and pre-1997 history is not reliable. 1990–96 has `rent_psf` null throughout (`n_with_rent_ttm=0`) while `price_psf` rides 3–4 TTM observations (1994-12 ≈ $638/SF, 1995-12 ≈ $528/SF). First sustained period by a conservative gate (8 consecutive quarter"
+  },
+  {
+    "row_id": "K17",
+    "title": "`cm_gov_market_turnover_m` — export-side crop applied in code, DB and export policy have not converged. Pre-2012 rows are artifacts (2005-01 `active_count=1`, 2008-12 `=2`) against 79–180 TTM sales. A curated `resolveEffectiveDisplayFrom()` fallback pins gov market_turnover at 2012-01-01 in the expo"
+  },
+  {
+    "row_id": "K19",
+    "title": "gov seller-sentiment fix was never mirrored to dia. `cm-excel-export.js` drops the `_8q` columns and relabels `10+ yr` → `6+ yr` for gov; the 2026-08-12 follow-up (\"mirror the fix to dia + recent-tail coverage guard\") is recorded as intent with no evidence it landed. Re-measure before acting. → `doc"
+  },
+  {
+    "row_id": "K20",
+    "title": "dia 23654 Census-radius demographics write never completed. Prompt 16's live-apply checklist items 1–2 were applied and re-verified; item 3 (the Census-radius demographics write) is the remaining one. `scripts/backfill-dia-location-trade-area-23654.mjs` passes syntax check and `.env.local` carries a"
+  },
+  {
+    "row_id": "K18",
+    "title": "`cm_gov_core_cap_rate_dots` retains a lease-derived term fallback that nothing currently uses. Audited 2026-08-11: all 1,143 plotted dots come from sale-frozen `firm_term_years_at_sale`; `lease_fallback_term_dots = 0`. Acceptable for current report use — but future unbackfilled sales could enter thr"
+  },
+  {
+    "row_id": "EB0",
+    "title": "Decided 2026-09-11 — daily short-form in the morning email (updated as data/news arrives) + weekly long-form email linked from it; lanes dia / gov / NL / broad NL only; XB lives on the dashboard, Scott-only; notes = every channel into one funnel, auto-routed. Recorded in spec §0."
+  },
+  {
+    "row_id": "EB1",
+    "title": "SHIPPED (schema + contracts + measurement; NOT applied to any live DB, no rendering). Migration `20260911165100_lcc_eb1_exec_briefs_foundation.sql`: five tables (`market_brief_facts`, `market_brief_issues`, `build_brief_snapshots`, `operator_notes`, `producer_runs`) + two views (`v_market_brief_live"
+  },
+  {
+    "row_id": "EB1a",
+    "title": "Applied live 2026-09-11 (OC-a step 0). All 5 tables + 2 views confirmed on LCC Opps; 16 exemplar facts inserted (11 `[UNVERIFIED]` items correctly excluded); `v_market_brief_staleness` returns 20 (lane, section) cells, 5 populated / 15 `is_missing` (expected — only the `dialysis` lane has facts unti"
+  },
+  {
+    "row_id": "EB1b",
+    "title": "Anthropic API credit is exhausted — the snapshot edge fn's call has failed daily (≥ 09-02; code comment says since 2026-07-08). Blocks MB5 (P-WEB) and any cloud fallback; burns a failed call + warning daily. Decide: fund credits with a hard monthly cap, or keep P-WEB off and run MB on P-SQL + P-RSS "
+  },
+  {
+    "row_id": "OC1",
+    "title": "Shipped 2026-09-11 — `POST /api/operator-notes`, three of four channels live. In-app Note button (`operator-note-client.js`, floating button + modal, auto-captures route/entity/last-10-errors) · MCP `log_operator_note` (sibling of `log_memory`) · Outlook, with the LCC-Note dormancy diagnosed and fix"
+  },
+  {
+    "row_id": "OC2",
+    "title": "Shipped 2026-09-11, flag OFF (`OPERATOR_NOTE_TRIAGE`). `GET/POST /api/operator-triage-tick`, deterministic rules first (error signatures/stuck-loading/missing-data/idea/ux/trailing-`?` patterns), on-box Ollama on a miss (fails closed, no cloud fallback), dedupe vs prior open notes + a generated PLAN"
+  },
+  {
+    "row_id": "OC3",
+    "title": "Shipped 2026-09-11. `scripts/render-operator-inbox.mjs --write` → GENERATED `docs/os/OPERATOR-INBOX.md`, grouped by `routed_to` thread, severity-sorted. MCP `get_operator_inbox` read tool + `/api/operator-inbox` HTTP route read the identical query. Not yet wired into `.claude/hooks/session-start.sh`"
+  },
+  {
+    "row_id": "OC4",
+    "title": "Close the loop — disposition per note (row / PR / refuted-by-measurement), reported in the next XB issue."
+  },
+  {
+    "row_id": "MB1",
+    "title": "P-SQL producer — on-box structured facts per lane (our comps/cap bands, trades, on-market, CMS clinic counts, GSA events), on ingest + nightly. Add `cortex_market_intel` as a source (live, 922 email-parsed listing alerts with cap rate/price/tenant/type — also the only general-NL on-market signal; sh"
+  },
+  {
+    "row_id": "MB2",
+    "title": "P-RSS producer — extend `briefing-intel-snapshot` streams; Ollama classifies + extracts cited candidate facts daily. Measured: gov/tax streams go empty some days (gov 0 on 09-07/08) — add feeds per lane before relying on it."
+  },
+  {
+    "row_id": "MB3",
+    "title": "Daily \"Lane Briefs\" block in the morning email (upgrades §8 Sector Watch) — fact-diff \"what changed\" + top facts + link."
+  },
+  {
+    "row_id": "MB4",
+    "title": "Homepage \"Market Briefs\" tab `#/briefs/<lane>` — live view, archive, changed-since highlight."
+  },
+  {
+    "row_id": "MB5",
+    "title": "P-WEB producer — weekly + event-triggered cited web research via Anthropic API + web search; public facts only; budget-capped; degrades visibly when the key/credit is missing. Blocked by EB1b (no API credit). Also needs the web-search `tools` field added (EB1: absent in current code)."
+  },
+  {
+    "row_id": "MB6",
+    "title": "Synthesizer + weekly long-form email (Monday, all four lanes, exemplar structure)."
+  },
+  {
+    "row_id": "MB7",
+    "title": "Broker recall — MCP `get_market_brief(lane, section?, as_of?)` + canon block → render → surface pastes."
+  },
+  {
+    "row_id": "MB8",
+    "title": "Broad net-lease lane — depends on the general-NL on-market store gap shared with BUY0/UX-T4."
+  },
+  {
+    "row_id": "XB1",
+    "title": "Collector — GitHub Action on push to `main` + nightly: STATUS / BACKLOG / CURRENT-STATE / prompts / responses / git / CI + pipeline & deploy health → `build_brief_snapshots`."
+  },
+  {
+    "row_id": "XB2",
+    "title": "Audit rules — doc contradictions (e.g. 2026-09-11 ⭐NEXT C2g vs live queue PDR2), stale dated blockers, branch/uncommitted drift, orphaned prompts, GENERATED hand-edits, stale brief facts, dead producers, flags ON with no consumer → ranked next-best-effort list."
+  },
+  {
+    "row_id": "XB3",
+    "title": "`#/exec` dashboard (Scott-only, always current)."
+  },
+  {
+    "row_id": "XB4",
+    "title": "Ollama narrative + weekly Scott-only email; a Scott-only daily line waits on per-recipient rendering (does not reopen P13 fork 3)."
+  },
+  {
+    "row_id": "PI1",
+    "title": "Inventory and version the existing ASC identity rules. Name each transformation, evidence burden, reason code, collision guard, second-review requirement, and owner. Preserve historical frozen-token compatibility as an explicit rule, not an implicit re-normalization."
+  },
+  {
+    "row_id": "PI2",
+    "title": "Build a de-identified golden mismatch corpus with adversarial negative controls. Cover suites/floors, parent buildings, same-address campuses, ranges, directionals, suffixes, municipality aliases, compound streets, postal variants, historical tokens, and confusable facility names. No private rows or"
+  },
+  {
+    "row_id": "PI3",
+    "title": "Extract a lane-neutral pure matcher and structured decision object. The component must be deterministic, versioned, write-free, and fail closed; existing ASC outcomes replay unchanged except separately approved corrections."
+  },
+  {
+    "row_id": "PI4",
+    "title": "Add sidebar identity diagnostics and explicit candidate refresh/advance state. Show the active frozen candidate, component verdicts, corroboration, rule version, second-review flag, failure class, and one safe next action. Eliminate stale-candidate ambiguity without retargeting on page navigation."
+  },
+  {
+    "row_id": "PI5",
+    "title": "Run read-only shadow evaluation across approved current and future lanes. Report changed decisions, collisions, and review load before any lane adopts a shared rule. No canonical writes or scope expansion."
+  },
+  {
+    "row_id": "PI6",
+    "title": "Design a governed property-alias ledger. Every alias needs citations, scope, authorization, timestamps, reason, review/expiry behavior, replay, and rollback. This requires a separate schema/security decision before migration or use."
+  },
+  {
+    "row_id": "PI7",
+    "title": "Emit aggregate identity-quality metrics. Measure match modes, missingness, disagreements, collisions, second-review agreement, stale-state errors, technical failures, and research time without exposing row-level or licensed data."
+  },
+  {
+    "row_id": "PI8",
+    "title": "Optional on-box discrepancy-note assistant. After PI3 emits structured decisions, an on-box model may suggest reason codes or draft reviewer notes. It is advisory only and may never match, alias, approve, or write."
+  }
+]
