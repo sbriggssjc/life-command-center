@@ -1,5 +1,50 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — ID1 live-DB follow-up: government + LCC Opps measured (PR #2323); corrects the sibling ranking below
+
+The ID1 entry immediately below this one shipped with no live DB credentials and marked
+government/LCC Opps as proposed-but-not-run queries. This pass had live Supabase access
+(read-only `SELECT`/`information_schema` only — no writes, no migrations, no flag flips) and ran
+them. New `§9` appended to `docs/audits/ID1_OPERATOR_IDENTITY_AUDIT_2026-09.md` (nothing above §9
+was rewritten — corrections point back to it, per this repo's own "correct in place with the
+measurement, never delete" doctrine).
+
+**Corrects a claim in the entry below: government does NOT have "no normalizer at all."**
+`gov.properties.agency_canonical` already collapses 1,286 raw strings to 45 clean codes (VA 2,174,
+GSA 1,911, SSA 1,408, USDA 672, …), and a 65-row `government_agencies` registry already exists.
+**The real defect is unwired plumbing, not a missing normalizer**: `properties.agency_id` is **0 of
+20,509** populated, and the multi-tenant bridge `property_agencies` (132,243 rows, 7,865
+properties) sits at **160/132,243 (0.12%) FK coverage** against **498 distinct, unnormalized**
+`agency_code` values — worse FK coverage than dialysis operator (30–78%), via a different
+mechanism. Still ranked #1 sibling by reach, now for a cheaper reason: wire two already-existing FK
+columns to an already-existing registry, don't build a normalizer from nothing.
+
+**Resolves an open item: the LCC Opps `lcc_operator_affiliate_patterns` seed did NOT degrade.** 230
+patterns / **29 distinct parent entities** live — well beyond the four operators named in the
+migration's own text. Confirms the live canonical Fresenius entity is stored as `fresenius medical
+care` (lowercase), directly from the row, not just from reading the seed SQL.
+
+**Confirms `cortex_market_intel` exists and is live**, resolving the "could not locate" flag from
+the prior pass: 922 rows, 897 carry a `tenant` value, **671 distinct strings**, no FK column at
+all. Its writer is still not located in this repo — flagged as an open attribution gap, since this
+repo's doctrine requires fixing a fact at its source of record and the source is unidentified.
+
+**New finding, not in the original prompt: `entities.canonical_name` on LCC Opps carries 250+ rows
+with `davita`/`fresenius` as a bare substring** — almost entirely `domain='dia'` property/deal
+names minted by the asset-entity mint path (`asset-entity.js`), not operator identities (e.g.
+`davita corpus christi padre island drive tx`, `fresenius kidney care center located in
+hillsboro`). Worse: the operator's own bare name has been independently re-minted — **4 distinct
+entity rows literally named `davita`**, **4 named `fresenius medical care`** — and only one of each
+is the row the affiliate-pattern registry actually points at. This directly blocks the ID2 design's
+planned "link entities to the operator registry by name match" step: a naive match would mismerge
+hundreds of properties into the operator identity. Moved into the ranked sibling list at #3.
+
+Backlog: `docs/os/PLANNED-BACKLOG.md` §P0d ID1/ID3 rows updated with the corrected government
+ranking, the resolved seed/`cortex_market_intel` open items, and the new §9.4 entity-pollution
+finding as a ranked sibling. **Still open, unchanged by this pass**: Scott's 👤 canonical-name
+decision (§5.2 of the audit), the `DaVita | ...` composite-string attribution gap, and the
+`cortex_market_intel` writer identity.
+
 ## 2026-09-11 — ID1 shipped: the operator-identity audit, and a THIRD registry the queuing note above missed
 
 Executed the ID1 prompt in full (read-only against every live DB; no writes, no migrations, no flag
