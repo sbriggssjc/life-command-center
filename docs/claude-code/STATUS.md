@@ -16,6 +16,56 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-11 — PRI1 merged and confirmed excellent; then a live CMS ingestion crash revealed the same root cause is causing REAL data loss across at least 3 pipeline components — full catalog filed as `PRI3`
+
+Two things landed together this turn: PRI1's response (thorough, answered every unit directly), and a
+fresh CMS ingestion crash Scott reported via Railway's own "Deploy Crashed" email plus the run's logs.
+
+**PRI1, closed.** `fetch_properties_for_extraction()`'s bare `.execute()` now routes through the
+codebase's own `safe_execute()` (already used at 113 call sites, already special-cases this exact
+`ConnectionTerminated` error as transient) — a genuinely well-scoped fix that reused an existing pattern
+rather than inventing one. Confirmed the RLS-check warning shares the same root cause (one cached
+Supabase client, one connection pool). Traced the 5-hour idle-container mystery to nothing in the code
+and pointed at Railway's own container lifecycle instead — asked Scott to check for a distinct "exited
+with code 1" line to confirm, still open. 64/64 tests pass. PR `sbriggssjc/Dialysis#7404` confirmed
+merged. Moved to ✅ in `PLANNED-BACKLOG.md`.
+
+**Then the fresh crash arrived — and it's much worse than PRI2's "wasteful but survives" framing.**
+Scott's freshly triggered CMS run hit the identical `ConnectionTerminated` error, but at call sites
+`PRI1`'s fix doesn't touch, and this time with **real, permanent data loss**, not just doubled retries:
+
+- `oig_leie_ingestor`: `fetched=84001 upserted=42000 errored=42001` — essentially half a federal
+  exclusion-list ingestion run lost, no per-batch retry (291 distinct failed-batch log lines in this
+  window alone).
+- `ownership_linker`: **all 9 of 9 linking sub-steps failed**, zero retry anywhere, every counter `0`
+  this run.
+- A genuine **separate code bug** inside that same cascade: `Address matching failed: cannot access
+  local variable 'owners' where it is not associated with a value` — an `UnboundLocalError`, not a
+  connection error, needing its own real fix.
+- `utils_shared`'s `pending_updates` fetch and `ingestion_tracker`'s run-start both hit the same error
+  (the latter retries twice and still fails) — meaning **this run may have no `ingestion_tracker` row at
+  all**, worth knowing given how much this arc has leaned on that table.
+- The final run summary printed **all zeros** with an explicit warning that counters "were not
+  recorded" — unclear whether real clinic processing (earlier, outside this log excerpt) also failed, or
+  the counters mechanism itself silently breaks under upstream errors.
+- `Pipeline finished with 1 failed step(s): census_demographics` — cause not visible in this excerpt.
+- The actual fatal crash Railway's email refers to isn't visible in this log slice either — it ends on
+  an orderly-looking (if all-zero) summary, not a raw traceback.
+
+**Filed the full catalog and a remediation plan as `PRI3`** (`PLANNED-BACKLOG.md`), with a drafted prompt
+(`docs/claude-code/prompts/PRI3-connection-retry-sweep-and-ownership-linker-bug.md`) asking the
+Dialysis-side session to apply the same `safe_execute()` pattern PRI1 already proved correct to each
+newly-found call site, fix the `owners` bug directly, and get plain answers on the three open questions
+(the zeroed counters, `census_demographics`, and the actual crash trigger) rather than assuming.
+`PRI2`'s row updated to point at `PRI3` for the full severity picture, since "wasteful retries" was too
+mild a description once real data loss was confirmed.
+
+**Next step.** Send `PRI3` to the Dialysis-side CC session — recommend this one NOT be queued, given
+confirmed data loss, unlike `PRI1`'s original "add to the to-do list" framing. Still separately owed:
+the `clinic_quality_metrics` full-table scale check that was the original reason for triggering this run
+— worth re-running once `PRI3`'s connection issues are addressed, since this crash likely means the
+CMS-clinics phase of this particular run didn't complete cleanly either.
+
 ## 2026-09-11 — PDR14 investigated per Scott's direction: only 28 of 89 orphaned LCC-dia links trace to a known dia merge ledger; evidence points the other 61 at pre-audit-log-era cleanup, not ongoing loss; two fix prompts filed (PDR14a, PDR14b)
 
 Scott's direction: dig into the 66 unexplained orphans to rule out an ongoing/larger issue, but pursue
