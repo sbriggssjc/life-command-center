@@ -327,6 +327,24 @@ async function wireAscResearchAction(ctx, actions) {
   missing.style.cssText = 'margin-left:5px;margin-top:5px;';
   missing.textContent = 'Complete: CoStar + RCA not found';
   wrap.appendChild(missing);
+  const parcelEvidenceAlias = (
+    Array.isArray(target.cms_evidence?.approved_same_parcel_address_conflicts)
+      ? target.cms_evidence.approved_same_parcel_address_conflicts : []
+  ).find((alias) =>
+    alias?.status === 'approved'
+    && alias?.reason_code === 'service_location_multi_address_same_parcel_recorded_owner_identity'
+    && alias?.capture_authorized === false
+    && alias?.second_review_required === true
+    && alias?.costar_property_id
+    && alias?.parcel_number
+  );
+  const parcelEvidence = parcelEvidenceAlias ? document.createElement('button') : null;
+  if (parcelEvidence) {
+    parcelEvidence.className = 'btn btn-sm btn-secondary';
+    parcelEvidence.style.cssText = 'margin-left:5px;margin-top:5px;';
+    parcelEvidence.textContent = 'Complete parcel evidence only';
+    wrap.appendChild(parcelEvidence);
+  }
   actions.appendChild(wrap);
 
   const appendCaptureCompletion = () => {
@@ -358,6 +376,34 @@ async function wireAscResearchAction(ctx, actions) {
     });
   };
   if (Number(target.capture_count) > 0) appendCaptureCompletion();
+
+  parcelEvidence?.addEventListener('click', async () => {
+    const confirmed = window.confirm(
+      'Confirm this candidate has approved same-parcel recorded-owner evidence. This will advance the worklist with zero captures and mandatory second review.',
+    );
+    if (!confirmed) return;
+    parcelEvidence.disabled = true;
+    button.disabled = true;
+    missing.disabled = true;
+    parcelEvidence.textContent = 'Recording parcel evidence…';
+    const advanced = await apiCall('/api/asc-research-complete', {
+      run_id: target.run_id,
+      candidate_fingerprint: target.candidate_fingerprint,
+      completion_mode: 'parcel_evidence_only',
+    });
+    if (advanced.ok) {
+      parcelEvidence.textContent = 'Parcel evidence recorded ✓ — open next property';
+      detail.textContent = 'Candidate advanced with zero captures and mandatory second review. Reload the next property to load the next frozen candidate.';
+    } else {
+      parcelEvidence.disabled = false;
+      button.disabled = false;
+      missing.disabled = false;
+      parcelEvidence.textContent = 'Complete parcel evidence only';
+      detail.textContent = toErrorMessage(
+        advanced.data?.detail || advanced.data?.error || advanced.error
+      ) || 'Could not complete parcel evidence';
+    }
+  });
 
   missing.addEventListener('click', async () => {
     const label = identity.facility_name || identity.ccn || 'this frozen candidate';

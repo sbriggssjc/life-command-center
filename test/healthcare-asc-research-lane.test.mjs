@@ -1276,3 +1276,34 @@ test('CoStar value-first tenancy cards preserve the explicit single-tenant gate'
     /\/\^\(single\|multi\)\$\/i\.test\(line\)[\s\S]+\/\^tenancy\$\/i\.test\(next\)[\s\S]+data\.tenancy_type\s*=\s*line/,
   );
 });
+
+test('parcel-owner evidence completion advances with zero captures and mandatory second review', async () => {
+  const [migration, handler, sidepanel] = await Promise.all([
+    readFile(new URL('../supabase/migrations/20261002100000_lcc_asc_parcel_evidence_completion.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
+    readFile(new URL('../extension/sidepanel.js', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(migration, /service_location_multi_address_same_parcel_recorded_owner_identity/);
+  assert.match(migration, /capture_authorized' = 'false'/);
+  assert.match(migration, /candidate_completion_authorized' = 'false'/);
+  assert.match(migration, /second_review_required' = 'true'/);
+  assert.match(migration, /v_capture_count <> 0/);
+  assert.match(migration, /final_disposition[\s\S]*parcel_owner_evidence_only/);
+  assert.match(migration, /set status = 'reviewed'/);
+  assert.match(migration, /security invoker/i);
+  assert.match(migration, /revoke all[\s\S]*from public, anon, authenticated/i);
+  assert.doesNotMatch(migration, /insert into public\.healthcare_research_captures/i);
+  assert.doesNotMatch(migration, /canonical_write_authorized\s*=\s*true/i);
+
+  assert.match(handler, /completion_mode === 'parcel_evidence_only'/);
+  assert.match(handler, /lcc_complete_asc_candidate_parcel_evidence/);
+  assert.match(handler, /capture_created: false/);
+  assert.match(handler, /canonical_write_performed: false/);
+  assert.match(handler, /exact_parcel_evidence_completion_required/);
+
+  assert.match(sidepanel, /Complete parcel evidence only/);
+  assert.match(sidepanel, /completion_mode: 'parcel_evidence_only'/);
+  assert.match(sidepanel, /capture_authorized === false/);
+  assert.match(sidepanel, /second_review_required === true/);
+});
