@@ -485,6 +485,7 @@ function approvedSameParcelAddressConflict(target, context, frozenAddressToken, 
         !recordedOwnerAssessorAddressMatches
         || !ownerMailingLocationMatches
         || !recordedOwnerIdentityMatches
+        || alias?.capture_authorized !== true
         || alias?.second_review_required !== true
       ))
       || !clean(alias?.authorized_by)
