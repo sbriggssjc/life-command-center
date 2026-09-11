@@ -1312,3 +1312,33 @@ test('parcel-owner evidence completion advances with zero captures and mandatory
   assert.match(sidepanel, /capture_authorized === false/);
   assert.match(sidepanel, /second_review_required === true/);
 });
+
+test('parcel-situs evidence completion excludes adjacent CoStar property capture', async () => {
+  const [migration, handler, sidepanel] = await Promise.all([
+    readFile(new URL('../supabase/migrations/20261002110000_lcc_asc_parcel_situs_evidence_completion.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
+    readFile(new URL('../extension/sidepanel.js', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(migration, /service_location_exact_parcel_situs_adjacent_context_record/);
+  assert.match(migration, /adjacent_context_only' = 'true'/);
+  assert.match(migration, /parcel_situs_address_token' = c\.address_token/);
+  assert.match(migration, /context_property_address_token'[\s\S]*<> c\.address_token/);
+  assert.match(migration, /context_parcel_number'[\s\S]*<>[\s\S]*parcel_number/);
+  assert.match(migration, /capture_authorized' = 'false'/);
+  assert.match(migration, /second_review_required' = 'true'/);
+  assert.match(migration, /v_capture_count <> 0/);
+  assert.match(migration, /parcel_situs_evidence_only/);
+  assert.match(migration, /on conflict on constraint healthcare_research_reviews_pkey do update/i);
+  assert.match(migration, /security invoker/i);
+  assert.match(migration, /revoke all[\s\S]*from public, anon, authenticated/i);
+  assert.doesNotMatch(migration, /insert into public\.healthcare_research_captures/i);
+  assert.doesNotMatch(migration, /canonical_write_authorized\s*=\s*true/i);
+
+  assert.match(handler, /completion_mode === 'parcel_situs_evidence_only'/);
+  assert.match(handler, /lcc_complete_asc_candidate_parcel_situs_evidence/);
+  assert.match(handler, /exact_parcel_situs_evidence_completion_required/);
+  assert.match(sidepanel, /Complete parcel situs evidence only/);
+  assert.match(sidepanel, /completion_mode: 'parcel_situs_evidence_only'/);
+  assert.match(sidepanel, /adjacent_context_only === true/);
+});
