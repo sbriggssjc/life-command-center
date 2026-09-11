@@ -1,5 +1,37 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — MB-a: MB1/MB2 market-brief producers built (dialysis lane), flags OFF, NOT live-verified
+
+Branch `claude/sweet-gates-83wyu7` → PR (see docs). Built `MB1` (P-SQL, `api/_handlers/market-brief-psql-tick.js`)
+and `MB2` (P-RSS, `api/_handlers/market-brief-rss-tick.js`) per `prompts/MBa-market-brief-producers-dialysis.md`,
+producers only — no rendering, no email, no UI, no cloud-model calls. Migration
+`20260911180000_lcc_mba_market_brief_producers.sql` adds `market_brief_facts.fact_key` (+ a partial unique index
+scoped to `status='live'`, the identity a source-url-less SQL derivation needs — EB1's own
+`uq_mbf_source_identity` only fires when `source_url`+`source_date` are both present), registers
+`MARKET_BRIEF_PSQL`/`MARKET_BRIEF_PRSS` in `feature_flags_registry` (both `off`), and schedules both crons
+(guarded `NOT EXISTS`, not flag-gated — the P138 pattern: an unscheduled job is invisible even when its flag is
+off). New shared modules `api/_shared/market-brief-facts.js` (fact builders + the pure `decideFactWrite`
+supersede/skip/conflict decision + the RSS verbatim-number check) and `api/_shared/market-brief-rss.js`
+(extraction prompt/parse/verbatim-filter, fails closed with no cloud fallback — mirrors the OC2/Analyst's-Take
+on-box pattern). 74 new tests (`market-brief-facts.test.mjs`, `market-brief-rss.test.mjs`,
+`market-brief-tick-handlers.test.mjs`), all fixture-based, no network. Full suite 5,890/0/6-skipped.
+
+**Measured (repo-only, no live Supabase/Railway reach this session):** dia sources wired are
+`sales_transactions` (TTM cap-rate band, per-operator with a 5-comp floor, and trades-since-last-run),
+`v_dia_on_market` (on-market count + median ask cap), `medicare_clinics` (top-8 operator counts + net-change vs.
+prior run). **NOT wired:** `cortex_market_intel` (writer still unlocated across two sessions — new row **MB1a**)
+and gov GSA lease events (dialysis-first per the prompt). CMS "closures" are a count net-change, not a real
+open/close event feed — no termination/status column could be confirmed from the repo (new row **MB1b**).
+PLANNED-BACKLOG §P18 rows MB1/MB2 updated with the full source list, gaps, and the exact live-verify steps.
+
+**What could NOT be done here, per this repo's own doctrine (dry-run-first, verify-live-then-flip):** running
+either tick against live Supabase/Railway, confirming `v_dia_on_market`'s actual column names (the GET dry run's
+`gaps[]` array is designed to surface a 400 there before any POST), the before/after `v_market_brief_staleness`
+snapshot for the dialysis lane, and sampling 5 real facts with citations. **Next: an operator/session with live
+reach runs the GET dry run for both ticks, reads `gaps[]`, runs one POST with the flag forced on, reports the
+five things above, then flips both flags and confirms the cron minutes (`7:15`/`10:10` UTC, picked without
+reach to `cron.job` — check for a collision before relying on them).**
+
 ## 2026-09-11 — OC-a reconciled (PR #2298 merged): funnel built, NOT yet a live loop; MB-a prompt drafted
 
 Processed `responses/OC-a desktop response.docx` → `done/`; prompt → `prompts/done/`. OC-a shipped EB1a (applied
