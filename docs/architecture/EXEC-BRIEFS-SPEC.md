@@ -1,7 +1,7 @@
 # Executive Briefs — Market Briefs per swimlane (MB) + CTO/CDO Build Brief (XB) + Operator Funnel (OC)
 
 **Spec v0.2 — decisions recorded 2026-09-11 (Scott), architecture recommended (Cowork). Design approved in
-principle; build proceeds prompt-by-prompt (first: `docs/claude-code/prompts/EB1-exec-briefs-foundation.md`).**
+principle; build proceeds prompt-by-prompt. EB1 (foundation) merged PR #2291 2026-09-11; next: `docs/claude-code/prompts/OCa-operator-funnel-v1.md`.**
 **Backlog:** `docs/os/PLANNED-BACKLOG.md` §P18. **Exemplars:** `docs/briefs/exemplars/2026-09-11-*.md`.
 
 ## 0. Scott's decisions (2026-09-11)
@@ -123,13 +123,13 @@ by measurement Z) and the next XB issue reports it back.
 
 ## 7. Build order (each step flag-gated OFF until verified live)
 
-1. **EB1 — foundation:** measure existing machinery; migrations for the four tables + `producer_runs`;
-   payload contracts; no rendering. (prompt drafted)
-2. **OC-a — funnel v1:** endpoint + in-app Note button + MCP `log_operator_note` + triage tick +
-   OPERATOR-INBOX render. *First, because every later step then improves faster.*
+1. ✅ **EB1 — foundation:** schema + contracts + seed (PR #2291). Migration **not yet applied live** → EB1a.
+2. **OC-a — funnel v1:** apply EB1 live, endpoint + in-app Note button + MCP `log_operator_note` + Outlook
+   `LCC-Note` branch + triage tick + OPERATOR-INBOX render (via session-start hook + MCP read, no bot commits).
+   *First, because every later step then improves faster.* (prompt drafted)
 3. **MB-a — P-SQL + P-RSS producers** for dialysis, then gov / NL.
 4. **MB-b — daily "Lane Briefs" block + homepage tab.**
-5. **MB-c — P-WEB weekly + event triggers; synthesizer; weekly long-form email; MCP `get_market_brief` + canon.**
+5. **MB-c — [blocked on EB1b: Anthropic credit] P-WEB weekly + event triggers; synthesizer; weekly long-form email; MCP `get_market_brief` + canon.**
 6. **XB-a — collector Action + audit rules + `#/exec` dashboard; XB-b — Ollama narrative + weekly email.**
 
 ## 8. Still open (small)
@@ -137,3 +137,17 @@ by measurement Z) and the next XB issue reports it back.
 - Anthropic API budget ceiling per week for P-WEB (default proposal: hard cap per run, logged).
 - Weekly send day/time (proposal: Monday 6:30 CT, ahead of the daily).
 - Which Teams channel for the note intake.
+
+## 9. Measured state (2026-09-11, Cowork, live read-only on LCC Opps) — supersedes EB1's UNMEASURED cells
+
+| Item | Measured |
+|---|---|
+| EB1 tables | **Not applied** — 0 of 5 exist. Apply in OC-a step 0 (EB1a). |
+| RSS streams (`briefing_intel_snapshot.sector_news`, last 8 rows) | All 4 live, capped at 6 items/stream. **government 0 on 09-07 and 09-08; tax_policy 0 on 3 of 8 days** → P-RSS needs more feeds per lane. |
+| Analyst's Take (Ollama) | Live daily since 09-03, 316–680 chars, `onprem_ollama`; 09-02 null. `BRIEFING_ANALYST_TAKE_ONPREM` = on. |
+| Anthropic API | Key present on the snapshot fn, **every call 09-02→09-11 fails: "credit balance is too low"** (code comment: since 2026-07-08). → EB1b decision; P-WEB blocked; §2 degradation path is the live reality today. |
+| Tagged Outlook intake | `TAGGED_COMM_INTAKE` = on, but **6 rows ever, last 2026-08-07, 0 in 30 d** → diagnose the PA flow before relying on the email channel. |
+| `cortex_market_intel` | **Exists live** (EB1 could not see it from the repo): 922 rows, last write 2026-09-11 06:30 UTC; email-parsed listing alerts with tenant, property_type, city_state, price, cap_rate, psf, dom, sf. Writer lives outside the repo. → a P-SQL source for MB1 and the only general-NL on-market signal (shared with BUY0). |
+
+**Routing table location (OC-a):** `docs/os/operator-note-routing.json` (data, versioned in the repo). Promote to a
+canon block only when a surface needs to read it.
