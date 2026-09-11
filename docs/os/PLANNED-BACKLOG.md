@@ -970,6 +970,33 @@ of what shows is the patterns showing themselves. The panel copy has been correc
 | **UX-T4** | **Buyer-representation / 1031 clients tab** (UX42) — a new vertical; design in P11 first. | 🔵 | P11 |
 | **UX-process** | **Best practices adopted from the review** (app-ux-review §3): a five-line per-surface contract in the docs; a human-in-the-loop budget per surface; screenshot-driven acceptance on surface PRs; a weekly dated review section appended to the review page. | 🟢 | |
 
+## ID3/ID4 — Identity integrity program (baseline measured 2026-09-11, nothing built)
+
+Following ID1's operator-identity audit, `docs/audits/ID4_IDENTITY_INTEGRITY_BASELINE_2026-09.md`
+extends the same measurement discipline to the other identity columns ID0/ID1 named (gov owner
+entities, gov agencies, gov county/state pairs, dia guarantors, dia brokers) and states the
+resolver-framework design + a ranked per-class plan. **Read that doc before starting any of the
+rows below — do not re-derive the numbers, they move.**
+
+| row | class | population (live, 2026-09-11) | status |
+|---|---|---|---|
+| **ID3a** | gov agency FK wiring (`properties.agency_id` / `property_agencies.agency_id`) | normalizer + registry exist; FK 0% / 0.12% wired | 🟢 lowest risk, highest reach — recommended first |
+| **ID3e** | gov county/state vocabulary normalization | 834/2,445 pairs (34%) collapse on case/whitespace | 🟢 lowest risk |
+| **ID3b** | gov `true_owners` duplicate entities | 991 groups / 2,004 rows (alnum-strip) | 🟡 needs a review lane, never auto-merge |
+| **ID3d** | dia `leases.guarantor` identity | 713 rows / 169 distinct / 134 normalized | 🔵 low reach |
+| **ID3c** | dia `brokers.broker_name` identity | 147 alnum-strip groups, but the key is UNSAFE (surnames/brands collide) | 🔴 sequence AFTER BR1–BR5 (`broker-and-firm-identity.md`) lands |
+| **ID3f** | dia operator/property duplicates | 14-row `operators` table, 2 collapsible groups; real defect is the missing parent/brand model (ID1/ID2a), not string collapse | 🔵 lowest priority; CMS-feed-dead sibling finding belongs to B6d-cms |
+
+**Also surfaced, not part of this program:** dia `medicare_clinics.chain_organization`
+(DaVita/Fresenius) re-measured at 2,796/2,768 rows, both series dead since **2026-01-22** —
+confirms the B6d-cms dead-feed finding and **retracts** ID1's cited "2,450/2,450 truncated import"
+signature as stale/wrong (the mechanism claim, not the dead-feed fact).
+
+**👤 Open for Scott:** confirm the ID3a→f ranking; confirm ID3c waits on BR1–BR5; decide whether to
+build the general registry-driven I13/I14/I15 detector now or after ID3a proves the pattern on one
+class (the audit recommends the latter, per the "framework built ahead of evidence" hazard this
+repo has paid for before — N15c/P189).
+
 ## P10a — Cross-lane property identity and address resolution (designed, not built)
 
 The restricted ASC sample exposed a platform class: property identity cannot be maintained as an expanding
