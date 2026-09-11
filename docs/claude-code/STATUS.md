@@ -1,5 +1,17 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — MB-a reconciled (PR #2301 merged): live check finds 4 source defects; MB-a2 fix prompt drafted
+
+Processed `responses/MB-a desktop response.docx` → `done/` (CC had already filed the prompt). MB-a built MB1 (P-SQL)
++ MB2 (P-RSS, Ollama-only, verbatim-number check), 74 tests, 5,890/0, filed MB1a (`cortex_market_intel` writer) and
+MB1b (CMS closures are net-count only). **Cowork live check (read-only):** migration `20260911180000` **not applied**;
+0 `producer_runs`. Against Dialysis_DB: `sales_transactions` has no `operator_name/address/city/state` (→ 400);
+raw `cap_rate` on 37 TTM rows vs `cap_rate_final` on 106 with 66 excluded rows (→ band must come from the shared comps
+engine); `v_dia_on_market` has `current_cap_rate` not `cap_rate` (→ 400); `medicare_clinics` read capped at 1,000 of
+6,695 (→ **silent** undercount). New backlog row **MB1c**; two design rules added to spec §9 (comps-engine parity for
+every cap-rate fact; SQL aggregation + truncation tripwire + column contracts). OPERATOR-ACTIONS **MBa-hold**: do not
+flip MB flags. **OC-v unchanged** (0 notes, no triage flag row, MCP not redeployed). **Next:** send
+`prompts/MBa2-psql-source-fixes-and-live-verify.md`; redeploy both Railway services after it merges (ships OC-a too).
 ## 2026-09-11 — OWN-T0j shipped: gov OWN-T0a disagreement split into `sponsor_family_confirmed` vs `unclassified_rival`
 
 Built the cross-database classifier the prompt above asked for. **Node-layer job, not SQL** — gov's

@@ -50,6 +50,7 @@ off. Session-start hook **is** wired (`.claude/hooks/session-start.sh` L23, non-
 `docs/architecture/EXEC-BRIEFS-SPEC.md` §6, PLANNED-BACKLOG.md §P18 (EB1a/OC1–OC3).
 
 ### Market-brief producers (MB-a, dialysis lane) — built, flags OFF pending live-verify
+**Cowork live check 2026-09-11 (read-only):** migration `20260911180000_lcc_mba_market_brief_producers.sql` **not applied** (no `fact_key`, no flag rows, no cron jobs, 0 `producer_runs`); P-SQL source queries do not match the live Dialysis_DB schema and the CMS count query truncates at 1,000 of 6,695 rows — **do not flip until MB1c (`prompts/MBa2-…`) ships.**
 `GET/POST /api/market-brief-psql-tick` (flag `MARKET_BRIEF_PSQL`) writes deterministic on-box SQL facts —
 TTM dia cap-rate band (whole-market + per operator, 5-comp small-n floor), on-market count + median ask cap
 from `v_dia_on_market`, trades since the producer's last run, CMS clinic counts by top operator + net-change vs.
