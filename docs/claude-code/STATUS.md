@@ -1,5 +1,38 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — Not actually a crash: `ownership_linker`'s fix confirmed working live for the first time; one new orphaned-tracker-row gap found, `census_demographics` still failing — filed as `PRI5`
+
+Scott reported the latest CMS ingestion run as "crashed" and sent logs. **It wasn't a crash** — no
+traceback, no hang; the process ran its full course and printed a complete, orderly summary. Two pieces
+of real good news:
+
+- **`PRI3`'s `ownership_linker` fix is confirmed working live for the first time**: `Properties →
+  true_owners: {'from_recorded_chain': 1, 'from_tenant_match': 0, 'from_cms_chain': 6570}` and `Contacts
+  → Salesforce: {..., 'by_company': 19}` — real, non-zero linkage counts, versus the original crash where
+  all 9 sub-steps failed with every counter at `0`. This is the live-fix proof this arc has been waiting
+  on since `PRI3` first shipped.
+- The process did **not** hang this time, consistent with (though not proof of) `PRI4`'s daemon-thread +
+  `os._exit(2)` mitigation.
+
+**One real, distinct new gap found and filed as `PRI5`**: `ingestion_tracker.start_run` failed after
+retries again (same persistent connection instability — expected per `PRI3`'s Section 2 conclusion), but
+this time **the pipeline continued anyway and completed successfully**, leaving that run's
+`ingestion_tracker` row permanently orphaned (`run_status='started'`, `finished_at=null`, 30+ minutes
+later — confirmed live). A live count shows this isn't isolated: **5 of `cms_medicare_clinics`'s
+`ingestion_tracker` rows are stuck at `started` forever, out of 118 `success`** — every stuck one traces
+to this arc's problem runs. This is a distinct code path from `PRI4`'s catalog (which covered the
+*preflight-abort* exit only) — this is the *pipeline proceeds and finishes normally after `start_run`
+itself failed* path, never revisited to close its own tracker row.
+
+Also filed in `PRI5`: `census_demographics` failed again (`PRI3`'s still-unresolved catalog item (g),
+recurring rather than a one-off), and the same all-zero-counters + "not recorded" warning `PRI3` called
+"two conflated but benign phenomena" — asked the next round to re-confirm that conclusion against this
+specific run rather than re-assert it, since it keeps recurring in the identical shape.
+
+Prompt: `docs/claude-code/prompts/PRI5-orphaned-tracker-row-on-start-run-failure-and-census-demographics.md`.
+Not urgent — the pipeline is genuinely producing real writes now — but worth closing since this arc has
+leaned on `ingestion_tracker` for run-timing correlation throughout, and orphaned rows undermine that.
+
 ## 2026-09-11 -- all three recommended next steps done: OWN-T0j prompt drafted, OWN-T0e confirm-lane gap found (not forced), AC11 re-measured (still 0, now explained)
 
 Scott: "let's do it all in the order you recommend" (build the gov-side classifier; prioritize OWN-T0e confirms
