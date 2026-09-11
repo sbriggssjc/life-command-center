@@ -56,6 +56,34 @@ a dangling `domain_property_id`). This is now more urgent than finishing PDR2, s
 undoing PDR1/PDR4's confirmed fix and will keep doing so with every future dia merge. PDR2 (the
 ownership guard-gap, 4,026-property blast radius) and PDR12 (Rock Hill planner gap) remain queued
 behind it, unaffected by this finding.
+## 2026-09-11 — New defect found and triaged: `public_record_ingest.py` crashes its whole batch on a single dropped Supabase connection (`PRI1`, queued not urgent)
+
+Scott noticed a separate service crash while checking on the (unrelated) CMS ingestion run he'd
+triggered, and asked for a triage + backlog entry rather than an immediate fix.
+
+**Triage, from the Railway logs he shared**: `public_record_ingest.py`'s batch (`batch=800
+chain_canonical_only=true force=false`, started 07:03:04 UTC) crashed 2 seconds after starting —
+`fetch_properties_for_extraction()`'s Supabase `query.execute()` raised an unhandled
+`httpx.RemoteProtocolError: <ConnectionTerminated error_code:0, last_stream_id:3, …>` (a dropped HTTP/2
+stream), which propagated uncaught through `run_batch()` → `main()`, killing the entire batch before a
+single property was processed. A near-simultaneous warning on what looks like the same connection
+(`user_interactions RLS check failed: <ConnectionTerminated …>`, same `last_stream_id:3`) suggests one
+dropped connection, not two bugs — worth confirming, not assuming. Separately noted: the container sat
+idle for 5+ hours after the crash before "Stopping Container" — worth a plain answer on whether that's
+expected or itself a small gap (a crashed process should probably exit promptly). Also flagged, cosmetic
+only: `"pending_updates is schema-light... this is OK"` logged at `error` severity despite saying it's
+fine — the same log-severity false-positive pattern seen in the CMS ingestion service, not a real defect.
+
+**Filed to `PLANNED-BACKLOG.md` as `PRI1`** and drafted
+`docs/claude-code/prompts/PRI1-public-record-ingest-connection-terminated-crash.md` — a standard
+retry-with-backoff fix around the vulnerable Supabase call(s), reusing whatever retry pattern already
+exists elsewhere in the codebase rather than inventing one. **Queued, not sent** — Scott asked to add
+this to the to-do list, not fix it now; ready whenever he wants to run it through the Dialysis-side CC
+session.
+
+**Next step.** Still waiting on the CMS ingestion run Scott triggered to finish, to do the final
+full-table `clinic_quality_metrics` check that closes the CQM1/RATINGS arc. `PRI1` can go out independently
+whenever convenient — it's unrelated to that arc.
 
 ## 2026-09-11 — CQM1 merged; fix independently confirmed live (single row), held at 🟡 not ✅ pending full-table proof — and the saved response transcript itself was thin, flagged rather than papered over
 
