@@ -1288,6 +1288,8 @@ test('parcel-owner evidence completion advances with zero captures and mandatory
   assert.match(migration, /capture_authorized' = 'false'/);
   assert.match(migration, /candidate_completion_authorized' = 'false'/);
   assert.match(migration, /second_review_required' = 'true'/);
+  assert.match(migration, /regexp_replace\(upper\(c\.address_token\)[\s\S]*PARKWAY\|PKY[\s\S]*PKWY/);
+  assert.doesNotMatch(migration, /set\s+address_token\s*=/i);
   assert.match(migration, /v_capture_count <> 0/);
   assert.match(migration, /final_disposition[\s\S]*parcel_owner_evidence_only/);
   assert.match(migration, /set status = 'reviewed'/);
