@@ -70,16 +70,29 @@ async function fetchGovComparablePopulation() {
     for (const p of r.data) propMap.set(p.property_id, p.true_owner_id);
   }
 
-  const ownerIds = Array.from(new Set(Array.from(propMap.values()).filter((x) => x != null)));
+  // BUGFIX 2026-09-11 (Cowork, live 502 found in production): the previous
+  // version batched true_owner_id UUIDs into a single `in.(...)` PostgREST
+  // filter at PAGE (1000) per request -- 1000 quoted UUIDs is ~39KB of query
+  // string, which Railway's edge/proxy rejects outright (measured live:
+  // POST/GET both returned 502 `{"error":"gov true_owners fetch failed at
+  // chunk 0"}` on the very first chunk). The `properties` fetch above uses
+  // the same `in.()` shape but with short numeric ids (~8KB for 1000 ids),
+  // which is why only this fetch broke. Fix: scan `true_owners` unfiltered,
+  // paged by limit/offset like the transitions fetch above, and keep only
+  // the ids this run actually needs -- no `in.()` filter, no URL-length
+  // ceiling regardless of how large `ownerIds` grows.
+  const ownerIdSet = new Set(Array.from(propMap.values()).filter((x) => x != null));
   const ownerNameMap = new Map();
-  for (let i = 0; i < ownerIds.length; i += PAGE) {
-    const chunk = ownerIds.slice(i, i + PAGE);
+  for (let offset = 0; ; offset += PAGE) {
     const r = await domainQuery('government', 'GET',
-      'true_owners?select=true_owner_id,name&true_owner_id=in.(' + chunk.map((x) => '"' + x + '"').join(',') + ')&limit=' + PAGE);
+      'true_owners?select=true_owner_id,name&order=true_owner_id.asc&limit=' + PAGE + '&offset=' + offset);
     if (!r.ok || !Array.isArray(r.data)) {
-      return { ok: false, error: 'gov true_owners fetch failed at chunk ' + i, status: r.status };
+      return { ok: false, error: 'gov true_owners fetch failed at offset ' + offset, status: r.status };
     }
-    for (const o of r.data) ownerNameMap.set(o.true_owner_id, o.name);
+    for (const o of r.data) {
+      if (ownerIdSet.has(o.true_owner_id)) ownerNameMap.set(o.true_owner_id, o.name);
+    }
+    if (r.data.length < PAGE) break;
   }
 
   const comparable = [];
