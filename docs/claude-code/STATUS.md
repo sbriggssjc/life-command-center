@@ -106,6 +106,39 @@ pull the trigger unsupervised the same day it's measured."
 a single proof case, or hold entirely until he's reviewed the split himself. Whichever he picks, PDR2/
 PDR3/PDR4/PDR7 (the property tabs marked "depends on PDR1" in §P17) need a live re-check against
 DaVita's post-merge state once it actually merges — not assumed fixed by the merge alone.
+## 2026-09-11 — `RATINGS-INSERT-COLLISION` marked ✅ closed: independently confirmed live in production, at full-table scale, not from Scott's uploaded logs but by querying Dialysis_DB directly
+
+Scott reported the RATINGS3 PR merged and shared logs from a run he triggered (starting 2026-09-11
+06:16 UTC). That log excerpt only covered its first 19 seconds — CFE-RUNAWAY/PROPREV1-stage activity,
+nothing from the ratings phase yet — so rather than draw a conclusion from an incomplete slice, this
+session queried Dialysis_DB directly (Supabase MCP), per this arc's own standing discipline.
+
+**Found the real proof, from an earlier run than the one Scott uploaded:** `ingestion_tracker` shows a
+`cms_medicare_clinics` run started **2026-09-10 22:05:31 UTC** — after PR #7402 merged at 18:32:10 UTC.
+A direct query of `ratings` shows **all 7,013 rows now carry a fresh `updated_at` timestamp, stamped
+between 22:05:32 and 22:17:13 UTC in that same run** — the March 2026-03-12 baseline that had been stuck
+through three straight rounds is completely gone. Checked `postgres_logs` minute-by-minute afterward:
+**zero `ratings_medicare_id_uidx` duplicate-key errors from 22:19 UTC onward**, across the full 8+ hours
+to now. This is the first time in this saga a full, real production run has actually executed the fixed
+code end-to-end and succeeded at scale — not a single hand-run row in a sandbox, the whole table.
+
+**One residual item, flagged but not blocking:** during the transition window itself (22:05:32–22:17:13),
+~219 `ratings_medicare_id_uidx` duplicate-key errors still fired even as all 7,013 rows ultimately
+succeeded — declining from ~18–21/minute down to 0 by the end of the window. Most likely explanation:
+the old and new containers briefly overlapped during the actual redeploy cutover (consistent with
+RATINGS3's own "merged is not running" finding, just observed from the other side — the moment a
+redeploy *does* land), or a benign retry-then-succeed race under concurrent writers. Didn't stop a
+single row from writing, but worth a quick look if it recurs on future runs.
+
+**`RATINGS-INSERT-COLLISION` moved from 🟡 to ✅** in `PLANNED-BACKLOG.md` — the one open question left
+after RATINGS3 (has the redeploy actually happened?) is now answered with live evidence, not an
+assumption. This closes a 3-round, cross-repo saga: CFE-RUNAWAY → RATINGS-INSERT-COLLISION → RATINGS2 →
+RATINGS3, all confirmed live.
+
+**Next step.** `RATINGS2 (clinic_quality_metrics half only)` is still 🔴 and still unverified — worth a
+direct look next time logs or a fresh Supabase check are convenient (does its full-table-probe call
+count actually drop to O(1) now?). Otherwise, with `CFE-RUNAWAY`/`PROPREV1`/`RATINGS-INSERT-COLLISION`
+all ✅, this arc's only remaining open thread in `Dialysis` is that one `clinic_quality_metrics` check.
 
 ## 2026-09-10 — RATINGS3 resolves the 3-round `ratings` saga: the fix was correct all along, the test run was executing stale pre-merge code, and a real (previously invisible) `updated_at` bug was found and fixed; live before/after proof obtained for the first time this arc
 
