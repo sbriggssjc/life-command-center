@@ -25,13 +25,43 @@
 // minted.
 // ============================================================================
 
-// Canonical operator names — exactly the dominant existing spelling per family.
+// Canonical operator names.
+//
+// ⚠️ ID2a (2026-09-11): Fresenius and US Renal Care were RENAMED off the
+// dominant-existing-spelling rule this module's header used to justify them
+// by. Scott's decision (docs/audits/ID1_OPERATOR_IDENTITY_AUDIT_2026-09.md
+// §11, per the audit's §5.2 "3 of 4 independent sources agree" evidence):
+//   - Fresenius → 'Fresenius Medical Care' (dia.operators, LCC Opps entities,
+//     and CMS chain_organization all already said this; this module was the
+//     ONE outlier, and its own comment admitted it chose the majority variant
+//     of the defect it was built to fix, not any external authority).
+//   - US Renal Care → 'US Renal Care' (the brand form CMS uses; the legacy
+//     legal-entity form 'US Renal Care, Inc.' is now an ALIAS, never the
+//     canonical target).
+// This is a single point of change — everything downstream (the SQL mirror
+// dia_operator_from_tenant, the dia.operators registry row, the dia
+// dia_operator_aliases seed) was updated in the SAME change
+// (supabase/migrations/dialysis/20260911200000_dia_id2a_operator_registry.sql)
+// so no second canonical map exists anywhere in the repo
+// (test/id2a-operator-registry.test.mjs pins that).
+//
+// Chart labels are UNCHANGED — SHORT_OPERATOR_DISPLAY below seeds the CM
+// export's existing `display: 'short_operator'` token so a longer canonical
+// name never lengthens a chart axis.
 const OP_DAVITA = 'DaVita';
-const OP_FRESENIUS = 'Fresenius';
-const OP_USRC = 'US Renal Care, Inc.';
+const OP_FRESENIUS = 'Fresenius Medical Care';
+const OP_USRC = 'US Renal Care';
 const OP_DCI = 'Dialysis Clinic, Inc.';
 const OP_ARA = 'American Renal Associates';
 const OP_SATELLITE = 'Satellite Healthcare';
+
+// Canonical → short chart-label map (ID2a §5.2's trade-off resolution: choose
+// the long, more-authoritative canonical name and solve the display-length
+// problem here, at export time, per the CM export's existing
+// `display: 'short_operator'` token — never by re-shortening the identity).
+export const SHORT_OPERATOR_DISPLAY = Object.freeze({
+  'Fresenius Medical Care': 'Fresenius',
+});
 
 // Deterministic, anchored alias map. Each pattern is anchored `^` so a stray
 // substring (e.g. a street or a clinic name containing a family token) never
@@ -146,4 +176,53 @@ export function operatorForTenant(tenant) {
 /** Test/audit helper — the distinct canonical operator targets. */
 export function listCanonicalOperators() {
   return [OP_DAVITA, OP_FRESENIUS, OP_USRC, OP_DCI, OP_ARA, OP_SATELLITE];
+}
+
+// ============================================================================
+// ID2a — the single resolver every writer routes through.
+//
+// `deriveOperatorFromTenant` above is the pure, offline classifier (no DB) —
+// it is what the SQL mirror `dia_operator_from_tenant` was generated from and
+// what this module's own tests pin. It cannot resolve an `operator_id`
+// (that needs the live registry + alias table on Dialysis_DB), so it is NOT
+// itself "the resolver" the ID2a design calls for.
+//
+// `resolveOperatorAgainstRegistry` IS that resolver: it calls the SQL mirror
+// function `dia_resolve_operator(text)` (added by
+// supabase/migrations/dialysis/20260911200000_dia_id2a_operator_registry.sql)
+// via the caller's own domain-query function, so the identity source is the
+// live registry — never a second copy of the alias map re-implemented here.
+// It FAILS CLOSED: any status other than 'matched' returns
+// `{ operatorId: null, status: 'needs_review' | 'non_dialysis' | 'blank' }`
+// and never mints a new operator row.
+//
+// @param {string} tenant - raw tenant/operator free text.
+// @param {(method:string, path:string, body?:object) => Promise<{ok:boolean,
+//   data?:any}>} domainQueryFn - e.g. `(m,p,b) => domainQuery('dialysis',m,p,b)`.
+// @returns {Promise<{operatorId:number|null, canonicalName:string|null,
+//   status:'matched'|'needs_review'|'non_dialysis'|'blank'|'lookup_failed'}>}
+export async function resolveOperatorAgainstRegistry(tenant, domainQueryFn) {
+  const t = typeof tenant === 'string' ? tenant.trim() : '';
+  if (!t) return { operatorId: null, canonicalName: null, status: 'blank' };
+  if (typeof domainQueryFn !== 'function') {
+    return { operatorId: null, canonicalName: null, status: 'lookup_failed' };
+  }
+  try {
+    const r = await domainQueryFn(
+      'POST',
+      'rpc/dia_resolve_operator',
+      { p_text: t }
+    );
+    const row = Array.isArray(r?.data) ? r.data[0] : r?.data;
+    if (!r?.ok || !row) return { operatorId: null, canonicalName: null, status: 'lookup_failed' };
+    return {
+      operatorId: row.operator_id ?? null,
+      canonicalName: row.canonical_name ?? null,
+      status: row.status || 'needs_review',
+    };
+  } catch {
+    // Fail closed — never guess, never mint. A caller reachability failure is
+    // the same as an unresolved name: leave operator_id NULL, review it.
+    return { operatorId: null, canonicalName: null, status: 'lookup_failed' };
+  }
 }

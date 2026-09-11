@@ -24,6 +24,37 @@ not decided yet, so there's no card today to fix.
 
 Updated `docs/os/PLANNED-BACKLOG.md`'s RO4 row (closed, root-caused).
 
+## 2026-09-11 — ID2a SHIPPED (unapplied): operator registry + alias table + resolver + hard write guard + reviewed backfill
+
+`prompts/ID2a-operator-registry-resolver-and-guard.md` executed. Migration
+`supabase/migrations/dialysis/20260911200000_dia_id2a_operator_registry.sql` (Dialysis_DB) rebuilds
+`operators` (kind company/category/payer/non_operator, `parent_operator_id` for brand children,
+`merged_into_operator_id` for retired dupes — retire, never delete), adds `dia_operator_aliases`
+(seeded), the single resolver `dia_resolve_operator(text)` (fails closed, never mints), `operator_id`
+FKs on `properties`/`leases`, a **hard-block** write-guard trigger on `properties.operator` (RAISEs on
+an unresolved non-blank value; leases guarded only if it turns out to carry a raw text `operator`
+column — unverified from this sandbox), and a dry-run-default reviewed backfill function.
+`api/_shared/operator-normalize.js` renamed the canonical Fresenius/US Renal Care targets to match
+Scott's §11 decisions, in lock-step with the SQL mirror re-declared in the same migration, and gained
+`resolveOperatorAgainstRegistry()` — the JS wrapper over the SQL resolver RPC. Guard
+`test/id2a-operator-registry.test.mjs` (22 tests, full suite 5,950/5,950 green).
+
+⚠️ **NOT live.** This sandbox has no Dialysis_DB credentials — the migration was never applied and
+none of its own numbers (registry before/after, alias count, auto/review split, FK coverage, the §4
+cap-band parity gate) were measured. The migration ships the exact verification queries (§13); Cowork
+or Scott must run the dry-run backfill first, read the split, apply, then run the parity check before
+ID2b (consumer switch) relies on anything here.
+
+🔴 **New finding, from this guard's own first run, not either audit pass:** `api/_shared/tenant-canonical.js`
+is a live, pre-existing FOURTH operator canonicalizer (writes `dia.leases.tenant`, not
+`properties.operator`) whose spellings now DISAGREE with the ID2a decision
+(`'DaVita Kidney Care'`/`'U.S. Renal Care'`/`'DCI'`/`'Innovative Renal Care'` vs the registry's
+`'DaVita'`/`'US Renal Care'`/`'Dialysis Clinic, Inc.'`/`'American Renal Associates'`). Out of scope
+for ID2a (different column, and "no new normalizer" means adding none, not retrofitting a pre-existing
+one) — filed as **ID2c** in `PLANNED-BACKLOG.md`.
+
+Backlog: `PLANNED-BACKLOG.md` ID2a marked shipped-unapplied; ID2b (consumer switch) and ID2c (the
+tenant-canonical.js finding) opened.
 ## 2026-09-11 -- RO2a sized: 1,380 gov recorded_owners name-variant groups, merge lane deferred
 
 Picked up RO2a next (fleet-wide sizing of same-party name variants in gov `recorded_owners`, named
