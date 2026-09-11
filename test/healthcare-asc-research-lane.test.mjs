@@ -929,6 +929,7 @@ test('candidate-scoped multi-address parcel accepts exact CMS recorded-owner ide
     costar_property_id: '19297271',
     authorized_by: 'research_owner',
     authorized_at: '2026-09-11T12:00:00Z',
+    capture_authorized: true,
     second_review_required: true,
     evidence_citations: [
       { source: 'official_facility_registry', url: 'https://registry.example/glacier-surgical' },
@@ -983,6 +984,7 @@ test('candidate-scoped multi-address parcel accepts exact CMS recorded-owner ide
     { owner_mailing_address_token: '' },
     { owner_mailing_address_token: conflict.captured_address_token },
     { recorded_owner_name: 'UNRELATED OWNER LLC' },
+    { capture_authorized: false },
     { second_review_required: false },
     { evidence_citations: [conflict.evidence_citations[0]] },
   ]) {
