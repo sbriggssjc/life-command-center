@@ -152,6 +152,27 @@ by measurement Z) and the next XB issue reports it back.
 **Routing table location (OC-a):** `docs/os/operator-note-routing.json` (data, versioned in the repo). Promote to a
 canon block only when a surface needs to read it.
 
+**Addendum 2026-09-11 (MB-a — MB1/MB2 built, flags OFF, not live-verified):** `GET/POST
+/api/market-brief-psql-tick` (MARKET_BRIEF_PSQL) and `GET/POST /api/market-brief-rss-tick`
+(MARKET_BRIEF_PRSS) are wired for the **dialysis** lane. P-SQL sources: dia `sales_transactions` (TTM
+cap-rate band, per-operator with a 5-comp small-n floor; trades since the last completed run),
+`v_dia_on_market` (on-market count + median ask cap — the canonical on-market filter, read directly,
+never re-derived locally), `medicare_clinics` (top-8 `chain_organization` counts, excluding
+`dedup_status='demoted_duplicate'`, + a net-change fact only when a prior count exists). **Not wired:**
+`cortex_market_intel` (its writer is still unlocated in this repo across two sessions — PLANNED-BACKLOG
+MB1a) and gov GSA lease events (dialysis-first per the build order). CMS "closures" are approximated as
+a fleet-count net-change, not a real per-facility open/close event feed (MB1b — no termination/status
+column could be confirmed for `medicare_clinics` from the repo). P-RSS reads the EB1-measured healthcare
+stream (still the 3 general feeds: MedCity News, KFF Health News, Health Affairs — no dialysis-specific
+feed added yet, since that edits a separate edge-function deploy surface and none could be egress-
+verified from this session) and fails closed with `producer_runs.status='skipped'` when on-box Ollama is
+unreachable. `market_brief_facts` gained `fact_key` (+ a partial unique index scoped to `status='live'`)
+so an SQL derivation with no `source_url` has a supersede identity; RSS/web facts keep using EB1's
+`uq_mbf_source_identity`. Both feature-flag rows and both cron schedules were registered live-shaped
+(off / guarded) in the same migration. **Neither flag has been flipped and neither tick has run against
+live Supabase/Railway** — this session had no such reach; the GET-dry-run-first design is exactly built
+so an operator can confirm real dia column names (via the response's `gaps[]`) before the first POST.
+
 **Addendum 2026-09-11 (after OC-a, PR #2298):** EB1a applied — 16 live dialysis facts; `v_market_brief_staleness`
 20 cells (5 populated / 15 missing). Outlook dormancy cause found in code: `parseLccCategoryHint` could never match
 `LCC-Note` (hyphen) — fixed; whether the PA trigger fires is still unconfirmed. Funnel not live yet: 0 notes, no
