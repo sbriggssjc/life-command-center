@@ -10,21 +10,38 @@
 //           the P123 lifecycle (opened before the work, closed on the way
 //           out) and writes/supersedes/conflict-marks market_brief_facts.
 //
-// SOURCES (dialysis lane, MB-a §1 measurement — see the PR description /
-// PLANNED-BACKLOG §P18 for the full source census):
-//   - dia comps engine (rpc_query_comps / the same domain views the CM export
-//     reads) for a TTM cap-rate band, sourced here directly from
-//     Dialysis_DB.sales_transactions (a "sold in the last 12 months" filter
-//     over the same cap-rate framework CLAUDE.md §12 describes) rather than
-//     re-deriving through the MCP comps tool, so this producer has no runtime
-//     dependency on mcp/server.js.
-//   - Dialysis_DB.available_listings (v_dia_on_market view is the canonical
-//     "currently on market" definition per CLAUDE.md; this producer reads the
-//     view directly via domainQuery so it inherits the canonical filter for
-//     free instead of re-deriving it).
-//   - Dialysis_DB.medicare_clinics, grouped by chain_organization, excluding
-//     dedup_status='demoted_duplicate' (the P113/census-writer discipline —
-//     never count an operator's clinics off a duplicate row).
+// SOURCES (dialysis lane; MB-a2 fixed all four against the LIVE schema —
+// MB-a's column names were guessed from docs and never checked live):
+//   - The dia comps engine's OWN RPC — `rpc/rpc_query_comps` (the same RPC
+//     `query_comps` / the comps-engine skill / mcp/comps-tools.js call), via
+//     domainQuery('dialysis','POST','rpc/rpc_query_comps', …). This is the
+//     shared, de-duplicated, cap-normalized source of truth — calling the RPC
+//     directly (not the JS runComps() pipeline, which adds scoring/appraisal
+//     machinery this producer doesn't need) guarantees the cap-rate band
+//     agrees with every other comps surface, by construction: same
+//     `cap_rate_final`-coalesced column, same `exclude_from_market_metrics`
+//     filter, same `transaction_state='live'` gate. No runtime dependency on
+//     mcp/server.js (the RPC is a plain Postgres function reached over
+//     PostgREST, exactly like every other domainQuery call this file makes).
+//   - Dialysis_DB.v_dia_on_market for on-market count + median ask cap. The
+//     view's cap-rate column is `current_cap_rate` (verified live 2026-09-11
+//     — MB-a assumed a bare `cap_rate`, which the view does not carry, and
+//     the request 400'd).
+//   - Dialysis_DB.v_market_brief_cms_operator_counts (migration
+//     20260911190000_dia_mba2_cms_operator_counts_view.sql) for CMS clinic
+//     counts by operator. MB-a counted client-side over a raw
+//     `medicare_clinics` select capped at `&limit=1000` against 6,695
+//     eligible rows (verified live) — a SILENT truncation to ~15% of the
+//     population that would have produced plausible-looking, wrong operator
+//     counts with no error. The view aggregates server-side over the WHOLE
+//     table (32 distinct operators, verified live — well under any
+//     PostgREST page cap), so the client-side read can never truncate again.
+//
+// TRUNCATION TRIPWIRE: every paged source read below checks whether the
+// returned row count equals the requested limit and, if so, records a named
+// gap (`source_truncated`) instead of silently under-counting (the A5/A5a
+// "an open count equal to a query window is a reading of the instrument"
+// lesson, applied at the SOURCE-READ layer of this producer specifically).
 //
 // EVERY WRITE GOES THROUGH decideFactWrite() (market-brief-facts.js) — the
 // supersede / skip-duplicate / conflict decision is pure and unit-tested
@@ -35,6 +52,7 @@ import { authenticate } from '../_shared/auth.js';
 import { fetchFeatureFlag, flagEnabled } from '../_shared/feature-flag.js';
 import { opsQuery } from '../_shared/ops-db.js';
 import { domainQuery } from '../_shared/domain-db.js';
+import { displayedCompCap } from '../../mcp/comps-tools.js';
 import {
   buildCapRateBandFact,
   buildOnMarketFacts,
@@ -49,6 +67,37 @@ import {
 const FLAG = 'MARKET_BRIEF_PSQL';
 const PRODUCER = 'p_sql';
 const TOP_OPERATOR_LIMIT = 8;
+
+// Generous ceilings, well above any expected live population, so a source
+// hitting its own requested limit is itself the truncation signal — never
+// PostgREST's separate hard 1000-row response cap (kept comfortably below it
+// so our own limit is what trips, and the tripwire is unambiguous).
+const COMPS_RPC_LIMIT = 900;
+const TRADES_LIMIT = 500;
+const CMS_OPERATOR_LIMIT = 500; // 32 distinct operators measured live 2026-09-11
+
+/** Reliable cap-rate reader for a rpc_query_comps row: prefer the engine's
+ * own displayed (rent÷price) basis — the SAME value query_comps' summary
+ * quotes (Prompt 52 doctrine: rank/report on the displayed cap, not the
+ * stored cap_rate field) — and fall back to the RPC's own
+ * coalesce(cap_rate_final, cap_rate) when no rent+price pair is available. */
+export function reliableCompCap(row) {
+  const displayed = displayedCompCap(row);
+  if (Number.isFinite(displayed) && displayed > 0) return displayed;
+  const stored = Number(row?.cap_rate);
+  return Number.isFinite(stored) && stored > 0 ? stored : null;
+}
+
+/** Pure truncation tripwire: a source read that comes back AT its own requested
+ * limit cannot tell you whether the true population is larger — read the RETURNED
+ * count, never the number asked for (the A5/A5a lesson, one layer earlier: this is
+ * a source-read guard, not a consumer-side auto-close guard). */
+export function truncationGap(rowCount, limit, label) {
+  if (!Number.isFinite(rowCount) || !Number.isFinite(limit)) return null;
+  return rowCount >= limit
+    ? `source_truncated (${label} returned ${rowCount} >= requested limit ${limit})`
+    : null;
+}
 
 const truthy = (v) => v === true || v === 1 || v === '1' || v === 'true';
 
@@ -87,19 +136,51 @@ async function fetchLastCompletedRun(lane) {
 // so one unreachable source doesn't take the whole tick down.
 // ---------------------------------------------------------------------------
 
-async function fetchDialysisCapRates() {
-  // TTM sold comps with a usable cap rate. CLAUDE.md §12-equivalent for dia:
-  // cap rate = net rent (NNN) / price, already computed at ingest on
-  // sales_transactions in most cases; we read the stored value rather than
-  // re-deriving it here (that derivation belongs to the domain DB, not to a
-  // brief producer).
-  const since = new Date(Date.now() - 366 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const r = await domainQuery('dialysis', 'GET',
-    `sales_transactions?sale_date=gte.${since}&cap_rate=not.is.null`
-    + '&select=cap_rate,operator_name,sold_price,sale_date,address,city,state'
-    + '&limit=1000', undefined, {});
+/**
+ * Call the comps engine's own RPC (`rpc_query_comps`) with an explicit
+ * `p_tenant: null`. Passing p_tenant is not optional here — the function has
+ * TWO live overloads (12-arg without p_tenant, 13-arg with it), and Postgres
+ * requires an unambiguous match; every call in mcp/comps-tools.js always
+ * sends p_tenant (verified live 2026-09-11), which is what resolves to the
+ * 13-arg signature. Omitting the key would leave the call ambiguous between
+ * the two overloads (42725 "function is not unique") on any project where
+ * both still exist.
+ */
+async function fetchCompsRpc({ dateFrom, dateTo, limit = COMPS_RPC_LIMIT } = {}) {
+  const body = {
+    p_comp_type: 'sale',
+    p_property_types: null,
+    p_states: null,
+    p_metros: null,
+    p_date_from: dateFrom || null,
+    p_date_to: dateTo || null,
+    p_sf_min: null,
+    p_sf_max: null,
+    p_government_only: false,
+    p_include_sf: true,
+    p_include_onmkt: false,
+    p_limit: limit,
+    p_tenant: null,
+  };
+  const r = await domainQuery('dialysis', 'POST', 'rpc/rpc_query_comps', body, {});
   if (!r.ok || !Array.isArray(r.data)) return { rows: [], gap: r?.data?.error || `status ${r?.status}` };
-  return { rows: r.data, gap: null };
+  const gap = truncationGap(r.data.length, limit, 'rpc_query_comps');
+  return { rows: r.data, gap };
+}
+
+async function fetchDialysisCapRates() {
+  // TTM sold comps, sourced from the SAME rpc_query_comps() the comps engine
+  // (query_comps / mcp/comps-tools.js) uses for every other comps surface —
+  // so this brief's band agrees with what brokers get everywhere else. The
+  // RPC already applies `transaction_state='live'`, `sold_price > 0`,
+  // `exclude_from_market_metrics IS NOT TRUE`, and computes
+  // `cap_rate = coalesce(cap_rate_final, cap_rate)` server-side (verified
+  // live 2026-09-11 against pg_get_functiondef). `p_include_sf: true`
+  // matches query_comps' own default, so a live Salesforce-staged sold comp
+  // is included exactly as it would be for a broker's own query_comps call.
+  const since = new Date(Date.now() - 366 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
+  return fetchCompsRpc({ dateFrom: since, dateTo: today });
 }
 
 async function fetchOnMarket() {
@@ -107,39 +188,50 @@ async function fetchOnMarket() {
   // government-lease's equivalent; the dia twin is documented in the T9d /
   // on-market-currency work). Reading the view directly means this producer
   // inherits whatever "currently on market" means today with no local copy
-  // of that filter.
+  // of that filter. The view's cap-rate column is `current_cap_rate`, NOT a
+  // bare `cap_rate` (verified live 2026-09-11 — MB-a's original select 400'd
+  // on this).
+  const limit = 900;
   const r = await domainQuery('dialysis', 'GET',
-    'v_dia_on_market?select=property_id,cap_rate,asking_price&limit=1000', undefined, {});
+    `v_dia_on_market?select=property_id,current_cap_rate,asking_price&limit=${limit}`, undefined, {});
   if (!r.ok || !Array.isArray(r.data)) return { rows: [], gap: r?.data?.error || `status ${r?.status}` };
-  return { rows: r.data, gap: null };
+  const gap = truncationGap(r.data.length, limit, 'v_dia_on_market');
+  return { rows: r.data, gap };
 }
 
 async function fetchTradesSince(sinceIso) {
   if (!sinceIso) return { rows: [], gap: null };
-  const r = await domainQuery('dialysis', 'GET',
-    `sales_transactions?sale_date=gte.${sinceIso.slice(0, 10)}`
-    + '&select=address,city,state,sale_date,sold_price,cap_rate&order=sale_date.desc&limit=500',
-    undefined, {});
-  if (!r.ok || !Array.isArray(r.data)) return { rows: [], gap: r?.data?.error || `status ${r?.status}` };
-  return { rows: r.data, gap: null };
+  // Same shared RPC as the cap-rate band, filtered to trades since the
+  // producer's own last completed run — so a "trade since last run" is
+  // exactly the same comp population every other surface would show for
+  // that window, address/city/state included via the RPC's own
+  // properties join (MB-a's raw sales_transactions select 400'd: that
+  // table carries neither address, city nor state — those live on
+  // `properties`, which only the RPC — or an explicit join — resolves).
+  return fetchCompsRpc({ dateFrom: sinceIso.slice(0, 10), limit: TRADES_LIMIT });
 }
 
 async function fetchCmsOperatorCounts() {
+  // Server-side aggregation (migration
+  // 20260911190000_dia_mba2_cms_operator_counts_view.sql) — the count is
+  // computed over the FULL medicare_clinics table (dedup_status <>
+  // demoted_duplicate AND chain_organization not null), not a client-side
+  // tally over a `&limit=1000` page against 6,695 eligible rows (MB-a's
+  // original select, verified live 2026-09-11 to silently truncate to
+  // ~15% of the population — the exact "failure mode that matters looks
+  // exactly like success" this file's doctrine section warns about: no
+  // error, plausible-looking counts, just wrong).
+  const limit = CMS_OPERATOR_LIMIT;
   const r = await domainQuery('dialysis', 'GET',
-    'medicare_clinics?dedup_status=neq.demoted_duplicate&chain_organization=not.is.null'
-    + '&select=chain_organization&limit=1000', undefined, {});
+    `v_market_brief_cms_operator_counts?select=operator,clinic_count&order=clinic_count.desc&limit=${limit}`,
+    undefined, {});
   if (!r.ok || !Array.isArray(r.data)) return { rows: [], gap: r?.data?.error || `status ${r?.status}` };
-  const counts = new Map();
-  for (const row of r.data) {
-    const op = String(row.chain_organization || '').trim();
-    if (!op) continue;
-    counts.set(op, (counts.get(op) || 0) + 1);
-  }
-  const sorted = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, TOP_OPERATOR_LIMIT)
-    .map(([operator, count]) => ({ operator, count }));
-  return { rows: sorted, gap: null };
+  const gap = truncationGap(r.data.length, limit, 'v_market_brief_cms_operator_counts');
+  const sorted = r.data
+    .map((row) => ({ operator: String(row.operator || '').trim(), count: Number(row.clinic_count) }))
+    .filter((row) => row.operator && Number.isFinite(row.count))
+    .slice(0, TOP_OPERATOR_LIMIT);
+  return { rows: sorted, gap };
 }
 
 /** Prior counts, resolved from the currently-live cms_clinic_count:* facts for the lane. */
@@ -244,36 +336,45 @@ const LANE_BUILDERS = {
       fetchDialysisCapRates(), fetchOnMarket(), fetchTradesSince(sinceIso), fetchCmsOperatorCounts(),
     ]);
     for (const [label, src] of [
-      ['dia_sales_transactions', capRateSrc], ['v_dia_on_market', onMarketSrc],
-      ['dia_sales_transactions_trades', tradesSrc], ['dia_medicare_clinics', cmsSrc],
+      ['rpc_query_comps_ttm', capRateSrc], ['v_dia_on_market', onMarketSrc],
+      ['rpc_query_comps_trades', tradesSrc], ['v_market_brief_cms_operator_counts', cmsSrc],
     ]) {
       if (src.gap) gaps.push({ source: label, error: src.gap });
     }
 
     // 1. Whole-market TTM cap-rate band + by-operator (small-n suppressed).
-    const capRates = capRateSrc.rows.map((r) => Number(r.cap_rate)).filter(Number.isFinite);
+    //    reliableCompCap() reads the engine's DISPLAYED cap (rent÷price) when
+    //    available, falling back to the RPC's own coalesce(cap_rate_final,
+    //    cap_rate) — the same basis query_comps' own summary quotes.
+    const capRates = capRateSrc.rows.map(reliableCompCap).filter(Number.isFinite);
     const wholeMarket = buildCapRateBandFact({
-      lane, capRates, sourceLabel: 'dia.sales_transactions (TTM)', asOfIso,
+      lane, capRates, sourceLabel: 'rpc_query_comps (TTM, dialysis sales)', asOfIso,
     });
     if (wholeMarket) facts.push(wholeMarket); else if (capRates.length) gaps.push({ source: 'cap_rate_band', error: `n=${capRates.length} below small-n floor` });
 
     const byOperator = new Map();
     for (const r of capRateSrc.rows) {
-      const op = String(r.operator_name || '').trim();
-      const cap = Number(r.cap_rate);
+      // `tenant` is the RPC's own resolved operator field
+      // (comp_tenant(chain_canonical, operator, tenant) for dialysis_db rows,
+      // st.tenant for salesforce-staged rows) — MB-a read a nonexistent
+      // `operator_name` column on the raw sales table.
+      const op = String(r.tenant || '').trim();
+      const cap = reliableCompCap(r);
       if (!op || !Number.isFinite(cap)) continue;
       if (!byOperator.has(op)) byOperator.set(op, []);
       byOperator.get(op).push(cap);
     }
     for (const [operator, rates] of byOperator) {
       const opFact = buildCapRateBandFact({
-        lane, capRates: rates, operator, sourceLabel: 'dia.sales_transactions (TTM)', asOfIso,
+        lane, capRates: rates, operator, sourceLabel: 'rpc_query_comps (TTM, dialysis sales)', asOfIso,
       });
       if (opFact) facts.push(opFact);
     }
 
     // 2. On-market count + median ask cap.
-    const onMarketCaps = onMarketSrc.rows.map((r) => Number(r.cap_rate)).filter(Number.isFinite);
+    //    v_dia_on_market's cap-rate column is `current_cap_rate`, not a bare
+    //    `cap_rate` (verified live 2026-09-11).
+    const onMarketCaps = onMarketSrc.rows.map((r) => Number(r.current_cap_rate)).filter(Number.isFinite);
     const onMarketFacts = buildOnMarketFacts({
       lane,
       count: onMarketSrc.rows.length,
@@ -284,10 +385,17 @@ const LANE_BUILDERS = {
     });
     facts.push(...onMarketFacts);
 
-    // 3. Trades since last run.
-    const tradesFact = tradesSrc.rows.length
-      ? buildTradesSinceLastRunFact({ lane, trades: tradesSrc.rows, sinceIso, sourceLabel: 'dia.sales_transactions', asOfIso })
-      : buildTradesZeroFact({ lane, sinceIso, sourceLabel: 'dia.sales_transactions', asOfIso });
+    // 3. Trades since last run. buildTradesSinceLastRunFact (pure, unit-
+    //    tested against fixtures) expects {sold_price, cap_rate} keys; map
+    //    the RPC's {sale_price, cap_rate} rows onto that shape rather than
+    //    changing the tested builder's contract.
+    const tradeRows = tradesSrc.rows.map((r) => ({
+      address: r.address, city: r.city, state: r.state, sale_date: r.sale_date,
+      sold_price: r.sale_price, cap_rate: reliableCompCap(r),
+    }));
+    const tradesFact = tradeRows.length
+      ? buildTradesSinceLastRunFact({ lane, trades: tradeRows, sinceIso, sourceLabel: 'rpc_query_comps (dialysis sales)', asOfIso })
+      : buildTradesZeroFact({ lane, sinceIso, sourceLabel: 'rpc_query_comps (dialysis sales)', asOfIso });
     if (tradesFact) facts.push(tradesFact);
 
     // 4. CMS clinic counts by top operator + net change vs. the prior run.
@@ -302,7 +410,7 @@ const LANE_BUILDERS = {
       if (priorMap.has(key)) priorByName.set(row.operator, priorMap.get(key));
     }
     const cmsFacts = buildCmsOperatorFacts({
-      lane, counts: cmsSrc.rows, priorCounts: priorByName, sourceLabel: 'dia.medicare_clinics', asOfIso,
+      lane, counts: cmsSrc.rows, priorCounts: priorByName, sourceLabel: 'dia.v_market_brief_cms_operator_counts', asOfIso,
     });
     facts.push(...cmsFacts);
 

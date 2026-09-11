@@ -1,5 +1,27 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — MB-a2: P-SQL source defects fixed against the live schema + both migrations applied; flags still OFF, live tick unverified
+
+Fixed all four MB1c defects (verified live via Supabase MCP, not guessed). Cap-rate band + trades-since-
+last-run now call the comps engine's own `rpc/rpc_query_comps` RPC (the same one `query_comps` uses)
+instead of a raw `sales_transactions` select missing `operator_name/address/city/state`; cap value reads
+`reliableCompCap()` (the engine's displayed rent÷price basis via `displayedCompCap()` imported from
+`mcp/comps-tools.js`, falling back to the RPC's own `coalesce(cap_rate_final, cap_rate)`) — measured live:
+RPC returns 200 TTM rows (175 dialysis_db + 25 salesforce, 98+21 with a cap) vs the raw table's 94
+market-eligible, a proper superset. `v_dia_on_market` now reads `current_cap_rate`. CMS operator counts
+now read a new server-side view `v_market_brief_cms_operator_counts` (migration
+`dialysis/20260911190000_dia_mba2_cms_operator_counts_view.sql`, **APPLIED to Dialysis_DB**,
+`sum(clinic_count)=6695` confirmed against the full 6,695-row population). Every paged read carries a
+`truncationGap()` tripwire. Migration `20260911180000_lcc_mba_market_brief_producers.sql` is now
+**APPLIED to LCC Opps** (`fact_key` + partial unique index present; both flags `off`; both crons scheduled,
+no collision checked against live `cron.job`). Guard: `test/mba2-market-brief-psql-source-fixes.test.mjs`
+(12 tests, mutation-verified). Full repo suite: 5,913 pass / 0 fail / 6 skipped. MB2 (P-RSS) swept for the
+same defect class and found clean (ops-side JSON, no domain-DB row limits). **⚠️ NOT verified: a live tick
+call** — this session has Supabase DB access but no Railway/API reach, so the code is committed and the
+DB is applied, but `/api/market-brief-psql-tick` has not been redeployed to or exercised, and the flags
+stay `off`. **Operator next step:** merge the PR, redeploy both Railway services, `GET
+/api/market-brief-psql-tick?lane=dialysis` and confirm `gaps[]` is empty, one flag-forced `POST`, compare
+against a direct `query_comps` call for the same window, flip both flags.
 ## 2026-09-11 -- OWN-T0j reviewed: classification logic verified correct, but the deployed route 502s -- found and fixed a real bug
 
 Scott: "the OWN-T0j prompt is done and the response is saved... review and update all documentation and plans
