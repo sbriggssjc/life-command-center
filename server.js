@@ -221,6 +221,7 @@ app.all('/api/link-coverage-tick', (req, res) => { req.query._route = 'link-cove
 app.all('/api/match-disambig-assist-tick', (req, res) => { req.query._route = 'match-disambig-assist-tick'; adminHandler(req, res); });
 app.all('/api/property-twin-assist-tick',  (req, res) => { req.query._route = 'property-twin-assist-tick';  adminHandler(req, res); });
 app.all('/api/ownership-chain-draft-tick', (req, res) => { req.query._route = 'ownership-chain-draft-tick'; adminHandler(req, res); });
+app.all('/api/ownt0j-sponsor-classify-tick', (req, res) => { req.query._route = 'ownt0j-sponsor-classify-tick'; adminHandler(req, res); });
 app.all('/api/briefing-analyst-take-tick', (req, res) => { req.query._route = 'briefing-analyst-take-tick'; adminHandler(req, res); });
 app.all('/api/dia-property-link-tick', (req, res) => { req.query._route = 'dia-property-link-tick'; adminHandler(req, res); });
 app.all('/api/tier0-auto-attach-tick',    (req, res) => { req.query._route = 'tier0-auto-attach-tick';    adminHandler(req, res); });
