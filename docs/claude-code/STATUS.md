@@ -1,5 +1,33 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 -- MB-a3: freshness-honest on-box facts (CMS feed gate) -- flags withheld pending redeploy
+
+Closed MB1d (`market-brief-facts.js`/`market-brief-psql-tick.js`): every P-SQL-derived fact's
+`source_date` now comes from the SOURCE's own as-of, not the tick's run date. CMS operator counts
+gate per-operator on `max(last_seen_date)` vs a 45-day SLA (mirrors dia `feed_freshness_registry`);
+a stale operator (DaVita and Fresenius both measured live at max(last_seen_date)=2026-01-22, ~8
+months stale, while their `cms_last_checked`/`source_last_seen` touch columns read days-old --
+exactly the B6d-cms nightly-reupsert trap one column over) writes a named `cms_census_gap:<op>`
+fact instead of a confident count. Cap-rate bands and the trades-since-last-run fact now date off
+the newest comp `sale_date`, not `asOfIso`. Migration applied to Dialysis_DB (appended
+`source_as_of` to `v_market_brief_cms_operator_counts`). 15 new tests, full suite 5,925/0/6-skipped.
+
+Investigated the DaVita=Fresenius=2,450 tie (read-only): both operators' live rows share an
+identical `created_at` batch window ending 2026-01-22 (max timestamps 17s apart) -- strong evidence
+of a shared import-cap/pagination artifact in the last real CMS ingest before the outage, not
+coincidence. Filed to the Dialysis repo's B6d-cms backlog; not fixed here (cross-repo, out of scope).
+
+Verified live via `net.http_get` from LCC Opps: `tranquil-delight` `/version` still reads
+`fc863b43d48f` -- this fix is committed, not deployed. **Deliberately did NOT flip
+`MARKET_BRIEF_PSQL`/`MARKET_BRIEF_PRSS`** -- both are DB-controlled (`feature_flags_registry.state`,
+via the env-OR-registry resolver), so flipping now would activate the OLD pre-fix code the moment it
+next runs, re-shipping the exact staleness bug this unit closes. Flip only after a post-merge
+Railway redeploy is confirmed (`/version` + `merge-base --is-ancestor`). P-RSS's `OLLAMA_URL`
+reachability from `tranquil-delight` could not be confirmed from this session (no Railway env
+access) -- named as an operator-verification item, not assumed either way.
+
+See `docs/os/PLANNED-BACKLOG.md` §P18 row MB1d and `docs/architecture/EXEC-BRIEFS-SPEC.md` §9
+"MB-a3" addendum for full detail.
 ## 2026-09-11 — BUY0 Phase 0 complete: Geller Round 1 client deliverable + email draft; build handoff written (spec §9) and backlog rows BUY1a/1b + BUY-G1…G6 filed
 
 Cowork. Round 1 for Jordan Geller is client-ready in `Team Briggs - Documents/Clients/Jordan Geller/2026 Industrial Search/Deliverables/Round 1 - Sep 2026/`

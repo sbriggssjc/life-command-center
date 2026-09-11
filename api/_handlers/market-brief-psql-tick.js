@@ -221,17 +221,25 @@ async function fetchCmsOperatorCounts() {
   // ~15% of the population — the exact "failure mode that matters looks
   // exactly like success" this file's doctrine section warns about: no
   // error, plausible-looking counts, just wrong).
+  // MB-a3: select=source_as_of too — migration 20260911XXXXXX_mba3_cms_operator_counts_source_as_of
+  // appends per-operator max(last_seen_date), the feed-gate input (see
+  // market-brief-facts.js::buildCmsOperatorFacts for why last_seen_date, not a touch column).
   const limit = CMS_OPERATOR_LIMIT;
   const r = await domainQuery('dialysis', 'GET',
-    `v_market_brief_cms_operator_counts?select=operator,clinic_count&order=clinic_count.desc&limit=${limit}`,
+    `v_market_brief_cms_operator_counts?select=operator,clinic_count,source_as_of&order=clinic_count.desc&limit=${limit}`,
     undefined, {});
   if (!r.ok || !Array.isArray(r.data)) return { rows: [], gap: r?.data?.error || `status ${r?.status}` };
   const gap = truncationGap(r.data.length, limit, 'v_market_brief_cms_operator_counts');
+  const sourceAsOf = new Map();
+  for (const row of r.data) {
+    const operator = String(row.operator || '').trim();
+    if (operator && row.source_as_of) sourceAsOf.set(operator, String(row.source_as_of).slice(0, 10));
+  }
   const sorted = r.data
     .map((row) => ({ operator: String(row.operator || '').trim(), count: Number(row.clinic_count) }))
     .filter((row) => row.operator && Number.isFinite(row.count))
     .slice(0, TOP_OPERATOR_LIMIT);
-  return { rows: sorted, gap };
+  return { rows: sorted, sourceAsOf, gap };
 }
 
 /** Prior counts, resolved from the currently-live cms_clinic_count:* facts for the lane. */
@@ -346,13 +354,19 @@ const LANE_BUILDERS = {
     //    reliableCompCap() reads the engine's DISPLAYED cap (rent÷price) when
     //    available, falling back to the RPC's own coalesce(cap_rate_final,
     //    cap_rate) — the same basis query_comps' own summary quotes.
+    // MB-a3: source_date for a comps-derived band is the newest comp behind it,
+    // never the tick's run date — max(sale_date) across the RPC rows.
+    const capSaleDates = capRateSrc.rows.map((r) => r.sale_date).filter(Boolean).map((d) => String(d).slice(0, 10));
+    const capSourceAsOfDate = capSaleDates.length ? capSaleDates.sort().at(-1) : null;
+
     const capRates = capRateSrc.rows.map(reliableCompCap).filter(Number.isFinite);
     const wholeMarket = buildCapRateBandFact({
-      lane, capRates, sourceLabel: 'rpc_query_comps (TTM, dialysis sales)', asOfIso,
+      lane, capRates, sourceLabel: 'rpc_query_comps (TTM, dialysis sales)', asOfIso, sourceAsOfDate: capSourceAsOfDate,
     });
     if (wholeMarket) facts.push(wholeMarket); else if (capRates.length) gaps.push({ source: 'cap_rate_band', error: `n=${capRates.length} below small-n floor` });
 
     const byOperator = new Map();
+    const byOperatorSaleDates = new Map();
     for (const r of capRateSrc.rows) {
       // `tenant` is the RPC's own resolved operator field
       // (comp_tenant(chain_canonical, operator, tenant) for dialysis_db rows,
@@ -363,10 +377,15 @@ const LANE_BUILDERS = {
       if (!op || !Number.isFinite(cap)) continue;
       if (!byOperator.has(op)) byOperator.set(op, []);
       byOperator.get(op).push(cap);
+      if (r.sale_date) {
+        const d = String(r.sale_date).slice(0, 10);
+        if (!byOperatorSaleDates.has(op) || d > byOperatorSaleDates.get(op)) byOperatorSaleDates.set(op, d);
+      }
     }
     for (const [operator, rates] of byOperator) {
       const opFact = buildCapRateBandFact({
         lane, capRates: rates, operator, sourceLabel: 'rpc_query_comps (TTM, dialysis sales)', asOfIso,
+        sourceAsOfDate: byOperatorSaleDates.get(operator) || null,
       });
       if (opFact) facts.push(opFact);
     }
@@ -409,8 +428,13 @@ const LANE_BUILDERS = {
       const key = String(row.operator).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
       if (priorMap.has(key)) priorByName.set(row.operator, priorMap.get(key));
     }
+    // MB-a3 feed gate: cmsSrc.sourceAsOf (operator -> max(last_seen_date)) is
+    // populated by fetchCmsOperatorCounts. Passing it turns the gate ON — a
+    // stale operator (per CMS_FEED_MAX_AGE_DAYS) gets a named gap fact instead
+    // of a count/net-change fact built off a run-date stamp.
     const cmsFacts = buildCmsOperatorFacts({
       lane, counts: cmsSrc.rows, priorCounts: priorByName, sourceLabel: 'dia.v_market_brief_cms_operator_counts', asOfIso,
+      sourceAsOf: cmsSrc.sourceAsOf,
     });
     facts.push(...cmsFacts);
 
