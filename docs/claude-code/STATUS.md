@@ -16,6 +16,59 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-11 — PDR2/PDR3/PDR6 root-caused (read-only investigation, no writes): all three trace to ONE shared cause — dia's own `properties` table has 5 un-deduped rows for the DaVita/Donna-TX address; PDR1's entity merge never touched it
+
+Per this arc's "measure before building" discipline, before drafting a follow-up prompt for the three
+confirmed-open gaps PDR1's merge left behind (PDR2 ownership, PDR3 sale history, PDR6 CMS link), ran a
+read-only Explore investigation against live data rather than guessing scope.
+
+**Shared root cause, filed as `PDR13`:** dia's internal `properties` table has 5 separate, never-merged
+rows for this one physical address — `37722` (canonical, per PDR1's cross-domain entity merge), `23545`
+(real owner "Phil Decarion" + the real sale), `37710` (duplicate CoStar capture of the same sale),
+`39874` (the correct CMS/Medicare link), `45543` (address null). **PDR1's merge unified the cross-domain
+`entities` layer only — it never touched, and structurally cannot touch, dia's own property-table
+duplication.** The existing `dia_auto_merge_property_duplicates` cron (confirmed alive, hourly, last run
+2026-09-11 11:35 UTC) requires byte-for-byte identical normalized address strings within the same state
+to detect a duplicate group — this property's 5 differently-formatted address strings never match under
+that key, so the group is entirely invisible to the cron's own candidate view. A match-key-too-strict
+bug, not a "not wired" gap.
+
+**PDR2 (ownership)** — the operator flag is already correct (`is_operator_not_owner=true` on the DaVita
+`true_owners` row), but `api/operations.js`'s `assemblePropertyPacket()` (~lines 8811–8829) reads the
+true-owner name with an unconditional join that ignores the flag, unlike two other code paths in this
+repo that already guard it correctly. **This is systemic, not one-off: 4,026 properties fleet-wide carry
+the same unguarded-read shape** (1,182 of them pointing at this exact DaVita placeholder row) — a much
+larger blast radius than this one property.
+
+**PDR3 (sale history)** — not a missing-data gap. The Feb-2019 sale ($3,639,317, buyer Phil Decarion) IS
+on file, sitting on dia's un-merged sibling `property_id=23545`, never reaching the canonical record —
+a linking gap. `bd_opportunities` (Salesforce) already links this deal correctly to the canonical entity.
+**Correction to Scott's own recollection: the sale is dated February 2019, not "2017-18"** — no trace of
+an earlier transaction found anywhere in either database.
+
+**PDR6 (CMS link)** — the matcher already fired successfully, just on sibling `property_id=39874`, not
+the canonical record. Confirmed the matcher (`api/admin.js`, `cms-match?action=resolve`) is pull/
+on-demand only (no cron) — nobody has loaded the canonical property's CMS tab since the PDR1 merge, so
+it's simply never been asked. Even if asked, there's no merge-time propagation step to copy a sibling's
+CMS link onto a survivor.
+
+**Docs updated:** `PLANNED-BACKLOG.md` PDR2/PDR3/PDR6 rows corrected in place with the measured root
+causes above (was: "confirmed open, needs own prompt" placeholder). New row **PDR13** filed for the
+shared dia-property-dedup cause, with the Explore agent's own recommendation carried forward: a fix
+should probably start there, since a smarter dia-side merge key or a secondary CCN/medicare_id-based
+merge pass would likely resolve PDR3 and PDR6 as a side effect, before patching each symptom
+individually. PDR2's guard-gap fix stands on its own regardless (systemic, unrelated to whether the
+properties table gets de-duped).
+
+**Next step.** Two follow-ups, different shape: (1) PDR2 — a guard-gap fix sized against the real
+4,026-property blast radius, not DaVita alone; (2) PDR3/PDR6 — likely resolved together by fixing PDR13
+(a smarter dia-side property-merge key or a CCN/medicare_id-based secondary merge pass), worth trying
+that first before hand-patching either symptom. Have not yet decided whether to send one combined prompt
+or two separately-scoped ones — that's the next call before drafting. Separately still queued from
+2026-09-10: the small PDR12 planner fix (Rock Hill self-referencing-candidate detection), not yet sent.
+Also still open, no urgency: 167 `needs_human` ambiguous entities sit in the live
+`ambiguous_entity_resolution` Decision Center lane whenever Scott wants to start working them.
+
 ## 2026-09-11 — Closed out the arc's last open thread (`RATINGS2`'s `clinic_quality_metrics` half): probe fix confirmed working, but found a second, previously out-of-scope occurrence of RATINGS3's exact `updated_at` blind spot; new prompt filed
 
 Continued straight from closing `RATINGS-INSERT-COLLISION`, since one thread was still open: `RATINGS2
