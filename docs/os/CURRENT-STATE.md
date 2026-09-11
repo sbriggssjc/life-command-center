@@ -37,6 +37,16 @@
 
 Grouped by the thing it does, not by the wave that built it.
 
+### Healthcare ASC frozen sample — collection complete, governed review pending
+
+**Measured 2026-09-11 in LCC Opps:** all 50 frozen ASC candidates are resolved for source collection:
+44 licensed-source captures and 6 reviewed source exceptions, with 0 pending. This is not a lane-advance
+result. Twenty-two candidates require independent second review and none has a second reviewer recorded;
+exactly 50 governed scorecards and the aggregate gate receipt are still outstanding. Canonical plan:
+`docs/architecture/HEALTHCARE-ASC-IDTF-ECONOMICS-AND-SAMPLING-v0.1.md`. Aggregate checkpoint:
+`docs/audits/HEALTHCARE_ASC_50_PROPERTY_CAPTURE_CHECKPOINT_2026-09-11.md`. IDTF remains unactivated; canonical,
+Salesforce, outreach, and production-opportunity writes remain unauthorized.
+
 ### Operator-note funnel (OC-a) — LIVE schema, intake + triage built, flag OFF pending live-verify
 EB1 schema applied live to LCC Opps 2026-09-11 (`market_brief_facts`/`market_brief_issues`/
 `build_brief_snapshots`/`operator_notes`/`producer_runs` + 2 staleness/live views). `POST /api/operator-
@@ -50,7 +60,7 @@ off. Session-start hook **is** wired (`.claude/hooks/session-start.sh` L23, non-
 `docs/architecture/EXEC-BRIEFS-SPEC.md` §6, PLANNED-BACKLOG.md §P18 (EB1a/OC1–OC3).
 
 ### Market-brief producers (MB-a, dialysis lane) — built, sources fixed + DB applied, flags OFF pending a live tick verify
-**Cowork check after MB-a2 (2026-09-11):** app redeployed at `e42dbcb7` (ticks live, flags OFF, crons active 07:15/10:10 UTC, 0 `producer_runs` yet); **do not flip — MB1d:** CMS operator facts would carry today's date over a census last seen 2026-01-22, and DaVita = Fresenius = 2,450 exactly (likely capped import). Standalone MCP not redeployed. **MB-a2 (2026-09-11):** the four MB1c source defects are fixed and verified against the live Dialysis_DB
+**Cowork check after MB-a2 (2026-09-11):** app redeployed at `e42dbcb7` (ticks live, flags OFF, crons active 07:15/10:10 UTC, 0 `producer_runs` yet). **MB1d — FIXED 2026-09-11 (MB-a3, PR open, NOT yet deployed):** CMS operator facts now gate per-operator on `max(last_seen_date)` vs a 45-day SLA and write a named `cms_census_gap:<op>` fact instead of a confident count when stale (DaVita/Fresenius both measured stale at ≈8 months); cap-rate/trades facts date off the newest comp instead of the run clock. **`/version` still reads `fc863b43d48f` (pre-fix) — do not flip either flag until a redeploy is confirmed**, or the OLD stale-dating code runs one more time on the newly-flipped flag. The DaVita=Fresenius=2,450 tie was confirmed as a shared import-cap artifact (identical `created_at` batch, not coincidence) and filed to the Dialysis repo's B6d-cms backlog. Standalone MCP not redeployed. **MB-a2 (2026-09-11):** the four MB1c source defects are fixed and verified against the live Dialysis_DB
 schema via Supabase MCP — cap-rate band + trades now read `rpc/rpc_query_comps` (the shared comps-engine
 RPC, same one `query_comps` calls) instead of a raw `sales_transactions` select missing
 `operator_name`/`address`/`city`/`state`; `v_dia_on_market` reads `current_cap_rate` (not a bare

@@ -38,6 +38,42 @@ export const CONFLICT_ORIGIN = 'web_research';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
+// MB-a3 — freshness-honest source_date (spec §1/§9 addenda "MB-a3").
+//
+// A fact's source_date must be the underlying SOURCE's own as-of date, never
+// the tick's run date (asOfIso) alone — the B6d-cms family (Dialysis repo
+// CLAUDE.md) documents exactly this class of trap for the CMS census: the
+// ingestion pipeline can run and "confirm" rows (stamping a touch column)
+// while the underlying roster is months stale, so a run-date stamp reads
+// fresh while the fact is not. asOfIso is used as source_date ONLY where the
+// underlying data genuinely carries no better date (a live COUNT with no
+// per-row date column, e.g. buildOnMarketFacts) — that exception is stated
+// at the call site, never assumed silently.
+//
+// CMS_FEED_MAX_AGE_DAYS mirrors dia.feed_freshness_registry's
+// `medicare_clinics` row (expected_max_age_days=45, ts_column=
+// `source_last_seen`). We deliberately do NOT key off `source_last_seen` (or
+// `cms_last_checked`/`cms_updated_at`) here — live measurement 2026-09-11
+// showed those columns move on every ingestion RUN (a re-confirmation touch)
+// even when the roster itself has not changed, which is the B6a "do not date
+// a feeder off updated_at on an upserted table" trap one column over. The
+// field that reflects the CENSUS's own age is `last_seen_date` (the date a
+// clinic row was last actually OBSERVED in a CMS extract) — measured live,
+// DaVita/Fresenius both read max(last_seen_date)=2026-01-22 while
+// cms_last_checked reads days-old. Callers pass the per-operator
+// max(last_seen_date) as `sourceAsOf`.
+export const CMS_FEED_MAX_AGE_DAYS = 45;
+
+/** True when a source's own as-of date is missing or older than the feed's registered SLA. */
+export function isSourceStale(sourceAsOfDateStr, asOfIso, maxAgeDays) {
+  if (!sourceAsOfDateStr) return true; // no date at all -> cannot vouch for freshness
+  const asOfMs = new Date(sourceAsOfDateStr).getTime();
+  const nowMs = new Date(asOfIso).getTime();
+  if (!Number.isFinite(asOfMs) || !Number.isFinite(nowMs)) return true;
+  return nowMs - asOfMs > maxAgeDays * DAY_MS;
+}
+
+// ---------------------------------------------------------------------------
 // TTL (spec §3)
 // ---------------------------------------------------------------------------
 
@@ -117,8 +153,14 @@ function pct1(v) {
  * @param {string} o.sourceLabel  e.g. "cm_dialysis_cap_ttm_m" — internal citation
  * @param {string} o.asOfIso     fetched_at
  * @param {number} [o.minN]
+ * @param {string|null} [o.sourceAsOfDate]  the latest sale_date behind these comps
+ *   (YYYY-MM-DD). MB-a3: this is the SOURCE's own as-of date and is preferred
+ *   over asOfIso as source_date — a comps band derived from a 366-day trailing
+ *   window is "as of" the newest comp it contains, not the moment the tick ran.
+ *   Falls back to asOfIso only when the caller has no comp dates (should not
+ *   happen once n>=minN, kept as a defensive default).
  */
-export function buildCapRateBandFact({ lane, capRates, operator = null, sourceLabel, asOfIso, minN = MIN_N_CAP_BAND }) {
+export function buildCapRateBandFact({ lane, capRates, operator = null, sourceLabel, asOfIso, minN = MIN_N_CAP_BAND, sourceAsOfDate = null }) {
   const stats = iqrStats(capRates || []);
   if (!stats || stats.n < minN) return null; // small-n suppression — never emit a thin band
   const segLabel = operator ? ` (${operator})` : '';
@@ -132,7 +174,7 @@ export function buildCapRateBandFact({ lane, capRates, operator = null, sourceLa
     unit: 'decimal_cap_rate',
     source_url: null,
     source_title: sourceLabel,
-    source_date: asOfIso.slice(0, 10),
+    source_date: sourceAsOfDate || asOfIso.slice(0, 10),
     origin: 'onbox_sql',
     fact_kind: 'derived',
     fact_key: factKey,
@@ -142,7 +184,15 @@ export function buildCapRateBandFact({ lane, capRates, operator = null, sourceLa
   };
 }
 
-/** On-market count + median ask cap for the lane. */
+/**
+ * On-market count + median ask cap for the lane.
+ * MB-a3 documented exception: source_date = asOfIso. A "currently on-market"
+ * count has no better date than the moment it was read — it is a live
+ * inventory-level count over v_dia_on_market's active-listing filter, not a
+ * derivation over dated rows, so there is no underlying "as of" date to
+ * prefer over the read time itself (unlike the cap-rate band or trades,
+ * which are derived over dated comps and MUST use the comps' own dates).
+ */
 export function buildOnMarketFacts({ lane, count, medianAskCap, sourceLabel, asOfIso }) {
   const facts = [];
   if (Number.isFinite(count)) {
@@ -197,7 +247,14 @@ export function buildTradesSinceLastRunFact({ lane, trades, sinceIso, sourceLabe
   const caps = list.map((t) => Number(t.cap_rate)).filter(Number.isFinite);
   const medPrice = median(prices);
   const medCap = median(caps);
+  // dateStr = the RUN day, kept for fact_key identity (buildTradesSinceLastRunFact's
+  // own dedupe/re-supersede contract — a re-run the SAME day supersedes rather than
+  // duplicates). MB-a3: source_date is a DIFFERENT thing — the latest sale_date among
+  // the trades themselves, since this fact is a derivation over dated comps, not a
+  // point-in-time count. Falls back to the run day only if no trade carries a date.
   const dateStr = asOfIso.slice(0, 10);
+  const saleDates = list.map((t) => t.sale_date).filter(Boolean).map((d) => String(d).slice(0, 10));
+  const sourceDateStr = saleDates.length ? saleDates.sort().at(-1) : dateStr;
   const windowStr = sinceIso ? ` since ${sinceIso.slice(0, 10)}` : '';
   let claim = `${list.length} dialysis sale${list.length === 1 ? '' : 's'} recorded${windowStr}.`;
   if (medPrice != null) claim += ` Median price $${Math.round(medPrice).toLocaleString('en-US')}.`;
@@ -210,7 +267,7 @@ export function buildTradesSinceLastRunFact({ lane, trades, sinceIso, sourceLabe
     unit: 'count',
     source_url: null,
     source_title: sourceLabel,
-    source_date: dateStr,
+    source_date: sourceDateStr,
     origin: 'onbox_sql',
     fact_kind: 'reported',
     fact_key: `trades_since_last_run:${dateStr}`,
@@ -219,7 +276,11 @@ export function buildTradesSinceLastRunFact({ lane, trades, sinceIso, sourceLabe
   };
 }
 
-/** Handles the genuine zero case honestly, separate from the "no trades array at all" guard above. */
+/**
+ * Handles the genuine zero case honestly, separate from the "no trades array at all" guard above.
+ * MB-a3 documented exception: source_date = asOfIso. There is no comp to date when the claim IS
+ * that no comp exists in the window — the only honest "as of" is the moment the window was checked.
+ */
 export function buildTradesZeroFact({ lane, sinceIso, sourceLabel, asOfIso }) {
   const dateStr = asOfIso.slice(0, 10);
   const windowStr = sinceIso ? ` since ${sinceIso.slice(0, 10)}` : '';
@@ -245,19 +306,68 @@ export function buildTradesZeroFact({ lane, sinceIso, sourceLabel, asOfIso }) {
  * count (only emitted when a prior count exists — no baseline is not a "0
  * change" claim, it is missing data, and missing data is never fabricated as
  * zero).
+ *
+ * MB-a3 FEED GATE (Dialysis CLAUDE.md B6d-cms family): a CMS operator's own
+ * census can be stale for months while the ingestion RUN still "succeeds"
+ * (the B6d-cms outage — a calendar throttle plus a watermark that counted
+ * crashed runs kept CMS ingestion from landing real rows for ~65 days while
+ * every surface read green). Writing a confident count fact off a stale
+ * census would repeat that failure one layer up. When an operator's own
+ * `sourceAsOf` date (the caller passes max(last_seen_date), never a touch
+ * column) is missing or older than CMS_FEED_MAX_AGE_DAYS, this builder does
+ * NOT emit a count fact or a net-change fact for that operator — it emits a
+ * single named GAP MARKER fact instead (fact_key `cms_census_gap:<operator>`,
+ * claim states the stale-since date), so a downstream staleness view shows
+ * the section as honestly missing rather than falsely fresh, and so a
+ * genuinely-moved count is never diffed against a stale baseline. This gate
+ * is OPT-IN: if `sourceAsOf` is not a Map at all, every operator is treated
+ * as fresh (back-compat for callers, and for tests, that have no per-operator
+ * date to give).
+ *
  * @param {object} o
  * @param {{operator:string, count:number}[]} o.counts
  * @param {Map<string,number>} [o.priorCounts]  operator -> the count from the
  *   fact this run's fact will supersede, resolved by the caller (tick reads
  *   the currently-live fact's value before writing).
+ * @param {Map<string,string>} [o.sourceAsOf]  operator -> max(last_seen_date)
+ *   (YYYY-MM-DD) for that operator's CMS rows. When provided, gates staleness
+ *   per CMS_FEED_MAX_AGE_DAYS; when omitted, no gate is applied.
  */
-export function buildCmsOperatorFacts({ lane, counts, priorCounts, sourceLabel, asOfIso }) {
+export function buildCmsOperatorFacts({ lane, counts, priorCounts, sourceLabel, asOfIso, sourceAsOf }) {
   const facts = [];
   const dateStr = asOfIso.slice(0, 10);
+  const gateEnabled = sourceAsOf instanceof Map;
   for (const row of counts || []) {
     const operator = String(row.operator || '').trim();
     const count = Number(row.count);
     if (!operator || !Number.isFinite(count)) continue;
+
+    let sourceDateStr = dateStr;
+    if (gateEnabled) {
+      const opAsOf = sourceAsOf.get(operator) || null;
+      if (isSourceStale(opAsOf, asOfIso, CMS_FEED_MAX_AGE_DAYS)) {
+        facts.push({
+          lane,
+          section: 'operators',
+          claim_text: `${operator}'s CMS clinic census is stale`
+            + `${opAsOf ? ` (last observed ${opAsOf})` : ' (no observed date on file)'}`
+            + ` — count withheld pending a fresh CMS ingest.`,
+          value: null,
+          unit: 'gap_marker',
+          source_url: null,
+          source_title: sourceLabel,
+          source_date: opAsOf || dateStr,
+          origin: 'onbox_sql',
+          fact_kind: 'reported',
+          fact_key: `cms_census_gap:${normKey(operator)}`,
+          confidence: 0.9,
+          _subtype: 'cms_census_gap',
+        });
+        continue; // no count fact, no net-change fact, for a stale census
+      }
+      sourceDateStr = opAsOf; // the source's OWN as-of date, never the run date
+    }
+
     facts.push({
       lane,
       section: 'operators',
@@ -266,7 +376,7 @@ export function buildCmsOperatorFacts({ lane, counts, priorCounts, sourceLabel, 
       unit: 'count',
       source_url: null,
       source_title: sourceLabel,
-      source_date: dateStr,
+      source_date: sourceDateStr,
       origin: 'onbox_sql',
       fact_kind: 'reported',
       fact_key: `cms_clinic_count:${normKey(operator)}`,
@@ -285,7 +395,7 @@ export function buildCmsOperatorFacts({ lane, counts, priorCounts, sourceLabel, 
         unit: 'count_delta',
         source_url: null,
         source_title: sourceLabel,
-        source_date: dateStr,
+        source_date: sourceDateStr,
         origin: 'onbox_sql',
         fact_kind: 'derived',
         fact_key: `cms_clinic_net_change:${normKey(operator)}`,
