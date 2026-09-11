@@ -16,6 +16,46 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-11 — PDR13 shipped + live-verified: dia's Donna, TX 5-way duplicate is down to 2 rows; but verifying it surfaced a new, more important gap (PDR14) — dia merges never tell LCC, and 89 LCC entities already point at deleted properties
+
+Scott reported PDR13 merged. Per this arc's standing discipline, independently re-queried every
+claim in the response against live Dialysis_DB rather than trusting the commit message (a prior
+session had already saved the response transcript but not reconciled docs).
+
+**Everything in the PDR13 response checked out exactly**, down to the nested JSON payloads: a new
+`parcel_number`/`medicare_id`-keyed twin detector shipped, reusing the existing `dia_property_twin_review`
+lane and `dia_merge_property_reversible` round trip (no second merge mechanism). Real fleet-wide
+population confirmed live: 48 pairs (32 `review_name` / 16 `review_conflict` / 0 auto). The Donna, TX
+group specifically: `properties` now holds 2 rows instead of 5 (`39874` canonical, `45543` a genuine
+address typo left alone), `sales_transactions` down to the correct single row (`sale_id 311`,
+$3,639,317, 2019-02-01), `property_cms_link` still correctly on `39874`. Merge backup rows 587/588/589
+confirmed live with the exact `rewired` JSON the response quoted.
+
+**Then checked the property through LCC's own lens (`get_property_context`) rather than stopping at
+"the dia fix is verified" — and found a regression.** The canonical LCC entity (`d90be440…`) still
+carries `metadata.domain_property_id = "37722"` — the property_id PDR13's own merge just dropped.
+`get_property_context` now returns `documents: []`, `lease_data: null`, `transactions: []`, ownership
+all null — **PDR4 (documents), confirmed fixed by PDR1 as of 2026-09-10 with 3 documents showing, is
+now showing zero again**, purely because the cross-database pointer went stale. No error surfaces
+anywhere in the app.
+
+**Measured how big this actually is, filed as `PDR14`:** neither dia's existing geospatial merge cron
+nor PDR13's new detector writes anything back to LCC's `entities.metadata.domain_property_id` when a
+dia property row is dropped. Of 1,245 distinct dia `property_id`s referenced by LCC entities, **89
+(7.1%) already point at a property_id that no longer exists** — a standing gap, not new today; PDR13's
+3 Donna-TX merges are 3 of the 89. This will keep growing every time either merge process runs, including
+future approvals of PDR13's own remaining 45 pending pairs.
+
+**Docs updated:** `PLANNED-BACKLOG.md` PDR13 marked SHIPPED + LIVE-VERIFIED. PDR3/PDR6 marked 🟡 —
+fixed at the dia layer, confirmed, but not yet visible through LCC until PDR14 ships. New **PDR14** row,
+flagged 🚨 given it's an active, silent regression, not just an open gap.
+
+**Next step.** PDR14 needs its own prompt — in `life-command-center` this time, not the Dialysis repo,
+since the missing write is on the LCC side (either a propagation step or a read-time reconciliation for
+a dangling `domain_property_id`). This is now more urgent than finishing PDR2, since it's actively
+undoing PDR1/PDR4's confirmed fix and will keep doing so with every future dia merge. PDR2 (the
+ownership guard-gap, 4,026-property blast radius) and PDR12 (Rock Hill planner gap) remain queued
+behind it, unaffected by this finding.
 ## 2026-09-11 — New defect found and triaged: `public_record_ingest.py` crashes its whole batch on a single dropped Supabase connection (`PRI1`, queued not urgent)
 
 Scott noticed a separate service crash while checking on the (unrelated) CMS ingestion run he'd
