@@ -16,6 +16,52 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-11 — PRI3 response reviewed: 5 of 6 call sites fixed with proof asserted (not independently visible), the `owners` code bug fixed, full suite green (3183 passed, up from 3173) — held at 🟡, not ✅, pending confirmation `Dialysis` PR #7406 is actually merged
+
+`PRI3`'s response (`"PRi3 surface response.docx"`, saved by Scott) was read in full and transcribed to
+`docs/claude-code/responses/done/PRI3-connection-retry-sweep-and-ownership-linker-bug.response.md`.
+Substantive and mostly responsive to what the prompt asked, with real gaps flagged rather than assumed
+resolved:
+
+**Fixed, per the response**: (a) `oig_leie_ingestor`'s LEIE upsert batches, (b) all 9 `ownership_linker`
+sub-steps, (d) `utils_shared`'s `pending_updates` fetch, (e) `ingestion_tracker`'s `start_run` (with a
+self-caught regression along the way — moving query construction outside `safe_execute()` broke a test
+using an incomplete stub client; fixed by wrapping construction+execution in a lambda, matching the
+original single try/except scope) — all via the same `safe_execute()` pattern `PRI1` already proved
+correct. **(c) the `owners` `UnboundLocalError`** — confirmed a genuine, separate Python bug (a failed
+preceding step left a local variable unassigned that a later step referenced unconditionally), fixed
+independent of the retry work.
+
+**Open questions, answered**: **(f)** the all-zeros summary + "counters not recorded" warning are two
+separate, both-benign phenomena that looked like one alarming thing — not real data loss hiding behind a
+broken counter. **(g)** `census_demographics_ingestor.py` confirmed vulnerable to the same connection
+issue, but this specific run's actual failure cause could not be determined from the available log
+excerpt — stated plainly as unresolved rather than assumed. **(h)** the actual crash trigger — traced all
+25 pipeline steps' try/except coverage and the post-loop tail code, found no unprotected path, concluded
+possibly an OOM/platform-level kill consistent with a failure mode already documented elsewhere in the
+repo — **genuinely unresolved**, reported honestly as such. **Section 2** (root cause of the connection
+drops): **not determinable from this repo** — no lockfile/Dockerfile/Railway config committed to audit
+actual resolved dependency versions, no deliberate version bump in git history; the call-site
+`safe_execute()` approach remains the practical path forward.
+
+**Gaps flagged, not glossed over**: the response asserts "(a)-(e), (g): fixed, each with before/after
+proof" but the actual before/after proof text was not visible in what this session could extract from
+the `.docx` (paragraph-only extraction — may exist in a table this method missed). The file list names 5
+changed files (`oig_leie_ingestor.py` +23-6, `ownership_linker.py` +202-105, `utils_shared.py` +39-24,
+`ingestion_tracker.py` +53-31, `test_pri3_connection_retry_sweep.py` +406-8) plus a **6th, unnamed file**
+("Show 1 more" in the transcript, not expandable from the extracted text).
+
+**Merge status: unconfirmed, and this matters.** The session was explicitly instructed not to open a PR
+unless told to, and closes by referencing `sbriggssjc/Dialysis#7406` as the branch's PR going forward —
+this confirms the PR exists, **not that it's merged**. Scott's "This PR is merged" message most likely
+refers to the `life-command-center` documentation PR for this round (confirmed merged from the
+subsequent git state), not necessarily the `Dialysis`-side code fix. **Asked Scott directly to confirm
+whether `Dialysis` PR #7406 (branch `claude/epic-archimedes-jpcknd`) is actually merged** before treating
+this fix as deployed.
+
+`PLANNED-BACKLOG.md`'s `PRI3` row updated to 🟡 (fix applied and tested per the response, held short of
+✅ pending that confirmation). Prompt moved to `docs/claude-code/prompts/done/`. Response docx pending
+archive to `responses/done/` on Scott's machine.
 ## 2026-09-11 — PDR14b shipped + live-applied: dia dangling property_id self-heal, ongoing monitoring, acceptance test confirmed
 
 **Scope: `domain='dia'` only, per the prompt's explicit instruction** — `domain='gov'` (PDR14-GOV,
