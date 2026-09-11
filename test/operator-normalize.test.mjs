@@ -21,23 +21,23 @@ describe('deriveOperatorFromTenant — matched families', () => {
     ['DVA Healthcare Renal Care, Inc.', 'DaVita'],
     ['Renal Treatment Centers-Southeast, L.P.', 'DaVita'],
     // Fresenius
-    ['Fresenius Medical Care', 'Fresenius'],
-    ['Fresenius Kidney Care', 'Fresenius'],
-    ['Fresnius Kidney Care', 'Fresenius'],          // common typo
-    ['FMC NORTH MEMPHIS', 'Fresenius'],              // the fmc(na)? fix
-    ['FMCNA - PINE BLUFF', 'Fresenius'],
-    ['FKC COLTON HOME', 'Fresenius'],
-    ['RAI-CERES AVE-CHICO', 'Fresenius'],
-    ['Bio-Medical Applications of Kentucky, Inc.', 'Fresenius'],
-    ['American Access Care', 'Fresenius'],
-    ['Renal Care Group', 'Fresenius'],
-    ['Azura Vascular Care', 'Fresenius'],
-    ['Liberty Dialysis', 'Fresenius'],
+    ['Fresenius Medical Care', 'Fresenius Medical Care'],
+    ['Fresenius Kidney Care', 'Fresenius Medical Care'],
+    ['Fresnius Kidney Care', 'Fresenius Medical Care'],          // common typo
+    ['FMC NORTH MEMPHIS', 'Fresenius Medical Care'],              // the fmc(na)? fix
+    ['FMCNA - PINE BLUFF', 'Fresenius Medical Care'],
+    ['FKC COLTON HOME', 'Fresenius Medical Care'],
+    ['RAI-CERES AVE-CHICO', 'Fresenius Medical Care'],
+    ['Bio-Medical Applications of Kentucky, Inc.', 'Fresenius Medical Care'],
+    ['American Access Care', 'Fresenius Medical Care'],
+    ['Renal Care Group', 'Fresenius Medical Care'],
+    ['Azura Vascular Care', 'Fresenius Medical Care'],
+    ['Liberty Dialysis', 'Fresenius Medical Care'],
     // US Renal Care
-    ['U.S. Renal Care', 'US Renal Care, Inc.'],
-    ['US Renal Care', 'US Renal Care, Inc.'],
-    ['USRC LOS BANOS HOME', 'US Renal Care, Inc.'],
-    ['Dialysis Newco, Inc. dba DSI Renal', 'US Renal Care, Inc.'],
+    ['U.S. Renal Care', 'US Renal Care'],
+    ['US Renal Care', 'US Renal Care'],
+    ['USRC LOS BANOS HOME', 'US Renal Care'],
+    ['Dialysis Newco, Inc. dba DSI Renal', 'US Renal Care'],
     // DCI
     ['DCI', 'Dialysis Clinic, Inc.'],
     ['Dialysis Clinic, Inc.', 'Dialysis Clinic, Inc.'],
@@ -102,7 +102,7 @@ describe('edge cases', () => {
   });
   it('canonical operator targets are the 6 known families', () => {
     assert.deepEqual(listCanonicalOperators(), [
-      'DaVita', 'Fresenius', 'US Renal Care, Inc.',
+      'DaVita', 'Fresenius Medical Care', 'US Renal Care',
       'Dialysis Clinic, Inc.', 'American Renal Associates', 'Satellite Healthcare',
     ]);
   });
