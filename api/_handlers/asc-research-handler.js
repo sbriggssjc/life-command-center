@@ -121,8 +121,39 @@ export async function handleAscResearchCapture(req, res) {
 export async function handleAscResearchComplete(req, res) {
   if (req.method !== 'POST') return fail(res, 405, `Method ${req.method} not allowed`);
   const auth = await operator(req, res); if (!auth) return;
-  const { run_id, candidate_fingerprint, source_dispositions } = req.body || {};
+  const { run_id, candidate_fingerprint, source_dispositions, completion_mode } = req.body || {};
   if (!run_id || !candidate_fingerprint) return fail(res, 400, 'frozen_target_required');
+  if (completion_mode === 'parcel_evidence_only') {
+    if (source_dispositions != null || Object.keys(req.body || {}).some((key) =>
+      !['run_id', 'candidate_fingerprint', 'completion_mode'].includes(key))) {
+      return fail(res, 400, 'exact_parcel_evidence_completion_required');
+    }
+    const parcelEvidence = await opsQuery(
+      'POST',
+      'rpc/lcc_complete_asc_candidate_parcel_evidence',
+      {
+        p_run_id: run_id,
+        p_candidate_fingerprint: candidate_fingerprint,
+        p_completed_by: auth.user.user_id || auth.user.id || null,
+      },
+      { countMode: 'none' },
+    );
+    if (!parcelEvidence.ok) {
+      return fail(res, parcelEvidence.status || 500,
+        'asc_research_parcel_evidence_completion_failed', parcelEvidence.data);
+    }
+    return res.status(200).json({
+      ok: true,
+      candidate: Array.isArray(parcelEvidence.data) ? parcelEvidence.data[0] : parcelEvidence.data,
+      controls: {
+        capture_created: false,
+        canonical_write_performed: false,
+        salesforce_write_performed: false,
+        outreach_performed: false,
+      },
+    });
+  }
+  if (completion_mode != null) return fail(res, 400, 'unsupported_completion_mode');
   if (source_dispositions != null) {
     if (source_dispositions?.costar !== 'not_found'
       || source_dispositions?.rca !== 'not_found'
