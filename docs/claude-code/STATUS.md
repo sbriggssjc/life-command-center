@@ -16,6 +16,39 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-11 — Closed out the arc's last open thread (`RATINGS2`'s `clinic_quality_metrics` half): probe fix confirmed working, but found a second, previously out-of-scope occurrence of RATINGS3's exact `updated_at` blind spot; new prompt filed
+
+Continued straight from closing `RATINGS-INSERT-COLLISION`, since one thread was still open: `RATINGS2
+(clinic_quality_metrics half only)`, unverified since 2026-09-10. Checked it live against the same
+2026-09-10 22:05–22:07 UTC production run already confirmed for the `ratings` fix, rather than waiting
+for another uploaded log.
+
+**Probe-count fix: confirmed working.** `edge_logs` shows only 36 `select=*&limit=1` probe calls against
+`clinic_quality_metrics` in the run's first minute, then zero in every minute after — down from the
+original 844×/30s runaway, and matching the once-per-run cache reset RATINGS2 described (a one-time
+burst while the cache populates, not a per-record recurrence).
+
+**New defect found, not fixed yet:** `clinic_quality_metrics.max(updated_at)` and `max(created_at)` are
+both still stuck at 2026-03-12 despite **1,994 `PATCH .../clinic_quality_metrics` calls returning `204`
+(success)** in that same run. Spot-checked one directly (`medicare_id='012500'`,
+`snapshot_date='2023-12-31'`) — still shows `updated_at = 2026-03-11`, untouched by the run. Confirmed no
+update trigger exists on the table. **This is RATINGS3's exact `updated_at`-never-stamped blind spot,
+recurring on a second table** — RATINGS3 explicitly scoped `clinic_quality_metrics` out of its fix, so
+this was always a known gap, just not yet checked live until now. Whether the underlying column values
+are actually changing on those 1,994 successful PATCHes is a separate, still-open question (no pre-run
+snapshot exists to diff against) — what's confirmed here is the measurement blind spot itself, mirroring
+RATINGS3's own finding almost exactly.
+
+**Filed `docs/claude-code/prompts/CQM1-quality-metrics-updated-at-stamp.md`** for the `Dialysis`-side
+session: stamp `updated_at` explicitly in `clinic_quality_metrics`'s write path (same shape as RATINGS3's
+fix to `ratings`), and confirm whether real data is changing on those PATCHes or if they're pure no-ops.
+`RATINGS2 (clinic_quality_metrics half only)` moved from 🔴 to 🟡 — split credit: probe fix real and
+confirmed, updated_at gap real and not yet fixed.
+
+**Next step.** Send `CQM1-quality-metrics-updated-at-stamp.md` to the `Dialysis`-side CC session per the
+usual convention. Once merged and deployed, re-check `clinic_quality_metrics.updated_at` live the same
+way — including whether real values changed — before closing this last thread.
+
 ## 2026-09-10 — PDR1 EXECUTED: 19 of 22 ambiguous entities merged live (incl. DaVita/Donna-TX); found a real planner gap on 3 more; confirmed DaVita's actual downstream effect
 
 Scott approved running all 22 auto-mergeable entities. Before executing, re-scored the 22 winners
