@@ -1,5 +1,22 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — PRI5 merged and deployed; recommended another live CMS test run
+
+Scott confirmed `Dialysis` PR `#7408` merged. `PLANNED-BACKLOG.md`'s `PRI5` row moved to ✅. Recommended
+triggering another CMS ingestion run to verify live: does `ingestion_tracker`'s `reclaim_stale_started_runs()`
+actually run and does a fresh run's own row close correctly this time; and does `census_demographics`
+now either succeed or fail with an honest, recorded `run_status='failure'` instead of orphaning a
+snapshot row. Every fix in this arc so far has been proven or caught out by an actual run, not by tests
+alone — same discipline applies here.
+
+## 2026-09-11 — PRI5 merged and deployed; recommended another live CMS test run
+
+Scott confirmed `Dialysis` PR `#7408` merged. `PLANNED-BACKLOG.md`'s `PRI5` row moved to ✅. Recommended
+triggering another CMS ingestion run to verify live: does `ingestion_tracker`'s `reclaim_stale_started_runs()`
+actually run and does a fresh run's own row close correctly this time; and does `census_demographics`
+now either succeed or fail with an honest, recorded `run_status='failure'` instead of orphaning a
+snapshot row. Every fix in this arc so far has been proven or caught out by an actual run, not by tests
+alone — same discipline applies here.
 ## 2026-09-11 — MB-a3 reconciled (PR #2313 merged): deployed + dry-run verified by Cowork; MB1e found; MB-b drafted
 
 Filed `responses/MB-a3 desktop response.docx` → `done/`; prompt → `prompts/done/`. MB-a3 fixed `source_date` (source
