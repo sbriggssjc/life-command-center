@@ -1,5 +1,53 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — PRI5 response reviewed: both real root causes found and fixed (not "undetermined" again), the orphaned-row gap resolved with live before/after, `census_demographics`'s months-old bug finally identified — held pending `Dialysis` PR #7408 merge confirmation
+
+`PRI5`'s response (`"PR15 surface response.docx"`, saved by Scott) read in full and transcribed to
+`docs/claude-code/responses/done/PRI5-orphaned-tracker-row-on-start-run-failure-and-census-demographics.response.md`.
+A strong round — this is the first time `census_demographics` got an actual root cause instead of
+"confirmed vulnerable, cause undetermined."
+
+**(a) The orphaned `ingestion_tracker` row — fixed with live proof.** `start_run()` returns `None` on
+exhausted retries but is never checked by its caller — the pipeline just proceeds, and nothing ever
+revisits the row it tried to create. Confirmed this session's own flagged row
+(`c817274e…`) is exactly this mechanism. **Found a second, distinct orphan class unprompted**:
+`ingestion_lock`'s own acquire call can leave a second row type orphaned the same way — 6 total orphans
+existed, not the 5 this session's own live count caught (which only checked one source). Fixed with a
+new `reclaim_stale_started_runs()` — deliberately not a lock, only touches rows past a 2-hour safety
+window so an in-flight run's own row is never touched — with a real rejected alternative explained (why
+reusing `acquire_ingestion_lock` for the outer row would create a lock collision with the inner sub-step).
+**Live before/after applied**: 2 of 6 orphans (past the safety window) closed immediately; the other 4,
+including this session's own flagged row, correctly left alone since they're still within the window.
+
+**(b) `census_demographics` — actual root cause found.** `_fetch_acs_data()` is a bare, unguarded HTTP
+call to `api.census.gov` (unrelated to this arc's Supabase connection-instability story) with no retry
+and no auth (`CENSUS_API_KEY` never configured, so every call hits Census's more rate-limited
+unauthenticated tier). The tell: `oig_leie_ingestor`'s equivalent fetch already has this exact guard
+pattern — `census_demographics_ingestor.py`'s own comment claims it was fixed "alongside" LEIE in an
+earlier round, but only the upsert-loop hardening was copied, never the fetch guard. **Confirmed against
+live data**: 3 snapshot rows from April/May/June 2026 show the identical months-old orphan pattern. Fixed
+to mirror LEIE's guard exactly. **Bonus fix found while wiring this in**: the step-loop's own success/
+failure check would have silently treated a clean `{"error": ...}` return as success — generalized the
+check to every step so this and `oig_leie_exclusions` (same latent gap) report honestly. Recommended
+(not required) setting `CENSUS_API_KEY` in Railway as a config action to reduce recurrence.
+
+**(c) The "benign all-zeros" conclusion — actually re-checked, not re-asserted.** Traced which modules
+populate the summary counter machinery — neither `run_cms_ingestion.py` nor
+`census_demographics_ingestor.py` appears in that list, so structurally `census_demographics` cannot be
+the cause either way. Confirmed live for this specific run: `facility_patient_counts` (the sub-step that
+does feed the counter) had zero new rows this date, matching the repo's documented near-annual CMS
+publish cadence — an expected no-op, not a defect.
+
+Tests: 7 new, full adjacent surface 285/286 passing (1 pre-existing, unrelated failure disclosed
+explicitly, reproduces on unmodified `main`).
+
+**PR `sbriggssjc/Dialysis#7408` was actually opened this round** (a step further than `PRI3`/`PRI4`,
+which only referenced a tracking PR number) — **merge status still unconfirmed**, same open item as every
+round. Asked Scott to confirm directly.
+
+`PLANNED-BACKLOG.md`'s `PRI5` row updated to 🟡. Prompt moved to `docs/claude-code/prompts/done/`.
+Response docx pending archive to `responses/done/` on Scott's machine.
+
 ## 2026-09-11 — MB-a reconciled (PR #2301 merged): live check finds 4 source defects; MB-a2 fix prompt drafted
 
 Processed `responses/MB-a desktop response.docx` → `done/` (CC had already filed the prompt). MB-a built MB1 (P-SQL)
