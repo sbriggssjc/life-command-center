@@ -16,46 +16,35 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
-## 2026-09-11 — PDR13 shipped + live-verified: dia's Donna, TX 5-way duplicate is down to 2 rows; but verifying it surfaced a new, more important gap (PDR14) — dia merges never tell LCC, and 89 LCC entities already point at deleted properties
+## 2026-09-11 — Escalation: the CMS ingestion re-run's own logs show the exact same connection-reset error from `PRI1` firing on 50% of ALL Supabase calls, continuously — not a rare blip, filed as `PRI2`
 
-Scott reported PDR13 merged. Per this arc's standing discipline, independently re-queried every
-claim in the response against live Dialysis_DB rather than trusting the commit message (a prior
-session had already saved the response transcript but not reconciled docs).
+Scott sent partial logs from the fresh CMS ingestion run he'd triggered ("here's the logs so far"), meant
+mainly to eventually confirm `clinic_quality_metrics` at scale. That check still isn't done — this
+excerpt only covers the first ~80 seconds — but a much bigger thing jumped out first.
 
-**Everything in the PDR13 response checked out exactly**, down to the nested JSON payloads: a new
-`parcel_number`/`medicare_id`-keyed twin detector shipped, reusing the existing `dia_property_twin_review`
-lane and `dia_merge_property_reversible` round trip (no second merge mechanism). Real fleet-wide
-population confirmed live: 48 pairs (32 `review_name` / 16 `review_conflict` / 0 auto). The Donna, TX
-group specifically: `properties` now holds 2 rows instead of 5 (`39874` canonical, `45543` a genuine
-address typo left alone), `sales_transactions` down to the correct single row (`sale_id 311`,
-$3,639,317, 2019-02-01), `property_cms_link` still correctly on `39874`. Merge backup rows 587/588/589
-confirmed live with the exact `rewired` JSON the response quoted.
+**`src.supabase_execute_wrapper`'s `supabase.execute` calls are failing their first attempt exactly 50%
+of the time** (1,714 of 3,428 calls in that 80-second window), with the **identical error signature**
+found in `PRI1`'s crash just hours earlier: `RemoteProtocolError: <ConnectionTerminated error_code:0,
+last_stream_id:3, additional_data:None>`. The sequence is a near-perfect alternation — fail, succeed,
+fail, succeed — meaning **a retry is happening here and does work**, unlike `public_record_ingest.py`
+(no retry, crashes outright). But this means the CMS ingestion service is silently doubling its Supabase
+call volume on essentially every single write, continuously, in live production — not as an occasional
+transient event, which is how `PRI1` was originally framed.
 
-**Then checked the property through LCC's own lens (`get_property_context`) rather than stopping at
-"the dia fix is verified" — and found a regression.** The canonical LCC entity (`d90be440…`) still
-carries `metadata.domain_property_id = "37722"` — the property_id PDR13's own merge just dropped.
-`get_property_context` now returns `documents: []`, `lease_data: null`, `transactions: []`, ownership
-all null — **PDR4 (documents), confirmed fixed by PDR1 as of 2026-09-10 with 3 documents showing, is
-now showing zero again**, purely because the cross-database pointer went stale. No error surfaces
-anywhere in the app.
+**Given the exact same error text in two different services, this looks like a shared root cause** —
+most likely in `supabase_execute_wrapper.py` itself or the underlying httpx/HTTP2 client configuration
+(e.g. a pooled connection Supabase's edge has already reset getting reused on the first attempt every
+time), not two coincidentally-identical bugs. Filed as **`PRI2`** in `PLANNED-BACKLOG.md`, cross-linked
+from `PRI1`'s row with an update flagging the escalation. **Not yet drafted as a prompt** — recommending
+the root cause get found first (why is every first attempt failing?) before `PRI1`'s downstream retry
+fix gets sent, so we're not just adding a second retry loop on top of an already-degraded connection
+layer.
 
-**Measured how big this actually is, filed as `PDR14`:** neither dia's existing geospatial merge cron
-nor PDR13's new detector writes anything back to LCC's `entities.metadata.domain_property_id` when a
-dia property row is dropped. Of 1,245 distinct dia `property_id`s referenced by LCC entities, **89
-(7.1%) already point at a property_id that no longer exists** — a standing gap, not new today; PDR13's
-3 Donna-TX merges are 3 of the 89. This will keep growing every time either merge process runs, including
-future approvals of PDR13's own remaining 45 pending pairs.
+**Next step.** Wait for the rest of the CMS run's logs (or query Dialysis_DB directly once it's done) to
+finish the `clinic_quality_metrics` scale check that closes the ratings arc — the 50% retry pattern
+doesn't appear to be losing data, just doubling load, so it shouldn't invalidate that check. Separately,
+decide with Scott whether `PRI2`'s root-cause investigation should go out before or alongside `PRI1`.
 
-**Docs updated:** `PLANNED-BACKLOG.md` PDR13 marked SHIPPED + LIVE-VERIFIED. PDR3/PDR6 marked 🟡 —
-fixed at the dia layer, confirmed, but not yet visible through LCC until PDR14 ships. New **PDR14** row,
-flagged 🚨 given it's an active, silent regression, not just an open gap.
-
-**Next step.** PDR14 needs its own prompt — in `life-command-center` this time, not the Dialysis repo,
-since the missing write is on the LCC side (either a propagation step or a read-time reconciliation for
-a dangling `domain_property_id`). This is now more urgent than finishing PDR2, since it's actively
-undoing PDR1/PDR4's confirmed fix and will keep doing so with every future dia merge. PDR2 (the
-ownership guard-gap, 4,026-property blast radius) and PDR12 (Rock Hill planner gap) remain queued
-behind it, unaffected by this finding.
 ## 2026-09-11 — New defect found and triaged: `public_record_ingest.py` crashes its whole batch on a single dropped Supabase connection (`PRI1`, queued not urgent)
 
 Scott noticed a separate service crash while checking on the (unrelated) CMS ingestion run he'd
