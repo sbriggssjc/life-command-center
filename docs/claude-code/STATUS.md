@@ -1,5 +1,32 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — Confirmed: the PRI3 test run is genuinely hung, not just idle-logging — filed as `PRI4`
+
+Follow-up to the preliminary finding above. Scott checked Railway directly: the deployment
+(`39b0ef8e-e041-44ca-9066-4c62d27ec7b4`) shows **"Running"**, not "Crashed" or "Success," and no new log
+lines have appeared beyond the `15:53:16Z` "preflight abort" summary. Re-checked `ingestion_tracker` live:
+the run's row (`started_at 2026-09-11 15:53:15.083884 UTC`) is still `run_status='started'`,
+`finished_at=null`, now **50+ minutes** with zero change. This rules out "Railway's dashboard is just
+stale" — **the process genuinely reached its own printed conclusion and then never exited.**
+
+Filed as `PRI4` (`docs/claude-code/prompts/PRI4-preflight-abort-hang-and-uncovered-call-site.md`),
+covering: (a) `facility_patient_counts`'s preflight check has no retry (an uncovered call site, distinct
+from `PRI3`'s catalog); (b) the `ingestion_tracker` row is never closed out on a preflight-abort exit,
+confirmed live; (c) the actual hang itself — the process prints a complete summary and then blocks
+forever instead of exiting, the priority item, with a specific ask to try attaching/inspecting the live
+process (Railway shell, `py-spy dump`) if still possible before Scott kills it, since that would settle
+the root cause far more precisely than static code reading; (d) a plain recommendation on whether it's
+safe for Scott to manually stop this specific stuck deployment now rather than wait.
+
+**Important scoping note carried into the prompt**: this run never reached any of `PRI3`'s actual fixed
+call sites (`oig_leie_ingestor`, `ownership_linker`, `utils_shared`, `ingestion_tracker.start_run`'s own
+retry logic) — it failed at preflight, a code path upstream of all of them. So **`PRI3`'s live-fix proof
+is still outstanding** — a clean run that gets past preflight is still needed before treating those fixes
+as proven in production, separate from this hang investigation.
+
+`PLANNED-BACKLOG.md`: filed `PRI4` 🔴, not queued — recommend sending promptly given it's occupying a live
+Railway instance right now.
+
 ## 2026-09-11 — Live PRI3 test run: connection instability confirmed still present, now hitting an uncovered preflight call site; `ingestion_tracker` row still stuck at `started` — preliminary, awaiting Railway status before filing a prompt
 
 Scott triggered a fresh CMS ingestion run to test `PRI3`'s deployed fix. Logs (deployment
