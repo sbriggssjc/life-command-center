@@ -360,6 +360,31 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
 
 ## Core doctrines (apply to every change)
 
+### 🧭 TRUTH IS FIXED AT ITS SOURCE OF RECORD — NEVER PATCHED WHERE IT SHOWS (Scott, 2026-09-11)
+
+Scott: *"for any of these factual errors, we want to track the source to ensure that the truth persists in all
+places, not just a patch for the purposes of these updates."* When a wrong, split, stale, or duplicated fact
+surfaces anywhere (a brief, a comps band, a CM chart, a dossier, an export), the fix is **not** in the surface that
+exposed it. Do these instead:
+
+1. **Trace it to the source of record.** That's the table and column that owns the fact, and **every writer**
+   that sets it: ingesters, sync jobs, sidebar capture, intake promoters, manual SQL, the Dialysis repo.
+2. **Fix it there, with provenance.** Repair or merge the record (reconcilable, never automatic truth). Ambiguous
+   cases go to a review lane, not a guess.
+3. **Guard every writer** so the defect cannot be re-minted. One resolver (JS plus a lock-step SQL mirror) that
+   every write path calls, and a CI or DB constraint that fails on a bypass.
+4. **Move every consumer to the canonical key** (an id, never a display string), then **measure every surface
+   that reads the fact** and confirm they agree.
+5. **Look one level deeper.** A naming split usually means a missing identity model, a stale number usually means
+   a dead feed, and a round-number cap usually means a truncated import. Name the underlying defect class and sweep
+   for its siblings before closing.
+
+A consumer-side normalizer (a map in the renderer, a `CASE` in a view) is allowed only as a **labelled, temporary
+bridge** with a backlog row pointing at the source fix. It is never the fix. *Worked example: the 2026-09-11
+operator split (backlog **ID1**): "Fresenius" vs "Fresenius Medical Care" in the market brief traced back to
+free-text `dia.properties.operator`, a duplicated `operators` registry, and two conflicting "canonical" spellings.*
+
+
 ### ⚠️ "MERGED" IS NOT "RUNNING" — CHECK THE FIX AGAINST THE DEPLOYED SHA BEFORE CALLING IT BROKEN (2026-08-26)
 
 Three assist fixes landed on 2026-08-26 and **the deploy cutoff cut straight through them.** The

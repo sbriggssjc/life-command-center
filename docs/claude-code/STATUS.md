@@ -1,5 +1,19 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — Doctrine: truth is fixed at its source of record; operator-identity audit (ID1) queued ahead of MB-b
+
+Scott, on the MB1e operator-name split: *"for any of these factual errors, we want to track the source to ensure that the
+truth persists in all places, not just a patch… include a deeper review to ensure that there are not greater problems
+underlying these naming and sorting issues."* Added as the first **Core doctrine in `CLAUDE.md`** (trace to the
+source of record and every writer, fix with provenance, guard writers, move consumers to canonical ids, look one level
+deeper). Cowork's read-only probe of Dialysis_DB confirms a **systemic identity defect**: the comps engine groups on
+free-text `properties.operator` (no FK, 45 variants); the `operators` registry has duplicates (USRC ×3, DCI ×2, DaVita ×5)
+plus categories and non-operators; `operator-normalize.js` and the registry disagree on the canonical Fresenius name;
+FK coverage is partial (leases 30%); 979 clinics have no chain and no operator and drop out of every count. Backlog §P0d
+gains **ID1** (audit, prompt drafted), **ID2** (build), and **ID3** (sibling sweep, linked to PDR2/OWN4/B6d-cms). MB1e item 1
+re-scoped to ID; MB-b §0.1 now consumes `operator_id` (per-operator bands withheld as a named gap until ID2); spec design
+rule 5. **Next:** send `prompts/ID1-operator-identity-source-of-record-audit.md`.
+
 ## 2026-09-11 -- OWN-T0h decided: reconciled store is canonical conflict count; found it doubled since 09-02
 
 Picked up OWN-T0h next (the "756 vs 2,097 conflict denominators" question CURRENT-STATE.md had been

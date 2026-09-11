@@ -1,4 +1,4 @@
-# MB-b — First visible brief: "Lane Briefs" block in the morning email + homepage Market Briefs tab (dialysis), after three producer cleanups
+# MB-b — (sequenced after ID1 → ID2) First visible brief: "Lane Briefs" block in the morning email + homepage Market Briefs tab (dialysis), after three producer cleanups
 
 **Repo: `life-command-center`.** First user-facing P18 surface. Renders from `v_market_brief_live` only — never
 recomputes a number. New surfaces ship flag-gated (`MARKET_BRIEF_RENDER`), flipped after §5.
@@ -26,10 +26,11 @@ renders, so they're fixed first.
 
 ## 0. Producer cleanups (MB1e, MB2)
 
-1. **Operator names are split.** The per-operator bands come out as separate facts for `Fresenius` (n=63) and
-   `Fresenius Medical Care` (n=12), and for `DaVita` (n=67) and `DaVita Dialysis` (n=10). Canonicalize through
-   Dialysis_DB `operators` (`operator_id`, `normalized_name`, `dba_names`) or the comps engine's canonical operator,
-   whichever `query_comps` uses. Supersede the fragment facts. Test: no two live band facts map to one `operator_id`.
+1. **Operator identity: consume, don't patch.** Group per-operator bands on the canonical `operator_id` that
+   **ID2** delivers (the source-of-record fix, per CLAUDE.md "TRUTH IS FIXED AT ITS SOURCE OF RECORD"). **Do not
+   add a normalization map in the producer or renderer.** If ID2 hasn't shipped, render only the whole-market band
+   and withhold per-operator bands with a named gap (`operator_identity_pending:ID2`). Test: no two live band facts
+   share an `operator_id`.
 2. **The trades fact has no window.** It reads "No dialysis sales recorded." with `since = null`, and its
    `fact_key` includes the date, so a new zero-fact accumulates every day. Make it state its window ("No dialysis
    sales recorded in the trailing 7 days as of …"), key it stably (`trades_trailing_7d`), and supersede it.

@@ -248,3 +248,10 @@ import batch (created_at 17 s apart), filed for the Dialysis repo's B6d-cms back
 is canonical — operator/tenant facts key on a canonical id (Dialysis_DB `operators.operator_id`), never a raw display
 string; windowed facts state their window and key stably.** Otherwise a brief shows one operator twice and zero-facts
 accumulate daily.
+
+**Addendum 2026-09-11 "source of record" (Scott):** *"track the source to ensure that the truth persists in all
+places, not just a patch."* Design rule 4 (canonical fact identity) is now satisfied **at the source**, not in the
+producer. The market brief consumes `operator_id` from the ID1/ID2 identity repair, and until then it withholds
+per-operator bands behind a named gap. **Design rule 5: a brief never fixes a fact the source of record gets wrong.
+It exposes the defect (gap or conflict), and the defect is traced and fixed upstream per CLAUDE.md Core doctrines.**
+The brief is therefore also a detector: every gap it renders points at a source-of-record repair.
