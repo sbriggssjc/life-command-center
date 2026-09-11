@@ -128,8 +128,20 @@ export async function handleOwnT0jSponsorClassifyTick(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
   const isApply = req.method === 'POST';
   if (isApply) {
-    const auth = authenticate(req);
-    if (!auth.ok) return res.status(auth.status || 401).json({ error: auth.error || 'unauthorized' });
+    // BUGFIX 2026-09-11 (Cowork, live 401 found in production, second bug in
+    // this handler): authenticate(req, res) is an ASYNC function that returns
+    // a user object (or null, having already sent its own 401 response) --
+    // see api/_shared/auth.js's own header comment for the real contract:
+    //   const user = await authenticate(req, res); if (!user) return;
+    // The previous code called `authenticate(req)` with one argument, no
+    // `await`, and treated the (unawaited Promise) result as an
+    // {ok, status, error} shape that authenticate() never returns -- so
+    // `auth.ok` was always undefined and every POST 401'd unconditionally,
+    // even with a correct X-LCC-Key. Reproduced live: `lcc_cron_post`'s own
+    // POST (the real key, from Vault, the same call the cron makes) came
+    // back 401 `{"error":"unauthorized"}`.
+    const user = await authenticate(req, res);
+    if (!user) return; // authenticate() already sent the 401 response
   }
 
   const [govR, famR] = await Promise.all([fetchGovComparablePopulation(), fetchConfirmedSponsorFamilies()]);
