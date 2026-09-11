@@ -22,6 +22,87 @@ DB is applied, but `/api/market-brief-psql-tick` has not been redeployed to or e
 stay `off`. **Operator next step:** merge the PR, redeploy both Railway services, `GET
 /api/market-brief-psql-tick?lane=dialysis` and confirm `gaps[]` is empty, one flag-forced `POST`, compare
 against a direct `query_comps` call for the same window, flip both flags.
+## 2026-09-11 -- OWN-T0j reviewed: classification logic verified correct, but the deployed route 502s -- found and fixed a real bug
+
+Scott: "the OWN-T0j prompt is done and the response is saved... review and update all documentation and plans
+accordingly." Reviewed by independently reproducing the numbers, not by re-reading the response.
+
+**Classification logic verified correct, byte-for-byte.** Ran the identical classification directly against
+both live Supabase projects (not through the app): 5,133 comparable / 2,462 disagree / 482 sponsor_family_confirmed
+(19.6%) / 1,980 unclassified_rival (80.4%) -- matches the shipped PLANNED-BACKLOG claim exactly. The Boyd
+Watterson positive control also holds live.
+
+**But the deployed route is broken -- curled it directly and got a 502.** `GET /api/ownt0j-sponsor-classify-tick`
+on the live Railway deploy (confirmed current: `/version` matches this session's git HEAD) returns
+`{"error":"gov true_owners fetch failed at chunk 0"}`. Root cause: the true_owners fetch batches up to 1,000
+UUID ids into a single PostgREST `in.(...)` filter -- roughly 39KB of query string, which Railway's edge
+rejects. The properties fetch just above it uses the identical shape but with short numeric ids (~8KB for
+1,000), which is why only this one fetch failed -- and why the shipped 11-test suite (pure classifier functions
+only) could not have caught it; nothing in that suite exercises an HTTP fetch.
+
+**Fixed** (branch `fix/ownt0j-true-owners-url-length`): scan `true_owners` unfiltered, paged by limit/offset
+like the transitions fetch already does, and keep only the needed ids via a client-side Set lookup -- no
+`in.()` filter, no URL-length ceiling regardless of population size (16,274 total true_owners today).
+`node --check` clean; the 11 existing classifier tests (they test pure functions, untouched by this fix)
+still pass.
+
+**The cache table remains empty in production** -- this fix hasn't shipped yet. Once it's merged and Railway
+redeploys, the next `lcc-ownt0j-sponsor-classify-refresh` cron fire should populate it for real; that's the
+thing to re-check next, not the classification math (already independently confirmed correct).
+
+**Docs**: `PLANNED-BACKLOG.md` `OWN-T0j` row appended with the verification + bug fix. Did not touch the
+`OWN-T0a`/`OWN-T0e`/`AC11` rows from the prior entry -- nothing here changes those findings.
+
+**Next step.** Get this fix branch pushed and merged, confirm the Railway redeploy, then re-check the cache
+table and the reporting view actually populate on the next cron fire.
+
+## 2026-09-11 — PRI5 response reviewed: both real root causes found and fixed (not "undetermined" again), the orphaned-row gap resolved with live before/after, `census_demographics`'s months-old bug finally identified — held pending `Dialysis` PR #7408 merge confirmation
+
+`PRI5`'s response (`"PR15 surface response.docx"`, saved by Scott) read in full and transcribed to
+`docs/claude-code/responses/done/PRI5-orphaned-tracker-row-on-start-run-failure-and-census-demographics.response.md`.
+A strong round — this is the first time `census_demographics` got an actual root cause instead of
+"confirmed vulnerable, cause undetermined."
+
+**(a) The orphaned `ingestion_tracker` row — fixed with live proof.** `start_run()` returns `None` on
+exhausted retries but is never checked by its caller — the pipeline just proceeds, and nothing ever
+revisits the row it tried to create. Confirmed this session's own flagged row
+(`c817274e…`) is exactly this mechanism. **Found a second, distinct orphan class unprompted**:
+`ingestion_lock`'s own acquire call can leave a second row type orphaned the same way — 6 total orphans
+existed, not the 5 this session's own live count caught (which only checked one source). Fixed with a
+new `reclaim_stale_started_runs()` — deliberately not a lock, only touches rows past a 2-hour safety
+window so an in-flight run's own row is never touched — with a real rejected alternative explained (why
+reusing `acquire_ingestion_lock` for the outer row would create a lock collision with the inner sub-step).
+**Live before/after applied**: 2 of 6 orphans (past the safety window) closed immediately; the other 4,
+including this session's own flagged row, correctly left alone since they're still within the window.
+
+**(b) `census_demographics` — actual root cause found.** `_fetch_acs_data()` is a bare, unguarded HTTP
+call to `api.census.gov` (unrelated to this arc's Supabase connection-instability story) with no retry
+and no auth (`CENSUS_API_KEY` never configured, so every call hits Census's more rate-limited
+unauthenticated tier). The tell: `oig_leie_ingestor`'s equivalent fetch already has this exact guard
+pattern — `census_demographics_ingestor.py`'s own comment claims it was fixed "alongside" LEIE in an
+earlier round, but only the upsert-loop hardening was copied, never the fetch guard. **Confirmed against
+live data**: 3 snapshot rows from April/May/June 2026 show the identical months-old orphan pattern. Fixed
+to mirror LEIE's guard exactly. **Bonus fix found while wiring this in**: the step-loop's own success/
+failure check would have silently treated a clean `{"error": ...}` return as success — generalized the
+check to every step so this and `oig_leie_exclusions` (same latent gap) report honestly. Recommended
+(not required) setting `CENSUS_API_KEY` in Railway as a config action to reduce recurrence.
+
+**(c) The "benign all-zeros" conclusion — actually re-checked, not re-asserted.** Traced which modules
+populate the summary counter machinery — neither `run_cms_ingestion.py` nor
+`census_demographics_ingestor.py` appears in that list, so structurally `census_demographics` cannot be
+the cause either way. Confirmed live for this specific run: `facility_patient_counts` (the sub-step that
+does feed the counter) had zero new rows this date, matching the repo's documented near-annual CMS
+publish cadence — an expected no-op, not a defect.
+
+Tests: 7 new, full adjacent surface 285/286 passing (1 pre-existing, unrelated failure disclosed
+explicitly, reproduces on unmodified `main`).
+
+**PR `sbriggssjc/Dialysis#7408` was actually opened this round** (a step further than `PRI3`/`PRI4`,
+which only referenced a tracking PR number) — **merge status still unconfirmed**, same open item as every
+round. Asked Scott to confirm directly.
+
+`PLANNED-BACKLOG.md`'s `PRI5` row updated to 🟡. Prompt moved to `docs/claude-code/prompts/done/`.
+Response docx pending archive to `responses/done/` on Scott's machine.
 
 ## 2026-09-11 — MB-a reconciled (PR #2301 merged): live check finds 4 source defects; MB-a2 fix prompt drafted
 
