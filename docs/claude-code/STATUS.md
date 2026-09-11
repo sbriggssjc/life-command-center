@@ -1,5 +1,13 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — BUY0 Phase 0 complete: Geller Round 1 client deliverable + email draft; build handoff written (spec §9) and backlog rows BUY1a/1b + BUY-G1…G6 filed
+
+Cowork. Round 1 for Jordan Geller is client-ready in `Team Briggs - Documents/Clients/Jordan Geller/2026 Industrial Search/Deliverables/Round 1 - Sep 2026/`
+(Buyer Showing: 19 Focused ranked best→worst on Credit/Lease/Real Estate, Market Ranking, 207-row Broad Market, Sources & Notes, How to Use; full MSA
+workbook; email draft in Scott's voice). Client folder reorganized with `00-README.md` as the pickup file. Credit leg automated on a bond-style scale
+(American Airlines Ba3/B+ and Oil States ratings looked up). Spec gains §4.7 (OM sourcing, BUY-G3) and §9 (deliverable contract, seed code, gaps, build
+order). Supersedes the unpushed local branch `docs/buy0-om-sourcing-layer` (its §4.7 content is included here). **Next:** Scott sends Round 1; build
+starts with BUY1a when authorized.
 ## 2026-09-11 -- OWN-T0j verified end-to-end: real write succeeded, cache populated, closed out
 
 Triggered the real POST directly via `select public.lcc_cron_post('/api/ownt0j-sponsor-classify-tick',

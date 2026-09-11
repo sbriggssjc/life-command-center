@@ -1,6 +1,6 @@
 # Buyer Engagement Module (Buy-Side Showings) — Spec v0.1 (DRAFT, design-only)
 
-> Status: **design-only, nothing authorized to build.** Opened 2026-09-11 (Cowork) from Scott's brief.
+> Status: **design-only, nothing authorized to build.** Opened 2026-09-11 (Cowork). **Phase 0 (Geller pilot) Round 1 delivered 2026-09-11 — see §9 for the build handoff.**
 > Backlog anchor: `UX-T4` / UX42 (buyer-representation / 1031 clients tab), `F1`, `F2`, `D14`.
 > Pilot engagement: Jordan Geller 2026 industrial search — log at
 > `Team Briggs - Documents/Clients/Jordan Geller/2026 Industrial Search/00-ENGAGEMENT-LOG.md`.
@@ -130,13 +130,31 @@ assignment on the official OMB county lists (Census PEP county rows) → address
 criteria screen as *flags* (never silent drops) → within-metro percentile leg scores (Derived, broker-adjustable)
 → Focused / Broad Market. Seed code: `Clients\Jordan Geller\2026 Industrial Search\Data\JG_pipeline_scripts_2026-09-11.zip`
 (normalize → stage2 → score → build_deals; BDPS styling in `tbstyle.py`). Source quirks to encode:
-- **CoStar For-Sale export** has no State/County/lat-long → metro needs ZIP/city inference; ask operators to add
-  those columns to the saved export layout. Portfolio rows appear as "Multiple - Portfolio" and may duplicate
+- **CoStar For-Sale export** has no State/County/lat-long, and CoStar's current For-Sale tab offers only a fixed
+  field set (Scott, 2026-09-11) → metro assignment stays ZIP/city-based; make it deterministic with a cached Census
+  ZCTA→county relationship file instead of CREXi cross-matching. Portfolio rows appear as "Multiple - Portfolio" and may duplicate
   component-address rows elsewhere (dedupe by name + city + price).
 - **CREXi inventory export** has county + lat/long + link (best for geography); header is on row 3.
 - **Salesforce Comps report** carries lease detail (expiration, escalation, options, guarantor, broker contact)
   that neither CoStar nor CREXi exports have → it should win field-level merges.
 - Nothing carries clear height, dock count or market rent → deal-stage fields.
+
+### 4.7 OM sourcing layer for Focused candidates (Scott, 2026-09-11) — gap BUY-G3
+Exports never carry clear height, docks, rent roll, expenses or lease abstracts; the OM does. For every Focused
+candidate, find and ingest the OM automatically, then fill the deal-stage columns (Derived from OM, cited):
+1. **Salesforce first.** Match the candidate to a `Comp__c` (address / name); if matched, pull its files with the
+   existing request-triggered **`sf-on-demand-file`** flow + `om-comp-resolver.js` (already resolves OMs on Comp and
+   Deal attachments) → `stageOmIntake` → `intake-extractor`. Round 1: 3 of 24 Focused rows are Salesforce comps.
+2. **CoStar sidebar / extension.** On the CoStar For-Sale page, the existing capture path
+   (`SPEC_forsale_om_and_webpage_ingest.md`: embedded brochure → OM) grabs the brochure. Needed change: the sidebar
+   classifier routes only dia/gov today (`unknown_domain` otherwise) → add an **engagement route** that files the OM
+   + extracted fields to the client folder (Decision A: no domain DB) instead of rejecting non-dia/gov listings.
+3. **CREXi / LoopNet / broker sites.** Listing links are in the workbook; OMs are usually behind a CA → draft the
+   OM-request email to the listing broker (draft only, Scott sends); the W7 email matcher (§4.4) catches the reply
+   and routes the attachment into `stageOmIntake`.
+4. **Extraction output** (local Ollama, `invokeExtractionAI`): building SF, clear height, docks/drive-ins, year
+   built/renovated, lease commencement/expiration, rent & bumps, options, expense structure, guarantor → proposed
+   updates to the showing row (review queue, never auto-applied); OM PDF filed to `Clients\[Client]\[Engagement]\OMs\`.
 
 ## 5. Phasing (draft)
 - **Phase 0 (now):** run Jordan Geller manually in Cowork; capture every step, data source and decision in the
@@ -191,7 +209,46 @@ F. Salesforce: is the SF Deal/Opportunity the system of record for engagements?
 - Reusable artifact: `market_metrics` cache (MSA × metric × vintage × source) is worth persisting — it is shared
   across every buyer engagement and cheap to refresh; per-engagement data stays in the client folder (Decision A).
 
+## 9. Phase 0 outcome & build handoff (2026-09-11) — START HERE for the build
+**Pilot result.** One Cowork session ran the whole loop manually for Jordan Geller: MSA ranking (75 metros × 15 public
+factors) → operator exports (CoStar / CREXi / Salesforce, 1,683 rows) → metro assignment, de-dupe, screen flags →
+OMs (Salesforce Files via Chrome, CREXi public pages, CoStar via Scott) → three-leg scoring incl. automated Credit →
+client workbook + explanatory email. Client folder (the requirements trace):
+`Team Briggs - Documents/Clients/Jordan Geller/2026 Industrial Search/00-README.md`.
+
+**Deliverable contract (what the generator must produce)** — `Deliverables/Round N/…Buyer Showing….xlsx`, BDPS-styled:
+1. **Focused** — ranked best→worst by SCORE; columns grouped PROPERTY · REAL ESTATE (Bldg SF, Land AC, Land:Bldg,
+   Year Built, Clear Ht, Loading) · LEASE (Tenant/Tenancy, Lease Type, Lease Exp, Rem. Term, Bumps, Options, NOI,
+   Rent/SF, Mkt Rent/SF, Rent vs Mkt) · PRICING (Ask, $/SF, Cap, DOM) · SCORES (Credit, Lease, Real Estate, Score)
+   · ACTION (Status, OM/Link, Key Notes). Leg weights are yellow inputs; blank legs = 5.0 neutral.
+2. **Market Ranking** — static values + live weights (no links to raw datasets). 3. **Broad Market** — same geometry,
+   grouped by metro rank. 4. **Passed**. 5. **Sources & Notes** — per-property source docs, conflicts, credit basis.
+6. **How to Use**. Full MSA dataset ships as a separate workbook.
+
+**Credit leg (automated).** Bond-style relative scale: 10 AAA/AA · 9 A · 8 BBB · 7 BBB-/BB+ · 6 BB · 5 B+/B · 4–4.5
+unrated private / diversified small-bay · 3–3.5 single small private · 2–2.5 special-use small operator · N/A vacant /
+owner-user. No financial transparency = one notch below a public comparable. Look up current public ratings where a
+parent exists. Calibrated to SJC "Cap Rate Trends" tenant list (dated anchors only).
+
+**Seed code** (`Data/JG_pipeline_scripts_2026-09-11.zip`): `normalize.py` (per-source parsers) → `stage2.py` (metro
+assignment on OMB county lists, dedupe) → `score.py` (percentile legs) → `focus_data.py` (curated OM facts) →
+`build_client.py` (client workbook) · `tbstyle.py` (BDPS palette mirroring `bov-generator/bov_constants.py`) ·
+`build2.py`/`restyle_analytic.py` (MSA ranking). Port into `bov-generator/` as the buyer-showing generator (Phase 1).
+
+**Gaps confirmed by the pilot:** BUY-G1 (email-alert location extraction), BUY-G2 (no SF path for industrial
+`Comp__c`; on-demand file flow is dia-routed + partly broken — Chrome Files→Download worked), BUY-G3 (OM sourcing:
+CoStar blocks the Claude browser → sidebar engagement route or operator download), BUY-G4 (public-data egress:
+census/bls/bea blocked from sandbox + local shell; Census API needs a key), BUY-G5 (market-rent evidence store:
+signed rents from rent rolls / OMs per submarket, merit-weighted), BUY-G6 (credit leg as a reusable scorer with a
+tenant→parent→rating lookup).
+
+**Recommended build order:** Phase 1a — port generator + canon block `buyer-engagement.md` + Cowork skill
+`buyer-showing` (manual data in, branded workbook out). Phase 1b — living engagement (§4.4) on the deal spine.
+Then BUY-G2 → BUY-G3 → BUY-G5. Decision still open: vacant/owner-user treatment in SCORE (neutral 5.0 today).
+
 ## 8. Change log
 - 2026-09-11 — v0.1 drafted (Cowork session, Jordan Geller kickoff).
 - 2026-09-11 — §4.5 sourcing/ingestion audit (gaps BUY-G1 email-alert location extraction, BUY-G2 filtered SF Comp__c query).
+- 2026-09-11 — §9 Phase 0 outcome + build handoff (deliverable contract, credit scale, seed code, gaps BUY-G1…G6, build order).
+- 2026-09-11 — §4.7 OM sourcing layer (BUY-G3: SF on-demand file flow → CoStar sidebar engagement route → broker OM-request drafts) + CoStar fixed-layout note.
 - 2026-09-11 — §4.4 living-engagement design (reuse deal spine + W7 comms + Ollama); Phase 1b added.
