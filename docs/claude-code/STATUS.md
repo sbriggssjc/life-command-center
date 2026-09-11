@@ -1,5 +1,19 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — MB-a3 reconciled (PR #2313 merged): deployed + dry-run verified by Cowork; MB1e found; MB-b drafted
+
+Filed `responses/MB-a3 desktop response.docx` → `done/`; prompt → `prompts/done/`. MB-a3 fixed `source_date` (source
+as-of, never run time; justified exceptions for on-market count and zero-trades), added the CMS 45-day feed gate,
+confirmed the DaVita = Fresenius = 2,450 tie is a single import batch (17 s apart; B6d-cms, Dialysis repo), declined to
+flip because its sandbox saw a pre-fix build. **Cowork (read-only):** `/version` via pg_net = `78082f46` (the MB-a3 merge),
+so the fix is live. GET dry-runs via pg_net with the vault key: **P-SQL `gaps:[]`**, 17 candidates — TTM band median
+7.00% IQR 5.69–8.03% n=169; 211 on-market, 6.00% median ask; 8 `cms_census_gap:*` facts, no stale counts. **P-RSS:
+Ollama reachable** (6 articles, 0 model failures), 0 facts (no dialysis content). New **MB1e**: operator-band
+fragmentation (`Fresenius` vs `Fresenius Medical Care`, `DaVita` vs `DaVita Dialysis`), windowless/daily-keyed trades
+zero-fact, no dialysis feed. Removed the duplicate 🔴 MB1d row the merge left behind. Spec design rule 4 (canonical fact
+identity). **MBa-hold can lift — Scott's call** (flip SQL in OPERATOR-ACTIONS). OC-v still half done: standalone MCP not
+redeployed (still 21 tools), 0 notes, no triage flag row. **Next:** `prompts/MBb-lane-briefs-daily-block-and-tab.md`.
+
 ## 2026-09-11 -- B1b graded: developer-chain floor NOT lifted (only 1.4% resolvable)
 
 Picked up B1b as the next recommended step after OWN-T0j closed out. B1's own audit had
