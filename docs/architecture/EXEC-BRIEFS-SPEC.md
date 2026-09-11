@@ -238,3 +238,13 @@ stay OFF**: this fix is not yet deployed to Railway (`/version` still reads the 
 flipping `MARKET_BRIEF_PSQL` before a redeploy would re-ship the exact bug this addendum closes.
 P-RSS's Ollama reachability from `tranquil-delight` could not be confirmed (no Railway env access
 from this session) — left OFF, stated as an operator-verification item.
+
+**Addendum 2026-09-11 "MB-a3 reconcile" (PR #2313 merged, deployed as `78082f46`):** MB-a3 declined to verify because
+its sandbox saw a pre-fix build; by reconcile time the fix was deployed, so Cowork ran both ticks' GET dry-runs via
+pg_net (vault key, no writes). P-SQL: `gaps: []`, 17 candidates, CMS gate emitting 8 named gaps and no counts —
+design rule 3 is working in production. P-RSS: Ollama reachable from Railway, 0 facts — the healthcare stream has no
+dialysis content, so **P-RSS value depends on lane-specific feeds** (MB-b §0.3). The 2,450 tie is confirmed as one
+import batch (created_at 17 s apart), filed for the Dialysis repo's B6d-cms backlog. **Design rule 4 added: fact identity
+is canonical — operator/tenant facts key on a canonical id (Dialysis_DB `operators.operator_id`), never a raw display
+string; windowed facts state their window and key stably.** Otherwise a brief shows one operator twice and zero-facts
+accumulate daily.
