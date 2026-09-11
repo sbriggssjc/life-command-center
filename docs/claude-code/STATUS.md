@@ -16,6 +16,30 @@
 > on 2026-08-26 (Prompt 141). Every still-open item from that range was carried into
 > `PLANNED-BACKLOG.md`; nothing was dropped.
 
+## 2026-09-11 — CQM1 merged; fix independently confirmed live (single row), held at 🟡 not ✅ pending full-table proof — and the saved response transcript itself was thin, flagged rather than papered over
+
+Scott reported CQM1's PR merged and the response saved. The saved `.docx` turned out to only capture the
+session's CI-monitoring/wrap-up narration — waiting on a background test run, discarding a known
+test-artifact-dirtying side effect, confirming a clean tree, the merge handoff — **not** the substantive
+answers to the prompt's own Unit 1 (root cause) or Unit 3 (real-value-change vs. no-op) questions. Named
+this plainly in the `.response.md` rather than inferring content that wasn't there.
+
+**Independently verified the core fix live instead**, since the transcript's own proof was missing:
+`clinic_quality_metrics.max(updated_at)` moved from the 2026-03-12 baseline (stuck through this whole
+arc) to **2026-09-11 11:54:01 UTC** — exactly one row touched, consistent with a single hand-verified
+proof row from inside the fix session itself, not yet a full production run. `updated_at` genuinely moves
+now, which it never did before this fix.
+
+**Held at 🟡, not ✅** — same discipline `RATINGS-INSERT-COLLISION` was held to before its close: a
+single proven row isn't the same as full-table production-scale proof (`ratings`' close required
+7,013/7,013 rows in a real ingestion run). `PR sbriggssjc/Dialysis#7403` confirmed merged (commit
+`a0e2ffa`, branch `claude/exciting-hopper-ycrafc`); full suite reported 3,170 passed/0 failed, no
+regressions.
+
+**Next step.** Wait for (or trigger) a real `clinic_quality_metrics` ingestion run and re-check live at
+scale, the same way `ratings` earned its ✅. With that, and Unit 1/3's answers if they still matter, this
+closes out the entire CFE-RUNAWAY → RATINGS-INSERT-COLLISION → RATINGS2 → RATINGS3 → CQM1 arc.
+
 ## 2026-09-11 — Closed out the arc's last open thread (`RATINGS2`'s `clinic_quality_metrics` half): probe fix confirmed working, but found a second, previously out-of-scope occurrence of RATINGS3's exact `updated_at` blind spot; new prompt filed
 
 Continued straight from closing `RATINGS-INSERT-COLLISION`, since one thread was still open: `RATINGS2
