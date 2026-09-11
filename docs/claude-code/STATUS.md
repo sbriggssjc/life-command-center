@@ -1,5 +1,70 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 — Not actually a crash: `ownership_linker`'s fix confirmed working live for the first time; one new orphaned-tracker-row gap found, `census_demographics` still failing — filed as `PRI5`
+
+Scott reported the latest CMS ingestion run as "crashed" and sent logs. **It wasn't a crash** — no
+traceback, no hang; the process ran its full course and printed a complete, orderly summary. Two pieces
+of real good news:
+
+- **`PRI3`'s `ownership_linker` fix is confirmed working live for the first time**: `Properties →
+  true_owners: {'from_recorded_chain': 1, 'from_tenant_match': 0, 'from_cms_chain': 6570}` and `Contacts
+  → Salesforce: {..., 'by_company': 19}` — real, non-zero linkage counts, versus the original crash where
+  all 9 sub-steps failed with every counter at `0`. This is the live-fix proof this arc has been waiting
+  on since `PRI3` first shipped.
+- The process did **not** hang this time, consistent with (though not proof of) `PRI4`'s daemon-thread +
+  `os._exit(2)` mitigation.
+
+**One real, distinct new gap found and filed as `PRI5`**: `ingestion_tracker.start_run` failed after
+retries again (same persistent connection instability — expected per `PRI3`'s Section 2 conclusion), but
+this time **the pipeline continued anyway and completed successfully**, leaving that run's
+`ingestion_tracker` row permanently orphaned (`run_status='started'`, `finished_at=null`, 30+ minutes
+later — confirmed live). A live count shows this isn't isolated: **5 of `cms_medicare_clinics`'s
+`ingestion_tracker` rows are stuck at `started` forever, out of 118 `success`** — every stuck one traces
+to this arc's problem runs. This is a distinct code path from `PRI4`'s catalog (which covered the
+*preflight-abort* exit only) — this is the *pipeline proceeds and finishes normally after `start_run`
+itself failed* path, never revisited to close its own tracker row.
+
+Also filed in `PRI5`: `census_demographics` failed again (`PRI3`'s still-unresolved catalog item (g),
+recurring rather than a one-off), and the same all-zero-counters + "not recorded" warning `PRI3` called
+"two conflated but benign phenomena" — asked the next round to re-confirm that conclusion against this
+specific run rather than re-assert it, since it keeps recurring in the identical shape.
+
+Prompt: `docs/claude-code/prompts/PRI5-orphaned-tracker-row-on-start-run-failure-and-census-demographics.md`.
+Not urgent — the pipeline is genuinely producing real writes now — but worth closing since this arc has
+leaned on `ingestion_tracker` for run-timing correlation throughout, and orphaned rows undermine that.
+
+## 2026-09-11 — MB-a: MB1/MB2 market-brief producers built (dialysis lane), flags OFF, NOT live-verified
+
+Branch `claude/sweet-gates-83wyu7` → PR (see docs). Built `MB1` (P-SQL, `api/_handlers/market-brief-psql-tick.js`)
+and `MB2` (P-RSS, `api/_handlers/market-brief-rss-tick.js`) per `prompts/MBa-market-brief-producers-dialysis.md`,
+producers only — no rendering, no email, no UI, no cloud-model calls. Migration
+`20260911180000_lcc_mba_market_brief_producers.sql` adds `market_brief_facts.fact_key` (+ a partial unique index
+scoped to `status='live'`, the identity a source-url-less SQL derivation needs — EB1's own
+`uq_mbf_source_identity` only fires when `source_url`+`source_date` are both present), registers
+`MARKET_BRIEF_PSQL`/`MARKET_BRIEF_PRSS` in `feature_flags_registry` (both `off`), and schedules both crons
+(guarded `NOT EXISTS`, not flag-gated — the P138 pattern: an unscheduled job is invisible even when its flag is
+off). New shared modules `api/_shared/market-brief-facts.js` (fact builders + the pure `decideFactWrite`
+supersede/skip/conflict decision + the RSS verbatim-number check) and `api/_shared/market-brief-rss.js`
+(extraction prompt/parse/verbatim-filter, fails closed with no cloud fallback — mirrors the OC2/Analyst's-Take
+on-box pattern). 74 new tests (`market-brief-facts.test.mjs`, `market-brief-rss.test.mjs`,
+`market-brief-tick-handlers.test.mjs`), all fixture-based, no network. Full suite 5,890/0/6-skipped.
+
+**Measured (repo-only, no live Supabase/Railway reach this session):** dia sources wired are
+`sales_transactions` (TTM cap-rate band, per-operator with a 5-comp floor, and trades-since-last-run),
+`v_dia_on_market` (on-market count + median ask cap), `medicare_clinics` (top-8 operator counts + net-change vs.
+prior run). **NOT wired:** `cortex_market_intel` (writer still unlocated across two sessions — new row **MB1a**)
+and gov GSA lease events (dialysis-first per the prompt). CMS "closures" are a count net-change, not a real
+open/close event feed — no termination/status column could be confirmed from the repo (new row **MB1b**).
+PLANNED-BACKLOG §P18 rows MB1/MB2 updated with the full source list, gaps, and the exact live-verify steps.
+
+**What could NOT be done here, per this repo's own doctrine (dry-run-first, verify-live-then-flip):** running
+either tick against live Supabase/Railway, confirming `v_dia_on_market`'s actual column names (the GET dry run's
+`gaps[]` array is designed to surface a 400 there before any POST), the before/after `v_market_brief_staleness`
+snapshot for the dialysis lane, and sampling 5 real facts with citations. **Next: an operator/session with live
+reach runs the GET dry run for both ticks, reads `gaps[]`, runs one POST with the flag forced on, reports the
+five things above, then flips both flags and confirms the cron minutes (`7:15`/`10:10` UTC, picked without
+reach to `cron.job` — check for a collision before relying on them).**
+
 ## 2026-09-11 — OC-a reconciled (PR #2298 merged): funnel built, NOT yet a live loop; MB-a prompt drafted
 
 Processed `responses/OC-a desktop response.docx` → `done/`; prompt → `prompts/done/`. OC-a shipped EB1a (applied
