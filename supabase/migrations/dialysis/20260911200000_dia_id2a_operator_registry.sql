@@ -18,11 +18,36 @@
 -- "no consumer switch yet"); the cache-vs-retire wiring is ID2b's job when
 -- that consumer switches.
 --
--- Applies to Dialysis_DB (zqzrriwuavgrquhisnoa). Cannot be run from this
--- session (no live DB credentials) — report-only dry run first, then apply,
--- per this repo's CLAUDE.md data-write discipline: fill-blanks only,
--- conservative/unambiguous matching (surface ambiguity, never guess),
--- provenance-tagged, reversible, idempotent, dry-run-able.
+-- Applies to Dialysis_DB (zqzrriwuavgrquhisnoa). Per this repo's CLAUDE.md
+-- data-write discipline: fill-blanks only, conservative/unambiguous matching
+-- (surface ambiguity, never guess), provenance-tagged, reversible, idempotent,
+-- dry-run-able.
+--
+-- ⚠️ APPLIED LIVE 2026-09-11 with a schema-mismatch fix (this file already
+-- reflects it — see the header note below) plus a follow-up type-cast fix
+-- shipped as 20260911200100 (operators.operator_id is `integer`, not
+-- `bigint`; RETURN QUERY needs an explicit cast the plpgsql assignment form
+-- does not). The property/lease BACKFILL below was run in DRY-RUN ONLY
+-- (`dia_id2a_backfill_property_operator_ids(true)`) — no `properties` or
+-- `leases` row's `operator_id` was written by this phase; that write is a
+-- deliberate operator decision, gated on review-queue depth, not bundled here.
+--
+-- Measured live immediately after apply (report-only, nothing further
+-- written): registry 67 rows unchanged in count, `kind` split
+-- company 59 / category 4 / non_operator 2 / payer 2; 3 rows retired
+-- (2 DaVita spelling variants, 1 Satellite Dialysis spelling variant into
+-- Satellite Healthcare — `ESRD SATELLITE UNIT` was already the sole survivor
+-- for its own name); `dia_operator_aliases` seeded 42 rows (39 `id2a_seed` +
+-- 3 `registry_dedup`); `DaVita at Home` brand-child row created and parented.
+-- Dry-run backfill over `properties.operator` (10,327 non-blank, unlinked
+-- rows): would_auto_apply 9,309 / would_review 1,018 — the review bucket is
+-- dominated by long-tail regional/independent operator names
+-- (`Independent` 683, `State Owned` 17, `Wake Forest University` 20,
+-- `Mayo Clinic Dialysis` 14, …) that the alias seed and the deterministic
+-- family classifier correctly decline to guess at; they route to
+-- `dia_operator_write_review` on apply, never silently dropped or auto-typed.
+-- `leases.operator_id` (pre-existing, integer) already carries 3,809/12,833
+-- rows from before this migration — untouched by this phase.
 --
 -- REVERSAL:
 --   drop trigger if exists trg_dia_properties_operator_guard on public.properties;
@@ -65,8 +90,8 @@ end $$;
 
 alter table public.operators
   add column if not exists kind text not null default 'company',
-  add column if not exists parent_operator_id bigint references public.operators(id),
-  add column if not exists merged_into_operator_id bigint references public.operators(id),
+  add column if not exists parent_operator_id bigint references public.operators(operator_id),
+  add column if not exists merged_into_operator_id bigint references public.operators(operator_id),
   add column if not exists id2a_source text,
   add column if not exists id2a_note text,
   add column if not exists updated_at timestamptz not null default now();
@@ -147,12 +172,12 @@ begin
   -- Prefer an existing row already named exactly the canonical target
   -- (case-insensitive), among rows that are not themselves already merged
   -- away and are not the non_operator artifacts handled in step 3.
-  select o.id into v_survivor
+  select o.operator_id into v_survivor
     from public.operators o
    where lower(o.name) = lower(p_canonical_name)
      and o.merged_into_operator_id is null
      and o.kind not in ('non_operator')
-   order by o.id
+   order by o.operator_id
    limit 1;
 
   if v_survivor is null then
@@ -160,17 +185,17 @@ begin
     -- rename it to the canonical spelling (fill-blanks-equivalent: this is a
     -- SPELLING correction on a row we are about to make the single source of
     -- truth for the family, not a clobber of a different fact).
-    select o.id into v_survivor
+    select o.operator_id into v_survivor
       from public.operators o
      where o.name = ANY(p_member_names)
        and o.merged_into_operator_id is null
        and o.kind not in ('non_operator')
-     order by o.id
+     order by o.operator_id
      limit 1;
     if v_survivor is not null then
       update public.operators
          set name = p_canonical_name, id2a_source = 'id2a_migration', updated_at = now()
-       where id = v_survivor;
+       where operator_id = v_survivor;
     end if;
   end if;
 
@@ -187,10 +212,10 @@ begin
                                'company, different capture spelling.', v_survivor, p_canonical_name),
            updated_at = now()
      where o.name = ANY(p_member_names)
-       and o.id <> v_survivor
+       and o.operator_id <> v_survivor
        and o.merged_into_operator_id is null
        and o.kind not in ('non_operator')
-    returning o.id
+    returning o.operator_id
   )
   select count(*) into v_merged from dupes;
 
@@ -249,23 +274,23 @@ declare
   v_davita bigint;
   v_child bigint;
 begin
-  select id into v_davita from public.operators
+  select operator_id into v_davita from public.operators
    where lower(name) = 'davita' and merged_into_operator_id is null
-   order by id limit 1;
+   order by operator_id limit 1;
   if v_davita is null then
     return; -- DaVita survivor not found — nothing to parent under; leave for review.
   end if;
 
-  select id into v_child from public.operators where lower(name) = 'davita at home' limit 1;
+  select operator_id into v_child from public.operators where lower(name) = 'davita at home' limit 1;
   if v_child is null then
     insert into public.operators (name, kind, parent_operator_id, id2a_source, updated_at)
     values ('DaVita at Home', 'company', v_davita, 'id2a_migration', now())
-    returning id into v_child;
+    returning operator_id into v_child;
   else
     update public.operators
        set parent_operator_id = v_davita, kind = 'company',
            id2a_source = coalesce(id2a_source, 'id2a_migration'), updated_at = now()
-     where id = v_child;
+     where operator_id = v_child;
   end if;
 end $$;
 
@@ -280,7 +305,7 @@ end $$;
 -- ----------------------------------------------------------------------------
 create table if not exists public.dia_operator_aliases (
   id bigserial primary key,
-  operator_id bigint not null references public.operators(id),
+  operator_id bigint not null references public.operators(operator_id),
   alias_text text not null,
   alias_norm text generated always as (lower(btrim(alias_text))) stored,
   source text not null default 'id2a_seed',
@@ -367,7 +392,7 @@ with seed(alias_text, canonical_name) as (
     ('WellBound', 'Satellite Healthcare')
 )
 insert into public.dia_operator_aliases (operator_id, alias_text, source, confidence)
-select o.id, s.alias_text, 'id2a_seed', 'high'
+select o.operator_id, s.alias_text, 'id2a_seed', 'high'
   from seed s
   join public.operators o
     on lower(o.name) = lower(s.canonical_name)
@@ -378,7 +403,7 @@ on conflict (alias_norm) do nothing;
 --     seeded separately so a tenant literally reading "DaVita at Home" is not
 --     silently folded into the parent brand.
 insert into public.dia_operator_aliases (operator_id, alias_text, source, confidence)
-select o.id, 'DaVita at Home', 'id2a_seed', 'high'
+select o.operator_id, 'DaVita at Home', 'id2a_seed', 'high'
   from public.operators o
  where lower(o.name) = 'davita at home'
 on conflict (alias_norm) do nothing;
@@ -397,7 +422,7 @@ begin
   ) then
     alter table public.properties
       add constraint fk_properties_operator_id
-      foreign key (operator_id) references public.operators(id);
+      foreign key (operator_id) references public.operators(operator_id);
   end if;
 end $$;
 
@@ -421,7 +446,7 @@ begin
           where table_schema = 'public' and table_name = 'leases' and column_name = 'operator_id')
           in ('bigint', 'integer', 'smallint') then
         execute 'alter table public.leases add constraint fk_leases_operator_id '
-                'foreign key (operator_id) references public.operators(id)';
+                'foreign key (operator_id) references public.operators(operator_id)';
       end if;
     end if;
   end if;
@@ -500,7 +525,7 @@ declare
 begin
   loop
     if v_cur is null or v_hops >= p_max_hops then return v_cur; end if;
-    select merged_into_operator_id into v_next from public.operators where id = v_cur;
+    select merged_into_operator_id into v_next from public.operators where operator_id = v_cur;
     if v_next is null then return v_cur; end if;
     v_cur := v_next;
     v_hops := v_hops + 1;
@@ -538,16 +563,16 @@ begin
   if v_alias_op is not null then
     v_survivor := public.dia_operator_survivor(v_alias_op);
     return query
-      select o.id, o.name, 'matched'::text
+      select o.operator_id, o.name, 'matched'::text
         from public.operators o
-       where o.id = v_survivor;
+       where o.operator_id = v_survivor;
     return;
   end if;
 
   v_family_name := public.dia_operator_from_tenant(p_text);
   if v_family_name is not null then
     return query
-      select o.id, o.name, 'matched'::text
+      select o.operator_id, o.name, 'matched'::text
         from public.operators o
        where lower(o.name) = lower(v_family_name)
          and o.merged_into_operator_id is null
@@ -588,7 +613,7 @@ create table if not exists public.dia_operator_write_review (
   raw_operator_text text not null,
   attempted_at timestamptz not null default now(),
   resolved_at timestamptz,
-  resolved_operator_id bigint references public.operators(id),
+  resolved_operator_id bigint references public.operators(operator_id),
   resolved_alias_text text,
   status text not null default 'open' check (status in ('open', 'resolved', 'dismissed'))
 );
@@ -823,16 +848,16 @@ comment on function public.dia_id2a_backfill_property_operator_ids(boolean, int)
 -- ----------------------------------------------------------------------------
 create or replace view public.v_id2a_operator_registry_parity as
 select
-  coalesce(surv.id, o.id) as operator_id,
+  coalesce(surv.operator_id, o.operator_id) as operator_id,
   coalesce(surv.name, o.name) as canonical_name,
-  count(distinct o.id) as merged_variant_count,
+  count(distinct o.operator_id) as merged_variant_count,
   array_agg(distinct o.name order by o.name) as variant_names,
   count(p.property_id) as property_count
 from public.operators o
-left join public.operators surv on surv.id = public.dia_operator_survivor(o.id)
-left join public.properties p on p.operator_id = coalesce(surv.id, o.id)
+left join public.operators surv on surv.operator_id = public.dia_operator_survivor(o.operator_id)
+left join public.properties p on p.operator_id = coalesce(surv.operator_id, o.operator_id)
 where o.kind = 'company'
-group by coalesce(surv.id, o.id), coalesce(surv.name, o.name)
+group by coalesce(surv.operator_id, o.operator_id), coalesce(surv.name, o.name)
 order by property_count desc nulls last;
 
 comment on view public.v_id2a_operator_registry_parity is
