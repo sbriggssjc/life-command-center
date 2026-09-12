@@ -220,12 +220,23 @@ per-operator cap-rate band groups on it — the `Fresenius`/`DaVita` text fragme
 now ADDITIVELY returns `operator_id`/`operator_canonical` on its output (comp SELECTION/scoring —
 `mcp/comps-tools.js`'s `p_tenant` text filter and `operatorTier()`/`compTenantText()` — is
 UNCHANGED; only new output fields were added, never an existing one, so which comps are chosen
-could not have moved). The market brief's per-operator TTM cap-rate band now groups on the id;
-verified live, the `Fresenius`/`Fresenius Medical Care` and `DaVita`/`DaVita Dialysis`
-fragmentation is gone. **Switching comp SELECTION itself** (the `p_tenant` filter, and whether
-`mcp/comps-tools.js` should filter/score on `operator_id` rather than text) is unchanged and
-remains **ID2b-c**, still needing Scott's call on a live 5-subject diff before any filter logic
-moves. **Still reading raw operator text, measured and deferred, not started:** the `cm_dialysis_*`
+could not have moved). The market brief's per-operator TTM cap-rate band now groups on the id.
+⚠️ **ID2b-caps's own live-verification was incomplete — it read only the `properties`-joined
+sale/listing arms and missed a THIRD comp source.** `sf_comp_staging` (Team Briggs' own
+Salesforce-staged closed comps) has no `properties` join, so it could only ever emit
+`operator_id: null`, and 375 rows spelled exactly as already-registered aliases (`DaVita
+Dialysis`, `Fresenius Medical Care`) kept minting a second, text-keyed band under the identical
+canonical label. **ID2b-caps-2 (2026-09-12, same day) fixed it for real:** `sf_comp_staging`
+gained its own `operator_id` (fill-blanks, resolved via the same `dia_resolve_operator`), the SF
+arm now resolves through it identically to the other two arms, and a structural
+duplicate-display-label invariant in `planOperatorCapRateBands()` refuses to ever ship two
+id-keyed bands under one label. Live-verified on the tick's own TTM window: exactly three bands
+(DaVita, Fresenius Medical Care, US Renal Care), no duplicate label. **The
+`Fresenius`/`Fresenius Medical Care` and `DaVita`/`DaVita Dialysis` fragmentation is gone as of
+ID2b-caps-2, not ID2b-caps.** **Switching comp SELECTION itself** (the `p_tenant` filter, and
+whether `mcp/comps-tools.js` should filter/score on `operator_id` rather than text) is unchanged
+and remains **ID2b-c**, still needing Scott's call on a live 5-subject diff before any filter
+logic moves. **Still reading raw operator text, measured and deferred, not started:** the `cm_dialysis_*`
 CM exhibits (`cm_dialysis_operator_unit_economics` already ILIKE-bucket-normalizes via
 `dia_operator_bucket()`, a heuristic not the registry; `cm_dialysis_available_by_tenant[_q]`/
 `cm_dialysis_industry_participants` still raw — ID2b-cm), the dossier, and MCP tools generally
@@ -233,7 +244,7 @@ beyond the additive `rpc_query_comps` fields (ID2b-mods). The true population me
 is **96 views** referencing operator text (not the 45 first estimated), most correctly excluded as
 review/audit queues where raw text is the deliverable.
 → `CLAUDE.md` (ID2a's Dialysis-repo mirror doc, if any), `docs/os/PLANNED-BACKLOG.md` §P0d
-(ID2a / ID2a-cleanup / ID2b / ID2b-caps / ID2c / ID2c-payer), `docs/audits/ID1_OPERATOR_IDENTITY_AUDIT_2026-09.md`,
+(ID2a / ID2a-cleanup / ID2b / ID2b-caps / ID2b-caps-2 / ID2c / ID2c-payer), `docs/audits/ID1_OPERATOR_IDENTITY_AUDIT_2026-09.md`,
 `docs/audits/ID2b_OPERATOR_ID_CONSUMER_SWITCH_2026-09-12.md`,
 `docs/audits/ID2b_caps_RPC_QUERY_COMPS_OPERATOR_ID_2026-09-12.md`.
 
