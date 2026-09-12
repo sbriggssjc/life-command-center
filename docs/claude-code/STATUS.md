@@ -1,3 +1,27 @@
+## 2026-09-12 — HP1-P1a-fix reconciled: code is merged, but live production is NOT confirmed running it (Cowork)
+
+Reconciling two Claude Code desktop responses sitting in `docs/claude-code/responses/` against git
+history. Both `HP1-P1a-fix-opportunity-upsert-never-updated.response.md` (Units 2-5: the RPC-first
+upsert, the batch-endpoint honesty fix, the `closed_at` preservation, and the test guards) and
+`ID2b caps 2 desktop response.docx` match already-merged commits on `origin/main`
+(`4530a341`/`3f0edc24` for HP1-P1a-fix + the HP1-P1a-dup finding; `a8fc2eb2` for ID2b-caps-2, which
+`STATUS.md` already had a full entry for). Both response files moved to `responses/done/`.
+
+**ID2b-caps-2:** already ✅ in `PLANNED-BACKLOG.md`, nothing to change.
+
+**HP1-P1a-fix:** the backlog row was still sitting at 🔴 despite the code being merged, so ran the
+response's own asked-for verification live rather than trusting the merge alone —
+`select date_trunc('day', last_synced_at), count(*) from bd_opportunities group by 1` on
+`xengecqvemvfknjvbvrq`. Result: **zero rows have synced since 2026-09-09** — three days *before*
+today's fix even shipped. The fix is merged into `main`; there is no live evidence it is actually
+deployed and running against the real Salesforce feed yet (Railway redeploy status is outside what
+this session can see). Marked the row 🟡 (code shipped, deploy/live-run unconfirmed) rather than ✅ —
+per this repo's own standing rule, a merged PR is not itself proof of a working system. **Next
+verification step, once Railway is redeployed:** wait for the next PA sync cycle, then re-run the
+`UPDATED_not_inserted`-style check the original prompt specified before closing this row.
+
+Docs updated: `PLANNED-BACKLOG.md` (HP1-P1a-fix row corrected from 🔴 to 🟡 with live measurement);
+2 response files moved to `responses/done/`.
 # Claude Code queue — STATUS
 
 ## 2026-09-12 ✅ — HP1-P1a-fix CLOSED: 608 UPDATED, not inserted — the Salesforce feed writes for the first time (Cowork)
