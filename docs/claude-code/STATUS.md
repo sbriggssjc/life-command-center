@@ -1,3 +1,66 @@
+# Claude Code queue — STATUS
+
+<!-- ============================================================================
+     CONVENTION — READ BEFORE PREPENDING AN ENTRY.
+     This file is newest-first. New entries go DIRECTLY BELOW this block, never
+     above it. The `# Claude Code queue — STATUS` H1 above must remain line 1.
+     This is enforced by test/status-header-integrity.test.mjs — CI fails if the
+     H1 moves off line 1 or a second copy appears. Five sessions on 2026-09-12
+     buried it (lines 25, 29, 57, 83, 212) before the guard existed.
+     Line budget: 2,500 (test/status-line-budget.test.mjs). When you approach it,
+     move the OLDEST contiguous span verbatim to docs/history/ and extend the
+     archive pointer — never reword or drop an entry to make room.
+     ============================================================================ -->
+
+## 2026-09-12 — HP1-P2a reconciled: shipped and verified live; my own target number was wrong; one gap promoted out of a closed row (Cowork)
+
+PR #2389 merged. Response and prompt filed to `done/`. **Verified independently against the live DB rather than
+read from the report** — every claim holds:
+
+| check | reading |
+|---|---|
+| `inbox_items` at `status='new'` | **1,061** |
+| `v_inbox_triage` at `status='new'` (what the Inbox shows) | **182** |
+| `new_contact_qualify` excluded | **879**, and **0 leak** into the view |
+| `contact_misparse_review` still visible | **117** |
+| destination `v_lcc_contact_qualify_worklist` | **868** live rows |
+| `mv_work_counts.inbox_new` (the header) | **182** — agrees with the list |
+
+✅ **The honesty gate held, and in the right shape.** `inboxHygienePointer()` reads the excluded population
+**straight off `inbox_items` with `countMode:'exact'` and `limit=1`** — never the view, never a page — and returns
+`null` on failure rather than a wrong number. Exactly the P159a-safe construction, inside the change meant to make
+the surface honest.
+
+⛔ **My own prompt contradicted itself, and CC was right to ignore the wrong half.** §5 set *"Target: the homepage
+Inbox shows 65 items"* while §3 of the same prompt instructed leaving `contact_misparse_review` in place if it had
+no resolution surface. It has none. The target was unreachable by construction and **182 is correct**. CC reported
+it and stopped rather than bending the filter — precisely what the next sentence of §5 asked for. Corrected in the
+prompt file in place before filing it: a prompt that argues with itself teaches the wrong lesson to whoever reads
+it next.
+
+🔴 **One real filing defect, found and fixed: a gap was recorded inside a row that then closed.** CC correctly
+established that `contact_misparse_review` has **zero readers anywhere in the repo** — written at
+`sidebar-pipeline.js:2114`, never read — and correctly left it on the Inbox rather than routing it into
+invisibility (P131). But it wrote that finding **into the HP1-P2a row**, which is now ✅ SHIPPED. **A gap filed
+inside a closed row is a gap that disappears.** Promoted to its own open row, **HP1-P2misparse** — and it matters:
+those 117 rows are **64% of the remaining Inbox (117 of 182)**, the single biggest thing still between Scott and
+*"a view of the work that needs the broker's attention."* 117 rows written since 2026-08-10 and never once read is
+itself evidence about whether they want a review surface or an automated repair.
+
+⚠️ **Minor, filed as HP1-P2a-count:** three numbers a broker meets in two clicks — pointer **881**
+(`status IN (new,triaged)`), exclusion **879** (`new` only), destination **868** (11 junk rows dropped by design).
+Each defensible alone; clicking a pointer promising 881 and landing on 868 is an unexplained 13-row gap — the same
+*rendered ≠ population* confusion one layer out. Not urgent, not a defect in the exclusion.
+
+🛡️ **The H1 burial is now a CI guard, not a convention.** This file's header was buried a **fifth** time today —
+including once *after* the prose convention note was added telling sessions not to. A convention nobody is forced
+to read is not a convention. `test/status-header-integrity.test.mjs` now fails the build if the H1 leaves line 1,
+if a duplicate appears, or if the convention block goes missing, with the repair procedure in the assertion text.
+
+**Net for Scott:** the Inbox went **1,061 → 182**, the header agrees with the list, and nothing was hidden. The
+remaining 182 is 117 misparses (P2misparse) + 20 personal alerts (P2b) + 45 genuine broker items — so **P2b and
+P2misparse together are what turn 182 into ~45**, and the ranking work (P2c/P2e) still belongs after them.
+
 ## 2026-09-12 — MB-b: first user-facing P18 surface built (Lane Briefs email block + homepage tab); flag OFF, not deployed
 
 Built `docs/claude-code/prompts/MBb-lane-briefs-daily-block-and-tab.md` end to end. §0 producer cleanups:
@@ -26,20 +89,7 @@ the flag forced on and confirm the trades supersede chain clears the old date-su
 the email block and load `#/briefs/dialysis`, verify each new RSS feed URL parses, THEN flip
 `MARKET_BRIEF_RENDER`. Full detail: `docs/architecture/EXEC-BRIEFS-SPEC.md` §9 "MB-b" addendum;
 `docs/os/CURRENT-STATE.md` §2 "MB-b" subsection; `docs/os/PLANNED-BACKLOG.md` §P18 MB1e/MB3/MB4.
-# Claude Code queue — STATUS
 
-<!-- ============================================================================
-     CONVENTION — READ BEFORE PREPENDING AN ENTRY.
-     This file is newest-first. New entries go DIRECTLY BELOW this block, never
-     above it. The `# Claude Code queue — STATUS` H1 above must remain line 1.
-     On 2026-09-12 four separate sessions prepended above the H1, burying it at
-     lines 57, 83, 212 and 25 and leaving duplicate H1s mid-file. If you find a
-     `# Claude Code queue — STATUS` line anywhere but line 1, it is a burial:
-     delete it, do not add another.
-     Line budget: 2,500 (test/status-line-budget.test.mjs). When you approach it,
-     move the OLDEST contiguous span verbatim to docs/history/ and extend the
-     archive pointer — never reword or drop an entry to make room.
-     ============================================================================ -->
 
 ## 2026-09-12 — HP1-P2a prompt: 94% of the homepage Inbox is data hygiene, and the destination already exists (Cowork)
 
