@@ -1,3 +1,33 @@
+## 2026-09-12 — C2g-40 diagnosed live: three distinct sub-populations, one is a zero-risk clear (Cowork)
+
+Continuing the recommended next step after sizing C2g-40, dry-ran `lcc_reconcile_property_owner`
+(unmodified, `p_write=false`) against all 39 distinct owner-side entities behind the 40 stuck
+properties, rather than assuming which of C2g's named candidates (the 0.55 confidence gate, a dia
+operator in the owner slot, a cross-domain anchor) applied.
+
+**Three distinct shapes, not one:**
+- **20 of 39 (51%) have zero rows in `lcc_property_owner_evidence`** — an upstream evidence-capture
+  gap. The reconciler has nothing to score; this is not a confidence-gate problem.
+- **16 of 39 (41%) have real evidence but score 0.10–0.50**, below the 0.55 gate (e.g. `WCB Medical
+  Center Drive, LLC` at 0.106, `County Of Spotsylvania, Virginia` at 0.5) — **the gate is working
+  exactly as designed here.** Correctly withheld, not a defect.
+- **3 of 39 (8%) score 1.000 confidence** — `One Oak Over The Line LLC`, `Brighthouse Properties LLC`,
+  `Jencer Investments Inc`. These clear the gate today. Nothing is blocking them except that the
+  reconciler has simply never been invoked against these entities — this is C2g's own "876 assets with
+  evidence still reading Unresolved" pattern, confirmed live rather than assumed.
+
+**Recommendation, not yet executed:** running `lcc_reconcile_property_owner(entity_id, 0.55, true)` for
+just these 3 entities is a zero-risk write — the existing, unmodified function, at its existing
+threshold, doing exactly what it already does for every other resolved row in `lcc_property_owner`.
+No gate change, no new detector, no schema change. Left for Scott's go rather than run automatically,
+consistent with this session's practice of not taking production writes without a signal.
+
+The other two shapes are explicitly NOT actionable from this finding: the 41% needs the confidence
+gate left alone (it's correct), and the 51% needs an evidence-capture diagnosis of its own, not a
+resolution-function fix.
+
+Docs updated: `PLANNED-BACKLOG.md` (`C2g-40` row now carries the diagnosis, not just the sizing).
+
 ## 2026-09-12 — Sized the 40-property residual from B2: a small, named slice of C2g (Cowork)
 
 Continuing after B2's retirement, sized the 40-property residual flagged there (gov properties with a
