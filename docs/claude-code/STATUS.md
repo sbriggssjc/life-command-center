@@ -1,5 +1,23 @@
 # Claude Code queue — STATUS
 
+## 2026-09-12 — ID2a-cleanup + ID3a reconciled: operator registry clean; gov agency WIRED but the NAVY regex is still live
+
+Both responses filed. **ID2a-cleanup (PR #2337) verified live:** aliases 42 → 207, review queue 1,020 → 71 open, 807
+category/payer rows routed to `properties.operator_class`, 5 subsidiaries parented (not merged), 9 junk rows
+reclassified, `operator_id` 9,307 → 9,449, parity byte-identical on the 7 canonicals. **ID3a (PRs #2338/#2339)
+measured before building** — and caught a live contamination bug: `canonicalize_agency()` prefix-matches `^navy`
+with no word boundary, so 145 **Navy Federal Credit Union** rows (a private bank) carry `agency_canonical='NAVY'`.
+Wiring shipped anyway: `properties.agency_id` 0 → **7,369/20,509**, `property_agencies.agency_id` 0.12% → **90.3%**,
+alias/review tables and both guards live. **Cowork live check: the bug is NOT fixed** — the NAVY rows are unlinked only
+because no `NAVY` registry row exists, and `canonicalize_agency('Navy Federal Credit Union')` still returns `NAVY`, so
+adding that row would promote a credit union to a federal agency across 145 properties. Also open: 1,732 rows
+canonicalized-but-unlinked, 8,838 with agency text and no canonical, and the registry lacks NAVY/ARMY/DOC/LSC/DOL/
+USGS/NRC/NIH/NLRB/USAF/TREAS (it has `USACE` but no `ACE` alias — the 614 Tully Rd twin, ID3i). **Scott decided
+(2026-09-12):** `RICHMOND FIELD OFFICE (VA)` is **Virginia**, not Veterans Affairs; bare `DOC` is state **Corrections**
+— verify all 16, auto-link none; **`GSA - <AGENCY>` is SINGLE-TENANT** — *"the tenant is the GSA but the user is whatever
+is second"* — so keep one lease and add a using-agency field beside the lease-counterparty agency. New row **ID3a-b**
+carries all of it, regex fix first. **Next:** send `prompts/ID3ab-agency-canonicalizer-fix-and-finish-wiring.md`.
+
 ## 2026-09-12 — ID2a-cleanup SHIPPED and live-verified against Dialysis_DB (aliases 42→207, review 1,020→71)
 
 Ran the ID2a-cleanup prompt against live Dialysis_DB (`mcp__Supabase__apply_migration`, real writes,
