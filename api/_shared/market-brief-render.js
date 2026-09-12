@@ -18,17 +18,20 @@
 
 import { opsQuery } from './ops-db.js';
 
-// Mirrors the EB1 migration's chk_mbf_lane CHECK constraint — the only
+// Mirrors the EB1R1 migration's chk_mbf_lane CHECK constraint — the only
 // lanes a fact/issue row can carry. Only 'dialysis' has a live producer
 // today (MB-a); the others render as omitted-empty lanes until their
 // producers exist (spec §3 "What NOT to do": no new gov/NL lanes here).
-export const KNOWN_LANES = ['dialysis', 'government', 'net_lease', 'broad_net_lease'];
+// 'net_lease' and 'broad_net_lease' were collapsed into a single
+// 'net_lease' lane per Scott's 2026-09-12 call — no live facts or issues
+// existed under either at collapse time (verified against market_brief_facts
+// / market_brief_issues before this change), so no data migration was needed.
+export const KNOWN_LANES = ['dialysis', 'government', 'net_lease'];
 
 export const LANE_LABELS = {
   dialysis: 'Dialysis',
   government: 'Government-Leased',
   net_lease: 'Net Lease',
-  broad_net_lease: 'Broad Net Lease',
 };
 
 // Ranks which section's facts lead the "2-3 most material" selection (spec
