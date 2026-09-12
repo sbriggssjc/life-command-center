@@ -17,11 +17,12 @@
 
 ## 2026-09-12 ASC frozen-50 review boundary
 
-**Local, not yet live:** a reviewer-guidance pass now renders capture evidence as readable cards while retaining
-raw JSON in a collapsed audit view, defines every scorecard field, makes the authenticated identity continuously
-visible, presents existing primary/second-review state, explains the governed `Unknown`/`Unresolved` path, and
-shows validation blockers before save. It changes no review contract, API, migration, or candidate data. Do not
-credit this UX as deployed until its PR merges and Railway serves the resulting revision.
+**Live and deployment-verified:** PR #2384 merged as `3f60666055892616648b2348f952d1d53fbefd42` and
+Railway `/version` reported the pinned revision `3f6066605589` on 2026-09-12; `/asc-review.html` returned HTTP
+200. The reviewer-guidance layer renders capture evidence as readable cards while retaining raw JSON in a
+collapsed audit view, defines every scorecard field, keeps the authenticated identity continuously visible,
+presents existing primary/second-review state, explains the governed `Unknown`/`Unresolved` path, and shows
+validation blockers before save. It changed no review contract, API, migration, or candidate data.
 
 The ASC source-collection pass is complete (50/50 resolved; 44 licensed-source captures and six governed
 source exceptions), but commercial review is not. A governed workbench is implemented at `/asc-review.html`
@@ -34,8 +35,9 @@ outreach, production opportunities, or IDTF activation. PR #2355 merged as `9829
 the migration is applied, Railway reports that exact pinned revision, `/asc-review.html` returns 200, and the
 unauthenticated review API fails closed with JSON 401. Post-migration read-only verification remains **0/50
 primary** and **0/22 initially required second reviews** (50 candidates: 44 captured, 6 reviewed exceptions;
-6 existing exception rows, all requiring second review). After the pending UX publication is verified, the next
-action is human review, not another data or workflow build.
+6 existing exception rows, all requiring second review). Those counts are the last database-verified baseline,
+not a claim about work completed after the deployment. The next action is human review, not another data or
+workflow build.
 See the capture checkpoint and `PLANNED-BACKLOG.md` ASC50-R1–R3.
 
 ## 1. Runtime truth — where the app actually runs
@@ -112,6 +114,64 @@ column name before any write), run one POST with the flag forced on, check `v_ma
 dialysis lane before/after, then flip both flags. `cortex_market_intel` (a live 922-row source, writer still
 unlocated) and gov GSA lease events are NOT wired yet. → `docs/architecture/EXEC-BRIEFS-SPEC.md` §2/§9,
 `docs/architecture/market_brief_payload_contract.md`, PLANNED-BACKLOG.md §P18 (MB1/MB2/MB1a/MB1b).
+
+### MB-b — first user-facing P18 surface: daily "Lane Briefs" email block + homepage tab — BUILT, flag OFF, NOT deployed/live-verified
+Per `docs/claude-code/prompts/MBb-lane-briefs-daily-block-and-tab.md`. Operator identity (spec §0.1) was
+already closed by ID2b/ID2b-caps/ID2b-caps-2 before this prompt started — `planOperatorCapRateBands()`
+(`api/_handlers/market-brief-psql-tick.js`) already groups every per-operator cap-rate band on the comps
+engine's own `operator_id`, refuses to ever emit two live band facts under one operator_id, and retires the
+stale text-keyed fragment an id-keyed band supersedes. Two producer defects fixed here:
+- **MB1e item 2 (trades fact re-mint) — FIXED.** `buildTradesSinceLastRunFact`/`buildTradesZeroFact`
+  (`api/_shared/market-brief-facts.js`) used to key on `trades_since_last_run:<run-day>`, so a zero-trade
+  day accumulated a fresh fact beside yesterday's instead of superseding it. Now a single stable key,
+  `TRADES_FACT_KEY = 'trades_trailing_7d'`, and the claim states its window explicitly ("in the trailing 7
+  days as of <date>"). The tick (`market-brief-psql-tick.js`) reads a FIXED trailing 7-day window
+  (`TRADES_WINDOW_DAYS`) rather than "since the producer's last run" — a cursor that cannot carry a stable
+  identity because it moves with run cadence.
+- **MB2 dialysis RSS feed — ADDED, NOT egress-verified.** `supabase/functions/briefing-intel-snapshot/index.ts`
+  gained a new `dialysis` RSS stream (Renal & Urology News, Nephrology News & Issues, CMS Newsroom) separate
+  from the generic `healthcare` stream that MB-a3-reconcile measured carries 0 dialysis content most days.
+  Migration `20260912120000_lcc_mbb_rss_dialysis_stream_cron.sql` repoints the `lcc-market-brief-rss` cron at
+  `stream=dialysis`. ⚠️ **The sandbox has no outbound reach to verify these URLs actually parse as
+  RSS/Atom** — same limitation MB-a3-reconcile already recorded for this exact task. Operator step: hit each
+  feed, confirm `parseRss()` handles it, check the tick's `gaps[]`/`results` on a dry run.
+
+New surfaces (both flag-gated `MARKET_BRIEF_RENDER`, migration `20260912121500_lcc_mbb_market_brief_render_flag.sql`,
+registered `off`):
+- **Daily "Lane Briefs" email block** (`renderMarketBriefLanes`, `api/_handlers/briefing-email-handler.js`) —
+  sits above Sector Watch (kept, unchanged, below it). Per lane with live facts: "changed since yesterday"
+  (a fact-set diff against the prior frozen daily issue, `diffFactSets`), the 2–3 most material live facts
+  (section-weighted, `selectTopFacts`), named gaps rendered plainly (`selectGapFacts` — e.g. a
+  `cms_census_gap:*` fact), and a "Read the full brief →" link to `#/briefs/<lane>`. A lane with no live
+  facts is omitted entirely. Every number traces to a fact object — no client-side computation (tripwire
+  test asserts this over the rendered HTML). Freezes one `market_brief_issues` row per lane per day
+  (`issue_type='daily'`), idempotent via the EB1 unique index on `(lane, issue_type, issue_date)` — a
+  same-day re-render upserts, never duplicates.
+- **Homepage Market Briefs tab** (`#/briefs/<lane>`, default `dialysis`) — new route in `app.js`
+  (`ROUTE_SLUG_TO_PAGE.briefs`, sub-path parsed like `#/inbox/<id>`), new `pageMarketBriefs` page in
+  `index.html`, rendered by `renderMarketBriefsPage()` from `GET /api/market-brief-tab` (new handler,
+  `api/_handlers/market-brief-tab.js`, registered in `server.js`). Shows live facts by section
+  (operators/policy/capital_markets/trades/implications), citation + staleness per fact, the issue archive,
+  and the same changed-since diff the email uses. Read-only; returns `{enabled:false}` while the flag is
+  off, never a 404/500. A small teaser (`renderMarketBriefsWidget()`, `#marketBriefsWidgetContent`) sits
+  beside `#dailyBriefingWidget` on the homepage.
+- Shared fetch/diff/select logic lives in `api/_shared/market-brief-render.js` — one implementation for
+  both surfaces, so the email and the tab can never disagree about "live" or "changed".
+
+Guards added: `test/market-brief-render.test.mjs` (14), `test/market-brief-lane-briefs-email.test.mjs` (11,
+incl. the number-tripwire and the omitted-empty-lane case), `test/market-brief-operator-canonicalization.test.mjs`
+(3, "no two live band facts share an operator_id"), plus additions to `test/market-brief-facts.test.mjs` and
+`test/market-brief-tick-handlers.test.mjs`. Full repo suite: **6,114 pass / 0 fail / 6 skipped** (962
+suites) — no pre-existing failures were masked; the only failures seen before the fix were a missing
+`node_modules` in this sandbox, not real regressions.
+
+⚠️ **NOT deployed, NOT live-verified, flag NOT flipped.** This session had no Railway/Supabase write
+access. Two migrations are committed but unapplied (`20260912120000`, `20260912121500`). Operator sequence
+per the prompt's §5: apply both migrations, redeploy Railway, run the P-SQL tick once via POST with the
+flag forced on and confirm the supersede chain clears the old date-suffixed trades fragments, render the
+email with a preview and load `#/briefs/dialysis`, THEN flip `MARKET_BRIEF_RENDER`. → `docs/claude-code/
+prompts/MBb-lane-briefs-daily-block-and-tab.md`, `docs/architecture/EXEC-BRIEFS-SPEC.md` §9 "MB-b" addendum,
+PLANNED-BACKLOG.md §P18 (MB1e, MB2, MB3, MB4).
 
 ### Deal-intelligence spine — LIVE end to end
 SF Opportunity sync → `bd_opportunities` (592 deals) → Team-Briggs scope (roster edges) → deal-email
@@ -540,6 +600,7 @@ shipped row belongs in CURRENT-STATE, not PLANNED-BACKLOG. Nothing here was rewo
 | HP1-P0 | ✅ **SHIPPED + DEPLOYED 2026-09-12 (PR #2358, `42158f17`; `/version` confirms live).** `Promise.allSettled` + `settledQueryResult()` so a thrown source degrades only its own lane (1b); `timeoutMs` 20 s on the seller-prospect read, 12 s on the other three (1a); `countMode` `'exact'` → `'estimated'` on all four, safe because `.count` is read nowhere (1c); per-lane `source_error` rendered by `app.js` plus a degradation note folded into the existing `named_gaps` contract, replacing the **"Nothing here right now. ✓"** green checkmark a failed lane used to show (1e). A 7th previously-unguarded `opsQuery` in the same handler (the entity-name lookup) was found and wrapped. Guard `test/today-sections-degraded-source.test.mjs` asserts a thrown source empties exactly one lane and the endpoint still returns 200. Suite 6,013/0/6-skipped. | ✅ | STATUS.md 2026-09-12 |
 | HP1-P1a-fix | ✅ **CLOSED 2026-09-12 — verified on `UPDATED_not_inserted = 608`, `brand_new_rows = 0`.** PR #2371 + both services redeployed; **two silent defects found on verification and fixed live**: (a) the migration had **never been applied** (`pg_proc` had no such function — the redeploy would have 404'd all 608 deals per run, i.e. made the feed worse), (b) the function as written raises **42702** on its first call (OUT params `sf_opp_id`/`entity_id` collide with columns; a plpgsql body is not parsed at CREATE time). Corrected by `20261101170100_lcc_hp1p1a_upsert_rpc_fix_out_param_ambiguity.sql` (OUT params `out_`-prefixed, INSERT aliased `AS t`; no JS change). **The 12:47 UTC PA run wrote 608 UPDATEs** — the first this path has ever produced. Six weeks of drift landed as **10 stage changes / 6 close-date changes / 4 newly closed / 0 amount changes / 0 new rows**, all recognisable live deals. ✅ **Unit 4 held** — `closed_at` moved on exactly the 4 genuine transitions; the 569 already-closed rows kept their original timestamps. ⚠️ **One backward stage move** (*Essentia Health — Hinckley MN* `loi_executed` → `listing_signed`) — 👤 Scott's eye: real re-trade or SF hygiene. LCC now mirrors Salesforce faithfully, errors included. ⚠️ **The mass-auto-retire warning was misdirected** — there is no `deal_next_step` table; `lcc_generate_deal_next_steps()` writes into **`action_items`**. | ✅ | HP1-P1a-fix verified 2026-09-12 |
 | HP1-P1a-rpc | ✅ **DONE 2026-09-12 — recorded so the class is not repeated.** A merged migration is not an applied migration, and an applied plpgsql function is not a working one. Both halves failed here silently. **Standing check for any RPC-shipping prompt from now on:** after deploy, (1) assert the function exists in `pg_proc`, and (2) execute it once inside a rolled-back transaction against a real row — `CREATE` success proves neither. A `RETURNS TABLE` OUT parameter that shares a name with a column of the table the body writes is a 42702 waiting for its first call; prefix them. | ✅ | HP1-P1a-fix verify 2026-09-12 |
+| HP1-P2a | ✅ **SHIPPED 2026-09-12 — the Inbox surface excludes `new_contact_qualify` (captured-contact hygiene, 879 rows) at `v_inbox_triage`, the source every consumer (`handleInbox`/`/api/inbox`, `v2GetInbox`/`/api/queue-v2?view=inbox`, v1 `case 'inbox'`) reads.** `contact_misparse_review` (117) stays ON the Inbox — no resolution surface exists anywhere in the repo (P131 gap, filed not fixed). `mv_work_counts.inbox_new`/`inbox_triaged` carry the same exclusion so the header agrees with the list. Every response now carries `hygiene_pointer {source_type,count,label}` — an EXACT uncapped count against `inbox_items` (never the filtered view), rendered as a persistent row on the Inbox page linking to the pre-existing `renderContactQualifyWorklist()` surface (868 live rows). Inbox reads **182**, not the prompt's stale 65 (that figure assumed both hygiene lanes AND the personal `email_alert` class would leave; only one does). Migration `20261101190000`; guard `test/hp1-p2a-inbox-hygiene-pointer.test.mjs`. Suite 6,083/0/6-skipped. | ✅ | STATUS.md 2026-09-12 |
 | ✅ **C13g-min-lane** | **BUILT 2026-09-09 — the human-verdict LANE `entity_type_review` over C13g-min's retype write.** All four registries wired (`FEDERATED_DECISION_TYPES`+`federatedSubjectRef` = `etype:<entity_id>`, `_DC_FEDERATED`+tile, `_DC_FED_META`+card, `review-shared.js` lane `entity_merge`), pure planner `api/_shared/entity-retype-planner.js` (verdicts `retype_organization` → `rpc/lcc_retype_entity`, never a direct PATCH / `keep_person` record-only / `research`), card re-read from `v_lcc_entity_retype_candidates` at verdict time (P188), a success forward to the `sponsor_family_confirm` lane when the retyped entity was blocking a sponsor card. Guard `test/c13g-min-lane.test.mjs` (16 tests; one assertion mutation-sampled, not a full mutation pass). Live census re-run (not merely re-quoted): lane population is now **19 rows**, not 18 — re-derivable views move; `merge_candidates`/`auto_mergeable` confirmed to hold on retype alone and move only on the subsequent merge (5,205→5,204 / 3,012→3,011); the broader Gardner+sponsor `unclassified_rival` count moved 65→47 across a full rolled-back retype→merge→unmerge→unretype round trip, 0 residue. Neither Gardner nor MassMutual Life carries any Tier 0 corroboration column, so retyping either removes nothing from that bench. `v_lcc_entity_role_ambiguity` and the 14-co-claimed re-verification were NOT re-measured this pass — owner-role-classification.md §9f. | ✅ | C13g-min · OWN-T0e-b |
 | ✅ **C13g-min-lane-mutation** | **DONE 2026-09-09 — `test/c13g-min-lane.test.mjs` is now 14 tests / 46 mutations RED / 46.** Added 2 assertions (candidate-view migration reads the OWN-T0e cache not the slow view; `p_decision_id` bigint matching `lcc_decisions.id`, old uuid overload dropped — the repo-side twins of the two same-day hotfixes' apply-time DO blocks). Two assertions survived their first mutation and were rewritten: the ordering test's own row names happened to sort the same by name as by rent (renamed anti-alphabetically); the registry-membership regex matched the unrelated `research_type: 'entity_type_review',` literal in the verdict branch instead of the `FEDERATED_DECISION_TYPES` entry (re-anchored on the `sponsor_family_confirm` adjacency). Both unmeasured items closed, rolled back: `v_lcc_entity_role_ambiguity` is 0 rows for Foulger Pratt in either type (not every retype moves that view); the Tier 0 bench gained **10 cards across 3 of the 11 non-tombstoned retyped entities** (UIRC 7, Global Net Lease 2, Foulger Pratt 1) that could not exist while person-typed — §9f's Gardner/MassMutual-only corroboration check was right for those two, incomplete as a claim about the lane. owner-role-classification.md §9g. | ✅ | C13g-min-lane |
 | ✅ **C13g-min-lane-placeholder** | **DONE 2026-09-10 — `Research In Progress` is a placeholder ENTITY holding 2 current portfolio facts; it no longer reaches the retype lane.** Measured live first that none of the three existing name guards fires on it (`lcc_is_placeholder_owner_name`/`lcc_p131_is_document_row_label`/`lcc_a2_is_placeholder_party` all `false`); widened `lcc_is_placeholder_owner_name`'s exact-match list with the one literal after a blast-radius check (2 entities fleet-wide, both genuine placeholders). `v_lcc_entity_retype_candidates` restated (migration `20261101150000`) to exclude it from both population sources; candidates **4 → 3** (exact predicted delta). New `v_lcc_entity_retype_placeholder_excluded` view + one-shot `api/admin.js?action=entity-retype-placeholder-seed` route the excluded row to `junk_entity_review` (retire, never merge) — seeded live, review_id 386, `dismiss`, naming the 2 held facts. | ✅ | C13g-min-lane |

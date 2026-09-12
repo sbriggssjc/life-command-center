@@ -1,3 +1,31 @@
+## 2026-09-12 — MB-b: first user-facing P18 surface built (Lane Briefs email block + homepage tab); flag OFF, not deployed
+
+Built `docs/claude-code/prompts/MBb-lane-briefs-daily-block-and-tab.md` end to end. §0 producer cleanups:
+operator identity (§0.1) was already closed by ID2b-caps-2 before this build started (nothing to do, verified
+with a new guard `test/market-brief-operator-canonicalization.test.mjs`); the trades fact's date-suffixed
+`fact_key` (§0.2, re-minting a fresh zero-fact every day) is fixed — `TRADES_FACT_KEY = 'trades_trailing_7d'`
+is now a single stable key, the tick reads a fixed trailing 7-day window, and it retires any old-format live
+fact it finds; a `dialysis` RSS stream (§0.3, Renal & Urology News / Nephrology News & Issues / CMS Newsroom)
+was added to `briefing-intel-snapshot`'s `RSS_FEEDS`, **not egress-verified from this sandbox** (no outbound
+reach). Built: the daily email's "Lane Briefs" block (`renderMarketBriefLanes`, above Sector Watch, which
+stays below it), the homepage `#/briefs/<lane>` tab (`GET /api/market-brief-tab`, new page + route), and
+shared selection/diff logic (`api/_shared/market-brief-render.js`) so both read the same live facts. Both
+ship behind a new flag `MARKET_BRIEF_RENDER` (registered off). Every number in the rendered block traces to
+a fact object, asserted by a dedicated tripwire test. New guards: `test/market-brief-render.test.mjs` (14),
+`test/market-brief-lane-briefs-email.test.mjs` (11, incl. diff/gap/omitted-empty-lane), `test/market-brief-
+operator-canonicalization.test.mjs` (3), plus additions to the existing MB-a suites. **Full repo suite green:
+6,114 pass / 0 fail / 6 skipped** across 962 suites (this session had to `npm ci` first — 0 dependencies were
+installed at session start, which produced 28 misleading `ERR_MODULE_NOT_FOUND` failures on the first run;
+none were real regressions, confirmed by re-running after install).
+
+**Nothing here is deployed or live-verified** — no Railway/Supabase write access this session. Two new
+migrations are committed, unapplied: `20260912120000_lcc_mbb_rss_dialysis_stream_cron.sql` and
+`20260912121500_lcc_mbb_market_brief_render_flag.sql`. `MARKET_BRIEF_RENDER` stays off. Operator sequence
+(spec §5): apply both migrations, redeploy Railway (both services), run the P-SQL tick once via POST with
+the flag forced on and confirm the trades supersede chain clears the old date-suffixed fragments, preview
+the email block and load `#/briefs/dialysis`, verify each new RSS feed URL parses, THEN flip
+`MARKET_BRIEF_RENDER`. Full detail: `docs/architecture/EXEC-BRIEFS-SPEC.md` §9 "MB-b" addendum;
+`docs/os/CURRENT-STATE.md` §2 "MB-b" subsection; `docs/os/PLANNED-BACKLOG.md` §P18 MB1e/MB3/MB4.
 # Claude Code queue — STATUS
 
 <!-- ============================================================================
@@ -2183,3 +2211,52 @@ row), `docs/audits/ID2b_caps_RPC_QUERY_COMPS_OPERATOR_ID_2026-09-12.md` (addendu
 the registry merge machinery, or any alias-table write beyond calling the existing resolver; the 6
 unresolvable `sf_comp_staging` tenants sit in `dia_operator_write_review` like any other unresolved
 operator string, resolvable the normal way (`dia_id2a_resolve_review`).
+
+## HP1-P2a — route data-hygiene rows off the homepage Inbox (2026-09-12)
+
+Routing change, not a build. Scott's third and last untouched HP1 symptom: the Inbox homepage
+surface was 93%+ captured-contact hygiene noise. Re-measured live (the prompt's figures were
+stale by the time this ran — `inbox_items WHERE status='new'` is **1,061**, not 1,052):
+`new_contact_qualify` 879, `contact_misparse_review` 117, `email_alert` 20, `email_om`/
+`sidebar_om`/`folder_feed_om` 33, `flagged_email` 12.
+
+- **Excluded only `new_contact_qualify`** (879 rows) — it has a real, populated destination
+  (`v_lcc_contact_qualify_worklist`, 868 live rows, wired to `renderContactQualifyWorklist()` /
+  `bridgeQualifyContact` / `bridgeQualifyContactsBulk`, all pre-existing).
+- **`contact_misparse_review` (117) stays on the Inbox, deliberately** — grepped `api/` and every
+  frontend file: zero readers of `source_type='contact_misparse_review'` anywhere. Routing it off
+  would delete the only place it is visible. Filed as a P131 gap in `PLANNED-BACKLOG.md`
+  (HP1-P2a row), not built here.
+- **Exclusion lives at `v_inbox_triage`** (migration
+  `20261101190000_lcc_hp1p2a_inbox_exclude_contact_qualify_hygiene.sql`, applied to LCC Opps) —
+  every consumer of the view (v1 `case 'inbox'`, `handleInbox`/`/api/inbox`,
+  `v2GetInbox`/`/api/queue-v2?view=inbox`) is an Inbox surface and none of them wants
+  captured-contact hygiene rows.
+- **`mv_work_counts.inbox_new`/`inbox_triaged` carry the same exclusion** so the header total
+  agrees with the filtered list — without this the change reproduces the QA-18 defect (list count
+  and header count silently disagreeing by ~900).
+- **Every `v_inbox_triage` consumer's JSON response now carries `hygiene_pointer`** —
+  `{source_type, count, label}`, `count` read via a separate EXACT `count=exact` probe against
+  `inbox_items` directly (never the already-filtered view, never a capped page), so the excluded
+  population can never be silently dropped or under-reported (the HP1-badge P159a trap, avoided in
+  the same change). Rendered on the full Inbox page (`ops.js renderInboxTriage`) as a persistent
+  row: *"🧹 Data hygiene — contacts to qualify — N items"* with a "Review →" button that calls the
+  existing `renderContactQualifyWorklist()`. The small Today-page widget (`app.js
+  loadCanonicalData`/`renderRecentEmails`, 6-item preview) already benefits from the view-level
+  filter via its existing "View all N" total; a redundant pointer was deliberately NOT added there.
+- **Result: the Inbox reads 182, not 65.** The prompt's 65 assumed both hygiene lanes and the
+  personal `email_alert` class would all leave; only `new_contact_qualify` does.
+  `email_alert` (personal, 20) is HP1-P2b's scope and untouched; `contact_misparse_review` (117)
+  stays for the reason above; OM/flagged-email broker work (45) is the genuine actionable residue.
+- **Verified live** (`select source_type, count(*) from v_inbox_triage group by 1` → 0 rows for
+  `new_contact_qualify`; `mv_work_counts.inbox_new` → 182) and via `v_lcc_contact_qualify_worklist`
+  still returning 868 reachable rows post-change (no destructive write performed — reachability
+  confirmed by read, not by a live `bridgeQualifyContact` round trip, to avoid mutating production
+  data for a verification step).
+- Guard: `test/hp1-p2a-inbox-hygiene-pointer.test.mjs` (2 tests, positive control included).
+  Full suite: 6,083 pass / 0 fail / 6 skipped.
+
+**Not done, deliberately:** no drain of the 979/868 captured-contact rows (that writes — links
+people, stamps cadences; a separate decision); no `priority_score` ranking (HP1-P2c, sequenced
+after this); `contact_misparse_review` resolution surface not built (filed, not fixed);
+`inbox_items.domain` four-spelling drift not touched (already filed as HP1-P2-domain).
