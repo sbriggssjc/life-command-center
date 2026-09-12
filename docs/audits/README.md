@@ -188,3 +188,28 @@ documentation map is a defect to file, not something this index fixes by existin
 - [`P198_PREFIX8_ARM_IS_LOAD_BEARING_2026-08-27.md`](P198_PREFIX8_ARM_IS_LOAD_BEARING_2026-08-27.md)
 - [`PR12_PROVENANCE_QUOTE_LOSS_2026-09-02.md`](PR12_PROVENANCE_QUOTE_LOSS_2026-09-02.md)
 - [`V8_SPONSOR_FAMILY_REVIEW_2026-08-27.md`](V8_SPONSOR_FAMILY_REVIEW_2026-08-27.md)
+
+## CONSOLIDATE2 (round 2, 2026-09-12) — appended, not regenerated
+
+- **`docs/claude-code/STATUS.md` archived again.** Lines 2226–10644 (dated 2026-08-29 → 2026-09-11:
+  the B6d/B6e CI-and-producer-health tail, PRI2–PRI5, BROKER1, the P18/BUY0 design opens, the
+  AC-series, and a long ID-series/C13-C14 run) moved verbatim to
+  [`../history/STATUS_claude-code_2026-08-29_to_2026-09-11.md`](../history/STATUS_claude-code_2026-08-29_to_2026-09-11.md).
+  STATUS.md itself now carries an "Open threads" table at the top pointing to this archive and to
+  the live backlog rows for each thread.
+- **`docs/os/PLANNED-BACKLOG.md` shipped rows folded into `docs/os/CURRENT-STATE.md` §2a** (78 rows
+  whose State column read exactly `✅`), moved verbatim, deleted from the backlog. See
+  `CURRENT-STATE.md` §2a for the list.
+- **Contradictions flagged, not resolved** (follow-up work, listed here per the DOCMAP2 rule of
+  recording a sweep's findings even when the fix is deferred):
+  - `docs/architecture/document-capture-and-ocr-status.md` header still reads a "FINAL STATE" box
+    dated 2026-08-12, while `docs/architecture/document-capture-ocr-and-deeds.md` (DOC1–DOC18,
+    through 2026-09-02) is the actually-current OCR/longdoc state. The two pages were not merged in
+    this pass; a reader following the first alone would miss DOC17/DOC18.
+  - `docs/architecture/tier0-owner-contact-system.md` is billed as the single door into P186–P198,
+    but P197/P198's park-reason and prefix-8-arm corrections (2026-08-27) are not reflected in its
+    own prose — the door page itself was not re-verified against its dozen rounds in this pass.
+  - Several `docs/architecture/*.md` files carry "LIVE"/"SHIPPED" language dated before a later
+    STATUS entry recorded a correction to the same claim (e.g. the FRED/CMS "don't build" verdict
+    superseded same-day by Scott's correction, noted in STATUS but not chased into every doc that
+    quoted the earlier verdict). Not chased further here — filed as a topic-coherence follow-up.
