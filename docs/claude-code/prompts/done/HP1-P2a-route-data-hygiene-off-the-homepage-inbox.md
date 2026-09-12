@@ -89,8 +89,14 @@ Paste both readings, from the live DB, not from fixtures:
    `v_lcc_contact_qualify_worklist` and one successful `bridgeQualifyContact` round trip (rolled back or on a
    throwaway row).
 
-**Target: the homepage Inbox shows 65 items and one pointer.** If it shows anything else, report the number and
-stop rather than adjusting the filter to hit 65.
+⛔ **CORRECTED AFTER THE FACT (2026-09-12) — this target was wrong and it contradicted §3 of this same prompt.**
+It read *"Target: the homepage Inbox shows 65 items and one pointer"*, which silently assumed **both** hygiene
+lanes would leave — while §3 above explicitly instructed the opposite if `contact_misparse_review` had no
+resolution surface. It has none, so it correctly stayed, and `email_alert` (HP1-P2b's scope) stayed too.
+**The right answer was 182, and CC reported it rather than bending the filter to hit my number** — which is what
+the sentence below actually asks for, and the reason to keep that sentence in every prompt:
+
+> If it shows anything else, report the number and stop rather than adjusting the filter to hit it.
 
 ## 6. What NOT to do
 
