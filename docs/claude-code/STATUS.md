@@ -1,5 +1,61 @@
 # Claude Code queue — STATUS
 
+## 2026-09-12 — HP1-P1a ANSWERED read-only: it is NOT a Salesforce hygiene gap. The opportunity feed has written 5 rows in 36 days.
+
+HP1 framed the frozen deal backbone as *"a Salesforce hygiene gap or a Power Automate scope gap — do
+not assume"* and sent Scott to check Salesforce. **Both options were wrong, and one column settled it
+without leaving the database.** `bd_opportunities.last_synced_at` is stamped unconditionally on every
+ingest write (`mcp/opportunity-sync.js:217`), so it records *the feed touched this row*, independently
+of whether anything changed. Its write history:
+
+| date | rows written by the SF feed |
+|---|---:|
+| **2026-08-03** | **590** ← one bulk backfill |
+| 2026-08-04 | 15 |
+| 2026-08-20 | 1 |
+| 2026-09-03 | 1 |
+| 2026-09-07 | 2 |
+| 2026-09-09 | 1 |
+
+**Five rows in 36 days — and one of the five is `Test Property SN 05032024`.** Of 569 CLOSED
+opportunities, **zero have been synced since the backfill** (`max(last_synced_at)` on closed rows is
+2026-08-04 21:00:45, the backfill itself). A brokerage does not go 36 days with no closes. **The feed
+ran once and stopped.** The surviving five carry `:00:4x`-second timestamps on the hour, which reads
+like a scheduled flow that still fires and delivers almost nothing — a too-narrow filter or a broken
+query, not a dead trigger. Distinguishing those two is a **Power Automate run-history** question, not
+a Salesforce one.
+
+⚠️ **This corrects my own HP1 finding 2c, which said the opposite.** It read *"the table as a whole is
+still being written (`max(updated_at)` 2026-09-10, 619 rows), so the pipe is not dead — the
+transaction-stage rows specifically have not changed."* **`updated_at` was the wrong column.** It also
+moves for LCC-side writers, and the proof is on one row: `DaVita Dialysis - Succasunna - NJ` reads
+`last_synced_at` **2026-09-07** against `updated_at` **2026-09-10** — that later change came from
+inside LCC, not from Salesforce. Reading `updated_at` as feed liveness produced a confident, plausible
+and wrong conclusion, and it is the same class this file documents a dozen times: *the convenient
+counter answered instead of erroring.* **For any pushed feed, read the column the WRITER stamps
+unconditionally, never the row's own mtime.**
+
+**This re-orders HP1's P1 and kills one premise.** The stale tasks, the 22 past-close deals and the
+graveyard My Work are **symptoms of a dead feed**, not of missing task hygiene — so **P1d (the
+backbone freshness assertion) is now FIRST**, not last. It should have fired on 2026-08-05 and there
+was nothing to fire it: `lcc-bd-sync-health-check` (05:00) and `lcc-feed-freshness-sync` (05:30) watch
+other feeds, and `bd_opportunities` is in neither registry. ⚠️ **Do NOT build P1b (the deal-status
+confirmation lane) next** — on a stopped feed it becomes a surface that asks Scott to hand-reconcile
+data we stopped receiving, which is the producer/consumer inversion, and it would make the outage
+*more* comfortable to live with rather than fixing it.
+
+⚠️ **And note what a restarted feed will do on its first run:** 569 closed rows and 37 frozen open rows
+will all arrive at once. `lcc_generate_deal_next_steps()` retires on stage change, so a backlog of
+real closes lands in one batch — expect a large auto-retire and verify it against the ledger rather
+than being surprised by it.
+
+**👤 Scott's step changed:** not "check the stage in Salesforce" but **"open the Power Automate
+opportunity-sync flow and read its run history since 2026-08-04"** — is it failing, is it succeeding
+with 0 records, or has it been turned off? Each answer is a different fix. Backlog **HP1-P1a** rewritten.
+
+**Next:** HP1-P1d (freshness assertion on the deal backbone) once the flow's state is known; HP1-badge
+is unaffected and still ready to build.
+
 ## 2026-09-12 — PR-scanner-3 reconciled against the merged desktop response (Cowork)
 
 Read the pasted Claude Code desktop response for PR-scanner-3 in full and independently re-verified
