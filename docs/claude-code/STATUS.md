@@ -348,7 +348,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | thread | backlog rows | last entry | state (one line) |
 |---|---|---|---|
 | **Identity / operator canonicalization (ID-series)** | ID0–ID4, ID2a-cleanup, ID2b, ID2b-caps, ID2b-caps-2, ID3a–ID3e, ID3a-d | 2026-09-12 | ID2b-caps-2 shipped + live-verified (3rd comp source fixed at source); ID3a-d retired LCC's stale gov migration copy; ID2b's remaining 45 views/12 modules still group on operator text |
-| **Market briefs (MB/EB)** | MB1d, MB-a2, MB-a3, EB1, P18 | 2026-09-11/12 | ID2b partially wired operator_id into the market-brief operator count; P18 swimlane spec + EB1 design-only; MB-a2 fixes confirmed live, MB1d (false-fresh CMS facts) is the open blocker |
+| **Market briefs (MB/EB)** | MB1d, MB2a, MB3, MB4, MB5, MB6, MB7, EB1b, P18 | 2026-09-12 | **LIVE**: `MARKET_BRIEF_PSQL` + `MARKET_BRIEF_RENDER` on; the daily email carries the Lane Briefs block (cap-rate bands, on-market, honest CMS staleness gaps, link to `#/briefs/dialysis`), the tab serves live facts, first `market_brief_issues` row frozen. Next: MB2a (the 3 new dialysis RSS URLs all fail 403/404), MB5 P-WEB (blocked on EB1b Anthropic credit), MB6 weekly long-form, MB7 MCP recall |
 | **Operator funnel (OC / HP1)** | HP1, HP1-P1a, HP1-P1a-fix, HP1-P1a-dup | 2026-09-12 | HP1-P1a-fix CLOSED live (608 rows UPDATED, first-ever Salesforce UPDATE to `bd_opportunities`); HP1 P0 (Today 500 badge) fixed+deployed+verified |
 | **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI5 | 2026-09-12 | PR-scanner-3 shipped (`county_records_needed` action); PRI5 merged+deployed, awaiting another live CMS ingestion test run to confirm the hang is actually cleared |
@@ -365,6 +365,20 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-12 — MB-b reconciled and TURNED ON: the market brief is live in the daily email and on the homepage tab
+
+Cowork applied MB-b's two unapplied migrations (`MARKET_BRIEF_RENDER` registration, `lcc-market-brief-rss` cron),
+flipped `MARKET_BRIEF_PSQL` on, ran the producer once (**15 facts written, run `completed`**, 31 live facts), then
+flipped `MARKET_BRIEF_RENDER` on and verified both surfaces on deployed `6b28835f28ac`: `GET /api/market-brief-tab`
+returns `enabled:true, has_facts:true` with sourced facts, and `/api/briefing-email` (117 KB) now contains the **Lane
+Briefs block** — cap-rate band, on-market count, the CMS staleness gap rendered honestly, and the link to
+`#/briefs/dialysis` — with the first `market_brief_issues` row frozen. Three clean operator bands (DaVita, Fresenius
+Medical Care, US Renal Care), no duplicates. **One defect found:** MB-b's three new dialysis RSS URLs all fail —
+Renal & Urology News **403**, Nephrology News **404**, CMS Newsroom **404** — so `MARKET_BRIEF_PRSS` stays **off** and
+the stream would yield nothing; filed as **MB2a**. MB-b's own note said the URLs were never egress-verified.
+⚠️ Concurrency note: this entry was written twice — a parallel session's REPO1 root sweep (`68de2540`) discarded the
+first copy while it sat uncommitted in the shared checkout. Commit doc edits immediately in this repo.
 
 ## 2026-09-12 — MB-b's "needs a Railway redeploy" blocker is already cleared; two small migrations are the real remaining gap (Cowork)
 
