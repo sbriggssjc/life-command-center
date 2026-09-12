@@ -1,5 +1,63 @@
 # Claude Code queue — STATUS
 
+## 2026-09-12 — HP1 filed: the homepage Today 500 root-caused, and My Work / Inbox measured as pre-doctrine widgets
+
+Live read-only Cowork triage of Scott's screenshot (all three Today lanes showing `HTTP 500`; My Work
+and Inbox behind actual deal status). Filed `prompts/HP1-homepage-attention-surface-triage.md`. Nothing
+built, nothing written to the DB.
+
+**The 500 is one endpoint and one unhandled throw.** `GET /api/operations?action=today_sections`
+(`api/operations.js:2038`) fires six queries in `Promise.all`; `opsQuery` (`ops-db.js:63`) calls
+`fetchWithTimeout` with an **8 s default and no try/catch**, and an `AbortController` abort makes
+`fetch` **throw**, not resolve `{ok:false}` — so the handler's `sellerQR.ok ? … : []` guard is dead
+code for the timeout case and the rejection reaches `withErrorHandler` as a 500. All three lanes
+render from that one response, which is why one failure draws three errors. The slow source, measured
+with `EXPLAIN ANALYZE`: `v_lcc_seller_prospect_queue` = **815 ms** for the 200-row page + **750 ms**
+for the exact `COUNT(*)` PostgREST runs alongside it under `count=exact`, on a plan carrying two
+`Seq Scan`s of `entities` (56,289 rows), a `Seq Scan` of `lcc_property_attributes` (30,928), 33,812
+heap fetches on `entity_relationships`, and a `SubPlan` executed 1,518×. Cold cache on first load
+after idle is what crosses 8 s — matching "every so often when we log into the app." **The fix already
+exists in this repo and was never applied here:** `ops-db.js:80-84` documents the R6 `timeoutMs`
+option added for exactly this ("heavy aggregate views … need more headroom so a slow-but-successful
+read isn't aborted into a blanket 500"); `getTodaySections` passes none on any of its six calls.
+
+**My Work is stale because the deal backbone froze, and no task ever ages out.** 66 open
+`action_items`, **57 overdue, 38 by more than 30 days**; 37 are `deal_next_step` from
+`source_type='deal_stage_engine'`. `lcc_generate_deal_next_steps()` (cron `lcc-deal-next-steps-daily`,
+active) retires a task ONLY when `bd_opportunities.stage` changes or the deal closes — **there is no
+time-based retirement**. And the stage data it keys on has not moved: `off_market_listing` and
+`loi_executed` last updated **2026-08-03**, `bov` **2026-08-04**, while **22 of the 50 open deals have
+an `expected_close_date` already in the past** (ECU Physicians MOB 2024-08-27; Pops Mart Fuels
+2025-09-25). Scott's two screenshot cards trace exactly here: *DaVita Portfolio 4 - Realty Income* is
+still `loi_executed` with close 2026-07-16 (58 days past, task due = close−14 = Jul 2), *Queens - NY*
+still `listing_signed`. `bd_opportunities` is **pushed** from Salesforce via Power Automate into
+`/api/pipeline/ingest-opportunity` — nothing pulls, and there is no freshness assertion on the deal
+backbone even though `lcc-bd-sync-health-check` and `lcc-feed-freshness-sync` exist for other feeds.
+**Not determined read-only, and NOT to be assumed: whether the frozen stages are a Salesforce hygiene
+gap or a PA scope gap — 👤 Scott.**
+
+**The Inbox is a reverse-chronological mailbox holding mostly machine work.** 953 items at
+`status='new'`, of which **850 are `new_contact_qualify` and 38 `contact_misparse_review` — 93% data
+hygiene**, not broker judgment. The human-facing residue is market data, not decisions: a competitor's
+Spokane DaVita listing blast present **twice** (original + FW, not deduped), an SSA Minden new-listing
+announcement, a Fresenius Pittsboro SOLD COMP notice, and a **bank balance alert**. Four of the 21 new
+`email_om` rows are titled from the raw MIME filename (`OM: email-body-AAVtKA8aAAA.txt`) because no
+property resolved. `inbox_items.priority_score` **exists and is dead**: written only by
+`api/intake.js:1054` for `domain='infra'` rows, never read — `v2GetInbox` (`api/queue.js:517`) orders
+`received_at.desc`. The classifier is fine (3,847 triaged + 2,252 dismissed vs 21 new); this is a
+routing-and-ranking problem, not a classification one.
+
+**The design finding underneath all three:** the homepage runs three widgets at three orderings —
+Today (client-value ranked, per operator-doctrine 1.8.0, and the one that 500s), My Work
+(`due_date.asc`, so the most-ignored task is pinned to the top), Inbox (`received_at.desc`). My Work
+and Inbox are **pre-doctrine widgets never re-cut when UX-T1a-today shipped 2026-09-03**. The
+alignment Scott is asking for is finishing that cut: make Today reliable, make My Work its Urgent
+detail view on the same ranking function, and reduce the Inbox to items needing a human verdict.
+
+**Next:** HP1 P0 (`allSettled` + timeout budget + count mode + per-lane error, with a guard test that
+a thrown source degrades one lane and still returns 200), then P1 (backbone freshness + deal-status
+confirmation lane) after Scott settles the SF-vs-PA question.
+
 ## 2026-09-12 — ID3a-c reconciled: agency class closed (live-verified), and a repo-ownership hazard found — gov DB now owned by `government-lease`
 
 Filed `responses/ID3a-c desktop response.docx` → `done/`; prompt → `prompts/done/`. **Verified live (Cowork, read-only):**
