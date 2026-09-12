@@ -1,5 +1,6 @@
 # Claude Code queue — STATUS
 
+<<<<<<< HEAD
 ## 2026-09-12 — HP1 P0 reconciled: the Today 500 is fixed, DEPLOYED and verified — and the "See all (N)" badge was never honest
 
 Filed `responses/HP1 desktop response.docx` → `done/`; prompt → `prompts/done/`. **PR #2358 merged
@@ -69,6 +70,31 @@ any other engine change in the same merge is live.
 
 **Next:** HP1-badge (smallest, and it is an honest-counts defect on an operator surface), then P2's
 inbox routing. P1 stays 👤-blocked.
+=======
+## 2026-09-12 — ID2b partially shipped: market brief's operator-count source switched to `operator_id`; comps/CM/dossier measured and deferred
+
+Executed `prompts/ID2b-consumer-switch-to-operator-id.md`. **Re-measured the population first: the real grep hit is
+96 views, not 45** — most are review/audit queues where raw operator text IS the deliverable (switching would hide
+the ambiguity they surface), correctly left alone. **Shipped:** `v_market_brief_cms_operator_counts` (the market
+brief's only CMS-operator-count source) now groups on `properties.operator_id` (survivor-resolved via
+`dia_operator_survivor`), fill-blanks fallback to raw text for the 14.7% of clinics with no resolved operator.
+Measured live: row-count parity 6,695→6,695, `Satellite Healthcare`(54)+`Satellite Dialysis`(14)→one bucket of 69.
+`market-brief-facts.js` needed no code change — it was already agnostic to the grouping key, so it is unblocked.
+Migration `supabase/migrations/dialysis/20260912120000_dia_id2b_market_brief_operator_id.sql`; guard
+`test/id2b-consumer-operator-id.test.mjs` (6 tests, incl. a repo-wide class guard against a NEW module grouping on
+raw operator text). Full suite 6,017/0/6-skipped.
+
+**Deferred, named, not silently declared done** (per the prompt's own "ship the highest-value subset, name the
+rest" instruction): `mcp/comps-tools.js` fuzzy comp SELECTION (`operatorTier`/`tenantMatches`) was read — its
+substring filter already tolerates most alias variance, but the required 5-subject live comp-set before/after diff
+was NOT run (needs a live MCP tick invocation this session's budget didn't reach) — filed **ID2b-c**, Scott's call.
+`cm_dialysis_operator_unit_economics`/`v_dia_econ_operator_benchmark` already ILIKE-bucket via `dia_operator_bucket()`
+(so the exact Fresenius/DaVita string split mostly doesn't occur there today, but it's a heuristic, not the
+registry); `cm_dialysis_available_by_tenant[_q]` and `cm_dialysis_industry_participants` still group on raw/
+precomputed text — filed **ID2b-cm**. `dossier-generator.js`/`rent-projection.js`/`team-context.js`/
+`sidebar-pipeline.js` and the ~85 remaining views not read this round — filed **ID2b-remaining**/**ID2b-mods**.
+Full report: `docs/audits/ID2b_OPERATOR_ID_CONSUMER_SWITCH_2026-09-12.md`. Branch `claude/dreamy-pascal-i97j44`.
+>>>>>>> origin/main
 
 ## 2026-09-12 — ID2b scoped: the identity fix is stored but unread — 45 views + 12 modules still group on operator text
 
