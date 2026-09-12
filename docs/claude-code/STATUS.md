@@ -1,6 +1,24 @@
 # Claude Code queue — STATUS
 
 <<<<<<< HEAD
+## 2026-09-12 — ID2b reconciled: real but not yet visible — the cap-rate fragmentation Scott flagged is unchanged; ID2b-caps drafted
+
+Filed `responses/ID2b desktop response.docx` → `done/`; prompt → `prompts/done/`. **ID2b (PR #2359) shipped one switch:**
+`v_market_brief_cms_operator_counts` now groups on `properties.operator_id` through `dia_operator_survivor` — verified live,
+0 rows lost (6,695 → 6,695), Satellite's two spellings collapsed into one bucket of 69, plus a repo-wide class-guard test.
+It corrected the prompt's own figure (**96** grouping-relevant views, not 45 — the remainder are review/audit surfaces where
+raw text is intentionally correct) and **refused to switch `comps-tools.js` blind** because the 5-subject comp-set diff
+hadn't been run — the right call, filed as ID2b-c. **What the reconcile found:** the switched view feeds the CMS clinic
+counts, which MB1d already withholds behind the staleness gate, so **nothing user-visible changed**. Cowork re-ran the
+P-SQL tick's dry run against the deployed build: `cap_rate_ttm_band:fresenius` **n=63** alongside `:fresenius_medical_care`
+**n=11**, `:davita` **n=67** alongside `:davita_dialysis` **n=9** — the exact defect that started the identity thread on
+2026-09-11, still live. Root cause named: the bands group on the comps RPC's `comp_tenant` **text** and key on
+`normKey(text)`, so `operator_id` never reaches the engine's output and every engine consumer re-fragments the same way.
+New row **ID2b-caps** with prompt `prompts/ID2bcaps-comps-engine-operator-id-passthrough.md`: return `operator_id` +
+`operator_canonical` from `rpc_query_comps` **additively** (existing fields byte-identical, so `operatorTier()` selection
+cannot change — proven on 5 subjects), group bands on the id, supersede the text-keyed fragments. Gate: Fresenius 63+11 →
+one band n=74, DaVita 67+9 → n=76, whole-market n≈167 unmoved.
+
 ## 2026-09-12 — HP1 P0 reconciled: the Today 500 is fixed, DEPLOYED and verified — and the "See all (N)" badge was never honest
 
 Filed `responses/HP1 desktop response.docx` → `done/`; prompt → `prompts/done/`. **PR #2358 merged
