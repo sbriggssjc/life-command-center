@@ -1,3 +1,27 @@
+## 2026-09-12 — Sized the 40-property residual from B2: a small, named slice of C2g (Cowork)
+
+Continuing after B2's retirement, sized the 40-property residual flagged there (gov properties with a
+working `asset` anchor that were never resolved to an owner in `lcc_property_owner` at all — distinct
+from the 2,496-property mint gap, which is `C2e-T2b`).
+
+**Findings:** these 40 are stuck, not merely queued — anchors range from 2026-04-24 to 2026-08-19 (up
+to ~4.5 months old) with no resolution having landed. Two sub-shapes: 10 of 40 carry a real
+`assessed_owner` name (LLCs, a trust, an individual, a corp, a city) and simply never resolved; the
+other 30 have no `assessed_owner` at all despite a `true_owner_id` and a working anchor — thinner data
+than the first ten, worth separating before diagnosing either. Checked and ruled out: not a
+`cmbs_discovery`-status artifact (all 40 are `status='active'`); not a timing/backlog-catch-up issue
+(ages rule that out).
+
+**This is very likely the same machinery as `C2g`** ("why are 489 anchored owner-orgs still
+unresolved?" — `lcc_reconcile_property_owner`'s 0.55 confidence gate, a dia-operator-in-owner-slot
+case, or a cross-domain anchor), just counted at the property level with no Salesforce-people filter,
+so the two counts (40 vs 489) aren't directly comparable. Filed as `C2g-40` right under `C2g` in
+`PLANNED-BACKLOG.md` rather than as a new independent row — per the repo's own standing rule against
+building a second detector for the same defect class, this should be diagnosed alongside C2g's own
+investigation, not separately.
+
+No build taken. Docs updated: `PLANNED-BACKLOG.md` (new `C2g-40` row).
+
 ## 2026-09-12 — B2 retired: it's `C2e-T2b`, not a separate gap; asset-anchor coverage re-measured live (Cowork)
 
 Picked B2 as the next gap after PR-scanner-3, per the standing "measure before building" discipline
