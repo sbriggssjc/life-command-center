@@ -1,5 +1,44 @@
 # Claude Code queue — STATUS
 
+## 2026-09-12 — ID3e SHIPPED: county/city vocabulary fold (I14), never merges across state
+
+Built from the pre-written prompt (`docs/claude-code/prompts/ID3e-county-city-vocabulary-fold.md`) and its own
+measurement note. Re-measured live before building (numbers move slightly, as expected): gov `properties.county`/`state`
+2,445→1,611 (834 collapse), gov `city`/`state` 3,454→3,225 (229 collapse), dia `medicare_clinics.city`/`state`
+4,367→3,635 (732 collapse). **This is I14 controlled-vocabulary work, not ID3a's FK-wiring pattern** — no registry
+table, no `_id` column: one IMMUTABLE normalizer (`gov_normalize_place_token`/`dia_normalize_place_token`) + STORED
+generated columns (`county_norm`/`city_norm`) keyed on `(normalized_name, lower(trim(state)))` as a **pair, never name
+alone**. Verified live: `St Louis|mn` ≠ `St Louis|mo` (cross-state same-name counties never fold); `RICHMOND (CITY)`
+and `Richmond city` fold to one `richmond city|va` key (VA independent cities fold across punctuation, never with a
+same-named county — punctuation normalizes to a **space**, never deleted, which is what keeps the `city` token alive).
+The two corrupted-state rows (`property_id 6638` state=`M`, `property_id 16465` state=`|`) route to
+`v_gov_place_vocab_state_review`, untouched. Parity views `v_{gov,dia}_{county,city}_fold_groups` expose every merged
+group. `property_type` (96 values, only 9 collapse) confirmed a taxonomy question, not a case-fold — scoped out as
+`ID3e-property-type-taxonomy`. Migrations applied live + committed
+(`supabase/migrations/{government,dialysis}/20260912120000_*_id3e_*_vocab_fold.sql`); offline structural guard
+`test/id3e-migration-shape.test.mjs` (13/13 pass, comments stripped before matching); live positive-control
+`test/sql/id3e-place-vocab-fold.live.test.mjs` (kept out of the `npm test` glob per the hermetic-suite doctrine — it
+reaches Supabase directly, so it's a manual/CI-secret-gated check, not a `npm test` member). Full suite: 5,991 pass /
+0 fail / 6 skipped. **Not built:** no consumer repointed to read the new columns yet — that's a separate decision.
+
+## 2026-09-12 — ID2a-cleanup + ID3a reconciled: operator registry clean; gov agency WIRED but the NAVY regex is still live
+
+Both responses filed. **ID2a-cleanup (PR #2337) verified live:** aliases 42 → 207, review queue 1,020 → 71 open, 807
+category/payer rows routed to `properties.operator_class`, 5 subsidiaries parented (not merged), 9 junk rows
+reclassified, `operator_id` 9,307 → 9,449, parity byte-identical on the 7 canonicals. **ID3a (PRs #2338/#2339)
+measured before building** — and caught a live contamination bug: `canonicalize_agency()` prefix-matches `^navy`
+with no word boundary, so 145 **Navy Federal Credit Union** rows (a private bank) carry `agency_canonical='NAVY'`.
+Wiring shipped anyway: `properties.agency_id` 0 → **7,369/20,509**, `property_agencies.agency_id` 0.12% → **90.3%**,
+alias/review tables and both guards live. **Cowork live check: the bug is NOT fixed** — the NAVY rows are unlinked only
+because no `NAVY` registry row exists, and `canonicalize_agency('Navy Federal Credit Union')` still returns `NAVY`, so
+adding that row would promote a credit union to a federal agency across 145 properties. Also open: 1,732 rows
+canonicalized-but-unlinked, 8,838 with agency text and no canonical, and the registry lacks NAVY/ARMY/DOC/LSC/DOL/
+USGS/NRC/NIH/NLRB/USAF/TREAS (it has `USACE` but no `ACE` alias — the 614 Tully Rd twin, ID3i). **Scott decided
+(2026-09-12):** `RICHMOND FIELD OFFICE (VA)` is **Virginia**, not Veterans Affairs; bare `DOC` is state **Corrections**
+— verify all 16, auto-link none; **`GSA - <AGENCY>` is SINGLE-TENANT** — *"the tenant is the GSA but the user is whatever
+is second"* — so keep one lease and add a using-agency field beside the lease-counterparty agency. New row **ID3a-b**
+carries all of it, regex fix first. **Next:** send `prompts/ID3ab-agency-canonicalizer-fix-and-finish-wiring.md`.
+
 ## 2026-09-12 — ID2a-cleanup SHIPPED and live-verified against Dialysis_DB (aliases 42→207, review 1,020→71)
 
 Ran the ID2a-cleanup prompt against live Dialysis_DB (`mcp__Supabase__apply_migration`, real writes,
