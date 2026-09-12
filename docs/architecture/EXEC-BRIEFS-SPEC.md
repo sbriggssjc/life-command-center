@@ -263,9 +263,21 @@ CMS-operator-count facts. `v_market_brief_cms_operator_counts` (the source the P
 whose linked property has no resolved operator (fill-blanks, never dropped). Measured live:
 row-count parity 6,695→6,695; `Satellite Healthcare`(54)+`Satellite Dialysis`(14)→one bucket of 69.
 `market-brief-facts.js` needed no code change — it was already agnostic to how `operator` was
-derived. **NOT re-verified this round: the per-operator CAP-RATE bands** MB1e names
-(`Fresenius` n=63 vs `Fresenius Medical Care` n=12) come from a different producer path than the
-CMS-count facts fixed here; confirm those collapse too before calling design rule 4 fully satisfied
-for the market brief. Full measurement + the remaining ~90-view/module inventory (deliberately not
-switched this round, named as follow-up):
+derived. Full measurement:
 `docs/audits/ID2b_OPERATOR_ID_CONSUMER_SWITCH_2026-09-12.md`.
+
+**Addendum 2026-09-12 "ID2b-caps" (Cowork, live):** the CAP-RATE half design rule 4 left
+unverified above is now ALSO closed. `rpc_query_comps` (the market brief's own cap-rate source,
+and every other comps-engine consumer's) returns `operator_id`/`operator_canonical`
+(survivor-resolved) additively — every pre-existing field, including `tenant`, is unchanged, so
+comp selection/scoring (`mcp/comps-tools.js`) cannot have moved. The per-operator TTM cap-rate
+band now groups on `operator_id`, falling back to the old raw-text grouping only for comps whose
+linked property has no resolved operator yet (ID2a's coverage gap, not this defect recurring).
+Measured live on the tick's own TTM window: DaVita and Fresenius Medical Care each collapse from
+two fragmented bands into one (72 and 68 comps respectively), clear of the small-n floor. Stale
+text-keyed bands a resolved id makes obsolete are explicitly retired (`status='superseded'`) in
+the same tick run, guarded against retiring a key other, still-unresolved comps genuinely need
+live. **Design rule 4 is now fully satisfied for the market brief's operator identity.** Full
+measurement + the sized ID2b-remaining follow-up list (CM views, dossier, MCP tools beyond the
+selection-identity proof):
+`docs/audits/ID2b_caps_RPC_QUERY_COMPS_OPERATOR_ID_2026-09-12.md`.
