@@ -5569,14 +5569,18 @@ const RESEARCH_ACTION_META = {
   // A3: the deed records an SPE of a sponsor a human has confirmed we hold. A representation
   // difference, not a data error — and NOT `agrees`, which would hand it to A2's write path.
   sponsor_spe: { label: 'Sponsor SPE (confirmed)', hint: 'The deed names an SPE of a sponsor family a human confirmed — a representation difference, not a data error.' },
+  // PR-scanner-3: a reclassification of mismatch/all_guarded — the property carries
+  // NO trustworthy public record on file at all, so the next step is Scott's manual
+  // scan (netronline -> assessor -> recorder -> SOS), not a records dispute.
+  county_records_needed: { label: 'County records needed', hint: 'No trustworthy public record on file for this property — scan the county assessor/recorder/SOS, not a records dispute.' },
   awaiting_draft:       { label: 'Not yet drafted', hint: 'Seeded but the drafter has not run — NOT the same as "nothing on file".' },
   unrecognised_payload: { label: 'Unrecognised draft', hint: 'The drafter emitted a reason this split does not know. Surfaced, never bucketed.' },
 };
-const RESEARCH_HUMAN_ACTIONS = ['mismatch', 'all_guarded'];
+const RESEARCH_HUMAN_ACTIONS = ['mismatch', 'all_guarded', 'county_records_needed'];
 
 function researchActionChipsHTML(rows) {
   if (!Array.isArray(rows) || !rows.length) return '';
-  const order = ['mismatch', 'all_guarded', 'sponsor_spe', 'agrees', 'no_records', 'awaiting_draft', 'unrecognised_payload'];
+  const order = ['mismatch', 'all_guarded', 'county_records_needed', 'sponsor_spe', 'agrees', 'no_records', 'awaiting_draft', 'unrecognised_payload'];
   const by = {};
   rows.forEach(function (r) { if (r && r.bucket) by[String(r.bucket)] = r; });
   const known = order.filter(function (k) { return by[k]; });
@@ -5812,6 +5816,7 @@ async function renderResearchPage(page = opsResearchPage) {
         <div class="q-actions">
           ${item.status !== 'completed' && item.research_type === 'owner_contact_manual' && item.entity_id ? `<button class="q-action primary" onclick="researchFindContact(decodeURIComponent('${encodeURIComponent(item.entity_id)}'))">Find the contact &rarr;</button>` : ''}
           ${item.status !== 'completed' && item.research_type === 'establish_ownership_history' && item.domain && item.source_record_id ? `<button class="q-action primary" onclick="researchOpenOwnership(decodeURIComponent('${encodeURIComponent(item.domain)}'), decodeURIComponent('${encodeURIComponent(item.source_record_id)}'))">Open ownership &rarr;</button>` : ''}
+          ${item.status !== 'completed' && item.lane_action === 'county_records_needed' && item.domain && item.source_record_id ? `<button class="q-action" onclick="researchOpenCountyPortal(decodeURIComponent('${encodeURIComponent(item.domain)}'), decodeURIComponent('${encodeURIComponent(item.source_record_id)}'))">County portal &rarr;</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action primary" onclick="_opsBtnGuard(this, completeResearch, decodeURIComponent('${encodeURIComponent(item.id)}'))">Complete</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action" onclick="_opsBtnGuard(this, createFollowup, decodeURIComponent('${encodeURIComponent(item.id)}'))">Follow-up</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action" onclick="_opsBtnGuard(this, dismissResearch, decodeURIComponent('${encodeURIComponent(item.id)}'))">Dismiss</button>` : ''}
@@ -5963,6 +5968,37 @@ async function researchOpenOwnership(domain, propertyId) {
   await openUnifiedDetail(dom, { property_id: pid }, {}, 'Ownership');
 }
 window.researchOpenOwnership = researchOpenOwnership;
+
+// ─── PR-scanner-3 — "go here next" for county_records_needed cards ───────────
+// PR-scanner-5 built /api/recorder-portal (gov-only, county_authority_cache)
+// but never wired a sidepanel button to it. This is that button, scoped to
+// exactly the cards this reclassification exists to route: a property with no
+// trustworthy public record on file. Read-only — resolves a portal URL and
+// opens it; never guesses a URL when none is on file (the endpoint's own
+// contract).
+async function researchOpenCountyPortal(domain, propertyId) {
+  const dom = String(domain || '').trim();
+  if (dom !== 'gov' && dom !== 'government') {
+    showToast('County portal lookup is gov-only', 'error');
+    return;
+  }
+  if (propertyId == null || propertyId === '') {
+    showToast('This task has no linked property', 'error');
+    return;
+  }
+  const res = await opsApi(`/api/recorder-portal?domain=gov&property_id=${encodeURIComponent(propertyId)}`);
+  if (!res.ok || !res.data) {
+    showToast('Could not resolve a county portal for this property', 'error');
+    return;
+  }
+  const portalUrl = res.data.portal_url;
+  if (!portalUrl) {
+    showToast('No county portal on file for this property — scan it manually via the sidepanel', 'error');
+    return;
+  }
+  window.open(portalUrl, '_blank', 'noopener');
+}
+window.researchOpenCountyPortal = researchOpenCountyPortal;
 
 async function completeResearch(id) {
   const res = await opsPost('/api/workflows?action=research_followup', {

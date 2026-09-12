@@ -259,3 +259,41 @@ Ran the measurements §7b said were needed, now that DB access is available.
   `human_actionable` slice) a reason to open the sidepanel at all.
 - **Build prompt drafted:** `docs/claude-code/prompts/PR-scanner-3-county-records-needed-action.md`.
 - **Filed:** `PLANNED-BACKLOG.md` row `PR-scanner-3` updated in place with these numbers.
+
+## 7d. `county_records_needed` — SHIPPED 2026-09-12 (item 3 closed, prediction exact)
+
+Re-measured the 68/27 and 254/126 figures live before writing the migration (unchanged from §7c —
+the population moves with parcel/tax/deed capture but had not moved in the interim). The
+`ai_gpt4o_presumed` label named in the original spec does not exist as a literal in gov's tables;
+the live model-leg tag is `ai_recall_gpt` (matches §7c's parenthetical, which already named both).
+
+- **Cross-database constraint, resolved:** the split view lives on LCC Opps; gov's
+  `parcel_records`/`tax_records`/`deed_records` live on the separate gov project and cannot be
+  joined into one SQL statement. Built a small mirror table
+  (`lcc_gov_property_record_coverage`, LCC Opps) synced by
+  `api/_shared/gov-property-record-coverage.js`, and the view LEFT JOINs it — the SQL CASE stays
+  the single owner of the CLASSIFICATION decision (mismatch/all_guarded → county_records_needed);
+  the JS module only ever answers "do we have a record". A property absent from the mirror (not yet
+  synced) is left at its base action — `IS FALSE`, never `= false`, so an unsynced NULL can never be
+  guessed into the reclassification.
+- **Item (3), predicted vs. actual `open_tasks` delta — CLOSED, exact match.** Before: `mismatch`
+  192 / `all_guarded` 62 (254 total). Predicted after: `mismatch` ≈101 / `all_guarded` ≈27 /
+  `county_records_needed` ≈126, `human_actionable` total unchanged at 68 (split ≈37/4/27). Measured
+  after shipping: **`mismatch` 101, `all_guarded` 27, `county_records_needed` 126 — exact.**
+  `human_actionable` count held at 68, split 37 mismatch / 4 all_guarded / 27 county_records_needed.
+  `agrees` (147) and `sponsor_spe` (110) untouched.
+- **UI:** `researchOpenCountyPortal()` (`ops.js`) wires a "County portal →" button on
+  `county_records_needed` cards to PR-scanner-5's existing `/api/recorder-portal?domain=gov&
+  property_id=` route — the first live consumer of that route (it had shipped read-only and unwired
+  per PLANNED-BACKLOG `PR-scanner-5`).
+- **Not done — an operator/scheduling step, not a code gap:** the coverage mirror needs a periodic
+  sync. `syncGovPropertyRecordCoverageForOwnershipLane()` exists and is safe to run repeatedly
+  (idempotent upsert), but is not yet wired to a cron/route — today's population was synced by a
+  one-shot seed against the same 254 properties this measurement covers, matching precedent
+  (A2a/A3 shipped "not yet scheduled" too). As the lane's parcel/deed captures change (PR-scanner-1/2
+  writers, once adopted) the mirror will read stale until a sync runs.
+- **Guard:** `test/ownership-lane-split.test.mjs` (structural, on the migration text) +
+  `test/gov-property-record-coverage.test.mjs` (behavioural, injected deps — covers the model-leg
+  exclusion, the parcel/tax/deed OR, and the failed-read-is-surfaced case). Full suite green
+  (6,022 pass / 0 fail at time of shipping).
+- **Migration:** `supabase/migrations/20260912150000_lcc_pr_scanner3_county_records_needed_action.sql`.
