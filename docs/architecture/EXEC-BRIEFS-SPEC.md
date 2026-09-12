@@ -255,3 +255,17 @@ producer. The market brief consumes `operator_id` from the ID1/ID2 identity repa
 per-operator bands behind a named gap. **Design rule 5: a brief never fixes a fact the source of record gets wrong.
 It exposes the defect (gap or conflict), and the defect is traced and fixed upstream per CLAUDE.md Core doctrines.**
 The brief is therefore also a detector: every gap it renders points at a source-of-record repair.
+
+**Addendum 2026-09-12 "ID2b" (Cowork, live):** design rule 4's own withheld gap is closed for the
+CMS-operator-count facts. `v_market_brief_cms_operator_counts` (the source the P-SQL tick reads for
+`cms_clinic_count:*`/`cms_census_gap:*` facts) now groups on `properties.operator_id`
+(survivor-resolved), falling back to raw `chain_organization` text only for the ~14.7% of clinics
+whose linked property has no resolved operator (fill-blanks, never dropped). Measured live:
+row-count parity 6,695→6,695; `Satellite Healthcare`(54)+`Satellite Dialysis`(14)→one bucket of 69.
+`market-brief-facts.js` needed no code change — it was already agnostic to how `operator` was
+derived. **NOT re-verified this round: the per-operator CAP-RATE bands** MB1e names
+(`Fresenius` n=63 vs `Fresenius Medical Care` n=12) come from a different producer path than the
+CMS-count facts fixed here; confirm those collapse too before calling design rule 4 fully satisfied
+for the market brief. Full measurement + the remaining ~90-view/module inventory (deliberately not
+switched this round, named as follow-up):
+`docs/audits/ID2b_OPERATOR_ID_CONSUMER_SWITCH_2026-09-12.md`.
