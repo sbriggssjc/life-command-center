@@ -114,6 +114,25 @@ Ownership Resolution Engine; supersession tiers; the gov ownership-transition fe
 → `CLAUDE.md` §"BD spine", `docs/architecture/property-owner-subsystem.md`,
 `government-lease/docs/OWNERSHIP_RESOLUTION_ENGINE.md`
 
+### Government agency identity — the registry is WIRED (ID3a, 2026-09-12)
+
+gov `government_agencies` (65 rows) existed and nothing pointed at it. Now:
+`properties.agency_id` **0 → 7,369** / 20,509 · `property_agencies.agency_id` **160 → 119,361** /
+132,243 (**0.12% → 90.3%**). VA collapses **37 raw strings → 1 code** (2,063 properties), SSA
+**13 → 1** (1,248). One resolver (`gov_resolve_agency`, exact alias match, fails closed,
+service_role only), a hard write guard on BOTH columns (proven live: an unknown `agency_id` RAISEs),
+a reason-classified review lane (1,493 strings / 23,025 rows, raw text intact) and the first
+identity detector for the ID4 program, **run once and deliberately unscheduled**.
+⚠️ **The alias table is NOT seeded from `agency_canonical`** — measured, that column conflates
+federal agencies with same-named STATE bodies and COMMERCIAL lookalikes (`NAVY` is 145× *Navy
+Federal Credit Union*; `ICE` contains *Handel's Homemade Ice Cream*; `VA` folds in the Arkansas and
+Virginia state veterans departments). Every auto-applied row is a string a human enumerated;
+`(VA)` suffixes, `GSA - <occupant>` compounds and 14 codes with no registry row are routed, never
+guessed. Batch `id3a_20260912`, fully reversible.
+→ **`docs/audits/ID3a_GOV_AGENCY_IDENTITY_WIRING_2026-09-12.md`**; open follow-ups `ID3a-regdup`
+(the `CIS`/`USCIS` registry duplicate), `ID3a-registry-gaps`, `ID3a-gsa-compound`,
+`ID3a-detector-schedule`, `ID3a-consumer-switch`.
+
 ### Entity identity — one key, one writer, two tiers (P189 → PR5c-entities-c, 2026-09-03)
 `entities.canonical_name` is trigger-owned (N15c, drift 0 at 4,618 mints). `ensureEntityLink`'s
 canonical_name tier no longer scopes identity by `entities.domain` — a provenance tag, not a scope —
