@@ -1,4 +1,52 @@
-## 2026-09-12 — HP1-P1a-fix reconciled: code is merged, but live production is NOT confirmed running it (Cowork)
+# Claude Code queue — STATUS
+
+## 2026-09-12 🚨 — The monitor named `salesforce_sync` was green every day of the outage, watching a different pipe (Cowork)
+
+Scott deferred the `LCC_API_KEY` rotation until the build is complete and real users are added — recorded on
+**HP1-P1a-sec** with the one caveat the single-user rationale does not cover (the exposure is **repository** access,
+not app users; re-open at a second person with repo access or a visibility change, whichever comes first). Moved on
+to **HP1-P1d**, the last open item of HP1's Finding 2: *why did nothing notice for 36 days?*
+
+**The answer is not "the table wasn't registered."** Measured live:
+
+- `feed_freshness_registry` has exactly **two active rows** — `om_intake` and `salesforce_sync`. That is the entire
+  watched surface.
+- 🚨 **`salesforce_sync` watches a different Salesforce pipe entirely.** It reads `sf_sync_log.created_at`, and
+  `sf_sync_log` logged **220,845 rows across all 39 days** of the outage (`object_intake` 195,552 ok / 28,493
+  skipped / 16 error; `crawl_run` 949 ok). **The opportunity ingest writes nothing to `sf_sync_log`.** The monitor
+  was not silent — it answered "is the Salesforce feed healthy?" with a confident **yes**, daily, from a row whose
+  name says Salesforce and whose contents are a different producer. That row is *correct for what it watches*; it
+  must not be touched or "extended".
+- The registry's shape **cannot express** the assertion: it keys on `(src_table, ts_column)` and asks whether a
+  timestamp moved on a table. `bd_opportunities` has at least two producers — **619 rows against the feed's 608** —
+  so a table-keyed row would go green on an LCC-side write over a dead Salesforce pipe. Exactly the B6a trap.
+
+✅ **The machinery to use probably already exists:** `producer_runs` is **producer-keyed** and already carries
+`facts_written` and `skip_reason` — the precise two columns this defect needed — but holds **2 rows** and is
+effectively unused outside exec-briefs. Reviewing it before building anything is the prompt's first unit.
+
+Prompt written: `prompts/HP1-P1d-deal-backbone-feed-freshness.md`. Its predicate is
+`max(last_synced_at) FILTER (WHERE sf_opp_id IS NOT NULL)` — never bare `last_synced_at`, never `updated_at`. Its
+**deliverable is a positive control, not a green dashboard** (Class 11): green now · fires against a rolled-back
+back-dated feed · would have fired across the real 2026-08-04→09-12 window · and is **not cleared by touching an
+`sf_opp_id IS NULL` row**. If that last one fails, the assertion is table-keyed in disguise and the prompt says to
+stop rather than adjust the expectation.
+
+It also asks CC to reconcile rather than duplicate: Unit 3 already made `ingestBatch` return non-2xx when
+`total > 0 && succeeded === 0`. That catches **a run that fails**; this catches **a run that never happens**;
+neither covers the other, and the 36-day outage would have been caught by the HTTP one only if someone were reading
+Power Automate run bodies — nobody was, and the flow history was green throughout.
+
+⚠️ **Housekeeping, worth naming:** a parallel session reconciled the same two responses at 12:59 and prepended its
+entry **above** this file's H1, creating a duplicate `HP1-P1a-fix` backlog row and a now-false headline. Both
+corrected in place (row collapsed, entry re-titled and banner-corrected, H1 restored to the top). This is the third
+time today a session has buried the H1 by prepending — if it happens again, the fix is a convention note at the top
+of the file, not another manual repair.
+
+## 2026-09-12 — HP1-P1a-fix reconciled: code merged, live run not yet confirmed — ⚠️ SUPERSEDED 12 MINUTES LATER (Cowork, parallel session)
+
+⚠️ **Superseded, and kept for the record rather than rewritten.** This entry was filed at 12:59 UTC by a parallel session on an honest reading — *zero rows synced since 2026-09-09* — which was true when taken. The **12:47 UTC Power Automate run had in fact already landed**, and a second session verified it at 12:50: `updated_not_inserted = 608`, `brand_new_rows = 0`. See the ✅ entry above. Two things below are now false and are corrected here rather than deleted: (1) *"there is no live evidence it is actually deployed"* — there is: `tranquil-delight`'s `/version` reports `c91d5dabe932`, matching `main`; (2) the implied conclusion that the fix was not working — it was not working, but for a reason this reading could not see: **the migration had never been applied, and the function as written raised 42702 on its first call.** Both were found and fixed at ~12:41. The 🟡 backlog row this entry created has been collapsed into the ✅ one.
+
 
 Reconciling two Claude Code desktop responses sitting in `docs/claude-code/responses/` against git
 history. Both `HP1-P1a-fix-opportunity-upsert-never-updated.response.md` (Units 2-5: the RPC-first
@@ -22,7 +70,6 @@ verification step, once Railway is redeployed:** wait for the next PA sync cycle
 
 Docs updated: `PLANNED-BACKLOG.md` (HP1-P1a-fix row corrected from 🔴 to 🟡 with live measurement);
 2 response files moved to `responses/done/`.
-# Claude Code queue — STATUS
 
 ## 2026-09-12 ✅ — HP1-P1a-fix CLOSED: 608 UPDATED, not inserted — the Salesforce feed writes for the first time (Cowork)
 
