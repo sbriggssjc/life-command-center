@@ -674,6 +674,35 @@ merged today.
   row and understates a `cap_rate_history` loss.** Substantive / re-derivable / queue are three
   policies, and the fold must state which applies per table rather than infer it from the name.
 
+### 🚨 TWO BRANCHES THAT BOTH *ADD* TO A SHARED DOC MERGE CLEANLY AND SILENTLY DUPLICATE IT — ONLY A GUARD CATCHES IT (BACKLOG-ids, 2026-09-12)
+
+`PLANNED-BACKLOG.md` and `STATUS.md` are append-mostly files that every session and every parallel agent writes
+to. Git's 3-way merge sees two pure **insertions** at different offsets, finds **no textual conflict**, and keeps
+**both**. Nobody is warned, and nothing is wrong with either side in isolation.
+
+Measured, the same day, twice over:
+- A dedupe PR fixed 27 duplicate backlog IDs correctly. A concurrent PR then merged `MB2a`/`MB3`/`MB4` restatement
+  rows into `main`. The merge was clean; the duplication the PR existed to remove was **reintroduced on its own
+  branch**, plus malformed extra table columns from the earlier bad merges.
+- `STATUS.md` passed its line budget locally at 2,465, then a merge from `main` added 74 lines and it failed CI at
+  **2,503**. Twice, on two different PRs.
+
+**Therefore:**
+1. **A shared append-mostly doc needs a CI guard, not a convention.** Prose conventions have failed here five
+   times in one day on a single rule. Live guards: `test/backlog-id-uniqueness.test.mjs` (one row per ID),
+   `test/backlog-table-shape.test.mjs`, `test/status-header-integrity.test.mjs` (H1 on line 1),
+   `test/status-line-budget.test.mjs` (≤ 2,500 lines).
+2. **A green local run proves nothing about the merge.** Re-run the doc guards **after** merging `main` into your
+   branch, before pushing — and for the line budget, archive an old span to `docs/history/` **before** you push,
+   leaving 200+ lines of headroom rather than trimming to fit.
+3. **Never resolve a doc duplicate by deleting a row.** Classify first: two unrelated issues sharing an ID is a
+   **collision** — rename the newer one, keep the ID where more citations already point (count them), and leave a
+   pointer so old references resolve. The same issue written twice is a **restatement** — collapse it keeping
+   every distinct fact, and where two copies disagree on a number, **report the conflict and keep both readings
+   with their dates**; never silently pick one.
+4. **Edit the row, don't restate it.** Every one of the 14 restatement groups began as a session appending a fresh
+   row instead of amending the existing one.
+
 ### ⚠️ A CANONICAL TOPIC PAGE GOES STALE ON ITS OWN TOPIC FIRST — UPDATE IT IN THE SAME CHANGE (2026-09-08)
 
 Twice in one week the arc's *canonical page* was the last thing to learn what the arc found, while
