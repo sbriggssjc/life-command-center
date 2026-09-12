@@ -1,3 +1,29 @@
+## 2026-09-12 — CONSOLIDATE2's first flagged contradiction resolved: the stale "FINAL STATE" box defused (Cowork)
+
+Continuing the doc-consolidation work after CONSOLIDATE2 (round 2) flagged three canonical-doc
+contradictions without resolving them. Picked off the first, most directly actionable one:
+`docs/architecture/document-capture-and-ocr-status.md` already carried an accurate redirect banner
+at the very top pointing to `document-capture-ocr-and-deeds.md` as canonical — but immediately below
+it sat a large `✅ FINAL STATE 2026-08-12 — THE WHOLE OCR LOOP IS CLOSED AND LIVE. READ THIS, DON'T
+REBUILD.` box whose present-tense imperative wording could override the redirect on a skim-read,
+exactly as CONSOLIDATE2 warned ("a reader following the first alone would miss DOC17/DOC18").
+
+**Fix, not a rewrite:** retitled the box `⚠️ HISTORICAL — FINAL STATE AS OF 2026-08-12 ONLY`, named
+the newer canonical doc and its DOC17/DOC18 currency explicitly inside the box itself (not just in
+the banner above it), and reworded "the durable operating state" to "the operating state AS OF
+2026-08-12" so the numbers that follow read as a dated snapshot rather than a standing claim.
+**Nothing below the box was touched** — same historical narrative, same numbers, per REGISTRY.md's
+never-delete rule. This is a framing fix, not a fact correction: everything in the box was true on
+2026-08-12 and still is, as history.
+
+The other two CONSOLIDATE2 contradictions (`tier0-owner-contact-system.md` not re-verified against
+its own P197/P198 corrections; scattered "LIVE"/"SHIPPED" language predating a same-day correction,
+e.g. the FRED/CMS verdict) remain open — left for a follow-up pass, same as CONSOLIDATE2 left them.
+
+Also filed: `responses/consolidate 2 desktop response.docx` moved to `responses/done/` (matches the
+already-merged CONSOLIDATE2 commit `9364ec1e`).
+
+Docs updated: `docs/architecture/document-capture-and-ocr-status.md` (FINAL STATE box retitled).
 ## Open threads (updated 2026-09-12 — table moved to the TOP of this file by Cowork; new entries go BELOW the `---`)
 
 One-line read on each active multi-round thread. Full narrative for anything older than this file's
