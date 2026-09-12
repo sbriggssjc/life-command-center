@@ -1,5 +1,20 @@
 # Claude Code queue — STATUS
 
+## 2026-09-12 — ID3a-d reconciled: ownership table settled (LCC owns Dialysis_DB); blast radius measured at 188 live objects; drift run still owed
+
+Filed `responses/ID3a-d desktop response.docx` → `done/`; prompt → `prompts/done/`. ID3a-d shipped on branch
+`claude/id3a-d-db-ownership` — **PR #2352 is OPEN, not merged; `main` is still at #2351**, so the retirement README, the
+CI guard and the drift-check design are not on `main` yet. It wrote the ownership table into `CLAUDE.md`/I16/`REGISTRY.md`,
+marked all 213 `migrations/government/*` files historical (README + per-file header, naming the stale canonicalizer and the
+two mappings a re-apply would restore), added a CI guard against new gov migrations landing here, and **refused to fabricate
+a drift result** it had no DB access to produce — the right call. **Cowork measured what ID3a-d could not:** of the 194
+objects those retired files define, **188 are live right now (86 functions, 102 views)** — the retirement is a live-overwrite
+hazard, not housekeeping. Live gov census: 277 functions, 252 views, 91 triggers. 👤 **Scott decided: `life-command-center`
+owns Dialysis_DB**, not the Dialysis repo as ID3a-d proposed — the operator registry, aliases, guards, comps engine and
+market-brief producers all ship from here, and declaring otherwise would orphan this week's ID2a work; the Dialysis repo owns
+CMS/NPI **ingestion** (rows, not schema). That closes **ID3a-d-dia**: LCC's 277 `migrations/dialysis/*` stay live and owned,
+and must NOT be retired. New row **ID3a-e**: run the drift detector for real in a session that has both repos, report the
+drift list, then schedule it. **Next:** merge PR #2352, then ID3e (county vocabulary) or MB-b (the visible brief).
 ## 2026-09-12 — HP1 filed: the homepage Today 500 root-caused, and My Work / Inbox measured as pre-doctrine widgets
 
 Live read-only Cowork triage of Scott's screenshot (all three Today lanes showing `HTTP 500`; My Work

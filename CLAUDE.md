@@ -367,6 +367,13 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
 to. Do not write new gov DB objects here, and do not re-apply an old one: found 2026-09-12, LCC's committed
 `canonicalize_agency()` is older than live (no state-qualifier guard, old ICE/CBP branch order), so re-running it would
 silently restore `TEXAS DEPARTMENT OF AGRICULTURE → USDA` and `Immigration & Customs Enforcement → CBP`. Before editing
+any DB object, read its **deployed** definition and know which repo owns it (invariant I16). **Ownership table (Scott, 2026-09-12):**
+
+| database | owning repo | note |
+|---|---|---|
+| government | **`government-lease`** | LCC's `supabase/migrations/government/*` (213 files) is historical — **188 of the 194 objects they define are live right now**, so re-applying one overwrites a running object |
+| Dialysis_DB | **`life-command-center`** | where the work happens: operator registry, aliases, write guards, comps engine, market-brief producers. The Dialysis repo owns its CMS/NPI **ingestion** (rows, not schema) — if it needs a schema change, it lands here |
+| LCC Opps | **`life-command-center`** | this repo is the app |
 any DB object, read its **deployed** definition and know which repo owns it (invariant I16).
 
 ✅ **ID3a-d SHIPPED 2026-09-12 — every database now has a named owner, measured, not guessed.**

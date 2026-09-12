@@ -227,3 +227,35 @@ county/SOS lookup (the population the new sidepanel Save flow in §7a actually c
   `v_lcc_research_lane_summary.open_tasks` for this lane before and after, per the A2/C2e-T2a
   discipline.
 - **Filed:** `PLANNED-BACKLOG.md` §P3/PR-scanner (row `PR-scanner-3`).
+
+## 7c. `county_records_needed` — MEASURED LIVE 2026-09-12 (Cowork), unblocking items (1) and (2) above
+
+Ran the measurements §7b said were needed, now that DB access is available.
+
+- **Item (1), population — real and non-trivial.** Of gov's 68 currently `human_actionable` tasks in
+  `v_lcc_ownership_history_lane_split` with `action` in (`mismatch`, `all_guarded`), joined locally
+  (`source_record_id` = gov `properties.property_id`) against gov's own `parcel_records` /
+  `tax_records` / `deed_records` — **excluding** the `ai_gpt4o_presumed`/`ai_recall_gpt` model leg
+  (§2a of `public-records-source-lane.md`; real sources only, i.e. `costar_sidebar` parcel/tax rows and
+  any `deed_records` row) — **27 of 68 (40%) carry no trustworthy public record on file at all.**
+  That is a real, sizable, correctly-scoped population for the sixth action: a property genuinely has
+  nothing to draw from, as opposed to having a record that disagrees or is fully guarded away.
+- **Item (2), no duplication of `no_records`/`all_guarded` — confirmed by design, not just by absence
+  of overlap.** `all_guarded` rows are deliberately INCLUDED in the 68 (not excluded), because
+  "every transfer on file was guard-rejected" and "no record exists at all" are two different reasons
+  for the same stuck state, and `county_records_needed` exists to tell them apart — not to re-litigate
+  A4/A4b's retirement logic. `no_records` itself is correctly absent from today's split (all 74 already
+  retired by A4, per `ownership-history-lane.md` §2).
+- **Item (3), predicted vs. actual `open_tasks` delta — still open.** This needs the migration to exist
+  before it can be measured against a before/after read, per the A2/C2e-T2a discipline §7b names.
+- **Same session, a related adoption finding (not this action, but the same page):** the PR-scanner-1/2
+  writers this action would route people TO (`assessor_sidebar_manual`, `recorder_sidebar_manual`,
+  `llc_member`/`llc_manager`) have **zero rows on either domain**, nine days after shipping — the exact
+  same "capture path works, nobody has used it yet" shape AC11 already documented for the SOS leg
+  alone (`account-based-contact-intelligence.md` §8). **This action is arguably the fix for that
+  adoption gap**, not a separate concern: today there is no ranked "go scan this property next" signal
+  anywhere, so it is unsurprising the sidepanel has never been used. Shipping `county_records_needed`
+  gives the 27-property population (and its gov-wide equivalent, not yet measured beyond this
+  `human_actionable` slice) a reason to open the sidepanel at all.
+- **Build prompt drafted:** `docs/claude-code/prompts/PR-scanner-3-county-records-needed-action.md`.
+- **Filed:** `PLANNED-BACKLOG.md` row `PR-scanner-3` updated in place with these numbers.
