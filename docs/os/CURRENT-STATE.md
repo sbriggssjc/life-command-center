@@ -143,8 +143,54 @@ Virginia state veterans departments). Every auto-applied row is a string a human
 `(VA)` suffixes, `GSA - <occupant>` compounds and 14 codes with no registry row are routed, never
 guessed. Batch `id3a_20260912`, fully reversible.
 → **`docs/audits/ID3a_GOV_AGENCY_IDENTITY_WIRING_2026-09-12.md`**; open follow-ups `ID3a-regdup`
-(the `CIS`/`USCIS` registry duplicate), `ID3a-registry-gaps`, `ID3a-gsa-compound`,
-`ID3a-detector-schedule`, `ID3a-consumer-switch`.
+(the `CIS`/`USCIS` registry duplicate), `ID3a-registry-gaps`, `ID3a-detector-schedule`,
+`ID3a-consumer-switch`.
+
+✅ **ID3a-b (same day) fixed `agency_canonical` itself — closing `ID3a-gsa-compound` and most of
+`ID3a-canonical-repair`.** `canonicalize_agency()` no longer conflates: NAVY **150 → 3** properties
+(the 145 *Navy Federal Credit Union* rows now resolve NULL, routed to review as
+`private_company_name_collision`), STATE **213 → 9** (bare `\mstate\M` — which matched "State of
+Texas", "Washington State Dept of Social and Health Services" and even "DEPARTMENT OF STATE HEALTH
+SERVICES" — replaced with a closed allowlist of the actual federal Dept-of-State spellings), bare
+DOC **16 → 1** (routed to review as `ambiguous_doc_commerce_or_corrections` — `DOC&PS` reads state
+Corrections, not Commerce), and — found while shipping, not in the original brief — ICE **44 → 43**
+(*"Handel's Homemade Ice Cream & Yogurt"*). `RICHMOND FIELD OFFICE (VA)` and every trailing
+`"(XX)"` state-code suffix is now stripped before any match, generally. `GSA - <occupant>` compounds
+(624 properties / 106 raw strings, not the ~168/944 first estimated) keep `agency_canonical='GSA'`
+as the lease counterparty and gain a second `using_agency_canonical`/`using_agency_full` pair for
+the occupant. ⚠️ **DOJ/EPA/DOL/ED/DOT carry the identical state-body-conflation shape and are
+confirmed still live** (`TEXAS JUVENILE JUSTICE DEPARTMENT` reads DOJ, etc.) — filed **ID3a-c**,
+not fixed here. Migration
+`supabase/migrations/government/20260912030000_gov_id3ab_agency_canonicalizer_contamination_fix.sql`,
+reversible (`_gov_id3ab_agency_backup_20260912`); guard `test/gov-id3ab-agency-canonicalizer.test.mjs`.
+The separate `government_agencies`/`gov_agency_aliases` FK registry from ID3a is untouched by this
+change — display column and FK registry are two different systems, on purpose.
+
+⚠️ **The migration file cited above (`supabase/migrations/government/20260912030000_...sql`) is
+now HISTORICAL, not live (ID3a-d, same day).** `government-lease` — not this repo — owns the
+government database's objects; that repo's own PR #398 shipped the real, currently-deployed
+canonicalizer fix (with a state-qualifier guard and the corrected ICE/CBP branch order this repo's
+copy lacks). This repo's `supabase/migrations/government/` directory is retired
+(`README.md` + a per-file header on all 213 files); never re-apply anything from it. See
+`CLAUDE.md` → "ONE REPO OWNS EACH DATABASE'S OBJECTS" for the full ownership table covering
+government, Dialysis_DB and LCC Opps.
+
+### County/city vocabulary fold — I14, never merges across state (ID3e, 2026-09-12)
+
+gov `properties.{county,city}` and dia `medicare_clinics.city` each gained a STORED generated
+`*_norm` column keyed on `(normalized_name, lower(trim(state)))` as a **pair** — county/city alone
+is never the key. Punctuation normalizes to a space (never deleted), so a Virginia independent
+city's `(city)`/`city` token survives and `RICHMOND (CITY)` / `Richmond city` fold together while
+never colliding with a same-named county; cross-state same-name counties (`St Louis` MN vs MO,
+`LaSalle` IL vs TX) verified to carry distinct keys. Two corrupted-state rows route to a review
+view, untouched. Fold sizes (live, 2026-09-12): gov county/state 2,445→1,611 (834 collapse), gov
+city/state 3,454→3,225, dia city/state 4,367→3,635. This is I14 (controlled-vocabulary
+normalization) — a different mechanism than ID3a's FK/registry wiring; no consumer has been
+repointed to the new columns yet. dia `property_type` was measured and scoped OUT (a taxonomy
+question, not a case fold) — filed `ID3e-property-type-taxonomy`.
+→ `docs/os/PLANNED-BACKLOG.md` §ID3e; migrations
+`supabase/migrations/{government,dialysis}/20260912120000_*_id3e_*_vocab_fold.sql`; guard
+`test/id3e-migration-shape.test.mjs`.
 
 ### Entity identity — one key, one writer, two tiers (P189 → PR5c-entities-c, 2026-09-03)
 `entities.canonical_name` is trigger-owned (N15c, drift 0 at 4,618 mints). `ensureEntityLink`'s

@@ -31,6 +31,7 @@ or *historical* (kept for history; never edit/wire).
 | Knowledge (voice/frameworks/personal) | `_AI-Context/Copilot-Context/BRIGGS-*` (SharePoint) |
 | Write governance | `WRITE_SURFACE_POLICY.md` |
 | Infra topology | `docs/architecture/infrastructure-topology.md` |
+| Database ownership (which repo owns which Supabase project's migrations) | `CLAUDE.md` → "ONE REPO OWNS EACH DATABASE'S OBJECTS" (ID3a-d, 2026-09-12) |
 
 ## B. Reference (stable context; not a rule source)
 - `docs/architecture/lcc_intelligent_operating_system_v2.md` — the founding OS vision (informs the canon).

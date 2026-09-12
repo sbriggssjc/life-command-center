@@ -1,3 +1,9 @@
+-- ⚠️ HISTORICAL — DO NOT RE-APPLY. This directory does not own the government database;
+-- `government-lease` does (see supabase/migrations/government/README.md, 2026-09-12).
+-- This file is kept as a record of what this repo applied in the past. The live, correct
+-- copy of any object it defines may have since diverged -- read the deployed database or
+-- government-lease's committed source, never this file, before trusting its content.
+
 -- ============================================================================
 -- W3.6b — bulk-refresh the OPEN gov cap_mismatch comp-review rows off the ENGINE
 -- NOI, auto-resolve the reconciling set, and write-through confirmed-lease NOI to

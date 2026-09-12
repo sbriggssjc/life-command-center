@@ -1,3 +1,9 @@
+-- ⚠️ HISTORICAL — DO NOT RE-APPLY. This directory does not own the government database;
+-- `government-lease` does (see supabase/migrations/government/README.md, 2026-09-12).
+-- This file is kept as a record of what this repo applied in the past. The live, correct
+-- copy of any object it defines may have since diverged -- read the deployed database or
+-- government-lease's committed source, never this file, before trusting its content.
+
 -- CONNECTIVITY #1b broad-drain gate (gov): final eligibility view — excludes the
 -- attribution / amount / date artifact classes (mirror of dia + the SQL guard
 -- public.lcc_owner_name_is_junk). NARROW — CMBS-shelf-code/year-series NOT used
