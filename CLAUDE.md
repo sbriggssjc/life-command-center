@@ -360,6 +360,16 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
 
 ## Core doctrines (apply to every change)
 
+### 🗄️ ONE REPO OWNS EACH DATABASE'S OBJECTS (Scott, 2026-09-12)
+
+`government-lease` owns the **government** DB's migrations, functions, views and triggers. This repo's
+`supabase/migrations/government/*` (213 files) is **historical** — the record of what was applied, not a place to add
+to. Do not write new gov DB objects here, and do not re-apply an old one: found 2026-09-12, LCC's committed
+`canonicalize_agency()` is older than live (no state-qualifier guard, old ICE/CBP branch order), so re-running it would
+silently restore `TEXAS DEPARTMENT OF AGRICULTURE → USDA` and `Immigration & Customs Enforcement → CBP`. Before editing
+any DB object, read its **deployed** definition and know which repo owns it (invariant I16). The owning repo for the
+dialysis and LCC Opps databases is still to be named — backlog **ID3a-d**.
+
 ### 🧭 TRUTH IS FIXED AT ITS SOURCE OF RECORD — NEVER PATCHED WHERE IT SHOWS (Scott, 2026-09-11)
 
 Scott: *"for any of these factual errors, we want to track the source to ensure that the truth persists in all
