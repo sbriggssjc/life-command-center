@@ -2036,27 +2036,85 @@ async function getBdWorklist(req, res, user, workspaceId) {
 //     loan_maturity and ownership_chain are deliberately excluded (see
 //     today-sections.js header for why).
 // ============================================================================
-async function getTodaySections(req, res, user, workspaceId) {
+// HP1 Finding 1 (P0, 2026-09-12) — settle a Promise that may REJECT (opsQuery's
+// fetchWithTimeout throws on abort; it does not resolve {ok:false}) into the
+// same {ok,status,data} shape domainSelect already fails soft into. Without
+// this, one slow source (the seller-prospect view crossing its timeout on a
+// cold shared-buffer cache) rejects the whole `Promise.all` and 500s all THREE
+// Today lanes at once — the exact symptom Scott reported (one endpoint, drawn
+// three times). `Promise.allSettled` + this mapper means a thrown source
+// degrades ONLY its own lane; every other source is untouched.
+function settledQueryResult(settled, label) {
+  if (settled.status === 'fulfilled') return settled.value;
+  const reason = settled.reason;
+  const msg = (reason && reason.message) ? String(reason.message).slice(0, 200) : String(reason || 'unknown error');
+  console.error(`[today_sections] source "${label}" threw:`, reason && reason.stack || reason);
+  return { ok: false, status: 0, data: null, error: msg };
+}
+
+export async function getTodaySections(req, res, user, workspaceId) {
   const limit = (() => {
     const n = Number(req.query.limit);
     return (Number.isFinite(n) && n > 0 && n <= 25) ? Math.floor(n) : TODAY_SECTION_LIMIT;
   })();
 
+  // 1c: none of these six calls' `.count` is ever read below (each section's
+  // `total_open` is the RETURNED array length, not the header count) — so
+  // `Prefer: count=exact` buys nothing here and only pays for it. Measured:
+  // the exact COUNT(*) PostgREST runs in ADDITION under count=exact costs
+  // ~750ms on v_lcc_seller_prospect_queue alone (docs/HP1 Finding 1). Dropped
+  // to 'estimated' on ALL FOUR ops-side reads, seller-prospect included —
+  // checked first that no rule requires exact here (there is no reader).
+  // 1a: the seller-prospect view is the one measured to cross the OLD 8s
+  // default on a cold cache (EXPLAIN ANALYZE ~1.6s warm; several-fold longer
+  // cold) — it gets the most headroom. The other three are lighter aggregates
+  // but get real headroom too rather than a bare guess.
   const [
-    sellerQR, bdOppR, actionItemsR, lccUrgentR, ocGovR, ocDiaR,
-  ] = await Promise.all([
-    opsQuery('GET', 'v_lcc_seller_prospect_queue?select=*&order=rank_value.desc.nullslast,years_into_term.asc.nullslast&limit=200', null, { countMode: 'exact' }),
-    opsQuery('GET', 'bd_opportunities?select=id,entity_id,type,stage,amount,expected_close_date,opened_at&is_open=eq.true&order=amount.desc.nullslast&limit=200', null, { countMode: 'exact' }),
-    opsQuery('GET', "action_items?select=id,entity_id,action_type,title,priority,due_date,status&status=in.(open,in_progress)&order=due_date.asc.nullslast&limit=200", null, { countMode: 'exact' }),
-    opsQuery('GET', 'v_lcc_bd_worklist?select=signal_type,source_domain,property_id,entity_id,what,who,rank_value,city,state&signal_type=eq.contact_writeback&order=rank_value.desc.nullslast&limit=200', null, { countMode: 'exact' }),
+    sellerQS, bdOppQS, actionItemsQS, lccUrgentQS, ocGovR, ocDiaR,
+  ] = await Promise.allSettled([
+    opsQuery('GET', 'v_lcc_seller_prospect_queue?select=*&order=rank_value.desc.nullslast,years_into_term.asc.nullslast&limit=200', null, { countMode: 'estimated', timeoutMs: 20000 }),
+    opsQuery('GET', 'bd_opportunities?select=id,entity_id,type,stage,amount,expected_close_date,opened_at&is_open=eq.true&order=amount.desc.nullslast&limit=200', null, { countMode: 'estimated', timeoutMs: 12000 }),
+    opsQuery('GET', "action_items?select=id,entity_id,action_type,title,priority,due_date,status&status=in.(open,in_progress)&order=due_date.asc.nullslast&limit=200", null, { countMode: 'estimated', timeoutMs: 12000 }),
+    opsQuery('GET', 'v_lcc_bd_worklist?select=signal_type,source_domain,property_id,entity_id,what,who,rank_value,city,state&signal_type=eq.contact_writeback&order=rank_value.desc.nullslast&limit=200', null, { countMode: 'estimated', timeoutMs: 12000 }),
     domainSelect('gov', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id,recorded_owner_name,latest_deed_grantee,conflict_kind,annual_rent,city,state&order=annual_rent.desc.nullslast&limit=100'),
     domainSelect('dia', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id,recorded_owner_name,latest_deed_grantee,conflict_kind,annual_rent,city,state&order=annual_rent.desc.nullslast&limit=100'),
   ]);
+
+  const sellerQR = settledQueryResult(sellerQS, 'v_lcc_seller_prospect_queue (significant)');
+  const bdOppR = settledQueryResult(bdOppQS, 'bd_opportunities (important)');
+  const actionItemsR = settledQueryResult(actionItemsQS, 'action_items (urgent: deal correspondence)');
+  const lccUrgentR = settledQueryResult(lccUrgentQS, 'v_lcc_bd_worklist (urgent: pipeline hygiene)');
+  // domainSelect already fails soft internally (try/catch around its own
+  // fetch) — Promise.allSettled never sees a rejection from these two, but
+  // routing them through the same settler keeps one shape for every source.
+  const ocGov = settledQueryResult(ocGovR, 'gov v_owner_source_conflict');
+  const ocDia = settledQueryResult(ocDiaR, 'dia v_owner_source_conflict');
 
   const significantRows = sellerQR.ok ? (sellerQR.data || []) : [];
   const bdOppRows = bdOppR.ok ? (bdOppR.data || []) : [];
   const actionItems = actionItemsR.ok ? (actionItemsR.data || []) : [];
   const lccUrgentRows = lccUrgentR.ok ? (lccUrgentR.data || []) : [];
+
+  // 1b: a source that failed THIS request is named, never silently rendered
+  // as an empty-but-healthy lane (which would read as a false all-clear on a
+  // seller-prospect/pipeline-hygiene queue). Each string is short + honest —
+  // the HTTP status or the caught error, never the raw stack.
+  const describeFailure = (r, fallback) => {
+    if (r.ok) return null;
+    if (r.error) return r.error;
+    if (r.status) return `HTTP ${r.status}`;
+    return fallback;
+  };
+  const sourceErrors = {
+    significant: describeFailure(sellerQR, 'seller-prospect queue unavailable'),
+    important: describeFailure(bdOppR, 'bd_opportunities unavailable'),
+    actionItems: describeFailure(actionItemsR, 'action_items unavailable'),
+    // The bd_worklist half of Urgent is fed by THREE sources (lcc + gov + dia
+    // owner-conflict); name it degraded if the LCC leg failed — a failed
+    // domain leg alone just thins the rows (P131: never fabricate, never
+    // escalate a partial thinning to a full-lane failure).
+    bdWorklist: describeFailure(lccUrgentR, 'v_lcc_bd_worklist unavailable'),
+  };
 
   // The Urgent bd_worklist half reuses the SAME normalize+dedup+rank pure
   // function the full worklist uses (assembleBdWorklist) — never a second,
@@ -2064,28 +2122,35 @@ async function getTodaySections(req, res, user, workspaceId) {
   const bdWorklistRows = assembleBdWorklist({
     lcc: lccUrgentRows,
     owner_conflict: {
-      gov: ocGovR.ok ? ocGovR.data : [],
-      dia: ocDiaR.ok ? ocDiaR.data : [],
+      gov: ocGov.ok ? ocGov.data : [],
+      dia: ocDia.ok ? ocDia.data : [],
     },
   });
 
   // entity name lookup — bd_opportunities/action_items carry no FK for
   // PostgREST to embed (P132: never trust an unhinted embed), so resolve
-  // names with one bounded fetch instead of N+1s.
+  // names with one bounded fetch instead of N+1s. Guarded the same way as the
+  // six sources above: a thrown lookup degrades to "no names resolved" (the
+  // caller already falls back to the raw entity_id), never a 500 for the
+  // whole endpoint.
   const entityIds = [...new Set([
     ...bdOppRows.map((r) => r.entity_id),
     ...actionItems.map((r) => r.entity_id),
   ].filter(Boolean))];
   const entityById = new Map();
   if (entityIds.length) {
-    const idsFilter = entityIds.map((id) => encodeURIComponent(id)).join(',');
-    const enR = await opsQuery('GET', `entities?select=id,name&id=in.(${idsFilter})`, null, { countMode: 'none' });
-    if (enR.ok) for (const e of (enR.data || [])) entityById.set(e.id, e.name);
+    try {
+      const idsFilter = entityIds.map((id) => encodeURIComponent(id)).join(',');
+      const enR = await opsQuery('GET', `entities?select=id,name&id=in.(${idsFilter})`, null, { countMode: 'none' });
+      if (enR.ok) for (const e of (enR.data || [])) entityById.set(e.id, e.name);
+    } catch (e) {
+      console.error('[today_sections] entity name lookup threw:', e && e.stack || e);
+    }
   }
 
   const sections = assembleTodaySections({
     significantRows, bdOppRows, actionItems, bdWorklistRows, entityById,
-  }, { limit });
+  }, { limit, sourceErrors });
 
   return res.status(200).json({ ok: true, ...sections });
 }
