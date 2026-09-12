@@ -17,6 +17,22 @@
 //
 // It is 0 until a human confirms a sponsor family. Read the A3 section below.
 //
+// PR-scanner-3 (2026-09-12) added a SIXTH action, `county_records_needed`, as a
+// RECLASSIFICATION of `mismatch`/`all_guarded` (never `agrees`/`sponsor_spe`/
+// `no_records`) when the gov property carries NO trustworthy public record on
+// file at all (no costar_sidebar parcel/tax capture, no non-model-leg deed —
+// see api/_shared/gov-property-record-coverage.js). Re-measured live
+// 2026-09-12: of 68 human_actionable mismatch/all_guarded tasks, 27 (40%)
+// reclassify; fleet-wide (254 tasks) it is 126 (49.6%). This names which
+// properties Scott's manual scan (PR-scanner-1/2's sidepanel capture,
+// PR-scanner-5's /api/recorder-portal "go here next" link) should actually
+// visit, as distinct from "we hold a record and it disagrees" (stays
+// mismatch/all_guarded) or "we looked and truly have nothing" (no_records,
+// A4-retired). It is gov-only by construction (the lane itself is gov-only —
+// dia has no `v_ownership_transitions_portfolio`, per B1) and reuses B1's
+// EXISTING human value floor unchanged — human_actionable is computed
+// upstream of the action label and does not read it.
+//
 // ⚠️ THE CLASSIFIER LIVES IN SQL AND ONLY IN SQL.
 // `v_lcc_ownership_history_lane_split.action` is the single owner of this
 // decision. This module carries the vocabulary and the query shape, never a
@@ -45,7 +61,7 @@ export const OWNERSHIP_LANE_ACTIONS_VIEW = 'v_lcc_ownership_history_lane_actions
 // decisions, and only the first has been graded. A2 is untouched and `agrees` must not move.
 // Extending A2 to consume `sponsor_spe` is A3b -- named, sized, not built.
 export const OWNERSHIP_LANE_ACTIONS = Object.freeze([
-  'mismatch', 'all_guarded', 'sponsor_spe', 'agrees', 'no_records',
+  'mismatch', 'all_guarded', 'county_records_needed', 'sponsor_spe', 'agrees', 'no_records',
 ]);
 
 // A3: the three-way sub-classification of a `mismatch` chain. Vocabulary only — the SQL
@@ -77,7 +93,9 @@ export const OWNERSHIP_LANE_PENDING_STATES = Object.freeze([
 // to label a chip.
 // `sponsor_spe` is NOT here: a confirmed sponsor family has been answered, so the chain is no
 // longer a question for a human. The view's `human_actionable` column remains the authority.
-export const OWNERSHIP_LANE_HUMAN_ACTIONS = Object.freeze(['mismatch', 'all_guarded']);
+// `county_records_needed` IS a human action -- it is a reclassification of mismatch/all_guarded
+// (PR-scanner-3), never a new state, so it stays in the same human-needed set.
+export const OWNERSHIP_LANE_HUMAN_ACTIONS = Object.freeze(['mismatch', 'all_guarded', 'county_records_needed']);
 
 export function isOwnershipLaneAction(v) {
   return OWNERSHIP_LANE_ACTIONS.includes(String(v || ''));

@@ -1,5 +1,36 @@
 # Claude Code queue — STATUS
 
+## 2026-09-12 — PR-scanner-3 shipped: `county_records_needed`, the sixth ownership-history-lane action
+
+Re-measured live before building (unchanged from the 2026-09-12 sizing already in `PLANNED-BACKLOG.md`):
+of gov's 68 `human_actionable` `mismatch`/`all_guarded` tasks in `v_lcc_ownership_history_lane_split`,
+27 (40%) carry no trustworthy `parcel_records`/`tax_records`/`deed_records` on file; fleet-wide (254
+tasks) it is 126 (49.6%). The spec's `ai_gpt4o_presumed` model-leg label does not exist as a literal in
+gov's tables — the live tag is `ai_recall_gpt` (11 deed / 23 parcel / 14 tax rows), used instead.
+Shipped as a RECLASSIFICATION inside the existing split (mirroring A3's `sponsor_spe` precedent) rather
+than a new lane/table. Cross-database constraint (the view is on LCC Opps, the source tables on the gov
+project) solved with a small mirror table (`lcc_gov_property_record_coverage`) synced by
+`api/_shared/gov-property-record-coverage.js`; the SQL CASE in the view stays the single owner of the
+classification, and an unsynced property (`IS FALSE`, never `= false`) is left at its base action —
+never guessed into the reclassification on an absence of information. Reuses B1's existing
+`lcc_chain_human_value_floor()` unchanged.
+
+Predicted-vs-actual delta was **exact**: `mismatch` 192→101, `all_guarded` 62→27,
+`county_records_needed` 0→126, `human_actionable` held at 68 (split 37/4/27), `agrees`/`sponsor_spe`
+untouched. Wired the first live consumer of PR-scanner-5's previously-unwired `/api/recorder-portal`
+route: a "County portal →" button on these cards (`researchOpenCountyPortal`, `ops.js`).
+
+Migration `supabase/migrations/20260912150000_lcc_pr_scanner3_county_records_needed_action.sql`
+(applied live to LCC Opps + coverage table seeded for today's 254-property population). Guards:
+`test/ownership-lane-split.test.mjs` (6 new/updated assertions) + `test/gov-property-record-coverage.test.mjs`
+(7 behavioural tests, injected deps). Full suite: 6,022 pass / 0 fail (6 pre-existing skips, unrelated).
+
+**Not done — an operator/scheduling step:** `syncGovPropertyRecordCoverageForOwnershipLane()` is not
+yet wired to a cron; today's mirror was seeded once against the live population this measurement
+covers. As PR-scanner-1/2's capture writers get adopted (still 0 rows on either domain per the
+2026-09-12 research-workbench.md §7c note), the mirror needs a periodic re-sync to stay current.
+Docs updated in the same change: `PLANNED-BACKLOG.md` (row `PR-scanner-3`), `research-workbench.md`
+§7d, `ownership-history-lane.md` §5.
 ## 2026-09-12 — ID2b partially shipped: market brief's operator-count source switched to `operator_id`; comps/CM/dossier measured and deferred
 
 Executed `prompts/ID2b-consumer-switch-to-operator-id.md`. **Re-measured the population first: the real grep hit is
