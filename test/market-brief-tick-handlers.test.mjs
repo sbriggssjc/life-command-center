@@ -82,6 +82,6 @@ test('handleMarketBriefTab rejects an unknown lane with 400', async () => {
   // body the status must be 400 with the lane list.
   if (res.body && res.body.available_lanes) {
     assert.equal(res.statusCode, 400);
-    assert.deepEqual(res.body.available_lanes, ['dialysis', 'government', 'net_lease', 'broad_net_lease']);
+    assert.deepEqual(res.body.available_lanes, ['dialysis', 'government', 'net_lease']);
   }
 });

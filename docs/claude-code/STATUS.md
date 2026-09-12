@@ -45,6 +45,52 @@ spoofed UA was refused, per the task. Handled Google News's redirect-URL + broad
 auto-resolves on a real item). `MARKET_BRIEF_PRSS` left OFF — no live egress this session to confirm
 facts actually flow; Cowork's prior fetch predates this code. Suite 6,130/0/6-skipped. Backlog
 `docs/os/PLANNED-BACKLOG.md` §P18 MB2a; spec addendum in `EXEC-BRIEFS-SPEC.md`.
+
+## 2026-09-12 — MB9: collapsed the redundant net-lease lane, redesigned the homepage Market Briefs widget (Cowork)
+
+Scott, after seeing the live Market Briefs tab for the first time (3 screenshots): the homepage widget
+looked wrong ("two dialysis briefs" with no government brief), asked for a short-snapshot-then-detail
+redesign, and called `net_lease`/`broad_net_lease` redundant — one lane is enough.
+
+**Verified before touching anything:** `select lane, count(*) from market_brief_facts group by lane` and
+the same for `market_brief_issues` — both returned only `dialysis` (31 facts, 1 issue). Zero rows existed
+under `net_lease` or `broad_net_lease`, so the collapse is a pure schema/UI narrowing, no data migration.
+
+**What "two dialysis briefs, no government brief" actually was:** not a bug — `renderMarketBriefsWidget()`
+only ever fetched the `dialysis` lane and printed its top-2 raw fact bullets with no lane label, which reads
+like two unrelated blurbs. Government/net-lease show nothing because **no producer has ever written a fact
+for them** — MB1/MB2's P-SQL/P-RSS producers are dialysis-only by original scope (spec §3: "no new gov/NL
+lanes here"). That gap is real and unscoped — filed as part of MB9 in `PLANNED-BACKLOG.md`, not silently
+built here.
+
+**Changed:**
+- `api/_shared/market-brief-render.js` — `KNOWN_LANES`/`LANE_LABELS` narrowed to `dialysis`/`government`/`net_lease`.
+- `app.js` — new shared `MARKET_BRIEF_LANES`/`MARKET_BRIEF_LANE_LABELS` consts (replacing the old inline
+  `laneTabs`/`laneLabels` literals in `renderMarketBriefsPage`, so frontend/backend can't drift again).
+  `renderMarketBriefsWidget()` rewritten: one snapshot line per lane with the flag on (`<Lane> — N live
+  facts`, the single freshest claim, "Open full brief →"), plus a muted "no live facts yet (producer not
+  built)" line for an enabled-but-empty lane instead of silent omission.
+- `index.html` — dropped the widget's static "Open Dialysis brief →" header link (now redundant with each
+  lane's own link inside the widget body).
+- `docs/architecture/EXEC-BRIEFS-SPEC.md` — §0 swimlane row + weekly-email lane count updated to 3.
+- New migration `supabase/migrations/20261101200000_lcc_mbb2_lane_collapse_net_lease.sql` — narrows
+  `chk_mbf_lane`/`chk_mbi_lane`/`v_market_brief_staleness`'s lane set to 3. **Applied live** to project
+  `xengecqvemvfknjvbvrq`, verified via `pg_get_constraintdef`.
+- `docs/os/PLANNED-BACKLOG.md` — MB8 marked superseded, new MB9 row, EB0 corrected in place.
+
+**Guards:** new `test/mbb2-lane-collapse.test.mjs` (4 tests, comment-stripped-SQL structural guard
+mirroring `eb1-market-brief-foundation.test.mjs`'s own pattern), `test/market-brief-render.test.mjs` +
+`test/market-brief-tick-handlers.test.mjs` updated to assert 3 lanes. Targeted suite: 53/53 pass, 0 fail.
+**Full 423-file suite not run to completion this session** — the device shell's per-call timeout can't
+cover it and a backgrounded run didn't survive between calls; every `KNOWN_LANES`/`broad_net_lease` call
+site was grepped repo-wide first and confirmed covered by the targeted tests instead. Stated plainly
+rather than claiming a full-suite number I didn't actually observe.
+
+**Not done, deliberately:** no government or net-lease producer built (a real, separate, unscoped decision
+— GSA lease-event source for gov, the general-NL on-market store gap shared with BUY0/UX-T4 for net-lease);
+`docs/claude-code/prompts/done/EB1-exec-briefs-foundation.md`'s historical 4-lane note left untouched (it
+accurately describes what that original migration did, not current state).
+
 ## 2026-09-12 🚨 — 26 backlog IDs are used twice, and `SEC2` is two different issues. One of them bit me today. (Cowork)
 
 Two prompts are already queued for CC (**HP1-P2misparse**, **HP1-badge**), so rather than deepen the queue I took
