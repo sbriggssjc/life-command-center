@@ -1,3 +1,41 @@
+## 2026-09-12 — PR-scanner-3 reconciled against the merged desktop response (Cowork)
+
+Read the pasted Claude Code desktop response for PR-scanner-3 in full and independently re-verified
+its claims live against both Supabase projects rather than trusting the report text:
+
+- `v_lcc_ownership_history_lane_split` action distribution on LCC Opps matches exactly:
+  `agrees` 147, `county_records_needed` 126 (27 human_actionable), `sponsor_spe` 110,
+  `mismatch` 101 (37 human_actionable), `all_guarded` 27 (4 human_actionable), 1 null —
+  `human_actionable` total unchanged at 68. Confirms the response's "predicted-vs-actual delta
+  was exact" claim rather than assuming it.
+- The new mirror table `lcc_gov_property_record_coverage` has exactly 254 rows, all synced at one
+  single timestamp (`2026-09-12 05:26:52.77913+00`) — confirms it was seeded once, live, and is
+  not yet on a recurring sync, exactly as both the response and `PLANNED-BACKLOG.md`/`STATUS.md`'s
+  own PR-scanner-3 entries already disclose.
+- **Deploy status, both Railway services** (per the repo's standing "redeploy both" rule for engine
+  changes): `tranquil-delight-production-633f.up.railway.app/version` returns `bd679c4321c8` —
+  byte-identical to this change's merge commit (`bd679c43`), so it is live at the correct commit.
+  The standalone MCP service (`life-command-center-production.up.railway.app`, the `mcp/` directory)
+  does not import any file this change touched (`ops.js`, `api/_shared/gov-property-record-coverage.js`,
+  `api/_shared/ownership-lane-split.js` are all outside `mcp/`) and exposes no git-sha `/version` route
+  to check directly — its own `/health` reports a static `"version":"1.0.0"`. **Conclusion: this
+  shipment did not require a second-service redeploy, and none is owed.**
+- CC's own doc updates (`PLANNED-BACKLOG.md` PR-scanner-3 row, `ownership-history-lane.md` §5,
+  `research-workbench.md` §7d, and this file's PR-scanner-3 entry above) were read in full and found
+  accurate, complete, and consistent with the live numbers above — no corrections needed.
+
+**Outstanding decision for Scott, not yet made:** the `lcc_gov_property_record_coverage` mirror was
+seeded once (254/254 rows) and has no recurring sync. It will silently drift stale as A2/A3 apply
+tasks and PR-scanner-1/2 scans change gov's `parcel_records`/`tax_records`/`deed_records` — a stale
+mirror can only ever fail *safe* (an unsynced row stays at its base action, `IS FALSE` not `= false`),
+but it will under-report `county_records_needed` over time rather than staying accurate. Options:
+(a) schedule `syncGovPropertyRecordCoverageForOwnershipLane()` on a cron now (a small follow-up build,
+mirroring cron 244/245's cadence), or (b) leave it manual/on-demand until PR-scanner-1/2 show real
+adoption (their writers still show 0 rows on either domain as of this reconciliation), since a cron
+syncing an unused signal has no payoff yet. No action taken pending Scott's call.
+
+Response filed: `docs/claude-code/responses/done/PR-scanner 3 desktop response.docx`.
+
 # Claude Code queue — STATUS
 
 ## 2026-09-12 — PR-scanner-3 shipped: `county_records_needed`, the sixth ownership-history-lane action
