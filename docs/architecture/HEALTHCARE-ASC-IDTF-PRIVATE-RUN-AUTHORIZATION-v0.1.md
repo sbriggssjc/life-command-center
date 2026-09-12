@@ -185,3 +185,23 @@ Primary and second-review identities and timestamps are stored separately. A req
 a different authenticated user. Agreement can close the row-level review; disagreement remains visible and
 keeps the candidate in `second_review`. Neither function grants or performs a canonical-property, Salesforce,
 outreach, production-opportunity, or IDTF write.
+
+## 14. Production handoff and review order
+
+The reviewer-guidance layer is a presentation-only prerequisite to human execution: readable evidence cards and
+safe source links sit above a collapsed raw audit payload; field definitions explain `Unknown`/`Unresolved`; the
+sticky header keeps the authenticated reviewer visible; and client validation explains blockers before POST. It
+does not change the persisted contract, review RPCs, source evidence, or any candidate judgment. Human review
+must wait until that layer is published and verified on Railway.
+
+PR #2355 merged on 2026-09-12 as `9829cc3391dc`; the workbench migration was applied before merge and
+Railway reported the same pinned revision. The page and authentication boundary were verified live. Deployment
+created no scorecard or reviewer judgment: the measured handoff remains 50 frozen candidates, 0 primary
+reviews, and 0 independent second reviews.
+
+The human execution order is primary review first, candidate by candidate, followed by a different
+authenticated reviewer for every row the workbench places in `second_review`. The initial collection evidence
+requires 22 second reviews, but `unknown` property form or low primary confidence can increase that count.
+Reviewers must preserve private citations, the frozen CMS identity, source-exception dispositions, and any
+explicit disagreement. They must not use the workbench as authority for a canonical-property, Salesforce,
+outreach, production-opportunity, IDTF, or lane-advance write.

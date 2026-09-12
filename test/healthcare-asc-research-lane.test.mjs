@@ -10,6 +10,11 @@ import {
   diagnoseAscIdentityMatch,
   normalizeAscAddressToken,
 } from '../api/_shared/asc-research-lane.js';
+import {
+  safeEvidenceUrl,
+  summarizeCapture,
+  validatePrimaryDraft,
+} from '../asc-review-presentation.js';
 
 const sha = (digit) => digit.repeat(64);
 
@@ -29,6 +34,33 @@ test('ASC property review contract accepts only exact governed scorecards', () =
     run_id: base.run_id, candidate_fingerprint: base.candidate_fingerprint,
     mode: 'second', verdict: 'disagree', notes: 'Conflict retained.',
   }, 'second'), { verdict: 'disagree', notes: 'Conflict retained.' });
+});
+
+test('ASC review presentation makes licensed evidence readable without trusting unsafe source links', () => {
+  const summary = summarizeCapture({
+    source: 'rca', source_url: 'https://app.rcanalytics.com/property/123', captured_at: '2026-09-12T00:00:00Z',
+    address: '1101 Professional Blvd', city: 'Evansville', state: 'IN', zip: '47714',
+    structured_payload: { building_class: 'B', square_footage: 12345, tenants: [{ name: 'Example ASC' }] },
+    reconciliation: { asc_identity_match: { mode: 'approved_alias', second_review_required: true, corroboration_basis: 'same parcel' } },
+  });
+  assert.equal(summary.sourceUrl, 'https://app.rcanalytics.com/property/123');
+  assert.equal(summary.address, '1101 Professional Blvd, Evansville, IN, 47714');
+  assert.equal(summary.identity.secondReviewRequired, true);
+  assert.ok(summary.fields.some((field) => field.label === 'Building class' && field.value === 'B'));
+  assert.equal(safeEvidenceUrl('javascript:alert(1)'), null);
+});
+
+test('ASC review presentation explains every primary save blocker and accepts governed unresolved values', () => {
+  const blank = validatePrimaryDraft({ researchMinutes: {}, ownershipEvidence: '{', citations: '{}' });
+  assert.ok(blank.some((item) => item.includes('clinical identity')));
+  assert.ok(blank.some((item) => item.includes('property form')));
+  assert.ok(blank.some((item) => item.includes('Ownership evidence is not valid JSON')));
+  assert.ok(blank.some((item) => item.includes('Evidence citations must be a JSON array')));
+  assert.deepEqual(validatePrimaryDraft({
+    clinicalVerified: false, propertyForm: 'unknown',
+    researchMinutes: { clinical: 0, property: 0, ownership: 0, economics: 0, contact: 0 },
+    ownershipEvidence: '[]', citations: '[]',
+  }), []);
 });
 
 function candidates(count = ASC_RESEARCH_SAMPLE_SIZE) {
@@ -1179,10 +1211,11 @@ test('ASC routes are mounted and never invoke the dialysis/government propagator
 });
 
 test('ASC review workbench preserves reviewer separation and prohibited-write boundary', async () => {
-  const [sql, handler, html] = await Promise.all([
+  const [sql, handler, html, client] = await Promise.all([
     readFile(new URL('../supabase/migrations/20261002130000_lcc_asc_property_review_workbench.sql', import.meta.url), 'utf8'),
     readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
     readFile(new URL('../asc-review.html', import.meta.url), 'utf8'),
+    readFile(new URL('../asc-review.js', import.meta.url), 'utf8'),
   ]);
   assert.match(sql, /primary_reviewer uuid/i);
   assert.match(sql, /if v_primary = p_reviewer then raise exception 'second reviewer must differ/i);
@@ -1194,6 +1227,12 @@ test('ASC review workbench preserves reviewer separation and prohibited-write bo
   assert.match(handler, /'lcc_save_asc_second_review'\s*:\s*'lcc_save_asc_primary_review'/);
   assert.match(handler, /`rpc\/\$\{rpc\}`/);
   assert.match(html, /Independent second review/);
+  assert.match(html, /Insufficient evidence is a valid result/);
+  assert.match(html, /Raw structured capture \(audit view\)/);
+  assert.match(html, /id="validation-summary"/);
+  assert.match(client, /summarizeCapture/);
+  assert.match(client, /Your signed-in identity is visible in the sticky blue header/);
+  assert.doesNotMatch(client, /entities|external_identities|bd_opportunities|salesforce/i);
 });
 
 test('capture retries receive only the column update privilege required by the invoker RPC', async () => {

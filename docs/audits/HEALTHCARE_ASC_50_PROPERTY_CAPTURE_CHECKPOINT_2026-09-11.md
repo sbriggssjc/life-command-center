@@ -120,3 +120,13 @@ This implementation creates no row-level scorecard by itself. At this checkpoint
 50 source-collection resolutions, 0 completed primary scorecards, and 0 completed independent second reviews.
 The next action remains human, evidence-bound review; aggregate receipt generation remains blocked until all
 50 primary scorecards and every required independent second review are complete.
+
+## Production handoff verification — 2026-09-12
+
+PR #2355 merged as `9829cc3391dc`. The workbench migration was applied before merge and verified read-only:
+50 candidates remain (44 `captured`, 6 `reviewed` source exceptions), the same 6 exception review rows remain,
+all 6 still require second review, and primary/second judgment timestamps remain 0/0. Existing dispositions
+remain 4 `licensed_sources_not_found`, 1 `parcel_owner_evidence_only`, and 1
+`parcel_situs_evidence_only`. Railway reports the merge revision, the workbench returns HTTP 200, and its
+unauthenticated API returns JSON 401. This closes the tooling/deployment prerequisite only; ASC50-R1 is now the
+active human gate and no review conclusion is implied.

@@ -17,6 +17,12 @@
 
 ## 2026-09-12 ASC frozen-50 review boundary
 
+**Local, not yet live:** a reviewer-guidance pass now renders capture evidence as readable cards while retaining
+raw JSON in a collapsed audit view, defines every scorecard field, makes the authenticated identity continuously
+visible, presents existing primary/second-review state, explains the governed `Unknown`/`Unresolved` path, and
+shows validation blockers before save. It changes no review contract, API, migration, or candidate data. Do not
+credit this UX as deployed until its PR merges and Railway serves the resulting revision.
+
 The ASC source-collection pass is complete (50/50 resolved; 44 licensed-source captures and six governed
 source exceptions), but commercial review is not. A governed workbench is implemented at `/asc-review.html`
 with an operator-authenticated `/api/asc-research-review` boundary. It reads the frozen CMS identity and newest
@@ -24,9 +30,13 @@ licensed-source capture, stores the exact six-class property scorecard, and pres
 second-review identities, timestamps, and disagreement.
 
 This tooling does not pre-populate a human conclusion and cannot write canonical properties, Salesforce,
-outreach, production opportunities, or IDTF activation. Current review completion remains **0/50 primary** and
-**0/22 initially required second reviews** until production deployment and actual independent review. See the
-capture checkpoint and `PLANNED-BACKLOG.md` ASC50-R1–R3.
+outreach, production opportunities, or IDTF activation. PR #2355 merged as `9829cc3391dc` on 2026-09-12;
+the migration is applied, Railway reports that exact pinned revision, `/asc-review.html` returns 200, and the
+unauthenticated review API fails closed with JSON 401. Post-migration read-only verification remains **0/50
+primary** and **0/22 initially required second reviews** (50 candidates: 44 captured, 6 reviewed exceptions;
+6 existing exception rows, all requiring second review). After the pending UX publication is verified, the next
+action is human review, not another data or workflow build.
+See the capture checkpoint and `PLANNED-BACKLOG.md` ASC50-R1–R3.
 
 ## 1. Runtime truth — where the app actually runs
 
