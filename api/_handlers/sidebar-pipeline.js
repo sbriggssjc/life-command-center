@@ -48,6 +48,11 @@ import { validateSaleIngest, validateContactIngest } from '../_shared/ingest-con
 // cap one-email fan-out at the contact-extraction path (belt+braces even though
 // the misparse capture path is dormant).
 import { isMisparseName, planContactMinting } from '../_shared/tm-misparse.js';
+import {
+  partitionReviewForNotification,
+  recoverFanoutOwner,
+  reviewDedupeKey,
+} from '../_shared/misparse-disposition.js';
 // Round 77d (2026-06-02): listing_date derivation moved to a shared module so
 // the CoStar sidebar and the OM-intake promoter stay consistent. Re-exported
 // here for the existing test/derive-listing-date.test.js import path.
@@ -2082,12 +2087,88 @@ function classifyDomainWithDiag(metadata, entityFields) {
 // A sidebar path that skips the bridge gate lands here with no workspaceId — then
 // there is no inbox to write to, so we only log (the mint is still correctly
 // suppressed by the caller).
+// HP1-P2misparse (2026-09-12) — the keys already sitting on an OPEN review row
+// for this property. Used to notify once per (property, name, reason) instead of
+// once per capture. Fails OPEN: a failed probe returns an empty set, so the
+// worst case is the pre-HP1-P2misparse behaviour (a duplicate notification),
+// never a silently swallowed first-ever block.
+async function fetchNotifiedMisparseKeys(propertyEntityId) {
+  try {
+    const q = 'inbox_items?select=entity_id,metadata&source_type=eq.contact_misparse_review'
+      + '&status=eq.new&limit=200&order=received_at.desc'
+      + (propertyEntityId ? `&entity_id=eq.${propertyEntityId}` : '&entity_id=is.null');
+    const res = await opsQuery('GET', q);
+    if (!res?.ok || !Array.isArray(res.data)) return new Set();
+    const keys = new Set();
+    for (const row of res.data) {
+      const rejected = row?.metadata?.rejected_contacts;
+      if (!Array.isArray(rejected)) continue;
+      for (const r of rejected) keys.add(reviewDedupeKey(row.entity_id ?? null, r?.name, r?.reason));
+    }
+    return keys;
+  } catch {
+    return new Set();
+  }
+}
+
+// HP1-P2misparse — B6a, correctly applied: a suppressed block must still EMIT,
+// to a counter a human can read, not to the homepage. Reuses the existing
+// `producer_runs` ledger (HP1-P1d made facts_written/skip_reason live) rather
+// than minting a second ledger. Read it with:
+//   select detail, started_at from producer_runs
+//    where producer='sidebar_contact_guard' order by run_id desc;
+async function recordContactGuardBlocks(counts) {
+  try {
+    const total = Object.values(counts.by_reason || {}).reduce((a, b) => a + b, 0);
+    await opsQuery('POST', 'producer_runs', {
+      producer: 'sidebar_contact_guard',
+      lane: 'misparse_block',
+      status: counts.notified > 0 ? 'ok' : 'skipped',
+      // A run that blocked only page furniture / a repeat is a NAMED skip, never
+      // a silent zero.
+      skip_reason: counts.notified > 0 ? null
+        : (counts.silent_chrome > 0 || counts.duplicate > 0 ? 'blocks_all_chrome_or_duplicate' : 'no_blocks'),
+      trigger_source: 'sidebar_capture',
+      finished_at: new Date().toISOString(),
+      facts_written: counts.notified,
+      detail: { blocked_total: total, ...counts },
+    }, { headers: { Prefer: 'return=minimal' } });
+  } catch (e) {
+    console.warn('[sidebar misparse] producer_runs counter failed:', e?.message || e);
+  }
+}
+
 async function routeMisparseContactsToReview(reviewItems, ctx) {
   const { propertyEntityId, workspaceId, userId, domain, source, extractedAt } = ctx || {};
-  const names = reviewItems.map((r) => r?.contact?.name).filter(Boolean);
-  const reasons = [...new Set(reviewItems.map((r) => r.reason))];
+  const allNames = reviewItems.map((r) => r?.contact?.name).filter(Boolean);
+  const allReasons = [...new Set(reviewItems.map((r) => r.reason))];
   console.warn('[sidebar misparse] suppressed', reviewItems.length,
-    'suspect contact(s) [' + reasons.join(',') + ']:', names.slice(0, 20).join(' | '));
+    'suspect contact(s) [' + allReasons.join(',') + ']:', allNames.slice(0, 20).join(' | '));
+
+  // HP1-P2misparse — the guard's DECISIONS are unchanged above this line. What
+  // follows decides only who is TOLD: page furniture is counted, never
+  // notified; a (property, name, reason) already on an open row is counted,
+  // never re-notified.
+  const already = await fetchNotifiedMisparseKeys(propertyEntityId);
+  const { notify, silentChrome, duplicate } = partitionReviewForNotification(reviewItems, {
+    propertyEntityId: propertyEntityId ?? null,
+    alreadyNotified: already,
+  });
+  const byReason = {};
+  for (const r of reviewItems) byReason[r.reason] = (byReason[r.reason] || 0) + 1;
+  await recordContactGuardBlocks({
+    by_reason: byReason,
+    notified: notify.length,
+    silent_chrome: silentChrome.length,
+    duplicate: duplicate.length,
+    property_entity_id: propertyEntityId || null,
+    source: source || 'costar',
+  });
+
+  if (!notify.length) return 0;
+  reviewItems = notify;
+  const names = notify.map((r) => r?.contact?.name).filter(Boolean);
+  const reasons = [...new Set(notify.map((r) => r.reason))];
   if (!workspaceId) return 0;
   try {
     const fanout = reviewItems.find((r) => r.reason === 'email_fanout');
@@ -2156,6 +2237,26 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
     personJunkName: (c) => (contactEntityType(c) === 'person' && isJunkContactName(c.name)
       ? 'junk_contact_name' : null),
   });
+  // HP1-P2misparse (2026-09-12) — class D recovery. A fan-out batch is one
+  // broker's mailbox stapled onto every name on the page; blocking the batch is
+  // correct, but the name matching the mailbox's LOCAL PART is that mailbox's
+  // true owner and was being discarded with the collateral. Recover exactly one
+  // per email, under a strict whole-string rule, never on a tie, never for an
+  // organization-shaped candidate. Every OTHER name in the batch stays blocked.
+  let fanoutRecovered = [];
+  if (mintPlan.review.length) {
+    const rec = recoverFanoutOwner(mintPlan.review, {
+      isOrganization: (c) => contactEntityType(c) !== 'person',
+    });
+    fanoutRecovered = rec.recovered;
+    if (fanoutRecovered.length) {
+      const recoveredItems = new Set(fanoutRecovered.map((h) => h.item));
+      mintPlan.review = mintPlan.review.filter((r) => !recoveredItems.has(r));
+      for (const h of fanoutRecovered) mintPlan.mint.push(h.contact);
+      console.warn('[sidebar misparse] fan-out owner recovered:',
+        fanoutRecovered.map((h) => `${h.contact.name} <= ${h.email} (${h.rule})`).join(' | '));
+    }
+  }
   if (mintPlan.review.length) {
     await routeMisparseContactsToReview(mintPlan.review, {
       propertyEntityId, workspaceId, userId, domain, source, extractedAt,
