@@ -61,6 +61,45 @@ re-measured with the live numbers and the DOC3/DOC6 link made explicit; DOC2 lef
 ## 2026-09-12 — HP1-P1a-fix reconciled: code is merged, but live production is NOT confirmed running it (Cowork)
 # Claude Code queue — STATUS
 
+## 2026-09-12 ✅ — HP1-P1d SHIPPED: the SF opportunity feed now has a real freshness assertion (Claude Code)
+
+Investigation claims 1–4 all confirmed live before coding: `feed_freshness_registry` = 2 active rows
+(`om_intake`, `salesforce_sync`); `salesforce_sync` watches `sf_sync_log`, a different pipe, untouched;
+`bd_opportunities` = 619 rows / 612 sf-linked / 7 non-SF (`metadata->>'source' IN ('priority_queue', NULL)`,
+`last_synced_at IS NULL`); `producer_runs` exists, producer-keyed, held 2 EB1 rows.
+
+**Home: extended `producer_runs`**, not a table-keyed `feed_freshness_registry` row (no WHERE-filter column —
+would go green on the `priority_queue` producer's writes over a dead SF pipe). `ingestBatch` now writes ONE
+`producer_runs` row/batch (`facts_written` = the RPC's own inserted+updated tally, never `succeeded`), fire-
+and-forget, on a **3-arg** `opsQuery` call only (never the 4th-arg-options shape that mangled `Prefer` in P1a).
+
+Freshness CHECK: `lcc_check_sf_opportunity_freshness(p_stale_hours numeric DEFAULT 3)` (migration
+`20261101180000`), on `max(last_synced_at) FILTER (WHERE sf_opp_id IS NOT NULL)` — never bare `last_synced_at`
+or `updated_at` — into `lcc_health_alerts(alert_kind='sf_opportunity_feed_stale')`, the existing
+`v_lcc_health_alerts_open`/Teams-push surface, no new dashboard. 3h threshold = 6× the measured 30-min cadence.
+Cron `lcc-sf-opportunity-freshness-check` hourly, pure SQL. **Reconciles with P1a-fix Unit 3** (non-2xx on
+`succeeded===0`): that catches a run that fails; this catches a run that never happens — neither covers the
+other.
+
+**Four required positive controls, live + rolled back:** (1) green now — `stale:false`, age 0.3h, real
+12:47 UTC sync. (2) all sf-linked rows back-dated 10d → `stale:true`, age 240.0h, text captured, 0 residue
+after rollback. (3) historical replay, read-only (zero UPDATEs ever pre-fix ⇒ `last_synced_at==created_at`
+throughout) — **13 of 16 checkpoints across 2026-08-04→09-12 would have fired**; the 3 green ones are the
+few-hour windows after each of six sporadic new-deal inserts (08-04, 08-20, 09-03, 09-07×2, 09-09) — a stated,
+measured limitation (a brand-new `sf_opp_id` INSERTs cleanly with no conflict even while every UPDATE 502s),
+documented in the migration header rather than hidden. (4) back-dated all sf rows AND touched one
+`sf_opp_id IS NULL` row to `now()` in the same rolled-back txn → still `stale:true, age 240h` — the non-SF
+write never cleared it. All four pinned as automated tests too (`test/hp1-p1d-sf-feed-freshness.test.mjs`, a
+pure-JS shadow model of the SQL predicate against the same numbers), plus `ingestBatch` wiring + migration
+source guards. Full suite 6,077 pass / 0 fail / 6 skipped (pre-existing).
+
+**Not done, per the prompt:** `salesforce_sync` row untouched; no table-keyed registry row; no
+`bd_opportunities` backfill; HP1-P1a-nullsf (the `priority_queue` writer) left open — its existence is why the
+predicate excludes `sf_opp_id IS NULL`. Docs: `PLANNED-BACKLOG.md` (HP1-P1d → ✅), `CURRENT-STATE.md`,
+`B6a_FOLLOWUP_FRESHNESS_MONITOR_2026-08-28.md` (§11, sharpest real instance).
+
+**Next:** HP1-P1a-nullsf, then HP1-badge or HP1-P2a.
+
 ## 2026-09-12 🚨 — The monitor named `salesforce_sync` was green every day of the outage, watching a different pipe (Cowork)
 
 Scott deferred the `LCC_API_KEY` rotation until the build is complete and real users are added — recorded on

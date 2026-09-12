@@ -241,7 +241,51 @@ async function processDeal(raw, deps) {
     bd_opportunity_id: saved?.id || null, stage, unmapped_stage: unmappedStage,
     ambiguous_resolution: !!rec.ambiguous, closed: isClosed, regime: stageRegime(stage),
     needs_psa_timeline: CONTRACTUAL.has(stage), sf_opp_id: b.sf_opp_id,
+    // HP1-P1d: the RPC's own write outcome (inserted/updated), read straight
+    // through so ingestBatch can log a real facts_written delta to
+    // producer_runs instead of the "succeeded" tally, which counts entity
+    // resolution + write success together and is not itself the write delta.
+    outcome: result.outcome,
   } };
+}
+
+// HP1-P1d — producer_runs lifecycle for this feed. `ingestBatch` runs the
+// whole batch synchronously inside one request (unlike the tick-style
+// producers, which open a row before a long-running background pass), so
+// ONE row is written at the end carrying started_at/finished_at/duration
+// together, rather than open-then-PATCH-by-run_id. This deliberately avoids
+// re-reading the RPC's own OUT/`Prefer: return=representation` id back
+// through opsQuery: that "read the id back" shape is exactly what the
+// standalone MCP's positional opsQuery(method, path, body, prefer) mangled
+// (P1a-fix's own root cause). Every opsQuery call in this file stays 3-arg.
+const PRODUCER_SF_OPPORTUNITY_SYNC = 'sf_opportunity_sync';
+
+async function logIngestRun(deps, { summary, allFailed, startedAt, finishedAt }) {
+  const durationMs = finishedAt - startedAt;
+  const status = summary.total === 0 ? 'skipped' : (allFailed ? 'failed' : 'completed');
+  const payload = {
+    producer: PRODUCER_SF_OPPORTUNITY_SYNC,
+    lane: null,
+    started_at: new Date(startedAt).toISOString(),
+    finished_at: new Date(finishedAt).toISOString(),
+    duration_ms: durationMs,
+    status,
+    skip_reason: summary.total === 0 ? 'empty_batch' : null,
+    trigger_source: 'ingest',
+    // The state delta the RPC itself reports (inserted+updated), never the
+    // "succeeded" tally, which also counts entity-resolution work that made
+    // no write (P159a: judge a worker by the delta, not its own tally).
+    facts_written: (summary.inserted || 0) + (summary.updated || 0),
+    facts_superseded: 0,
+    facts_expired: 0,
+    error_count: summary.failed || 0,
+    detail: summary,
+  };
+  try {
+    await deps.opsQuery('POST', 'producer_runs', payload);
+  } catch (_e) {
+    // Logging must never break the response the caller (Power Automate) reads.
+  }
 }
 
 export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
@@ -261,6 +305,7 @@ export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
     // loops server-side with bounded concurrency and per-deal timeouts, so no single
     // record can stall the run (the failure mode of the PA Apply-to-each loop).
     ingestBatch: async (req, res) => {
+      const startedAt = Date.now();
       const body = req.body || {};
       const deals = Array.isArray(body) ? body : (body.deals || body.value || []);
       if (!Array.isArray(deals)) {
@@ -268,7 +313,11 @@ export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
       }
       const summary = {
         total: deals.length, succeeded: 0, created: 0, resolved: 0,
-        ambiguous: 0, closed: 0, unmapped_stage: 0, failed: 0, errors: [],
+        ambiguous: 0, closed: 0, unmapped_stage: 0, failed: 0,
+        // HP1-P1d: the RPC's own per-row write outcome, tallied separately
+        // from `succeeded` (which also counts a row that resolved an entity
+        // but made no DB write). This is what producer_runs.facts_written reads.
+        inserted: 0, updated: 0, errors: [],
       };
       const CONC = 8;
       let i = 0;
@@ -283,6 +332,8 @@ export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
               if (r.body.ambiguous_resolution) summary.ambiguous++;
               if (r.body.closed) summary.closed++;
               if (r.body.unmapped_stage) summary.unmapped_stage++;
+              if (r.body.outcome === 'inserted') summary.inserted++;
+              else if (r.body.outcome === 'updated') summary.updated++;
             } else {
               summary.failed++;
               if (summary.errors.length < 50) {
@@ -310,6 +361,11 @@ export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
       // but is flagged so `succeeded`/`failed` are never the only signal.
       const allFailed = summary.total > 0 && summary.failed === summary.total;
       const partial = summary.failed > 0 && summary.succeeded > 0;
+      // HP1-P1d: log the run regardless of outcome (completed/failed/skipped)
+      // so producer_runs carries an honest record of every batch this feed
+      // ever ran — never awaited into the response path, so a logging hiccup
+      // cannot turn a real sync into a 500 for Power Automate.
+      logIngestRun(deps, { summary, allFailed, startedAt, finishedAt: Date.now() });
       return res.status(allFailed ? 502 : 200).json({ ok: !allFailed, partial, ...summary });
     },
   };
