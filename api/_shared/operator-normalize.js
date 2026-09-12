@@ -158,6 +158,20 @@ export function deriveOperatorFromTenant(tenant) {
   const t = tenant.trim();
   if (t.length < 2) return { operator: null, status: 'non_dialysis' };
 
+  // ID2a fix (found verifying the live 2026-09-11 backfill write): a piped
+  // string ("DaVita | US Army Corps of Engineers") is a multi-tenant capture
+  // artifact (ID1 §10) — never a single operator's identity, even when its
+  // first token matches a family alias below. Refuse it outright rather than
+  // let the first-token match silently assign an operator; it falls through
+  // to unmatched_dialysis/non_dialysis, the fail-closed default this whole
+  // classifier exists to produce. Kept in lock-step with the SQL mirror
+  // `dia_operator_from_tenant` (both were found carrying the exact same bug).
+  if (t.includes('|')) {
+    return DIALYSIS_CUE_RE.test(t)
+      ? { operator: null, status: 'unmatched_dialysis' }
+      : { operator: null, status: 'non_dialysis' };
+  }
+
   for (const { re, operator } of OPERATOR_ALIASES) {
     if (re.test(t)) return { operator, status: 'matched' };
   }

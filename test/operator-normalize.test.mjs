@@ -106,4 +106,20 @@ describe('edge cases', () => {
       'Dialysis Clinic, Inc.', 'American Renal Associates', 'Satellite Healthcare',
     ]);
   });
+  // ID2a fix — found verifying the live 2026-09-11 backfill write: the bare
+  // DaVita alias regex matched the first token of a multi-tenant capture
+  // artifact and silently wrote operator_id=DaVita onto both live artifact
+  // properties. A pipe means "multi-tenant", never "single operator", even
+  // when the leading token would otherwise match.
+  it('a piped multi-tenant string is NEVER assigned an operator, even when its first token matches', () => {
+    const r1 = deriveOperatorFromTenant('DaVita | US Army Corps of Engineers');
+    assert.equal(r1.operator, null);
+    assert.notEqual(r1.status, 'matched');
+    const r2 = deriveOperatorFromTenant('DaVita |San Antonio Kidney Disease Center');
+    assert.equal(r2.operator, null);
+    assert.notEqual(r2.status, 'matched');
+    const r3 = deriveOperatorFromTenant('Fresenius | Walgreens');
+    assert.equal(r3.operator, null);
+    assert.notEqual(r3.status, 'matched');
+  });
 });
