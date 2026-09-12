@@ -15,6 +15,63 @@ market-brief producers all ship from here, and declaring otherwise would orphan 
 CMS/NPI **ingestion** (rows, not schema). That closes **ID3a-d-dia**: LCC's 277 `migrations/dialysis/*` stay live and owned,
 and must NOT be retired. New row **ID3a-e**: run the drift detector for real in a session that has both repos, report the
 drift list, then schedule it. **Next:** merge PR #2352, then ID3e (county vocabulary) or MB-b (the visible brief).
+## 2026-09-12 — HP1 filed: the homepage Today 500 root-caused, and My Work / Inbox measured as pre-doctrine widgets
+
+Live read-only Cowork triage of Scott's screenshot (all three Today lanes showing `HTTP 500`; My Work
+and Inbox behind actual deal status). Filed `prompts/HP1-homepage-attention-surface-triage.md`. Nothing
+built, nothing written to the DB.
+
+**The 500 is one endpoint and one unhandled throw.** `GET /api/operations?action=today_sections`
+(`api/operations.js:2038`) fires six queries in `Promise.all`; `opsQuery` (`ops-db.js:63`) calls
+`fetchWithTimeout` with an **8 s default and no try/catch**, and an `AbortController` abort makes
+`fetch` **throw**, not resolve `{ok:false}` — so the handler's `sellerQR.ok ? … : []` guard is dead
+code for the timeout case and the rejection reaches `withErrorHandler` as a 500. All three lanes
+render from that one response, which is why one failure draws three errors. The slow source, measured
+with `EXPLAIN ANALYZE`: `v_lcc_seller_prospect_queue` = **815 ms** for the 200-row page + **750 ms**
+for the exact `COUNT(*)` PostgREST runs alongside it under `count=exact`, on a plan carrying two
+`Seq Scan`s of `entities` (56,289 rows), a `Seq Scan` of `lcc_property_attributes` (30,928), 33,812
+heap fetches on `entity_relationships`, and a `SubPlan` executed 1,518×. Cold cache on first load
+after idle is what crosses 8 s — matching "every so often when we log into the app." **The fix already
+exists in this repo and was never applied here:** `ops-db.js:80-84` documents the R6 `timeoutMs`
+option added for exactly this ("heavy aggregate views … need more headroom so a slow-but-successful
+read isn't aborted into a blanket 500"); `getTodaySections` passes none on any of its six calls.
+
+**My Work is stale because the deal backbone froze, and no task ever ages out.** 66 open
+`action_items`, **57 overdue, 38 by more than 30 days**; 37 are `deal_next_step` from
+`source_type='deal_stage_engine'`. `lcc_generate_deal_next_steps()` (cron `lcc-deal-next-steps-daily`,
+active) retires a task ONLY when `bd_opportunities.stage` changes or the deal closes — **there is no
+time-based retirement**. And the stage data it keys on has not moved: `off_market_listing` and
+`loi_executed` last updated **2026-08-03**, `bov` **2026-08-04**, while **22 of the 50 open deals have
+an `expected_close_date` already in the past** (ECU Physicians MOB 2024-08-27; Pops Mart Fuels
+2025-09-25). Scott's two screenshot cards trace exactly here: *DaVita Portfolio 4 - Realty Income* is
+still `loi_executed` with close 2026-07-16 (58 days past, task due = close−14 = Jul 2), *Queens - NY*
+still `listing_signed`. `bd_opportunities` is **pushed** from Salesforce via Power Automate into
+`/api/pipeline/ingest-opportunity` — nothing pulls, and there is no freshness assertion on the deal
+backbone even though `lcc-bd-sync-health-check` and `lcc-feed-freshness-sync` exist for other feeds.
+**Not determined read-only, and NOT to be assumed: whether the frozen stages are a Salesforce hygiene
+gap or a PA scope gap — 👤 Scott.**
+
+**The Inbox is a reverse-chronological mailbox holding mostly machine work.** 953 items at
+`status='new'`, of which **850 are `new_contact_qualify` and 38 `contact_misparse_review` — 93% data
+hygiene**, not broker judgment. The human-facing residue is market data, not decisions: a competitor's
+Spokane DaVita listing blast present **twice** (original + FW, not deduped), an SSA Minden new-listing
+announcement, a Fresenius Pittsboro SOLD COMP notice, and a **bank balance alert**. Four of the 21 new
+`email_om` rows are titled from the raw MIME filename (`OM: email-body-AAVtKA8aAAA.txt`) because no
+property resolved. `inbox_items.priority_score` **exists and is dead**: written only by
+`api/intake.js:1054` for `domain='infra'` rows, never read — `v2GetInbox` (`api/queue.js:517`) orders
+`received_at.desc`. The classifier is fine (3,847 triaged + 2,252 dismissed vs 21 new); this is a
+routing-and-ranking problem, not a classification one.
+
+**The design finding underneath all three:** the homepage runs three widgets at three orderings —
+Today (client-value ranked, per operator-doctrine 1.8.0, and the one that 500s), My Work
+(`due_date.asc`, so the most-ignored task is pinned to the top), Inbox (`received_at.desc`). My Work
+and Inbox are **pre-doctrine widgets never re-cut when UX-T1a-today shipped 2026-09-03**. The
+alignment Scott is asking for is finishing that cut: make Today reliable, make My Work its Urgent
+detail view on the same ranking function, and reduce the Inbox to items needing a human verdict.
+
+**Next:** HP1 P0 (`allSettled` + timeout budget + count mode + per-lane error, with a guard test that
+a thrown source degrades one lane and still returns 200), then P1 (backbone freshness + deal-status
+confirmation lane) after Scott settles the SF-vs-PA question.
 
 ## 2026-09-12 — ID3a-c reconciled: agency class closed (live-verified), and a repo-ownership hazard found — gov DB now owned by `government-lease`
 
@@ -9875,3 +9932,53 @@ hiding it — **a finding, not a failure**, and the one thing two months of sile
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-12 — ID3a-d: named the owner of every database, retired LCC's government migrations (Claude Code)
+
+`government-lease`'s ID3a-c fix (PR #398) showed that two repos ship migrations to the same
+government database, and `life-command-center`'s own copy of the same canonicalizer fix
+(`supabase/migrations/government/20260912030000_gov_id3ab_agency_canonicalizer_contamination_fix.sql`)
+was **stale relative to what is actually deployed** — no state-qualifier guard, old ICE/CBP branch
+order. Re-applying it would have silently restored `TEXAS DEPARTMENT OF AGRICULTURE → USDA` and
+`Immigration & Customs Enforcement → CBP`.
+
+**Shipped:**
+- **Ownership table** (all three Supabase projects, measured, not guessed) in `CLAUDE.md` →
+  "ONE REPO OWNS EACH DATABASE'S OBJECTS", mirrored in `docs/architecture/data-coherence-invariants.md`
+  I16 and pointed-to from `docs/os/REGISTRY.md`. government → `government-lease` (settled by
+  Scott); Dialysis_DB → `Dialysis` (proposed from evidence — 555 migration files there vs. LCC's
+  277 duplicate copy, 👤 not yet Scott-confirmed); LCC Opps → `life-command-center` (this repo IS
+  the app that reads/writes it).
+- **Retired `supabase/migrations/government/`** — a `README.md` marking the directory historical
+  and naming both defects the stale canonicalizer file would restore, plus a per-file historical
+  header prepended to all 213 `.sql` files (script-generated, verified). Searched for any tooling
+  that globs and applies this directory live against the government database — **found none**.
+- **Guard:** `test/gov-migrations-directory-retired.test.mjs` (6 tests, all pass, includes a
+  positive control that proves the detection logic can actually fail). Existing tests that read
+  the retired canonicalizer migration (`test/gov-id3ab-agency-canonicalizer.test.mjs`,
+  `test/id3a-gov-agency-identity.test.mjs`) still pass unchanged — the header is comment-only and
+  those tests strip comments before asserting.
+- **I16 drift-check design:** `scripts/db-drift/gov-deployed-vs-committed-drift.sql` +
+  `scripts/db-drift/README.md`. Computes the live-side definition hash for every
+  function/view/materialized-view/trigger in the government database's `public` schema; documents
+  the "expected"-side replay of `government-lease`'s migrations and the final diff query inline.
+  **NOT executed** — this sandbox has no network access to Supabase, so no drift result is
+  reported (would be fabrication). Run it for real under credentials with access to the
+  government project before scheduling anything on the I11 alert path.
+- **ID3a-c deferred items closed/filed:** the "10 FK-vs-canonicalizer granularity judgment calls"
+  are already surfaced by `government-lease`'s own `v_gov_agency_fk_display_drift` view
+  (`sql/20260912_gov_id3a_c_agency_class.sql` §12) rather than a fresh list — filed as
+  `ID3a-c-fk-granularity` in `PLANNED-BACKLOG.md`, pointed at `government-lease`, with the
+  recommendation that Scott review that view's 10-row output in one pass. USFS/BLM/NSF
+  canonicalizer gaps: the registry seed rows exist (`sql/20260305_phase4_financials.sql`) but no
+  confirmed live regex branch was found — filed as `ID3a-c-usfs-blm-nsf`, low urgency pending an
+  orphan-string volume measurement.
+- **Not built, filed:** retiring LCC's `supabase/migrations/dialysis/*` (277 files) the same way —
+  needs Scott to confirm `Dialysis` as the formal owner first (`ID3a-d-dia`).
+
+**Not touched:** no live gov/dia/LCC-Opps DB object was edited. No migration was deleted. Full
+suite not re-run wholesale in this pass (repo has thousands of tests); the new test file and every
+test that reads a file this change touched were run directly and are green — see the branch's own
+commit for the exact list.

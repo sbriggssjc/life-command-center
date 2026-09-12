@@ -374,6 +374,28 @@ any DB object, read its **deployed** definition and know which repo owns it (inv
 | government | **`government-lease`** | LCC's `supabase/migrations/government/*` (213 files) is historical — **188 of the 194 objects they define are live right now**, so re-applying one overwrites a running object |
 | Dialysis_DB | **`life-command-center`** | where the work happens: operator registry, aliases, write guards, comps engine, market-brief producers. The Dialysis repo owns its CMS/NPI **ingestion** (rows, not schema) — if it needs a schema change, it lands here |
 | LCC Opps | **`life-command-center`** | this repo is the app |
+any DB object, read its **deployed** definition and know which repo owns it (invariant I16).
+
+✅ **ID3a-d SHIPPED 2026-09-12 — every database now has a named owner, measured, not guessed.**
+
+| database | ref | owning repo | evidence | migration count in owning repo | migration count in non-owning repos | newest file |
+|---|---|---|---|---:|---|---|
+| **government** | `scknotsqkcheojiaewwh` | **`government-lease`** (settled by Scott) | `government-lease` is the canonical repo per its own CLAUDE.md §1; carries `sql/*.sql`; ID3a-c's live fix (PR #398) shipped there | 294 (`sql/*.sql`) | `life-command-center` **213** (`supabase/migrations/government/*.sql`) — **retired, historical, this round** | both repos: 2026-09-12 (the same-day ID3a-c work) |
+| **Dialysis_DB** | `zqzrriwuavgrquhisnoa` | **`Dialysis`** — 👤 not formally confirmed by Scott, but the evidence is one-sided: this is the repo's own database (its CLAUDE.md documents dozens of migrations against it directly), it carries by far the largest and most actively-maintained migration set, and its own CLAUDE.md never defers to another repo | `Dialysis` carries `supabase/migrations/*.sql` (+ `sql/migrations/`, `migrations/`) | 555 files across all migration dirs in `Dialysis` | `life-command-center` **277** (`supabase/migrations/dialysis/*.sql`) — **not yet retired; same treatment as government is the obvious next step, filed below** | `Dialysis`: 2026-09-11 (`dia_pdr14a_property_redirects`); `life-command-center`'s dia copy: same window |
+| **LCC Opps** | `xengecqvemvfknjvbvrq` | **`life-command-center`** (this repo — the entities/BD-spine/priority-queue/decisions/cadence/provenance-registry app IS this repo) | This repo's own CLAUDE.md names LCC Opps as "the brain: entities, BD spine, priority queue, decisions, cadence, provenance registry, health alerts, auth (GoTrue), most crons" and every `lcc_*` function/table in this file is defined by this repo's root-level `supabase/migrations/*.sql` | 865 (root `supabase/migrations/*.sql`, excluding the `dialysis/` and `government/` subdirectories) | none found — no other repo in this session's scope carries LCC-Opps-targeted migrations | this repo, 2026-09-12 |
+
+**Not retired here (out of scope for ID3a-d, filed as a follow-up):** `life-command-center`'s
+`supabase/migrations/dialysis/*` (277 files) is the same shape of duplicate as the government
+directory was — a second repo's migrations sitting in a non-owning repo — but Scott has not been
+asked to confirm `Dialysis` as the formal owner (👤 above), and the dia directory has not (yet)
+been shown to carry a stale, dangerous copy of a live fix the way the gov directory did. Retiring
+it the same way (README + header stamp) is the natural next unit once Scott confirms ownership;
+see `docs/os/PLANNED-BACKLOG.md` §P0d **ID3a-d-dia**.
+
+**I16 drift detector:** designed, documented, ready to run, **not yet executed** (no Supabase
+network access from this sandbox) — `scripts/db-drift/gov-deployed-vs-committed-drift.sql` +
+`scripts/db-drift/README.md`. Run it once under real credentials, record the result in
+`docs/claude-code/STATUS.md`, and only then consider scheduling it on the I11 alert path.
 
 ### 🧭 TRUTH IS FIXED AT ITS SOURCE OF RECORD — NEVER PATCHED WHERE IT SHOWS (Scott, 2026-09-11)
 

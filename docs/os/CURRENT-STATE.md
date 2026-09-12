@@ -153,6 +153,15 @@ reversible (`_gov_id3ab_agency_backup_20260912`); guard `test/gov-id3ab-agency-c
 The separate `government_agencies`/`gov_agency_aliases` FK registry from ID3a is untouched by this
 change — display column and FK registry are two different systems, on purpose.
 
+⚠️ **The migration file cited above (`supabase/migrations/government/20260912030000_...sql`) is
+now HISTORICAL, not live (ID3a-d, same day).** `government-lease` — not this repo — owns the
+government database's objects; that repo's own PR #398 shipped the real, currently-deployed
+canonicalizer fix (with a state-qualifier guard and the corrected ICE/CBP branch order this repo's
+copy lacks). This repo's `supabase/migrations/government/` directory is retired
+(`README.md` + a per-file header on all 213 files); never re-apply anything from it. See
+`CLAUDE.md` → "ONE REPO OWNS EACH DATABASE'S OBJECTS" for the full ownership table covering
+government, Dialysis_DB and LCC Opps.
+
 ### County/city vocabulary fold — I14, never merges across state (ID3e, 2026-09-12)
 
 gov `properties.{county,city}` and dia `medicare_clinics.city` each gained a STORED generated
