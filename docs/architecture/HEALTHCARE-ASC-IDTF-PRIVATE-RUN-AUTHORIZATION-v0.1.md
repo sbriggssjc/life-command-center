@@ -188,16 +188,21 @@ outreach, production-opportunity, or IDTF write.
 
 ## 14. Production handoff and review order
 
-The reviewer-guidance layer is a presentation-only prerequisite to human execution: readable evidence cards and
+The reviewer-guidance layer is a presentation-only aid to human execution: readable evidence cards and
 safe source links sit above a collapsed raw audit payload; field definitions explain `Unknown`/`Unresolved`; the
 sticky header keeps the authenticated reviewer visible; and client validation explains blockers before POST. It
-does not change the persisted contract, review RPCs, source evidence, or any candidate judgment. Human review
-must wait until that layer is published and verified on Railway.
+does not change the persisted contract, review RPCs, source evidence, or any candidate judgment.
 
 PR #2355 merged on 2026-09-12 as `9829cc3391dc`; the workbench migration was applied before merge and
 Railway reported the same pinned revision. The page and authentication boundary were verified live. Deployment
 created no scorecard or reviewer judgment: the measured handoff remains 50 frozen candidates, 0 primary
 reviews, and 0 independent second reviews.
+
+PR #2384 merged on 2026-09-12 as `3f60666055892616648b2348f952d1d53fbefd42`. Railway `/version`
+reported the pinned revision `3f6066605589` and `/asc-review.html` returned HTTP 200. This closed the
+presentation prerequisite without changing the review contract or creating a candidate judgment. The 0/50
+primary and 0/22 initially required second-review counts above remain the last database-verified baseline; they
+must be re-measured before being quoted as current after reviewers begin work.
 
 The human execution order is primary review first, candidate by candidate, followed by a different
 authenticated reviewer for every row the workbench places in `second_review`. The initial collection evidence
