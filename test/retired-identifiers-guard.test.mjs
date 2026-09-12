@@ -123,6 +123,24 @@ const ALLOWLIST = [
       'path, which runs only the conflict-marker guard (backlog J13a-ci-docs-only).',
     reMeasure: '2026-10-09',
   },
+  {
+    path: 'docs/os/CURRENT-STATE.md',
+    id: 'life-command-center-nine.vercel.app',
+    reason: 'CONSOLIDATE2 folded the J13/DRIFT1-routing-gap PLANNED-BACKLOG rows into ' +
+      '§2a verbatim (the fold rule forbids rewording). The quoted text is a past-tense ' +
+      'record of the host being named as a live endpoint in OTHER docs at the time — the ' +
+      'same "correctly-framed history" class as docs/history/, just landing in a live ' +
+      'section because the row itself is a done-item record, not a live pointer.',
+    reMeasure: '2026-10-12',
+  },
+  {
+    path: 'docs/os/CURRENT-STATE.md',
+    id: 'GOV_STATE_SIGNALS',
+    reason: 'CONSOLIDATE2 folded the DRIFT1-routing-gap PLANNED-BACKLOG row into §2a ' +
+      'verbatim (the fold rule forbids rewording). Naming the retired symbol is the ' +
+      'historical record of the merge into GOV_SIGNALS, not a live reference to it.',
+    reMeasure: '2026-10-12',
+  },
 ];
 const ALLOWLIST_KEYS = new Set(ALLOWLIST.map((r) => `${r.path} ${r.id}`));
 
