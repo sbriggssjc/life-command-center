@@ -48,10 +48,12 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const BACKLOG_FILE = path.join(REPO_ROOT, 'docs', 'os', 'PLANNED-BACKLOG.md');
 
 // Measured against the committed file on 2026-09-12 (DOC-TABLE1). RATCHET: may only DECREASE.
+// 2026-09-12: duplicates 17 -> 14 after PR #2405 merged three restated rows. Baseline lowered
+// to match, per the rule below: a fix that leaves the baseline high just buys room for new damage.
 // Lower these in the same commit that fixes rows. Never raise them to make a build pass —
 // raising one is the exact failure this guard exists to prevent.
 export const WRONG_WIDTH_BASELINE = 45;
-export const DUPLICATE_ID_BASELINE = 17;
+export const DUPLICATE_ID_BASELINE = 14;
 
 /**
  * Split a markdown table row into cells, ignoring pipes inside `code spans` and escaped
