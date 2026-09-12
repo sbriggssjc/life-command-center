@@ -10487,3 +10487,46 @@ order. Re-applying it would have silently restored `TEXAS DEPARTMENT OF AGRICULT
 suite not re-run wholesale in this pass (repo has thousands of tests); the new test file and every
 test that reads a file this change touched were run directly and are green — see the branch's own
 commit for the exact list.
+
+## 2026-09-12 — ID2b-caps-2: the third comp source, fixed at the source of record, live-verified (Claude Code)
+
+Cowork's live re-check of ID2b-caps found the gate had not actually held: `sf_comp_staging` (Team
+Briggs' own Salesforce-staged closed comps) has no `properties` join, so `rpc_query_comps` could
+only ever emit `operator_id: null` for that arm — 196 `DaVita Dialysis` + 179 `Fresenius Medical
+Care` rows, exact matches of already-registered aliases, were minting a second, text-keyed band
+under the identical canonical label the id-keyed band already carried.
+
+**Shipped:**
+- `sf_comp_staging.operator_id` — a new first-class column, fill-blanks resolved via the SAME
+  ID2a resolver (`dia_resolve_operator`) every other caller uses, through a `BEFORE INSERT/UPDATE
+  OF tenant` trigger that never raises (deliberately lighter than the `properties` hard-block
+  guard, because this table is fed by an external Salesforce sync this repo does not control) and
+  a dry-run-default backfill mirroring `dia_id2a_backfill_property_operator_ids` exactly.
+- `rpc_query_comps`'s SF arm now resolves `operator_id`/`operator_canonical` from that column
+  through `dia_operator_survivor`, identically to the sale/listing arms — every other key
+  byte-identical.
+- A structural duplicate-display-label invariant in `planOperatorCapRateBands()`
+  (`market-brief-psql-tick.js`): two DIFFERENT resolved `operator_id` groups may never render
+  under one canonical label. Scoped to id-keyed groups only — the documented ID2a coverage-gap
+  fallback (an unresolved property sharing a raw-text label with a resolved sibling) is explicitly
+  exempted, per the pre-existing accepted test for that case. On collision it logs loudly, keeps
+  the larger-n band, and routes the loser through the existing `retireStaleFact()` supersede path.
+
+**Live-verified against `zqzrriwuavgrquhisnoa`** (had DB access this session, unlike some prior
+rounds): dry-run backfill predicted `406 candidates / 400 auto-apply / 6 review`, applied and
+matched exactly. Re-ran the tick's own TTM window afterward: exactly three bands clear the small-n
+floor (`id:4` DaVita, `id:5` Fresenius Medical Care, `id:73` US Renal Care); the one residual
+same-label fragment (n=1) traces to an unrelated ID2a property-coverage gap on the `dialysis_db`
+arm, not a recurrence of the SF-staging defect, and never clears the floor regardless.
+
+Migrations: `supabase/migrations/dialysis/20260912140000_dia_id2bcaps2_sf_comp_staging_operator_id.sql`,
+`.../20260912150000_dia_id2bcaps2_rpc_query_comps_sf_operator_id.sql` (both applied live). Guard:
+`test/id2bcaps2-sf-operator-resolution.test.mjs` (13 tests). Full suite: 6,057 pass / 0 fail / 6
+skipped (up from 6,044). Docs updated in this change: `docs/os/PLANNED-BACKLOG.md` §P0d (ID2b-caps-2
+row), `docs/audits/ID2b_caps_RPC_QUERY_COMPS_OPERATOR_ID_2026-09-12.md` (addendum),
+`docs/architecture/EXEC-BRIEFS-SPEC.md` §9 (correction appended in place, not rewritten).
+
+**Not done, deliberately:** `MARKET_BRIEF_PSQL` not flipped; no change to comp SELECTION/scoring,
+the registry merge machinery, or any alias-table write beyond calling the existing resolver; the 6
+unresolvable `sf_comp_staging` tenants sit in `dia_operator_write_review` like any other unresolved
+operator string, resolvable the normal way (`dia_id2a_resolve_review`).

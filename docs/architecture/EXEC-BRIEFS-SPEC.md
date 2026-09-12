@@ -281,3 +281,17 @@ live. **Design rule 4 is now fully satisfied for the market brief's operator ide
 measurement + the sized ID2b-remaining follow-up list (CM views, dossier, MCP tools beyond the
 selection-identity proof):
 `docs/audits/ID2b_caps_RPC_QUERY_COMPS_OPERATOR_ID_2026-09-12.md`.
+
+⚠️ **Correction, same day: the sentence above was written from a verification that missed a THIRD
+comp source.** A Cowork live re-check against the deployed build found the fragmentation had NOT
+actually closed — `sf_comp_staging` (Team Briggs' own Salesforce-staged closed comps) has no
+`properties` join, so ID2b-caps' passthrough could only ever emit `operator_id: null` for that arm,
+and 375 rows spelled exactly `DaVita Dialysis`/`Fresenius Medical Care` were still minting a
+second, text-keyed band under the SAME display label as the id-keyed one. **Addendum 2026-09-12
+"ID2b-caps-2" (Cowork, live) closes it for real:** `sf_comp_staging` now carries its own
+`operator_id`, resolved through the same `dia_resolve_operator` every other caller uses, and a
+structural invariant in `planOperatorCapRateBands()` refuses to ever ship two id-keyed bands under
+one label. Live re-verified: exactly three resolved bands (DaVita, Fresenius Medical Care, US
+Renal Care), no duplicate label. **Design rule 4 is fully satisfied for the market brief's
+operator identity as of ID2b-caps-2, not ID2b-caps.** Full measurement: the addendum appended to
+`docs/audits/ID2b_caps_RPC_QUERY_COMPS_OPERATOR_ID_2026-09-12.md`.
