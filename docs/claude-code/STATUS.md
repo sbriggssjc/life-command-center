@@ -107,6 +107,39 @@ look on its own rather than folding into the T2b decision.
 **No build taken** — T2b remains explicitly Scott's call, and this session did not override that.
 Docs updated: `PLANNED-BACKLOG.md` (`B2` row retired/redirected to `C2e-T2b`).
 
+# Claude Code queue — STATUS
+
+## 2026-09-12 — ID2b-caps SHIPPED: rpc_query_comps carries operator_id, the cap-rate band fragmentation is fixed
+
+Closed the row filed earlier today (ID2b-caps, prompt `prompts/ID2bcaps-comps-engine-operator-id-passthrough.md`
+→ `prompts/done/`). `rpc_query_comps` (Dialysis_DB, applied live) now returns `operator_id`/`operator_canonical`
+(ID2a registry, survivor-resolved via `dia_operator_survivor`) on the sale and listing arms, additive-only —
+appended via `jsonb || jsonb_build_object(...)`, never editing an existing key, so `mcp/comps-tools.js`'s comp
+SELECTION/scoring (`operatorTier`/`compTenantText`, which read only the pre-existing fields) cannot have
+changed. New pure `planOperatorCapRateBands()` in `market-brief-psql-tick.js` groups the TTM cap-rate band on
+`operator_id` when resolved, falls back to the old raw-tenant-text grouping for the ~20% of dia properties
+ID2a hasn't backfilled yet, and supersedes the stale text-keyed fragments a resolved id makes obsolete via a
+new `retireStaleFact()`.
+
+**Verified live on the tick's own TTM window (2026-09-12):** the exact fragmentation the earlier dry-run
+found — `Fresenius` vs `Fresenius Medical Care`, `DaVita` vs `DaVita Dialysis` — is gone: DaVita (72 comps)
+and Fresenius Medical Care (68 comps) each collapse into ONE band, both well clear of the `MIN_N_CAP_BAND=5`
+floor. The residual `:fresenius_medical_care`(13)/`:davita_dialysis`(12)/`:davita_kidney_care`(5) text bands
+are comps whose linked property has no resolved `operator_id` at all — a coverage gap (ID2a backfill sits at
+80.1%), not the fragmentation defect re-emerging; they are correctly kept separate rather than guessed into a
+bucket.
+
+**One defect caught by the test suite before shipping, not by a live probe:** the first draft of the
+retire-stale-key logic would have retired a `fact_key` the SAME run's own unresolved comps still needed as a
+genuinely live band, whenever a resolved operator and an unresolved property happened to share the identical
+raw tenant text. Added a guard (never retire a key this run also emitted) and a regression test for it before
+this went anywhere near the live DB.
+
+Guard `test/id2b-caps-operator-id-bands.test.mjs` (12 tests, all pass). Full suite: 6,044 pass / 0 fail / 6
+skipped (all pre-existing skips, unrelated). `MARKET_BRIEF_PSQL` not touched (MB-b's call). Full writeup +
+sized ID2b-remaining follow-up (CM views, dossier, MCP tools): `docs/audits/ID2b_caps_RPC_QUERY_COMPS_OPERATOR_ID_2026-09-12.md`.
+Backlog rows ID2b-caps and MB1e (item 1) updated to ✅ in `docs/os/PLANNED-BACKLOG.md`;
+`docs/architecture/EXEC-BRIEFS-SPEC.md` §9 addendum added.
 ## 2026-09-12 — HP1-P1a ANSWERED read-only: it is NOT a Salesforce hygiene gap. The opportunity feed has written 5 rows in 36 days.
 
 HP1 framed the frozen deal backbone as *"a Salesforce hygiene gap or a Power Automate scope gap — do
