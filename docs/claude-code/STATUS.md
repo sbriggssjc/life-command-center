@@ -18,6 +18,63 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-12 — BACKLOG-ids: the 27 duplicate row IDs, measured and repaired (Claude Code)
+
+Executed `docs/claude-code/prompts/BACKLOG-ids-collisions-and-restatements.md`. Re-measured from
+scratch rather than trusting the prompt's counts: **27 duplicate IDs**, not 26 — the prompt's own
+scan missed `COPILOT-OPEN` (a trailing `(was COPILOT-CHAT-OPEN)` annotation broke a naive regex)
+and `ID3e` (paired deliberately with `ID3e (original measurement)`).
+
+**Class A collisions renamed (13), citations checked, none needed updating** (every real external
+citation for SEC1-4/A5d/A5e/D1/D3/D4/D5/R1-R3 pointed at the KEPT row; verified via targeted grep
+per ID, not assumed):
+- `SEC1`/`SEC2`/`SEC3`/`SEC4` — §P0s (security-definer audit / wave0-config-values.txt exposure)
+  kept all four; §P9's versions renamed **SEC9/SEC10/SEC11/SEC12**. `docs/os/OPERATOR-ACTIONS.md`'s
+  SEC2 citation already pointed at §P0s — no fix needed there. §P0s `SEC2`'s ⏸️ deferral content
+  (Scott 2026-09-12) carried across byte-identical, untouched.
+- `A5d`/`A5e` — the A5-family block (~line 444, cited by `CURRENT-STATE.md`, the A5 audit doc,
+  C1/C2a/C2e) kept both; the isolated pair near N15/N20 (~line 74) renamed **A5i/A5j**.
+- `D1`/`D3`/`D4`/`D5` — the P0d data-coherence I-series (cited by `CLAUDE.md` "Campaign P0d / D1–D5")
+  kept all four; the P5 "Deal-intelligence spine" series renamed **D1-monitor/D3-digest/
+  D4-recall/D5-dealname**.
+- `R1`/`R2`/`R3` — the P6 cross-cutting series (cited by `BUILD-BACKLOG.md`, `cross-cutting-design.md`)
+  kept all three; the DOC-TABLE1 R1-R14 series (only 1 external cite, a STATUS.md history span)
+  renamed **R1b/R2b/R3b**, leaving R4-R14 untouched.
+
+**Class B restatements merged (14), no content dropped** — `AC2`, `AC3`, `B6d-cms-escalation`,
+`B6d-cms-restart` (3 copies → 1, chronology from 2026-08-29 through 09-12 folded together),
+`B6d-cms-step` (2, includes the "premise refuted" correction), `B6e-fred`, `B6e-fred-cm-exposure`,
+`B6e-fred-verify`, `COPILOT-OPEN`, `ID3a-d` (2 — **genuine disagreement found and reported, not
+silently picked**: one copy says Scott closed `ID3a-d-dia` by deciding LCC owns Dialysis_DB, the
+other still files `ID3a-d-dia` as open pending confirmation — both readings kept, flagged
+explicitly in the merged row), `MB3` (4 → 1), `MB4` (4 → 1), `PR1d` (2). In every case the LATEST
+occurrence was already a superset of the earlier ones (verified by diff, not assumed), except
+`B6d-cms-escalation`/`B6d-cms-step`/`ID3a-d`/`PR1d`/`AC2`/`AC3`/`B6e-fred-verify` where a distinct
+earlier fact was folded in explicitly.
+
+**`ID3e` / `ID3e (original measurement)`** — not a true duplicate (the file already disambiguated
+these as a shipped-result + preserved-original pairing); renamed the latter's row ID to
+**`ID3e-orig`** for mechanical uniqueness only, content untouched.
+
+Row count `docs/os/PLANNED-BACKLOG.md` **1172 → 1154 lines** (18 rows collapsed away; every
+collapsed row's distinct facts survive inside its merged sibling — verified by re-reading each
+merged row against all its source rows).
+
+**Guard shipped:** `test/backlog-id-uniqueness.test.mjs`, modeled on
+`test/status-header-integrity.test.mjs`. Parses only cells at split-position 1 of a `|`-leading
+line (never a prose mention elsewhere in a row's body) as a row-defining ID; positive-controlled
+both ways (a seeded prose cross-reference does NOT count as a duplicate; a seeded real duplicate
+DOES fail, with a message naming the repair procedure). Live-tested against the real file: seeded
+a duplicate `SEC9` row, confirmed the test fails with a useful message, reverted, confirmed green.
+`DUPLICATE_ALLOWLIST` is empty (every 2026-09-12 duplicate was resolved in this change, not
+deferred) but wired with the same by-ID / reason / re-measure-date / stale-entry-fails convention
+as `test/retired-identifiers-guard.test.mjs`.
+
+Full suite: **6,140 pass / 0 fail / 6 skipped** (unchanged from before this change — pure
+documentation + one new test file).
+
+Closed `BACKLOG-ids` in `docs/os/PLANNED-BACKLOG.md` §P0d (added as a done row, since the item
+existed only as the standalone prompt file, not a backlog row).
 ## 2026-09-12 — MB2a deployed: the dialysis stream is live, and its first run found 3 OTHER dead feeds (Cowork)
 
 Scott deployed `briefing-intel-snapshot` (CLI, `--project-ref xengecqvemvfknjvbvrq`). Verified live via
@@ -2340,3 +2397,35 @@ stale by the time this ran — `inbox_items WHERE status='new'` is **1,061**, no
 people, stamps cadences; a separate decision); no `priority_score` ranking (HP1-P2c, sequenced
 after this); `contact_misparse_review` resolution surface not built (filed, not fixed);
 `inbox_items.domain` four-spelling drift not touched (already filed as HP1-P2-domain).
+
+## BACKLOG-ids-dedupe — a 3-way merge silently reintroduced the duplicate class it was fixing (2026-09-12)
+
+PR #2410 fixed 27 duplicate `PLANNED-BACKLOG.md` row IDs and shipped
+`test/backlog-id-uniqueness.test.mjs` to guard it — then **failed its own new guard in CI**. A
+separate PR (#2409, later #2411) merged into `main` in between, adding its own restatement content
+for `MB2a`/`MB3`/`MB4` rather than editing those rows in place. Git's 3-way merge (pure line
+inserts in nearby but distinct regions, no textual conflict) kept **both** versions on the PR
+branch — the exact duplicate-row class the guard exists to catch, produced by the merge itself
+rather than by either PR's authored diff.
+
+- **Re-measured, not assumed.** `node --test test/backlog-id-uniqueness.test.mjs` on the already
+  `main`-merged branch (`b8c27f4`, later `7acd65e` after #2411 landed) found exactly the 3 IDs the
+  diagnosis named — `MB2a` 2x, `MB3` 4x, `MB4` 4x — and nothing new from #2411's independent merge.
+  All RESTATEMENT (same issue, told progressively as it moved toward live), not COLLISION.
+- **Merged each into one row, keeping every distinct fact** (verified programmatically — every
+  fragment from every original copy located byte-for-byte inside the merged text before/after):
+  `MB2a` = the build note + Cowork's "feeds fine, code not deployed" reconciliation (already a
+  clean superset in one copy — kept verbatim). `MB3` = base build → "partially unblocked, redeploy
+  confirmed" → "PR #2391, Cowork applied migrations + flipped flags" → "Scott, in parallel — PSQL
+  flag flipped 14:48 UTC, 31 live facts written, `market_brief_issues` frozen,
+  `MARKET_BRIEF_RENDER` confirmed `on`". `MB4` = base build → redeploy-confirmed pointer → "same
+  sequence as MB3" final-live note → the functional `#/briefs` + `/api/market-brief-tab` check.
+  Final `State` = the latest/most complete (`✅ live`); `Source` cells combined rather than picking
+  one.
+- **Also fixed the malformed-table byproduct of the same merge**: three of the four copies each of
+  `MB3`/`MB4` had grown two extra trailing cells beyond the table's real 4-column schema
+  (`# | Item | State | Source`), because a later restatement was appended as new cells instead of
+  new prose. Folded back into the `Item` narrative; no row now carries more than 4 cells.
+- Verify: `node --test test/backlog-id-uniqueness.test.mjs` → 6/6 pass. Full suite:
+  `npm test` → 6150 tests / 6144 pass / 0 fail / 6 skipped (unchanged skip count — no test was
+  removed or quarantined, only doc content merged).
