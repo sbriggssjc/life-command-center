@@ -18,6 +18,28 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-12 — FEED1 landed; reconciling it found the feed monitor itself was broken (Cowork)
+
+**FEED1 verified live.** CC re-fetched every URL itself rather than trusting Cowork's table (its sandbox
+has no egress), swapped the three dead feeds, deployed **v22 → v23**, and re-read the deployed body.
+Confirmed independently: all three dead URLs are gone from `RSS_FEEDS`, and today's health rows show
+`government` on 2 feeds (Federal Register GSA 14 + GovExec 15), `healthcare` 4, `net_lease` 4.
+🚨 **Then the monitor turned out to be broken — caught before its cron had ever fired.** Every feed read
+`zero_item_streak_days = 9999`, including ones that had just returned 15 items. Two bugs in one
+expression: (1) it measured **calendar days**, but `lcc-briefing-intel-snapshot` runs `0 10 * * 1-5`
+(weekdays) while the check runs `15 11 * * *` (daily) — so **Monday − Friday = 3** tripped the threshold
+on healthy feeds; (2) a **9999 sentinel** stood in for "no history", so the FIRST run alerted on all 16.
+Proven by simulation: a feed returning 15 items on EVERY check alerts on run 1 and every Monday. The
+monitor blamed feeds for days nobody looked — an **I11 inversion**, now written up in the invariants.
+**Fixed and applied live** (`20260912190000`, FEED2): the measure counts **checks, not days**
+(`zero_item_streak_checks`). After the fix: 13 healthy feeds **0**, the 3 retired feeds **1**,
+`lcc_check_market_brief_feed_health(3)` returns **0 opened / 0 resolved**. Both positive controls pass —
+a truly dead feed (3 zero-item checks) alerts, a healthy feed spanning a weekend stays silent. Tomorrow's
+11:15 UTC run would otherwise have opened **16 false alerts**.
+⚠️ This entry was written twice: the first copy was lost when a parallel session's STATUS archive
+rewrote the file while it sat uncommitted in the shared checkout. The rest of the FEED2 work (migration,
+backlog rows, invariants note) was swept into that session's commit `ba9da224`.
+
 ## 2026-09-12 — HP1-badge + HP1-P2misparse reconciled: both verified live, CC's own corrections held, one new finding (Cowork)
 
 PRs #2414 and #2415 merged. Three responses filed to `done/` (badge, P2misparse, FEED1). **Verified against the
