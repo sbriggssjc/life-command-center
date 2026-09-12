@@ -122,6 +122,22 @@ precision without it). All merge review views carry no `auto_mergeable`; `lcc_me
 reversible. 👤 N15e: 6,608 groups violate a `(workspace_id, canonical_name)` unique key.
 → **`docs/architecture/entity-identity-and-dedup.md`** (canonical).
 
+### dia operator source-of-record — registry hygiene done, no consumer switch yet (ID2a + ID2a-cleanup, 2026-09-12)
+`dia.operators` is the canonical registry (`kind` company/category/payer/non_operator/junk,
+`parent_operator_id` for brand children, `merged_into_operator_id` for retired dupes — retire, never
+delete); `dia_operator_aliases` (207 rows, exact-match only, seeded from every live company's own
+name + `dba_names`); `dia_resolve_operator(text)` is the one resolver, fails closed, never mints;
+`properties.operator_id` FK covers **9,449/11,804 (80.1%)**; a hard-block write guard
+(`dia_operator_write_guard`) refuses an unresolved write and routes classifications to the new
+`properties.operator_class` column instead of the human review queue. `dia_operator_write_review`:
+**71 open** (genuinely unregistered operator names), 142 resolved, 807 dismissed as classifications.
+Orphan-registry-gap detector reads 0. **Nothing downstream reads `operator_id`/`operator_class` yet**
+— the CM exhibits, `rpc_query_comps`, the market brief, the dossier and MCP tools all still read
+`dia.properties.operator` free text exactly as before; that consumer switch is ID2b, unblocked but
+not started.
+→ `CLAUDE.md` (ID2a's Dialysis-repo mirror doc, if any), `docs/os/PLANNED-BACKLOG.md` §P0d
+(ID2a / ID2a-cleanup / ID2b / ID2c / ID2c-payer), `docs/audits/ID1_OPERATOR_IDENTITY_AUDIT_2026-09.md`.
+
 ### CoStar sidebar capture — the largest producer, and five defect arcs in one place
 The extension → `sidebar-pipeline.js` path writes `properties`, `sales_transactions`,
 `parcel_records`/`tax_records`, `entities`/`contacts`, `loans` and `property_documents` DIRECTLY to
