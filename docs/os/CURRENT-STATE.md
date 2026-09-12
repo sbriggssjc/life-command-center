@@ -130,8 +130,28 @@ Virginia state veterans departments). Every auto-applied row is a string a human
 `(VA)` suffixes, `GSA - <occupant>` compounds and 14 codes with no registry row are routed, never
 guessed. Batch `id3a_20260912`, fully reversible.
 → **`docs/audits/ID3a_GOV_AGENCY_IDENTITY_WIRING_2026-09-12.md`**; open follow-ups `ID3a-regdup`
-(the `CIS`/`USCIS` registry duplicate), `ID3a-registry-gaps`, `ID3a-gsa-compound`,
-`ID3a-detector-schedule`, `ID3a-consumer-switch`.
+(the `CIS`/`USCIS` registry duplicate), `ID3a-registry-gaps`, `ID3a-detector-schedule`,
+`ID3a-consumer-switch`.
+
+✅ **ID3a-b (same day) fixed `agency_canonical` itself — closing `ID3a-gsa-compound` and most of
+`ID3a-canonical-repair`.** `canonicalize_agency()` no longer conflates: NAVY **150 → 3** properties
+(the 145 *Navy Federal Credit Union* rows now resolve NULL, routed to review as
+`private_company_name_collision`), STATE **213 → 9** (bare `\mstate\M` — which matched "State of
+Texas", "Washington State Dept of Social and Health Services" and even "DEPARTMENT OF STATE HEALTH
+SERVICES" — replaced with a closed allowlist of the actual federal Dept-of-State spellings), bare
+DOC **16 → 1** (routed to review as `ambiguous_doc_commerce_or_corrections` — `DOC&PS` reads state
+Corrections, not Commerce), and — found while shipping, not in the original brief — ICE **44 → 43**
+(*"Handel's Homemade Ice Cream & Yogurt"*). `RICHMOND FIELD OFFICE (VA)` and every trailing
+`"(XX)"` state-code suffix is now stripped before any match, generally. `GSA - <occupant>` compounds
+(624 properties / 106 raw strings, not the ~168/944 first estimated) keep `agency_canonical='GSA'`
+as the lease counterparty and gain a second `using_agency_canonical`/`using_agency_full` pair for
+the occupant. ⚠️ **DOJ/EPA/DOL/ED/DOT carry the identical state-body-conflation shape and are
+confirmed still live** (`TEXAS JUVENILE JUSTICE DEPARTMENT` reads DOJ, etc.) — filed **ID3a-c**,
+not fixed here. Migration
+`supabase/migrations/government/20260912030000_gov_id3ab_agency_canonicalizer_contamination_fix.sql`,
+reversible (`_gov_id3ab_agency_backup_20260912`); guard `test/gov-id3ab-agency-canonicalizer.test.mjs`.
+The separate `government_agencies`/`gov_agency_aliases` FK registry from ID3a is untouched by this
+change — display column and FK registry are two different systems, on purpose.
 
 ### County/city vocabulary fold — I14, never merges across state (ID3e, 2026-09-12)
 
