@@ -1,5 +1,75 @@
 # Claude Code queue — STATUS
 
+## 2026-09-12 — HP1 P0 reconciled: the Today 500 is fixed, DEPLOYED and verified — and the "See all (N)" badge was never honest
+
+Filed `responses/HP1 desktop response.docx` → `done/`; prompt → `prompts/done/`. **PR #2358 merged
+(`42158f17`) and LIVE — `/version` reads `42158f174956`** (probed from LCC Opps via `net.http_get`,
+the sandbox-reachable route), so this one is *running*, not merely merged.
+
+**What shipped, verified live in the merged source rather than from the response:** `Promise.all` →
+**`Promise.allSettled`** with a `settledQueryResult()` mapper (1b); explicit **`timeoutMs: 20000`** on
+the seller-prospect read and 12 s on the other three ops calls (1a); **`countMode` `'exact'` →
+`'estimated'`** on all four (1c); and a real per-lane failure state (1e) — `today-sections.js` now
+returns **`source_error`** per section, `app.js` renders *"This section is unavailable right now"*
+instead of the blanket "Today unavailable — HTTP 500", and `assembleTodaySections` folds a
+per-request degradation note into the existing **`named_gaps`** contract reading *"Section shown
+empty, not exhausted."* That last distinction is the whole point: before this, a lane whose source
+died rendered **"Nothing here right now. ✓"** — a green checkmark over a failure. CC also found and
+wrapped a **seventh** previously-unguarded `opsQuery` in the same handler (the entity-name lookup),
+which the brief had not named. Guard `test/today-sections-degraded-source.test.mjs` asserts a thrown
+source empties exactly its own lane, leaves the other two intact, and the endpoint returns **200**;
+full suite 6,013 pass / 0 fail / 6 skipped.
+
+🔴 **NEW FINDING, mine, found while reconciling — `total_open` is the CAPPED PAGE LENGTH, not the
+population, and two of the three "See all (N) →" badges under-report.** Every section returns
+`total_open: all.length` (`today-sections.js:79/103/182`) where `all` is the rows the query
+returned — and every source query carries **`limit=200`**. Measured live 2026-09-12:
+
+| lane | badge reads | true population | honest? |
+|---|---:|---:|---|
+| Significant (`v_lcc_seller_prospect_queue`) | **200** | **517** | ❌ under-reports 61% |
+| Urgent (`v_lcc_bd_worklist` contact_writeback half) | **≤200** | **1,587** | ❌ under-reports 87% |
+| Important (`bd_opportunities` open) | 50 | 50 | ✅ (below the cap) |
+
+**The module's own header promises the opposite** — *"`total_open` (the full population, for the
+'See all →' link)"* — and cites **P159a**, the rule that a rendered count and a population must be
+two distinct numbers and never blended. It is the honest-counts rule (Consumption Layer §5) failing
+inside the module written to enforce it. **Be precise about the blast radius: the RANKING is not
+affected.** Each query is `order=rank_value.desc` before the `limit=200`, so the eight rows rendered
+really are the top eight; only the badge lies.
+
+⚠️ **And this corrects my own filing, in place.** HP1's 1c said *"the only consumer of `total_open`
+is the 'See all (N) →' button text"*, which implies the PostgREST header count fed it. **It never
+did** — CC checked and reported correctly that `.count` is read nowhere in the handler, which is
+exactly why the downgrade to `'estimated'` was safe. What that check actually exposed is that the
+exact `COUNT(*)` we were paying ~750–800 ms for on every page load was **pure waste**, and the badge
+has been wrong since UX-T1a-today shipped. **Re-enabling `count=exact` is NOT the fix** — an
+estimated planner count over one of these views is the documented ~58× trap, and an exact one
+re-imposes the cost 1c just removed. Filed as **HP1-badge**: either a cheap dedicated count-only
+read, or render the badge as *"top 200"* and stop claiming a total. 👤 A count nobody can afford to
+compute may simply not belong on the card.
+
+**1d re-measured and correctly NOT built.** Post-1c the 200-row page is **~1.2 s warm** and the
+separate exact COUNT that 1c removed was **~0.8 s** (my own pre-fix measurement was 815 ms + 750 ms;
+wall-clock on this box moves 2–4× between sessions, so read the structural facts, not the
+milliseconds). The structural cost is untouched — seq scans on `entities` / `lcc_property_attributes`
+/ `lcc_entity_portfolio_facts` plus the `activity_events` subplan at `loops=1518` — so the
+materialized-view question stays open as **HP1-1d** rather than being taken on a number that moved.
+
+**Still open, unchanged:** **P1** (deal-backbone freshness + the deal-status confirmation lane) is
+held 👤 pending Scott's determination of whether the frozen transaction stages are a Salesforce
+hygiene gap or a Power Automate scope gap — *do not assume*. **P2** (Inbox routing/ranking, My Work
+re-rank onto the shared function) untouched. The 12 s front-end race in `renderTodaySections` was
+correctly left alone.
+
+⚠️ **Deploy note:** the doctrine is *redeploy BOTH Railway services*. `tranquil-delight` is confirmed
+on `42158f17` and serves this endpoint and `app.js`; the standalone MCP service does not serve
+`today_sections`, so the surface is fixed either way — but confirm the MCP redeploy before assuming
+any other engine change in the same merge is live.
+
+**Next:** HP1-badge (smallest, and it is an honest-counts defect on an operator surface), then P2's
+inbox routing. P1 stays 👤-blocked.
+
 ## 2026-09-12 — ID2b scoped: the identity fix is stored but unread — 45 views + 12 modules still group on operator text
 
 With ID2a/ID2a-cleanup live (`operator_id` on 9,449/11,804, guards on, 207 aliases, 71-row queue) Cowork measured how far

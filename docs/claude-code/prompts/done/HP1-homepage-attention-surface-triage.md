@@ -64,6 +64,16 @@ bug exists in the codebase and was never applied here.
   (or `'none'` + `count: items.length`) for `bd_opportunities`, `action_items` and
   `v_lcc_bd_worklist`. Keep exact for the Significant queue ONLY if a stated rule requires it — and
   if so, materialize it (next line) rather than paying for a 750 ms COUNT on every page load.
+  - ⚠️ **CORRECTED 2026-09-12 at reconcile — this bullet's premise was wrong in a way that hid a
+    second defect.** It says *"the only consumer of `total_open` is the 'See all (N) →' button
+    text"*, which implies the PostgREST header count fed that button. **It never did.** Every
+    section returns `total_open: all.length` — the length of the returned, `limit=200`-capped array
+    — and `.count` is read **nowhere** in the handler. So the exact `COUNT(*)` was pure waste (the
+    downgrade was right, for a better reason than stated), **and the badge has been under-reporting
+    since UX-T1a-today shipped**: Significant reads 200 against a true 517, the Urgent bd_worklist
+    half reads ≤200 against 1,587. Ranking is unaffected (each query orders by `rank_value.desc`
+    before the cap, so the rendered eight are the true top eight) — only the count lies. Filed as
+    **HP1-badge**; re-enabling `count=exact` is not the fix.
 - **1d — the view needs to stop being computed per request.** `v_lcc_seller_prospect_queue` is a
   ranked BD queue that changes daily at most. It is a candidate for a materialized view refreshed on
   the existing cron cadence (cf. `lcc-priority-queue-refresh`, `*/5 * * * *`, which already does this
