@@ -1,5 +1,41 @@
 # Claude Code queue — STATUS
 
+## 2026-09-12 -- ID3a measured before wiring: the canonicalizer itself has a live contamination bug
+
+Picked up ID3a next (Scott's #1 identity class, ranked first 2026-09-12). Before touching the
+alias/backfill/guard build the drafted prompt calls for, did its own Section 1 ("measure before
+wiring") live against the gov database -- the same discipline that caught OWN-T0h's counting bug and
+RO4's root cause.
+
+Two findings that change the prompt's scope, both live-verified:
+
+1. The "811 distinct uncanonicalized agency strings" population is contaminated by literal archived
+   junk: 2,670 rows / 20 strings carry `data_source='junk_backfill_archived_2026-06-09'` (e.g. "10
+   Federal Self Storage" duplicated across 10+ property_id rows at one address). Excluding them, the
+   real population is 6,168 rows / 804 distinct strings.
+
+2. More important: even the ALREADY-canonicalized 8,674 rows have drift -- 887 carry a code with no
+   matching row in the 65-row `government_agencies` registry. Read each code's raw strings rather than
+   assuming they're all registry gaps, and found one is not a gap at all but a live bug: `NAVY` (150
+   rows) is 145 rows of "Navy Federal Credit Union" -- a private bank -- because
+   `canonicalize_agency()`'s own regex (`gov_round_76bg_agency_canonicalizer.sql` line 53,
+   `x ~ '^navy|department of the navy'`) prefix-matches "Navy" with no word boundary. `DOC` (16 rows,
+   mostly bare `DOC`/`DOC/P&PO`/`DOC&PS`) is plausibly the same class -- likely a state Department of
+   Corrections abbreviation read as federal Commerce -- flagged as unconfirmed rather than guessed. The
+   other 9 missing codes (LSC/DOL/USGS/ARMY/NRC/NIH/NLRB/USAF/TREAS, ~400 rows) are genuine, safe
+   registry gaps -- real federal agencies just missing a row.
+
+This flips the ID3a build order: wiring `properties.agency_id`/`property_agencies.agency_id` to the
+existing canonicalizer BEFORE fixing the NAVY regex would durably promote a private credit union to a
+federal-agency record on every property it touches -- a worse defect than the unwired FK it was meant
+to fix. Documented both findings in the ID3a backlog row and added a warning block directly to
+`docs/claude-code/prompts/ID3a-gov-agency-wiring-and-first-detector.md` (the artifact a build session
+will actually read) so this isn't rediscovered the hard way mid-build.
+
+No code changed -- this was measurement only, same as RO4/RO5's pattern. The safe registry-gap
+backfill (9 codes) can proceed independently since it's additive and doesn't touch the regex; the NAVY
+fix and the DOC verification are prerequisites for the FK wiring itself.
+
 ## 2026-09-12 -- checked the response queue (both already merged), then wrote RO3's field-mapping design
 
 Two pasted Claude Code responses were waiting in docs/claude-code/responses/: ID2a (the operator
