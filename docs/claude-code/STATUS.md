@@ -437,6 +437,19 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-12 — MB2a scoped with feeds fetched live: 3 dead URLs replaced by 2 verified ones + a feed-health guard
+
+Cowork tested MB-b's three dialysis feeds and six candidates live. Dead: `renalandurologynews.com/feed/` **403**,
+`nephrologynews.com/feed/` **404** (and `/rss/`), `cms.gov/newsroom/rss` **404** (the `rss-feeds` page is an HTML
+listing, not a feed); also dead: `fiercehealthcare.com/rss/xml` **403**, `kidney.org/rss.xml` **404**. Working and
+parsed: **Federal Register ESRD query feed** (200, 3 items, real CMS documents — the authoritative ESRD-rule source)
+and **Google News operator query** (200, ~100 items). Two caveats recorded in the prompt rather than glossed: Google
+News links are redirect URLs with the publisher only in the title suffix, and the feed is broad enough that today's
+first item was local EMS news — so the Ollama relevance filter's survival rate gets measured before `MARKET_BRIEF_PRSS`
+is flipped. The real deliverable is the guard: a test that fetches every `RSS_FEEDS` URL and fails on non-200/zero
+items, plus per-stream feed health so an empty stream is a **named gap** (I11), not silence.
+Prompt: `prompts/MB2a-dialysis-feeds-that-actually-respond.md`.
+
 ## 2026-09-12 — MB-b reconciled and TURNED ON: the market brief is live in the daily email and on the homepage tab
 
 Cowork applied MB-b's two unapplied migrations (`MARKET_BRIEF_RENDER` registration, `lcc-market-brief-rss` cron),
