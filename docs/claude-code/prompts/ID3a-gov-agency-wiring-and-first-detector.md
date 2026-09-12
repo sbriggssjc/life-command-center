@@ -3,6 +3,21 @@
 **Repo: `life-command-center`.** Scott's #1 identity class (2026-09-12). Government DB. The registry and the
 normalizer already exist and work — this is a **wiring** job, not a cleanup invention.
 
+> ⚠️ **UPDATE 2026-09-12 (Cowork, live measurement) — read before starting.** "The normalizer already
+> works" (above) is not quite true: `canonicalize_agency()` has a **live contamination bug** — its
+> `NAVY` branch (`x ~ '^navy|department of the navy'`) prefix-matches "Navy Federal Credit Union" (a
+> private bank), and **145 of the 150 `NAVY`-canonicalized properties are that bank, not the Department
+> of the Navy**. `DOC` (16 rows) is plausibly the same class (state Dept. of Corrections read as federal
+> Commerce) — unconfirmed. **Fix `canonicalize_agency()`'s contamination before wiring any FK to it** —
+> wiring first would durably promote a private company into a federal-agency record. Separately, the
+> "811 distinct uncanonicalized strings" population includes 2,670 rows / 20 strings tagged
+> `data_source='junk_backfill_archived_2026-06-09'` (literal archived junk, e.g. duplicate "10 Federal
+> Self Storage" rows) — exclude these from the wiring population; the real uncanonicalized population is
+> 6,168 rows / 804 distinct strings. 9 of the 13 codes with no `government_agencies` registry row are
+> confirmed safe registry gaps (`LSC`/`DOL`/`USGS`/`ARMY`/`NRC`/`NIH`/`NLRB`/`USAF`/`TREAS`, ~400 rows)
+> and can be added independently. Full detail: `docs/os/PLANNED-BACKLOG.md` ID3a row,
+> `docs/claude-code/STATUS.md` 2026-09-12.
+
 **Read first:** `docs/audits/ID1_OPERATOR_IDENTITY_AUDIT_2026-09.md` §9.1 · `docs/audits/ID0_IDENTITY_VALUE_DOMAIN_PROBE_2026-09-11.md`
 · `docs/audits/ID4_IDENTITY_INTEGRITY_BASELINE_2026-09.md` (framework decision: **per-class comparators, never one
 shared normalizer**) · `docs/os/PLANNED-BACKLOG.md` §P0d ID3a, ID4, ID2a (the pattern to copy) ·
