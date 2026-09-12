@@ -133,6 +133,23 @@ guessed. Batch `id3a_20260912`, fully reversible.
 (the `CIS`/`USCIS` registry duplicate), `ID3a-registry-gaps`, `ID3a-gsa-compound`,
 `ID3a-detector-schedule`, `ID3a-consumer-switch`.
 
+### County/city vocabulary fold — I14, never merges across state (ID3e, 2026-09-12)
+
+gov `properties.{county,city}` and dia `medicare_clinics.city` each gained a STORED generated
+`*_norm` column keyed on `(normalized_name, lower(trim(state)))` as a **pair** — county/city alone
+is never the key. Punctuation normalizes to a space (never deleted), so a Virginia independent
+city's `(city)`/`city` token survives and `RICHMOND (CITY)` / `Richmond city` fold together while
+never colliding with a same-named county; cross-state same-name counties (`St Louis` MN vs MO,
+`LaSalle` IL vs TX) verified to carry distinct keys. Two corrupted-state rows route to a review
+view, untouched. Fold sizes (live, 2026-09-12): gov county/state 2,445→1,611 (834 collapse), gov
+city/state 3,454→3,225, dia city/state 4,367→3,635. This is I14 (controlled-vocabulary
+normalization) — a different mechanism than ID3a's FK/registry wiring; no consumer has been
+repointed to the new columns yet. dia `property_type` was measured and scoped OUT (a taxonomy
+question, not a case fold) — filed `ID3e-property-type-taxonomy`.
+→ `docs/os/PLANNED-BACKLOG.md` §ID3e; migrations
+`supabase/migrations/{government,dialysis}/20260912120000_*_id3e_*_vocab_fold.sql`; guard
+`test/id3e-migration-shape.test.mjs`.
+
 ### Entity identity — one key, one writer, two tiers (P189 → PR5c-entities-c, 2026-09-03)
 `entities.canonical_name` is trigger-owned (N15c, drift 0 at 4,618 mints). `ensureEntityLink`'s
 canonical_name tier no longer scopes identity by `entities.domain` — a provenance tag, not a scope —
