@@ -387,6 +387,21 @@ fix written against the committed source would have been written for a function 
 the "MERGED is not RUNNING" doctrine: *running is not committed*. **Second instance, 2026-09-12 (repo-level, worse):** the government DB is written by migrations in **two** repos — `life-command-center` (213 `migrations/government/*`) and `government-lease` — and ID3a-c's fix landed in the latter, so LCC's committed copy of the same function is now **older than live and still applicable**: re-running it would restore the state-agency contamination and the ICE/CBP conflation. **Rule (Scott, 2026-09-12): one repo owns each database's objects — `government-lease` owns the government DB.** A migration directory in a non-owning repo is historical, and must say so. **Detector:** hash every routine/view definition in each DB against the definition the OWNING repo's migrations produce, and alert on any difference. Until it exists, a session that
 touches a DB object reads the DEPLOYED definition first and says so.
 
+✅ **ID3a-d (2026-09-12) named the owner of all three databases and retired the government copy.**
+`government-lease` owns **government** (settled by Scott); `life-command-center`'s own
+`supabase/migrations/government/*` (213 files) is now marked historical with a
+`README.md` + a per-file header comment (never re-applied, never added to;
+`test/gov-migrations-directory-retired.test.mjs` guards it), explicitly naming both defects
+re-applying the stale `canonicalize_agency()` copy would restore. `Dialysis` owns **Dialysis_DB**
+and `life-command-center` owns **LCC Opps** — both proposed from evidence (migration counts,
+CLAUDE.md self-description), 👤 Dialysis is not yet Scott-confirmed. Full ownership table:
+`CLAUDE.md` → "ONE REPO OWNS EACH DATABASE'S OBJECTS". **The detector is designed and documented,
+not yet run** — `scripts/db-drift/gov-deployed-vs-committed-drift.sql` computes the live half of
+the hash comparison against government (the database where drift has already bitten twice); the
+"expected" half (replaying `government-lease`'s migrations) and the final diff are specified
+inline but require real Supabase credentials this sandbox does not have. Do not fabricate a
+result — run it for real, record what it finds, and only then schedule it on I11.
+
 ### I10 — A one-shot backfill is not a producer
 
 If the mechanism that filled a store was a migration or a script, the store **decays from the moment
@@ -430,7 +445,7 @@ Supabase project"; it is a new set of connections that must be asserted on day o
 | **I13** | identity: normalized-collapse probe + identical-canonical groups | ⚠️ **manual, 2026-09-11** (`docs/audits/ID0_IDENTITY_VALUE_DOMAIN_PROBE_2026-09-11.md`) → standing detector in **ID4** |
 | **I14** | controlled-vocabulary drift | ⚠️ **manual, 2026-09-11** (same probe) → **ID4** |
 | **I15** | import count reconciliation / truncation signature | ❌ **none** → **ID4** |
-| **I16** | deployed-vs-committed definition drift | ❌ **none — one instance found 2026-09-12 (ID3a-b, `canonicalize_agency()`).** Until a detector exists, read the deployed definition before editing any DB object. |
+| **I16** | deployed-vs-committed definition drift | ⚠️ **designed 2026-09-12 (ID3a-d), not yet run.** `scripts/db-drift/gov-deployed-vs-committed-drift.sql` computes the live-side hash for government (the database drift has bitten twice); the expected-side replay + diff are specified but unexecuted — no Supabase network access from this sandbox. Two instances found so far (ID3a-b's `canonicalize_agency()`; ID3a-d's two-repo copy of the same function). Until a run exists, read the deployed definition before editing any DB object, and know which repo owns it (see `CLAUDE.md` ownership table). |
 | I9 | fact stores lacking `created_at` | ❌ **none** |
 | **I13** | identity collapse (byte-identical entity under case/punctuation/format variants) | ⚠️ **PARTIAL — one class now has a standing detector.** ✅ **gov AGENCY (ID3a, 2026-09-12):** `v_gov_agency_identity_detector` over `properties.agency_id` + `property_agencies.agency_id`, using an AGENCY-SPECIFIC comparator (`gov_agency_alias_key` — word boundaries preserved, deliberately NOT a shared alnum key), reporting collapse, orphans and `rows_no_raw_text` as a SEPARATE state (blank ≠ unresolvable, P180). First live run: properties 7,369 resolved / 10,143 orphan / 179 strings collapsed onto 44 agencies; bridge 119,361 / 12,882 / 110 onto 45. Run once, **not scheduled** (ID3a-detector-schedule). Registry wired 0% → 35.9% and 0.12% → **90.3%**. ⚠️ **And ID3a proves the per-class rule from the other direction:** gov already had a 45-code normalizer (`agency_canonical`) and it was **unsafe to wire from** — it conflates federal agencies with same-named state bodies and commercial lookalikes (`NAVY` = Navy Federal Credit Union ×145; `ICE` includes an ice-cream shop). **A column named for the answer is not the answer.** Audit `docs/audits/ID3a_GOV_AGENCY_IDENTITY_WIRING_2026-09-12.md`.
     ✅ **ID3a-b (2026-09-12) fixed the display column itself** — `canonicalize_agency()`
