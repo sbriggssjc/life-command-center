@@ -48,6 +48,26 @@ registry are two different systems on purpose (`ID3a-regdup`, `ID3a-registry-gap
 Docs updated in the same change: `PLANNED-BACKLOG.md` (§P0d rows ID3a-b, ID3a-canonical-repair,
 ID3a-gsa-compound closed/updated; new row ID3a-c filed), `data-coherence-invariants.md` (I13),
 `CURRENT-STATE.md`.
+## 2026-09-12 — ID3e SHIPPED: county/city vocabulary fold (I14), never merges across state
+
+Built from the pre-written prompt (`docs/claude-code/prompts/ID3e-county-city-vocabulary-fold.md`) and its own
+measurement note. Re-measured live before building (numbers move slightly, as expected): gov `properties.county`/`state`
+2,445→1,611 (834 collapse), gov `city`/`state` 3,454→3,225 (229 collapse), dia `medicare_clinics.city`/`state`
+4,367→3,635 (732 collapse). **This is I14 controlled-vocabulary work, not ID3a's FK-wiring pattern** — no registry
+table, no `_id` column: one IMMUTABLE normalizer (`gov_normalize_place_token`/`dia_normalize_place_token`) + STORED
+generated columns (`county_norm`/`city_norm`) keyed on `(normalized_name, lower(trim(state)))` as a **pair, never name
+alone**. Verified live: `St Louis|mn` ≠ `St Louis|mo` (cross-state same-name counties never fold); `RICHMOND (CITY)`
+and `Richmond city` fold to one `richmond city|va` key (VA independent cities fold across punctuation, never with a
+same-named county — punctuation normalizes to a **space**, never deleted, which is what keeps the `city` token alive).
+The two corrupted-state rows (`property_id 6638` state=`M`, `property_id 16465` state=`|`) route to
+`v_gov_place_vocab_state_review`, untouched. Parity views `v_{gov,dia}_{county,city}_fold_groups` expose every merged
+group. `property_type` (96 values, only 9 collapse) confirmed a taxonomy question, not a case-fold — scoped out as
+`ID3e-property-type-taxonomy`. Migrations applied live + committed
+(`supabase/migrations/{government,dialysis}/20260912120000_*_id3e_*_vocab_fold.sql`); offline structural guard
+`test/id3e-migration-shape.test.mjs` (13/13 pass, comments stripped before matching); live positive-control
+`test/sql/id3e-place-vocab-fold.live.test.mjs` (kept out of the `npm test` glob per the hermetic-suite doctrine — it
+reaches Supabase directly, so it's a manual/CI-secret-gated check, not a `npm test` member). Full suite: 5,991 pass /
+0 fail / 6 skipped. **Not built:** no consumer repointed to read the new columns yet — that's a separate decision.
 
 ## 2026-09-12 — ID2a-cleanup + ID3a reconciled: operator registry clean; gov agency WIRED but the NAVY regex is still live
 
