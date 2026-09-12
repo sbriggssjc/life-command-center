@@ -1,3 +1,35 @@
+## 2026-09-12 — B2 retired: it's `C2e-T2b`, not a separate gap; asset-anchor coverage re-measured live (Cowork)
+
+Picked B2 as the next gap after PR-scanner-3, per the standing "measure before building" discipline
+and the row's own `owner_needs_salesforce` warning about wrong-key artifacts. Re-derived the real join
+chain instead of trusting the row's 9,830/6,362/3,468 figures: `properties.true_owner_id` (gov) →
+`external_identities(source_system='gov', source_type='true_owner')` (LCC Opps) → gov `asset` anchor →
+`lcc_property_owner`.
+
+**Found: B2's premise was itself a wrong-key artifact, the exact class its own warning named.** Of
+9,842 live gov properties carrying a `true_owner_id`, only 163 (1.7%) are unindexed at the identity
+layer — 97.7% already ARE indexed as a `gov/true_owner` identity. "Never reached the entity graph" is
+false at that layer. The real bottleneck is asset-anchor coverage: **2,496 properties have no gov
+`asset` entity anchor at all** (resolution can't even be attempted — the anchor-then-resolve chain
+never starts), plus a small, previously-uncounted **40-property residual that IS anchored but was
+never resolved to an owner link**.
+
+**This 2,496-property gap is not new — it is `C2e-T2b`** (`connectivity-and-open-threads.md` §4k.1),
+sized 2026-08-28 at 2,241 properties / 2,054 owners, already measured safe-to-run and low-value, and
+already left as an explicit, un-taken decision for Scott ("safe to run, low-value to run. No default
+taken."). The two-week population growth (2,241 → 2,496) is ordinary property-intake drift, not a new
+finding. `PLANNED-BACKLOG.md`'s `B2` row had drifted out of sync with `C2e-T2b` and was carrying stale,
+wrong-key numbers as if it were a distinct, still-unsized gap — retired into a pointer at `C2e-T2b` so
+there is one authoritative row for this population, not two disagreeing ones.
+
+**New, smaller finding not previously counted anywhere:** 40 gov properties that DO have an asset
+anchor but were never resolved to an owner in `lcc_property_owner` — distinct from T2b's mint-eligible
+population (T2b is entirely about properties with no anchor yet). Small enough to be worth a quick
+look on its own rather than folding into the T2b decision.
+
+**No build taken** — T2b remains explicitly Scott's call, and this session did not override that.
+Docs updated: `PLANNED-BACKLOG.md` (`B2` row retired/redirected to `C2e-T2b`).
+
 # Claude Code queue — STATUS
 
 ## 2026-09-12 — HP1-P1a ANSWERED read-only: it is NOT a Salesforce hygiene gap. The opportunity feed has written 5 rows in 36 days.
