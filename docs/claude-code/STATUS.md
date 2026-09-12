@@ -18,6 +18,23 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-12 — MB2a deployed: the dialysis stream is live, and its first run found 3 OTHER dead feeds (Cowork)
+
+Scott deployed `briefing-intel-snapshot` (CLI, `--project-ref xengecqvemvfknjvbvrq`). Verified live via
+pg_net dry-run: **`sector_news.dialysis` = 6 items**, where the key did not exist at all before.
+🚨 **The monitor's first run found three long-silent dead feeds in OTHER streams**, each confirmed
+independently: **GSA News 404**, **Health Affairs 410 Gone**, **GlobeSt 403**. The government lane is
+running on ONE feed, net_lease on two of three, healthcare on two of three — and the daily email's
+Sector Watch has been quietly built on that. → **FEED1**.
+**PRSS stays OFF, now on evidence:** of the 6 dialysis items, **0 are market signal** — local EMS
+coverage, a Canadian wildfire item, a $4,100 clinic refund, a PFAS suit, a supplier award, and a DaVita
+one-day stock move we already read straight off the DVA ticker. → **MB2b**.
+**Federal Register is healthy and contributes nothing:** 3 items parsed, 0 survive the shared **72h
+cutoff** — its documents are weeks old by design, which is exactly what the policy section wants. So
+`item_count` measures PARSING, not CONTRIBUTION, and a feed can look green while adding zero.
+**Publisher parser bug:** the suffix regex forbids hyphens in the outlet name, so
+"… - Honolulu Star-Advertiser" yields `publisher=null` AND leaves the suffix in the headline.
+
 ## 2026-09-12 — MB2a reconciled live: feeds confirmed, migration applied, and the code is NOT DEPLOYED (Cowork)
 
 **Both replacement feeds re-verified independently** via pg_net (the check CC's sandbox could not run —
