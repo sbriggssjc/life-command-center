@@ -7425,8 +7425,29 @@ function _renderTodaySection(contentId, section, viewAllLabel, viewAllOnclick) {
   const el = document.getElementById(contentId);
   if (!el) return;
   const items = (section && Array.isArray(section.items)) ? section.items : [];
-  if (!items.length) { el.innerHTML = '<div class="nba-empty">Nothing here right now. ✓</div>'; return; }
+  // HP1 Finding 1 (1e) — a section can be empty for two DIFFERENT reasons: no
+  // work today (a real, good finding), or its source degraded THIS request
+  // (server-side Promise.allSettled, HP1 P0). The two must never render the
+  // same "Nothing here right now. ✓" — that reads as a false all-clear on a
+  // seller-prospect/pipeline-hygiene queue. `section.source_error` (set only
+  // when the server actually reports a degraded lane) picks the message.
+  if (!items.length) {
+    if (section && section.source_error) {
+      el.innerHTML = '<div class="nba-empty">This section is unavailable right now — ' + esc(String(section.source_error))
+        + ' <button class="retry-btn" onclick="renderTodaySections(true)">Retry</button></div>';
+    } else {
+      el.innerHTML = '<div class="nba-empty">Nothing here right now. ✓</div>';
+    }
+    return;
+  }
   let html = '';
+  // Partially degraded (some rows came back, but the section is honestly
+  // incomplete for this request) — say so instead of presenting a thinned
+  // list as the whole population.
+  if (section && section.source_error) {
+    html += '<div class="nba-empty" style="margin-bottom:6px;font-size:0.85em;">⚠ partially unavailable — '
+      + esc(String(section.source_error)) + '</div>';
+  }
   items.forEach((it) => {
     const dl = it.deep_link || {};
     const clickable = dl.surface === 'entity' && !!dl.entity_id;

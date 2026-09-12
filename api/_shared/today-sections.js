@@ -51,7 +51,7 @@ const money = (v) => {
  * `years_into_term` are never collapsed to 0/false when unknown (P180) — they
  * ride as `null` and the caller renders "value unknown" / "term unknown".
  */
-export function buildSignificantSection(rows, { limit = TODAY_SECTION_LIMIT } = {}) {
+export function buildSignificantSection(rows, { limit = TODAY_SECTION_LIMIT, sourceError = null } = {}) {
   const all = Array.isArray(rows) ? rows : [];
   const items = all.slice(0, limit).map((r) => {
     const reasons = [];
@@ -76,7 +76,7 @@ export function buildSignificantSection(rows, { limit = TODAY_SECTION_LIMIT } = 
       deep_link: { surface: 'entity', entity_id: r.entity_id || null },
     };
   });
-  return { items, count: items.length, total_open: all.length };
+  return { items, count: items.length, total_open: all.length, source_error: sourceError || null };
 }
 
 /**
@@ -85,7 +85,7 @@ export function buildSignificantSection(rows, { limit = TODAY_SECTION_LIMIT } = 
  * recorded producer measured for this bucket — see the module header for the
  * two named gaps this does NOT cover).
  */
-export function buildImportantSection(bdOppRows, entityById = new Map(), { limit = TODAY_SECTION_LIMIT } = {}) {
+export function buildImportantSection(bdOppRows, entityById = new Map(), { limit = TODAY_SECTION_LIMIT, sourceError = null } = {}) {
   const all = Array.isArray(bdOppRows) ? bdOppRows : [];
   const items = all.slice(0, limit).map((r) => ({
     kind: 'bd_opportunity',
@@ -100,7 +100,7 @@ export function buildImportantSection(bdOppRows, entityById = new Map(), { limit
     type: r.type || null,
     deep_link: { surface: 'entity', entity_id: r.entity_id || null },
   }));
-  return { items, count: items.length, total_open: all.length };
+  return { items, count: items.length, total_open: all.length, source_error: sourceError || null };
 }
 
 /**
@@ -123,7 +123,7 @@ export function buildImportantSection(bdOppRows, entityById = new Map(), { limit
  * means operationally: a task actually late beats a task merely valuable. Ties
  * within "overdue" and within "not overdue" break on value.
  */
-export function buildUrgentSection({ actionItems, bdWorklistRows } = {}, entityById = new Map(), { limit = TODAY_SECTION_LIMIT, today } = {}) {
+export function buildUrgentSection({ actionItems, bdWorklistRows } = {}, entityById = new Map(), { limit = TODAY_SECTION_LIMIT, today, actionItemsError = null, bdWorklistError = null } = {}) {
   const now = today instanceof Date ? today : new Date();
   const todayIso = now.toISOString().slice(0, 10);
 
@@ -172,25 +172,51 @@ export function buildUrgentSection({ actionItems, bdWorklistRows } = {}, entityB
   });
 
   const items = all.slice(0, limit);
-  return { items, count: items.length, total_open: all.length };
+  // Urgent has TWO independent producers (§ module header) — either can fail
+  // on its own without the other, so the section's source_error names whichever
+  // (or both) degraded rather than collapsing to one undifferentiated flag.
+  const urgentSourceError = (actionItemsError && bdWorklistError)
+    ? `deal correspondence: ${actionItemsError}; pipeline hygiene: ${bdWorklistError}`
+    : (actionItemsError ? `deal correspondence: ${actionItemsError}`
+      : (bdWorklistError ? `pipeline hygiene: ${bdWorklistError}` : null));
+  return { items, count: items.length, total_open: all.length, source_error: urgentSourceError };
 }
 
 /**
  * Assemble the whole Today recut. `named_gaps` is a list of strings describing
  * a canon-named example with no producer today — filed, never fabricated.
+ *
+ * `sourceErrors` (HP1 Finding 1, P0) — when a source query for one lane threw
+ * or 5xx'd this request (a timeout, a dead connection), the CALLER (the
+ * handler) empties that lane's rows and passes the reason here instead of
+ * letting the whole endpoint 500. Each section then carries `source_error`
+ * (null when healthy) AND the reason is folded into `named_gaps` under the
+ * SAME contract as a permanent design gap — a degraded lane this request is
+ * exactly the kind of thing P131 says must be named, never silently swallowed
+ * as "nothing here" (which would read as a false all-clear on an owner queue).
+ * Shape: { significant, important, actionItems, bdWorklist } — each a
+ * string|null describing that source's failure THIS request.
  */
 export function assembleTodaySections({
   significantRows, bdOppRows, actionItems, bdWorklistRows, entityById,
 } = {}, opts = {}) {
   const em = entityById instanceof Map ? entityById : new Map();
-  return {
-    significant: buildSignificantSection(significantRows, opts),
-    important: buildImportantSection(bdOppRows, em, opts),
-    urgent: buildUrgentSection({ actionItems, bdWorklistRows }, em, opts),
-    named_gaps: [
-      'Important: no DB row anywhere records "a BOV was generated" or "one is due" — bd_opportunities open rows are the closest recorded producer, not a BOV-specific one.',
-      'Important: no discrete producer exists for "marketing a live listing" as a task (lcc_listing_events is a SALE-event feed, not a marketing-touch queue).',
-      'Urgent: loan_maturity has no sub-slice expressible for the canon\'s ~90-day window, so it is surfaced elsewhere (Priority Queue / BD worklist), not here.',
-    ],
-  };
+  const se = (opts && opts.sourceErrors) || {};
+
+  const significant = buildSignificantSection(significantRows, { ...opts, sourceError: se.significant || null });
+  const important = buildImportantSection(bdOppRows, em, { ...opts, sourceError: se.important || null });
+  const urgent = buildUrgentSection({ actionItems, bdWorklistRows }, em, {
+    ...opts, actionItemsError: se.actionItems || null, bdWorklistError: se.bdWorklist || null,
+  });
+
+  const named_gaps = [
+    'Important: no DB row anywhere records "a BOV was generated" or "one is due" — bd_opportunities open rows are the closest recorded producer, not a BOV-specific one.',
+    'Important: no discrete producer exists for "marketing a live listing" as a task (lcc_listing_events is a SALE-event feed, not a marketing-touch queue).',
+    'Urgent: loan_maturity has no sub-slice expressible for the canon\'s ~90-day window, so it is surfaced elsewhere (Priority Queue / BD worklist), not here.',
+  ];
+  if (significant.source_error) named_gaps.push(`Significant: source degraded this request — ${significant.source_error}. Section shown empty, not exhausted.`);
+  if (important.source_error) named_gaps.push(`Important: source degraded this request — ${important.source_error}. Section shown empty, not exhausted.`);
+  if (urgent.source_error) named_gaps.push(`Urgent: source degraded this request — ${urgent.source_error}. Section partially or fully empty, not exhausted.`);
+
+  return { significant, important, urgent, named_gaps };
 }
