@@ -1,3 +1,70 @@
+## 2026-09-12 — First real run of XB2's audit rules (manual, not the automated system) — four findings, one fixed live (Cowork)
+
+Scott asked for the repo's docs/files to be cleaned and consolidated by topic so future threads aren't
+misdirected by conflicting or stale files. `docs/architecture/EXEC-BRIEFS-SPEC.md` §5 already specs an
+automated system for exactly this (XB1 collector + XB2 audit rules + XB3 dashboard + XB4 narrative) —
+all four rows in `PLANNED-BACKLOG.md` are still 🔴, unbuilt. Building that system is its own project
+(a GitHub Action, an on-box Ollama synthesis tick, a new dashboard route) and out of scope for this
+turn. Instead, ran XB2's own audit-rules checklist manually, once, across the categories the spec
+names, using three read-only sub-passes.
+
+**1. Orphaned prompts** — none found. All 13 active files in `docs/claude-code/prompts/` are ≤1 day
+old and referenced in `PLANNED-BACKLOG.md`/`STATUS.md`. Adjacent finding: three prompts marked ✅
+SHIPPED in the backlog were still sitting in `prompts/` instead of `prompts/done/` (filing lag, not
+abandonment) — moved in this same change: `OWN-T0j-gov-side-reconciled-classifier.md`,
+`ID3e-county-city-vocabulary-fold.md`, `PR-scanner-3-county-records-needed-action.md`.
+
+**2. GENERATED hand-edits** — none found. All five `docs/os/surfaces/*.canon.md` files and
+`docs/os/OPERATOR-INBOX.md` show their last edits coming from genuine `render-surfaces.mjs`/canon-bump
+commits, not hand edits.
+
+**3. Dead producers** — pg_cron itself is healthy across a ~20-job sample; no job is silently disabled
+or failing. The real pattern is jobs that run green but produce nothing useful, and the docs already
+self-report both known cases: cron 219 (`comms-owner-attribution-tick`, green daily, zero new proposals
+since 2026-08-20) and cron 104 (`r9_chain_connect`, green, 4,943 of 5,207 minted entities orphaned/no
+consumer). Nothing new to file — flagging for whoever picks either one up next.
+
+**4. Flags ON with no consumer** — two real findings. `OCR_CLOUD_DOCAI` and `W51_PARTY_EXTRACT` are
+both marked `on` in `docs/os/CURRENT-STATE.md`'s feature-flags registry with **zero code path anywhere
+that reads either flag name** — both domains are actually gated by differently-named env vars/flags
+instead (OCR: `OCR_CLOUD_ESCALATION`/`OCR_CLOUD_PROVIDER`/`OCR_CLOUD_OCR_URL`; W51: its own migration
+comments it as a deliberately inert registry row, real control is `W51_ALLOW_CLOUD`/CLI args). Cosmetic
+registry drift, not a live risk — filed here, not fixed (deciding whether to retire the flag names or
+wire real reads to them is a judgment call, not this pass's job).
+
+**5. Doc contradictions** — two real findings, one fixed live this pass:
+- **Fixed:** `PLANNED-BACKLOG.md` carried **four near-duplicate copies of the `PR5c-enforce` row**
+  (accumulated 2026-08/09, pre-CONTACT1a, saying the same thing with slightly different wording).
+  Consolidated into one row and re-measured live while at it: `field_provenance` on `entities`
+  (email/phone) has grown from the 2026-09-03 blocked baseline (4 rows / 1 source / all `write`) to
+  **130 rows / 3 sources** — CONTACT1's numeric unblock condition (>~50 rows, ≥2 sources) is now
+  cleared. ⚠️ Not a clean green light: all 130 rows are `decision='write'` — zero `skip`/`conflict`
+  ever recorded, so the ladder has volume but has never been tested on a case where it would actually
+  need to protect a value or arbitrate a conflict. Flagged 🟢 unblocked-for-grading, not shipped —
+  flipping `enforce_mode` to `warn` is a build decision, not something this pass took.
+- **Not fixed, flagged for Scott:** `PLANNED-BACKLOG.md` has two rows independently claiming to be
+  THE single top priority in overlapping sections — `C2g` ("⭐ NEXT", dated 2026-09-11) and the `P1a`
+  section header ("⭐ THE TOP PRIORITY", dated 2026-08-27, now over two weeks stale) — with nothing in
+  the document reconciling which is actually first. Also: the spec's own worked example of a
+  contradiction (backlog's `C2g` ⭐NEXT vs. the live queue's `PDR2`, both noted 2026-09-11 in the
+  original XB2 finding) is **still unresolved today**, unchanged since the day it was found.
+
+**6. Stale dated blockers** — one flagged, not resolved: `B6d-cms-restart` has stood since 2026-08-31
+blocked on "Railway deploy logs no agent can reach," but three PRs since (PRI1/PRI3/PRI4, all
+2026-09-11, in the same ingestion pipeline) fixed a connection-drop crash and a broken
+timeout/shutdown path that PRI4 itself flags as "plausibly the same mechanism" behind unexplained
+hangs elsewhere in this arc. Nobody has gone back to check whether B6d-cms-restart's mystery is now
+explained. Left for whoever owns that pipeline next — this session didn't have the Railway log access
+the row's own blocker names.
+
+**Not built:** the XB1/XB3/XB4 automated system remains entirely unbuilt (all still 🔴). This was a
+one-time manual pass, not a standing process — if Scott wants this repeated automatically, that's the
+actual XB1/XB2 build, sized at a GitHub Action + on-box Ollama tick + dashboard route, a real project
+on its own.
+
+Docs updated: `PLANNED-BACKLOG.md` (`PR5c-enforce` deduped + re-measured), 3 prompts moved to
+`prompts/done/`.
+
 # Claude Code queue — STATUS
 
 ## 2026-09-12 — ID2b-caps reconciled: passthrough works, but the gate FAILED — two bands now share one display name; root cause is our own SF-staged comps
