@@ -144,6 +144,16 @@ the first thing to establish: **do not assume**. The repo already runs `lcc-bd-s
 (05:00) and `lcc-feed-freshness-sync` (05:30) for other feeds; the deal backbone has no equivalent
 freshness assertion.
 
+⚠️ **CORRECTED 2026-09-12 — 2c's central claim was wrong, and it sent the question to the wrong
+system.** It reads *"the table as a whole is still being written (`max(updated_at)` 2026-09-10, 619
+rows), so the pipe is not dead."* **`updated_at` was the wrong column** — it also moves for LCC-side
+writers (`DaVita Dialysis - Succasunna - NJ`: `last_synced_at` 2026-09-07, `updated_at` 2026-09-10).
+The honest column is **`last_synced_at`**, stamped unconditionally by the ingest, and it reads: 590
+rows on 2026-08-03, 15 on 08-04, then **5 rows in the following 36 days**, one of them
+`Test Property SN 05032024`, with **zero of 569 closed opportunities synced since**. The feed ran once
+as a backfill and stopped. So this is neither of the two options this section offered — and the
+operator step is a **Power Automate run-history** question, not a Salesforce one.
+
 **2d — My Work sorts chronologically, not by value.** `v2GetMyWork` (`api/queue.js:462`) defaults to
 `due_date.asc.nullslast,created_at.desc`, and `loadCanonicalData` (`app.js:6220`) requests
 `sort=due_date`. The consequence is structural: **the oldest, most-ignored task is always pinned to
