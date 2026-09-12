@@ -2058,19 +2058,27 @@ export async function getTodaySections(req, res, user, workspaceId) {
     return (Number.isFinite(n) && n > 0 && n <= 25) ? Math.floor(n) : TODAY_SECTION_LIMIT;
   })();
 
-  // 1c: none of these six calls' `.count` is ever read below (each section's
-  // `total_open` is the RETURNED array length, not the header count) — so
-  // `Prefer: count=exact` buys nothing here and only pays for it. Measured:
-  // the exact COUNT(*) PostgREST runs in ADDITION under count=exact costs
-  // ~750ms on v_lcc_seller_prospect_queue alone (docs/HP1 Finding 1). Dropped
-  // to 'estimated' on ALL FOUR ops-side reads, seller-prospect included —
-  // checked first that no rule requires exact here (there is no reader).
+  // 1c (superseded by HP1-badge, 2026-09-12): `.count` from the row-fetch
+  // calls is still never read — `total_open` must NOT come from a header
+  // count riding the SAME request as the row fetch, because that is exactly
+  // the ~750ms-per-request cost measured and removed here (docs/HP1 Finding
+  // 1). The row-fetch reads stay `countMode: 'estimated'` for that reason.
+  // HP1-badge instead runs the true count as a SEPARATE, PARALLEL, narrow
+  // (single-column, `limit=1`) probe per lane, `Prefer: count=exact` (the
+  // same idiom `getBdWorklist`'s summary path already uses for
+  // `v_lcc_bd_worklist`). Paying the DB's real COUNT(*) cost once, in
+  // parallel with the row fetches rather than serially inside one of them,
+  // is what keeps this off the row-fetch's own critical path — see the
+  // measured latency in the HP1-badge writeup before touching this shape.
   // 1a: the seller-prospect view is the one measured to cross the OLD 8s
   // default on a cold cache (EXPLAIN ANALYZE ~1.6s warm; several-fold longer
   // cold) — it gets the most headroom. The other three are lighter aggregates
-  // but get real headroom too rather than a bare guess.
+  // but get real headroom too rather than a bare guess. The count probes get
+  // the SAME headroom as their row-fetch siblings, since a view's COUNT(*)
+  // can cost as much as materialising it.
   const [
     sellerQS, bdOppQS, actionItemsQS, lccUrgentQS, ocGovR, ocDiaR,
+    sellerCountQS, bdOppCountQS, actionItemsCountQS, lccUrgentCountQS, ocGovCountR, ocDiaCountR,
   ] = await Promise.allSettled([
     opsQuery('GET', 'v_lcc_seller_prospect_queue?select=*&order=rank_value.desc.nullslast,years_into_term.asc.nullslast&limit=200', null, { countMode: 'estimated', timeoutMs: 20000 }),
     opsQuery('GET', 'bd_opportunities?select=id,entity_id,type,stage,amount,expected_close_date,opened_at&is_open=eq.true&order=amount.desc.nullslast&limit=200', null, { countMode: 'estimated', timeoutMs: 12000 }),
@@ -2078,6 +2086,12 @@ export async function getTodaySections(req, res, user, workspaceId) {
     opsQuery('GET', 'v_lcc_bd_worklist?select=signal_type,source_domain,property_id,entity_id,what,who,rank_value,city,state&signal_type=eq.contact_writeback&order=rank_value.desc.nullslast&limit=200', null, { countMode: 'estimated', timeoutMs: 12000 }),
     domainSelect('gov', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id,recorded_owner_name,latest_deed_grantee,conflict_kind,annual_rent,city,state&order=annual_rent.desc.nullslast&limit=100'),
     domainSelect('dia', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id,recorded_owner_name,latest_deed_grantee,conflict_kind,annual_rent,city,state&order=annual_rent.desc.nullslast&limit=100'),
+    opsQuery('GET', 'v_lcc_seller_prospect_queue?select=entity_id&limit=1', null, { countMode: 'exact', timeoutMs: 20000 }),
+    opsQuery('GET', 'bd_opportunities?select=id&is_open=eq.true&limit=1', null, { countMode: 'exact', timeoutMs: 12000 }),
+    opsQuery('GET', "action_items?select=id&status=in.(open,in_progress)&limit=1", null, { countMode: 'exact', timeoutMs: 12000 }),
+    opsQuery('GET', 'v_lcc_bd_worklist?select=signal_type&signal_type=eq.contact_writeback&limit=1', null, { countMode: 'exact', timeoutMs: 12000 }),
+    domainSelectCount('gov', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id'),
+    domainSelectCount('dia', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id'),
   ]);
 
   const sellerQR = settledQueryResult(sellerQS, 'v_lcc_seller_prospect_queue (significant)');
@@ -2089,6 +2103,34 @@ export async function getTodaySections(req, res, user, workspaceId) {
   // routing them through the same settler keeps one shape for every source.
   const ocGov = settledQueryResult(ocGovR, 'gov v_owner_source_conflict');
   const ocDia = settledQueryResult(ocDiaR, 'dia v_owner_source_conflict');
+
+  // HP1-badge: each true-count probe resolves to a NUMBER only when it
+  // actually succeeded with a real Content-Range total; anything else
+  // (thrown, non-2xx, missing/garbled header) is `null` — "unknown", never
+  // "0" and never a silent fallback to the capped page length (P180).
+  const exactCountOrNull = (settled, label) => {
+    const r = settledQueryResult(settled, label);
+    return (r && r.ok && Number.isFinite(r.count)) ? r.count : null;
+  };
+  const significantTrueCount = exactCountOrNull(sellerCountQS, 'v_lcc_seller_prospect_queue count (significant)');
+  const importantTrueCount = exactCountOrNull(bdOppCountQS, 'bd_opportunities count (important)');
+  const actionItemsTrueCount = exactCountOrNull(actionItemsCountQS, 'action_items count (urgent)');
+  const contactWritebackTrueCount = exactCountOrNull(lccUrgentCountQS, 'v_lcc_bd_worklist count (urgent)');
+  // domainSelectCount fails soft to {ok:false,count:0} internally and never
+  // throws, so settledQueryResult only ever sees 'fulfilled' here — routed
+  // through it anyway for one shape, and its own ok:false still reads as
+  // unknown (never the 0 it happens to carry).
+  const ocGovTrueCount = exactCountOrNull(ocGovCountR, 'gov v_owner_source_conflict count (urgent)');
+  const ocDiaTrueCount = exactCountOrNull(ocDiaCountR, 'dia v_owner_source_conflict count (urgent)');
+  // Urgent has FOUR independent producers feeding total_open; summing them is
+  // only honest when every one of the four actually resolved — a partial sum
+  // both under-reports (a failed leg silently contributes 0) and would be
+  // indistinguishable from a genuinely small population, so ANY unresolved
+  // leg makes the whole Urgent total "unknown" rather than a guess.
+  const urgentTrueCount = (
+    actionItemsTrueCount !== null && contactWritebackTrueCount !== null
+    && ocGovTrueCount !== null && ocDiaTrueCount !== null
+  ) ? (actionItemsTrueCount + contactWritebackTrueCount + ocGovTrueCount + ocDiaTrueCount) : null;
 
   const significantRows = sellerQR.ok ? (sellerQR.data || []) : [];
   const bdOppRows = bdOppR.ok ? (bdOppR.data || []) : [];
@@ -2150,7 +2192,10 @@ export async function getTodaySections(req, res, user, workspaceId) {
 
   const sections = assembleTodaySections({
     significantRows, bdOppRows, actionItems, bdWorklistRows, entityById,
-  }, { limit, sourceErrors });
+  }, {
+    limit, sourceErrors,
+    trueTotalOpen: { significant: significantTrueCount, important: importantTrueCount, urgent: urgentTrueCount },
+  });
 
   return res.status(200).json({ ok: true, ...sections });
 }

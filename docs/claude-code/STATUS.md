@@ -62,6 +62,40 @@ not exist yet**, so class B's ~60 firm rows stay deduped-and-visible rather than
 firm path (`BR1-misparse-handoff`); and the pre-guard fan-out damage is **live in `entities`** —
 `Drew A. Flood` and `Paul J. Collins` both carry William Collins's mailbox
 (`HP1-P2misparse-fanout-legacy`).
+## 2026-09-12 — BACKLOG-ids reconciled: 0 duplicates, guard positive-controlled, and the race behind it now a doctrine (Cowork)
+
+PR #2410 merged. Response and prompt filed to `done/`. **Verified independently rather than read from the report:**
+a fresh scan of `PLANNED-BACKLOG.md` finds **0 duplicate IDs across 551 rows**, and I re-ran the new guard's
+positive control myself — seeding a duplicate `HP1-badge` row makes `test/backlog-id-uniqueness.test.mjs` fail
+(*"PLANNED-BACKLOG.md row IDs are unique"*), restoring the file makes it pass 6/6. It is a real detector, not a
+green run.
+
+**CC's pass was better than the prompt that asked for it, and said so.** It re-measured from scratch instead of
+inheriting my 26 and found **27** — my parser had missed `COPILOT-OPEN` (its ID carries a trailing
+`(was COPILOT-CHAT-OPEN)` annotation) and `ID3e`. **13 collisions renamed** (`SEC1-4`→`SEC9-12`,
+`A5d/A5e`→`A5i/A5j`, `D1/D3/D4/D5`→`D1-monitor`/`D3-digest`/`D4-recall`/`D5-dealname`, `R1/R2/R3`→`R1b/R2b/R3b`),
+keeping each ID where the citations already pointed — checked, and none needed updating, including
+`OPERATOR-ACTIONS.md`'s `SEC2`. **14 restatements collapsed**, ten of which I had not enumerated. ✅ **And it did
+the thing the prompt cared most about:** the two `ID3a-d` copies **disagree** on whether `ID3a-d-dia` is closed —
+both readings kept with the conflict stated, not silently resolved.
+
+🚨 **The real finding is the race CC hit while fixing it, and it is now a CLAUDE.md doctrine.** Its correct fix
+was reintroduced as duplication by a *concurrent* PR adding `MB2a`/`MB3`/`MB4` rows: **git's 3-way merge sees two
+pure insertions at different offsets, finds no textual conflict, and keeps both.** Nobody is warned. That is the
+same mechanism that broke `STATUS.md`'s line budget twice today (passed locally at 2,465, failed CI at 2,503 after
+a merge from `main`). Filed under *"TWO BRANCHES THAT BOTH ADD TO A SHARED DOC MERGE CLEANLY AND SILENTLY
+DUPLICATE IT"* with four rules: a shared append-mostly doc needs a **guard, not a convention** (prose failed five
+times in one day on a single rule); **a green local run proves nothing about the merge** — re-run the doc guards
+after merging `main`, and archive before pushing; **never resolve a doc duplicate by deleting** — classify
+collision vs restatement first, and report disagreements; **edit the row, don't restate it** — every one of the 14
+restatement groups began as a session appending instead of amending.
+
+Four live doc guards now: `backlog-id-uniqueness`, `backlog-table-shape`, `status-header-integrity`,
+`status-line-budget`.
+
+⚠️ **Fixed a stale note of my own**: `HP1-P1a-sec` still warned *"there are TWO rows numbered SEC2"*. There
+aren't, as of this PR — rewritten to say the §P9 one is now `SEC10`. A caution that has been resolved is
+misdirection with a longer half-life than the defect it described.
 
 ## 2026-09-12 — BACKLOG-ids: the 27 duplicate row IDs, measured and repaired (Claude Code)
 
@@ -120,6 +154,19 @@ documentation + one new test file).
 
 Closed `BACKLOG-ids` in `docs/os/PLANNED-BACKLOG.md` §P0d (added as a done row, since the item
 existed only as the standalone prompt file, not a backlog row).
+## 2026-09-12 — FEED1 scoped: five replacement feeds fetched live for the three dead ones (Cowork)
+
+Verified via pg_net, with newest-pubDate recorded per feed because MB2a proved 200-with-items is not the
+same as contributing: `government` → Federal Register GSA-agency feed (**200, 14**, newest 09-11);
+`healthcare` → STAT News (**200, 20**, 09-12) + Healthcare Dive (**200, 10**, 09-11); `net_lease` →
+Connect CRE (**200, 10**) + REBusinessOnline (**200, 20**), both 09-11. Measured and rejected: Modern
+Healthcare **403**, The Real Deal **403**. Government Executive re-verified (**200, 23**) — the only
+reason that lane is not at zero. **All five publish daily, so all five clear the 72h cutoff as-is**,
+which keeps FEED1 a clean URL swap and leaves MB2b out of it. Sharper read on the ESRD feed while here:
+its problem is a narrow query returning 3 items spanning weeks, **not** Federal Register — the GSA
+agency feed on the same service is high-volume and behaves normally. Prompt carries the deploy step
+explicitly (`--project-ref` required; merged is not running).
+
 ## 2026-09-12 — MB2a deployed: the dialysis stream is live, and its first run found 3 OTHER dead feeds (Cowork)
 
 Scott deployed `briefing-intel-snapshot` (CLI, `--project-ref xengecqvemvfknjvbvrq`). Verified live via
@@ -2204,6 +2251,12 @@ alone — same discipline applies here.
 > Archived BEFORE pushing, per the convention block above. Nothing was dropped.
 
 
+> **📦 ARCHIVE (2026-09-12, seventh span):** the **ID1/ID2/ID3 reconcile → ID0 identity probe** run of
+> 2026-09-11 entries (the ID0–ID4 identity/operator-registry arc, OWN-T0h's corrected count, OWN-T0i) was moved
+> **verbatim** to
+> [`docs/history/STATUS_claude-code_2026-09-11_id1_to_id0.md`](../history/STATUS_claude-code_2026-09-11_id1_to_id0.md).
+> Nothing was dropped; every still-open item it named is tracked in `PLANNED-BACKLOG.md`.
+
 ## 2026-09-12 — ASC50 governed review workbench built and locally verified; publication pending
 
 The completed 50-property source pass exposed two execution gaps: only the six source exceptions had review
@@ -2401,3 +2454,15 @@ rather than by either PR's authored diff.
 - Verify: `node --test test/backlog-id-uniqueness.test.mjs` → 6/6 pass. Full suite:
   `npm test` → 6150 tests / 6144 pass / 0 fail / 6 skipped (unchanged skip count — no test was
   removed or quarantined, only doc content merged).
+
+## HP1-badge — `total_open` was the capped page length; now the true SQL count (2026-09-12)
+
+Full detail in `PLANNED-BACKLOG.md` (row **HP1-badge**), not restated here. Summary:
+`today-sections.js`'s `total_open` was the row-fetch's own `LIMIT`, not the population
+(Significant 200 vs true 516, Urgent ≤200 vs true 1,730). Fixed with a separate, narrow,
+`Prefer: count=exact` probe per lane run in the SAME `Promise.allSettled` batch as the row
+fetches (the `inboxHygienePointer` idiom) — never reintroducing HP1-P0's removed ~750 ms/request
+cost. A failed probe renders `total_open: null` end to end (server AND `app.js`), never `0` and
+never the row count. Guard: `test/hp1-badge-today-total-open.test.mjs` (2 tests); full suite
+unchanged and green. Urgent's true population is 96% `contact_writeback` pipeline hygiene —
+filed as **HP1-P2f-urgent**, not routed off here.
