@@ -178,7 +178,19 @@ Two patterns repeat across every stage, worth carrying into whatever gets priori
    both) was what kept re-creating the
    population Stage 3's retype lane exists to clean up. **Fixing entity-dedup and entity-typing at the
    root (once, upstream) is worth more than any one stage's local patch** — this is the single highest-
-   leverage thread across the whole pipeline as stated.
+   leverage thread across the whole pipeline as stated. **`[ID3b]` ✅ shipped 2026-09-12 — one slice of
+   this root-level fix, now done:** the gov `recorded_owners`/`true_owners` fuzzy-name-VARIANT residue
+   (name-format/punctuation/abbreviation duplicates like `Baker Properties Limited Partnership` /
+   `Baker-Properties, Ltd.`) that RO2a sized (1,380 groups / 2,870 rows combined) is now merged —
+   1,466 `recorded_owners` rows + 232 `true_owners` rows collapsed into their survivors via two new
+   guarded tick functions, 26 correctly routed to human review (bank/lienholder/brokerage names,
+   never auto-merged), parity confirmed bit-for-bit. **This is NOT the same population as the
+   OWN-T0b/c/d/f/g `duplicate_entity` residue below** — that 417-row population is Stage 3's
+   `entity_match_candidates`-classified rival/duplicate entities (a different classification lane,
+   `sponsor_family_confirmed`/`duplicate_entity`/`unclassified_rival`), still open. ID3b closed the
+   *upstream, mechanical, name-variant* half of "the same entity-dedup gap"; the *downstream,
+   classification-driven* half (OWN-T0b/c/d/f/g, and Stage 2's A2 residue) is unaffected by this build
+   and remains the next entity-dedup slice to take.
 2. **The human-verdict lanes (Decision Center) are unevenly used, independent of whether they're built
    well.** `[UX-T1c]`'s live census found **12 of 28 federated lanes have never received a single
    verdict**, several holding thousands of live, fully-wired candidate rows (`agency_risk_action` 692,

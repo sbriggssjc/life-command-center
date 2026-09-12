@@ -18,6 +18,50 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-12 — ID3b shipped: gov owner fuzzy-variant merge (Cowork)
+
+Continued the "ownership connectivity" redirect (Scott: audit property→recorded-owner→developer
+chain→true-owner→contact discovery/enrichment across LCC/Outlook/WebEx/Salesforce) by executing
+**ID3b**, the highest-leverage concrete step per `docs/architecture/ownership-truth-pipeline-state.md`'s
+own finding that entity-dedup fixed once upstream benefits multiple stages at once, and per Scott's
+own "THIRD by Scott 2026-09-12" sequencing.
+
+Re-measured live before building (RO2a's numbers were a day old): gov `recorded_owners` fuzzy-variant
+population unchanged at 1,380 groups / 2,870 rows; gov `true_owners` at 227 groups / 461 rows (down
+from the prior day's 237/483 as other identity work kept chipping at it). Confirmed the existing merge
+machinery (`apply_owner_merge`, `apply_true_owner_merge`) needs no extension — both already accept
+arbitrary caller-supplied survivor/loser pairs. Confirmed no reusable SQL guard exists for bank/lender
+exclusion (`lenderNamePasses` in `sidebar-pipeline.js` was checked and rejected — it deliberately does
+NOT exclude banks, wrong model for "bank captured as owner should route to review").
+
+Shipped two new tick functions, `gov_owner_variant_merge_tick(p_dry_run)` and
+`gov_true_owner_variant_merge_tick(p_dry_run)`: group by `gov_owner_strict_core` (core ≥4 chars),
+survivor = highest-property-count member, guard every group through `gov_owner_name_is_brokerage`,
+`is_generic_gov_owner`, and a new bank/lender/lienholder regex — any hit routes the WHOLE group to
+`entity_match_candidates`/`gov_owner_merge_review_log`, never auto-merged. Dry-run matched the live run
+exactly on both tables.
+
+**Live results:** `recorded_owners` 1,380 groups seen, 1,466 merged, 24 routed to review (22 groups —
+hand-checked: correctly caught `CBRE`, four `U.S. Bank National Association` casings, JPMorgan Chase,
+TD Bank, Umpqua, SunTrust, World Bank, a title/land-trust company, and three brokerage names —
+Colliers, Northmarq, Marcus & Millichap — riding inside one JV description string). `true_owners` 227
+groups seen, 232 merged, 2 routed to review (TD Bank / U.S. Bank). **Parity confirmed bit-for-bit**:
+`total_properties` (20,509), `properties_with_recorded_owner` (9,327), `properties_with_true_owner`
+(9,848) were unchanged before/after both live runs — only unmerged-owner-row counts dropped by exactly
+the merged-loser counts. No property silently moved to a different real owner. dia confirmed untouched
+(already zero exact AND fuzzy dups, no build needed).
+
+Migration: `supabase/migrations/government/20261013120000_gov_id3b_owner_variant_merge.sql`. Offline
+structural guard: `test/id3b-owner-variant-merge.test.mjs` (9/9 pass, asserts guard checks present,
+no second merge mechanism invented, flagged groups never merged, idempotent review inserts, no
+destructive DELETE). `PLANNED-BACKLOG.md` ID3b and RO2a rows marked executed with the live numbers.
+`ownership-truth-pipeline-state.md` Stage 3 refreshed to note the entity-dedup residue this closes.
+
+No Railway redeploy needed (DB-only, no application consumer changed). Left for a human: the 26
+review-lane rows (`gov_owner_merge_review_log`); Stage 3's remaining `OWN-T0b/c/d/f/g` (417
+`duplicate_entity` merges) and Stage 4's contact-linkage gaps are the next candidates in this pipeline,
+not yet started.
+
 ## 2026-09-12 — HP1-P2f-urgent: `contact_writeback` moved off Today's Urgent lane, not hidden (Claude Code)
 
 **Shipped.** Urgent's ranked union (`buildUrgentSection`, `api/_shared/today-sections.js`) no longer
