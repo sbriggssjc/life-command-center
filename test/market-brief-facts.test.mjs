@@ -14,6 +14,8 @@ import {
   buildOnMarketFacts,
   buildTradesSinceLastRunFact,
   buildTradesZeroFact,
+  TRADES_FACT_KEY,
+  TRADES_WINDOW_DAYS,
   buildCmsOperatorFacts,
   decideFactWrite,
   numericTokens,
@@ -66,8 +68,29 @@ test('buildTradesSinceLastRunFact source_date is the latest sale_date among the 
     lane: 'dialysis', trades, sinceIso: '2026-06-01T00:00:00Z', sourceLabel: 'x', asOfIso: '2026-09-11T00:00:00Z',
   });
   assert.equal(fact.source_date, '2026-08-15');
-  // fact_key identity still keys on the RUN day (dedupe/re-supersede contract), not the source date.
-  assert.equal(fact.fact_key, 'trades_since_last_run:2026-09-11');
+  // MB-b (spec §0.2): fact_key is STABLE across runs (the window, not the run
+  // day, carries identity) — a re-mint with a new date suffix would
+  // accumulate a fresh zero-fact every day instead of superseding.
+  assert.equal(fact.fact_key, 'trades_trailing_7d');
+});
+
+test('buildTradesSinceLastRunFact and buildTradesZeroFact share one stable fact_key across days (no date suffix)', () => {
+  const trades = [{ sold_price: 1000000, cap_rate: 0.06, sale_date: '2026-09-01' }];
+  const day1 = buildTradesSinceLastRunFact({ lane: 'dialysis', trades, sinceIso: '2026-09-05T00:00:00Z', sourceLabel: 'x', asOfIso: '2026-09-11T00:00:00Z' });
+  const day2 = buildTradesZeroFact({ lane: 'dialysis', sinceIso: '2026-09-06T00:00:00Z', sourceLabel: 'x', asOfIso: '2026-09-12T00:00:00Z' });
+  assert.equal(day1.fact_key, day2.fact_key);
+  assert.equal(day1.fact_key, TRADES_FACT_KEY);
+});
+
+test('buildTradesSinceLastRunFact states its window explicitly in the claim text', () => {
+  const trades = [{ sold_price: 1000000, cap_rate: 0.06, sale_date: '2026-09-01' }];
+  const fact = buildTradesSinceLastRunFact({ lane: 'dialysis', trades, sinceIso: '2026-09-05T00:00:00Z', sourceLabel: 'x', asOfIso: '2026-09-12T00:00:00Z' });
+  assert.match(fact.claim_text, /trailing 7 days as of 2026-09-12/);
+});
+
+test('buildTradesZeroFact states its window explicitly, not a bare "No dialysis sales recorded."', () => {
+  const fact = buildTradesZeroFact({ lane: 'dialysis', sinceIso: '2026-09-05T00:00:00Z', sourceLabel: 'x', asOfIso: '2026-09-12T00:00:00Z' });
+  assert.match(fact.claim_text, /No dialysis sales recorded in the trailing 7 days as of 2026-09-12\./);
 });
 
 test('buildCmsOperatorFacts: with no sourceAsOf Map, the gate is OFF (back-compat)', () => {

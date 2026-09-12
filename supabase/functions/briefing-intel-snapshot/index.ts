@@ -146,11 +146,35 @@ const COMMODITY_TICKERS = [
 ];
 
 // RSS feeds grouped by stream. Keep concise — 3-5 per stream is enough.
+//
+// MB-b (spec §0.3): the generic "healthcare" stream carries hospital/health-
+// system news with no dialysis content most days (MB-a3 reconcile: Ollama
+// reachable, 0 facts — "the healthcare stream has no dialysis content, so
+// P-RSS value depends on lane-specific feeds"). `dialysis` is a NEW stream,
+// separate from `healthcare` (never merged into it — a market-brief-rss-tick
+// caller asks for one stream by name via `?stream=`), carrying feeds
+// specific to nephrology/ESRD industry + policy news rather than general
+// healthcare. Sources, and why: Renal & Urology News and Nephrology News &
+// Issues are trade publications dedicated to the nephrology/dialysis
+// industry (operator, reimbursement, and clinical-practice news a broker in
+// this lane would actually read); CMS Newsroom is the official federal
+// source for ESRD PPS rule announcements (the policy input this lane's TTL
+// table names explicitly, spec §3). ⚠️ These URLs were NOT egress-verified
+// from this session (the sandbox has no outbound reach to any of these
+// hosts — same limitation the MB-a3-reconcile addendum already recorded for
+// this exact task). Operator verify-before-flip step: hit each URL, confirm
+// it parses as RSS/Atom under `parseRss()`, and check the tick's own
+// `gaps`/`results` on a dry run before relying on it.
 const RSS_FEEDS: Record<string, { url: string; source: string }[]> = {
   healthcare: [
     { source: "MedCity News",    url: "https://medcitynews.com/feed/" },
     { source: "KFF Health News", url: "https://kff.org/feed/" },
     { source: "Health Affairs",  url: "https://www.healthaffairs.org/rss/site" },
+  ],
+  dialysis: [
+    { source: "Renal & Urology News",     url: "https://www.renalandurologynews.com/feed/" },
+    { source: "Nephrology News & Issues", url: "https://www.nephrologynews.com/feed/" },
+    { source: "CMS Newsroom",             url: "https://www.cms.gov/newsroom/rss" },
   ],
   government: [
     { source: "GSA News",        url: "https://www.gsa.gov/about-us/newsroom/news-releases/rss" },
@@ -407,7 +431,14 @@ function parseRss(xml: string, source: string): NewsItem[] {
 }
 
 async function fetchSectorNews(): Promise<Record<string, NewsItem[]>> {
-  const result: Record<string, NewsItem[]> = { healthcare: [], government: [], net_lease: [], tax_policy: [] };
+  // Built from RSS_FEEDS' own keys (not a hardcoded literal) so adding a
+  // stream (dialysis, MB-b) can never desync this initializer from the
+  // feed table above -- the exact drift this file's own history warns
+  // against (CLAUDE.md: "a JS copy is the normaliser drift ... check the
+  // name is not already taken").
+  const result: Record<string, NewsItem[]> = Object.fromEntries(
+    Object.keys(RSS_FEEDS).map((stream) => [stream, [] as NewsItem[]]),
+  );
   // Drop articles older than 72h so the briefing stays current.
   const cutoff = Date.now() - 72 * 3600 * 1000;
 
@@ -618,7 +649,9 @@ async function buildSnapshot(variant: "daily" | "friday_deep_dive"): Promise<Rec
     }),
     fetchSectorNews().catch((err) => {
       warnings.push(`sector_news: ${(err as Error).message}`);
-      return { healthcare: [], government: [], net_lease: [], tax_policy: [] };
+      return Object.fromEntries(
+        Object.keys(RSS_FEEDS).map((stream) => [stream, [] as NewsItem[]]),
+      );
     }),
   ]);
 
@@ -650,8 +683,7 @@ async function buildSnapshot(variant: "daily" | "friday_deep_dive"): Promise<Rec
     reits:         (market.reits || []).length,
     tenants:       (market.tenants || []).length,
     commodities:   (market.commodities || []).length,
-    news_total:    (news.healthcare.length + news.government.length +
-                    news.net_lease.length + news.tax_policy.length),
+    news_total:    Object.values(news).reduce((sum, arr) => sum + (arr as NewsItem[]).length, 0),
     reading_items: readingList.length,
     runtime_ms:    Date.now() - startedAt,
   };

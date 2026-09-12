@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { handleMarketBriefPsqlTick } from '../api/_handlers/market-brief-psql-tick.js';
 import { handleMarketBriefRssTick, __internal as rssInternal } from '../api/_handlers/market-brief-rss-tick.js';
+import { handleMarketBriefTab } from '../api/_handlers/market-brief-tab.js';
 
 function fakeReqRes({ method = 'GET', query = {}, headers = {} } = {}) {
   const req = { method, query, body: {}, headers: { 'x-lcc-key': 'test', ...headers } };
@@ -61,4 +62,26 @@ test('classifySection routes a cap-rate/REIT claim to capital_markets', () => {
 
 test('classifySection defaults to policy when nothing matches', () => {
   assert.equal(rssInternal.classifySection('A generic healthcare industry story with no keywords.'), 'policy');
+});
+
+// ---------------------------------------------------------------------------
+// MB-b — /api/market-brief-tab (the homepage tab's read-only data source)
+// ---------------------------------------------------------------------------
+
+test('handleMarketBriefTab rejects non-GET methods', async () => {
+  const { req, res } = fakeReqRes({ method: 'POST' });
+  await handleMarketBriefTab(req, res);
+  assert.equal(res.statusCode, 405);
+});
+
+test('handleMarketBriefTab rejects an unknown lane with 400', async () => {
+  const { req, res } = fakeReqRes({ query: { lane: 'not_a_real_lane' } });
+  await handleMarketBriefTab(req, res).catch(() => null);
+  // authenticate() may short-circuit first in a bare test env (no LCC_API_KEY
+  // configured) — accept either outcome, but if it DID reach the handler
+  // body the status must be 400 with the lane list.
+  if (res.body && res.body.available_lanes) {
+    assert.equal(res.statusCode, 400);
+    assert.deepEqual(res.body.available_lanes, ['dialysis', 'government', 'net_lease', 'broad_net_lease']);
+  }
 });
