@@ -15,6 +15,19 @@
 
 ---
 
+## 2026-09-12 ASC frozen-50 review boundary
+
+The ASC source-collection pass is complete (50/50 resolved; 44 licensed-source captures and six governed
+source exceptions), but commercial review is not. A governed workbench is implemented at `/asc-review.html`
+with an operator-authenticated `/api/asc-research-review` boundary. It reads the frozen CMS identity and newest
+licensed-source capture, stores the exact six-class property scorecard, and preserves separate primary and
+second-review identities, timestamps, and disagreement.
+
+This tooling does not pre-populate a human conclusion and cannot write canonical properties, Salesforce,
+outreach, production opportunities, or IDTF activation. Current review completion remains **0/50 primary** and
+**0/22 initially required second reviews** until production deployment and actual independent review. See the
+capture checkpoint and `PLANNED-BACKLOG.md` ASC50-R1–R3.
+
 ## 1. Runtime truth — where the app actually runs
 
 | Thing | Truth | Canonical doc |

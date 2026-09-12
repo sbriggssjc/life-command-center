@@ -458,6 +458,7 @@ app.all('/api/asc-research-import', (req, res) => { req.query._route = 'asc-rese
 app.all('/api/asc-research-target', (req, res) => { req.query._route = 'asc-research-target'; intakeHandler(req, res); });
 app.all('/api/asc-research-capture', (req, res) => { req.query._route = 'asc-research-capture'; intakeHandler(req, res); });
 app.all('/api/asc-research-complete', (req, res) => { req.query._route = 'asc-research-complete'; intakeHandler(req, res); });
+app.all('/api/asc-research-review', (req, res) => { req.query._route = 'asc-research-review'; intakeHandler(req, res); });
 
 // Phase 2 Slice 2b: write an LCC-generated deliverable INTO a property folder.
 app.all('/api/property-doc-writeback', (req, res) => { req.query._route = 'property-doc-writeback'; intakeHandler(req, res); });

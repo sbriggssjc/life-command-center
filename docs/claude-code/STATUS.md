@@ -778,6 +778,22 @@ access) -- named as an operator-verification item, not assumed either way.
 
 See `docs/os/PLANNED-BACKLOG.md` §P18 row MB1d and `docs/architecture/EXEC-BRIEFS-SPEC.md` §9
 "MB-a3" addendum for full detail.
+## 2026-09-12 — ASC50 governed review workbench built and locally verified; publication pending
+
+The completed 50-property source pass exposed two execution gaps: only the six source exceptions had review
+rows, and their legacy property-form vocabulary did not match `healthcare_property_review:1.0`. Implemented an
+authenticated `/asc-review.html` workbench plus `/api/asc-research-review`, exact request validation, and two
+invoker RPCs for primary and independent second review. The migration maps persisted legacy forms to the
+aggregate contract, retains `unresolved` only as a pre-scorecard exception sentinel for compatibility, stores
+the two reviewer identities/timestamps separately, rejects self-second-review, and preserves disagreement.
+Existing `final_disposition` values are never overwritten by primary scorecards. No candidate judgment or
+production row-level review was made.
+
+Verification: focused ASC/property-review suite **37/37 passed**; full suite **5,933 total / 5,927 passed /
+0 failed / 6 skipped**; app boot passed after lockfile dependency install; changed files pass syntax and whitespace checks. Repository-wide lint remains red on pre-existing,
+unrelated errors in `sidebar-pipeline.js`, `bridge-handlers-outlook.js`, and other files; this change introduced
+no lint error in its API files. Protected-PR checks remain to run.
+
 ## 2026-09-11 — BUY0 Phase 0 complete: Geller Round 1 client deliverable + email draft; build handoff written (spec §9) and backlog rows BUY1a/1b + BUY-G1…G6 filed
 
 Cowork. Round 1 for Jordan Geller is client-ready in `Team Briggs - Documents/Clients/Jordan Geller/2026 Industrial Search/Deliverables/Round 1 - Sep 2026/`
