@@ -416,6 +416,28 @@ committed-vs-deployed for every `supabase/functions/*/index.ts`. Note also that 
 stale five days later, which is the general lesson: **a one-time census cannot hold a drift
 invariant; only a repeated check can.** → backlog `MB2a-deploy`.
 
+**I11 can fail INVERTED — 2026-09-12 (Cowork), FEED2.** I11 says a monitor must alert on its own
+blindness. The MB2a feed monitor failed the other way: it attributed its own blindness to the thing it
+watched. Its staleness measure was `checked_date - (last date with items)` — **calendar days** — but the
+producer writing those rows runs **weekdays only** (`0 10 * * 1-5`) while the check runs **daily**
+(`15 11 * * *`). So Monday minus Friday is 3 days and a feed that answered perfectly on both checks read
+as 3 days stale. A second bug compounded it: with no prior row the expression fell back to a **9999
+sentinel** meaning "unknown", so the monitor's FIRST run would have alerted on all 16 feeds. Both were
+caught before the cron ever fired, and fixed by counting **checks rather than days**
+(`zero_item_streak_checks`, migration `20260912190000`).
+
+Two general lessons worth carrying into any I11 detector:
+
+- **A gap in the DATA is not a fault in the SOURCE.** Whenever a detector measures elapsed time, check
+  the cadence of the thing that writes the rows. If the writer's schedule is sparser than the checker's,
+  calendar arithmetic converts every gap into a false fault. Count observations, not dates.
+- **"No history" is not "maximally bad".** A sentinel like 9999 makes an unknown indistinguishable from
+  the worst case, which is precisely the confident-wrong-answer this document exists to prevent. An
+  unseen feed should read as unknown and stay silent until it has actually been observed failing.
+
+A false alarm is not a harmless failure mode: a monitor that cries wolf every Monday is one nobody reads
+by the third week, which returns the system to exactly the silence I11 was written to end.
+
 ### I10 — A one-shot backfill is not a producer
 
 If the mechanism that filled a store was a migration or a script, the store **decays from the moment
