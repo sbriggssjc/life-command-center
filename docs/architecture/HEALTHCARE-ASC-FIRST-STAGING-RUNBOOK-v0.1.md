@@ -94,3 +94,27 @@ private root. Existing outputs are never overwritten. The harness requires the r
 authorized packet and the contract to bind to the same ASC artifact release. It is ASC-only and has no
 downloader, database client, replacement discretion, review-score writer or CRM promotion capability. The
 private frame authorizes governed human review only; it is not a positive lane decision.
+
+## 8. Governed property-review handoff
+
+The operator surface is `/asc-review.html`. Before the first primary review, confirm the current revision is
+deployed, the page loads
+through the authenticated LCC session and that the frozen sample reports 50 candidates. Review the candidate's
+frozen CMS identity, newest licensed-source capture or governed source exception, and retained capture history;
+then submit only evidence-supported `healthcare_property_review:1.0` fields and private citations. Do not infer
+property form from enrollment, and do not replace a source-exception disposition with a scorecard conclusion.
+
+Use the human-readable evidence cards for the primary pass and open the direct source link when the underlying
+record needs inspection. The collapsed raw structured capture remains the audit view, not the primary reading
+experience. Every field includes its decision rule. When evidence does not establish property form, ownership,
+addressability, or economics, record `Unknown`/`Unresolved`, lower confidence where appropriate, explain the gap,
+and require independent second review; do not turn missing evidence into a positive or negative fact. Resolve all
+displayed save blockers before submission. The sticky header identifies the authenticated reviewer whose identity
+the server records automatically.
+
+After primary review, route every `second_review` candidate to a different authenticated reviewer. An `agree`
+verdict closes that row; `disagree` remains visible for adjudication. Re-saving a primary review invalidates a
+stale second review. Stop if the active frozen candidate, evidence, or reviewer identity is wrong. The workbench
+does not authorize canonical-property, Salesforce, outreach, production-opportunity, IDTF, or lane-advance
+writes. Aggregate review remains blocked until exactly 50 primary scorecards and every required independent
+second review are complete.
