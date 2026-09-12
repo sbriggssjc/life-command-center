@@ -1,3 +1,43 @@
+## Open threads (updated 2026-09-12 — table moved to the TOP of this file by Cowork; new entries go BELOW the `---`)
+
+One-line read on each active multi-round thread. Full narrative for anything older than this file's
+current window lives in `docs/history/STATUS_claude-code_*.md`; durable state lives in
+`docs/os/PLANNED-BACKLOG.md` and `docs/os/CURRENT-STATE.md`.
+
+| thread | backlog rows | last entry | state (one line) |
+|---|---|---|---|
+| **Identity / operator canonicalization (ID-series)** | ID0–ID4, ID2a-cleanup, ID2b, ID2b-caps, ID2b-caps-2, ID3a–ID3e, ID3a-d | 2026-09-12 | ID2b-caps-2 shipped + live-verified (3rd comp source fixed at source); ID3a-d retired LCC's stale gov migration copy; ID2b's remaining 45 views/12 modules still group on operator text |
+| **Market briefs (MB/EB)** | MB1d, MB-a2, MB-a3, EB1, P18 | 2026-09-11/12 | ID2b partially wired operator_id into the market-brief operator count; P18 swimlane spec + EB1 design-only; MB-a2 fixes confirmed live, MB1d (false-fresh CMS facts) is the open blocker |
+| **Operator funnel (OC / HP1)** | HP1, HP1-P1a, HP1-P1a-fix, HP1-P1a-dup | 2026-09-12 | HP1-P1a-fix CLOSED live (608 rows UPDATED, first-ever Salesforce UPDATE to `bd_opportunities`); HP1 P0 (Today 500 badge) fixed+deployed+verified |
+| **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
+| **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI5 | 2026-09-12 | PR-scanner-3 shipped (`county_records_needed` action); PRI5 merged+deployed, awaiting another live CMS ingestion test run to confirm the hang is actually cleared |
+| **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
+| **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
+| **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
+| **gov agency canonicalization (ID3a\*)** | ID3a, ID3a-b, ID3a-c, ID3a-d, ID3e, I14, I16 | 2026-09-12 | ID3a-b/c/d/e all shipped and live-verified; repo-ownership hazard (I16) found and closed — `government-lease` owns the gov DB's migrations, LCC's copy retired |
+| **CI / producer health (B6d/B6e)** | B6d-cms-*, B6d-assessor-*, B6d-pri-*, B6e-ci-*, B6e-fred-* | archived 2026-09-11 | Suite is a real merge gate (`Run Tests` unmasked, green once on `main`); `pip-audit`/secrets-grep/ruff still masked; full detail in the 2026-08-29→09-11 archive and `docs/architecture/producer-health-and-ci-enforcement.md` |
+
+> **📦 ARCHIVE (2026-09-08):** entries for **2026-08-31 → 2026-09-01** (the CMS-ingestion restart,
+> DOC1–DOC18 document pipeline, C13/C14 entity-role work, and the trailing pointers for two earlier
+> cuts) were moved **verbatim** to
+> [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
+> Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-12 — CONSOLIDATE2 reconciled: STATUS 10,742 → 2,461 lines; two structural fixes + next cadence filed
+
+Verified live: archive `docs/history/STATUS_claude-code_2026-08-29_to_2026-09-11.md` written verbatim; 78 ✅ backlog rows
+folded into `CURRENT-STATE.md` §2a (1,233 → 1,155); `test/status-line-budget.test.mjs` guards 2,500 lines;
+`docs/audits/README.md` appended, DOCMAP2 rule intact. **Two fixes by Cowork:** (1) the Open-threads table had ended up
+**below 2,300 lines of entries** — moved to the top, where a new session actually reads it, with new entries below the
+`---`; (2) **headroom is 39 lines** against the 2,500 budget, so the next one or two entries fail the suite — archive
+cadence and an entry-length convention filed as **CONSOLIDATE3**. CONSOLIDATE2 also flagged three canonical-doc
+contradictions (document-capture OCR pages, tier0-owner-contact vs its P197/P198 corrections, architecture docs quoting a
+pre-correction verdict) — carried as DOC-CONTRA, not silently fixed.
+
+---
+
 ## 2026-09-12 — CONSOLIDATE2 (round 2) SHIPPED: STATUS archived again, backlog folded, topic index extended
 
 **PR (this branch), documentation-only.** `docs/claude-code/STATUS.md` **10,742 → 2,351 lines**
@@ -2336,33 +2376,6 @@ still open and untouched by this entry.
 > health arc tail, the PRI2–PRI5 ingestion-hang investigation, BROKER1, the P18/BUY0 design opens, the
 > AC-series contact/address work, and a long ID-series/C13-C14 run) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-29_to_2026-09-11.md`](../history/STATUS_claude-code_2026-08-29_to_2026-09-11.md).
-> Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
-
----
-
-## Open threads (updated 2026-09-12, CONSOLIDATE2 round 2)
-
-One-line read on each active multi-round thread. Full narrative for anything older than this file's
-current window lives in `docs/history/STATUS_claude-code_*.md`; durable state lives in
-`docs/os/PLANNED-BACKLOG.md` and `docs/os/CURRENT-STATE.md`.
-
-| thread | backlog rows | last entry | state (one line) |
-|---|---|---|---|
-| **Identity / operator canonicalization (ID-series)** | ID0–ID4, ID2a-cleanup, ID2b, ID2b-caps, ID2b-caps-2, ID3a–ID3e, ID3a-d | 2026-09-12 | ID2b-caps-2 shipped + live-verified (3rd comp source fixed at source); ID3a-d retired LCC's stale gov migration copy; ID2b's remaining 45 views/12 modules still group on operator text |
-| **Market briefs (MB/EB)** | MB1d, MB-a2, MB-a3, EB1, P18 | 2026-09-11/12 | ID2b partially wired operator_id into the market-brief operator count; P18 swimlane spec + EB1 design-only; MB-a2 fixes confirmed live, MB1d (false-fresh CMS facts) is the open blocker |
-| **Operator funnel (OC / HP1)** | HP1, HP1-P1a, HP1-P1a-fix, HP1-P1a-dup | 2026-09-12 | HP1-P1a-fix CLOSED live (608 rows UPDATED, first-ever Salesforce UPDATE to `bd_opportunities`); HP1 P0 (Today 500 badge) fixed+deployed+verified |
-| **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
-| **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI5 | 2026-09-12 | PR-scanner-3 shipped (`county_records_needed` action); PRI5 merged+deployed, awaiting another live CMS ingestion test run to confirm the hang is actually cleared |
-| **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
-| **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
-| **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
-| **gov agency canonicalization (ID3a\*)** | ID3a, ID3a-b, ID3a-c, ID3a-d, ID3e, I14, I16 | 2026-09-12 | ID3a-b/c/d/e all shipped and live-verified; repo-ownership hazard (I16) found and closed — `government-lease` owns the gov DB's migrations, LCC's copy retired |
-| **CI / producer health (B6d/B6e)** | B6d-cms-*, B6d-assessor-*, B6d-pri-*, B6e-ci-*, B6e-fred-* | archived 2026-09-11 | Suite is a real merge gate (`Run Tests` unmasked, green once on `main`); `pip-audit`/secrets-grep/ruff still masked; full detail in the 2026-08-29→09-11 archive and `docs/architecture/producer-health-and-ci-enforcement.md` |
-
-> **📦 ARCHIVE (2026-09-08):** entries for **2026-08-31 → 2026-09-01** (the CMS-ingestion restart,
-> DOC1–DOC18 document pipeline, C13/C14 entity-role work, and the trailing pointers for two earlier
-> cuts) were moved **verbatim** to
-> [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
