@@ -1,5 +1,29 @@
 # Claude Code queue — STATUS
 
+## 2026-09-12 — ID2a-cleanup SHIPPED and live-verified against Dialysis_DB (aliases 42→207, review 1,020→71)
+
+Ran the ID2a-cleanup prompt against live Dialysis_DB (`mcp__Supabase__apply_migration`, real writes,
+measured before AND after in the same session — not a static-analysis prediction). Migration
+`supabase/migrations/dialysis/20260912120000_dia_id2acleanup_operator_registry_finish.sql`.
+
+The fix that shrank everything else: **seeded an exact-match alias for every live company operator's
+own name + `dba_names`** — `dia_resolve_operator` only ever knew the 6 hardcoded families, so a
+property whose raw text was literally a registered operator's own name (Northwest Kidney Centers,
+Wake Forest University, Sanford Health, ...) still hard-blocked into the review queue. Aliases
+42 → 207; review queue 1,020 open → **71 open** (142 resolved onto 14 real operators, verified
+byte-exact against the parity table; 807 dismissed as classifications, see next). Also: merged the
+two byte-identical `Us Renal Care Inc` / `Dialysis Clinic Inc` duplicates ID2a's exact-string array
+missed; parented (never merged) BMA Quincy / BMA OF NORTH CHARLOTTE / KNICKERBOCKER under Fresenius
+and DCI East Gainesville under DCI; reclassified 9 person/junk rows to a new `kind='junk'`; added
+additive `properties.operator_class` (category/payer/non_operator) so those rows never occupy a human
+queue slot again, backfilled on the 807 already-existing rows too; shipped the orphan-registry-gap
+detector (`v_dia_operator_orphan_registry_gap`, reads 0 today) for the ID3a-class generalization.
+**Parity proven, not asserted:** the 7 pre-existing merged canonicals are byte-identical
+before/after (0 properties moved by the two new dedup merges — both duplicates carried 0 properties).
+Guard `test/id2a-cleanup-operator-registry.test.mjs` (13 tests) + full suite green (5,966/0).
+**ID2b is now unblocked on the registry side** — `operator_id` covers 9,449/11,804 (80.1%), see
+`PLANNED-BACKLOG.md` §P0d ID2a-cleanup/ID2b/ID2c-payer. **Next:** ID2b (consumer switch) or ID3a
+(gov agency wiring), per Scott's priority.
 ## 2026-09-12 -- ID3a measured before wiring: the canonicalizer itself has a live contamination bug
 
 Picked up ID3a next (Scott's #1 identity class, ranked first 2026-09-12). Before touching the
