@@ -18,6 +18,45 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-12 — HP1-badge prompt: the count lies, and fixing it honestly exposes that Urgent is 96% hygiene (Cowork)
+
+REPO1 sweep confirmed in `main` (`docs/flows/README.md` present, root `err.txt` gone). Drafted the next prompt and
+re-measured all three Today lanes live first.
+
+**The defect:** `total_open: all.length` (`today-sections.js` 79/103/182) is the **capped page length**, not the
+population — while the module header promises *"the full population"* and cites **P159a**. The honest-counts rule
+failing inside the module written to enforce it.
+
+| lane | badge | true | |
+|---|---|---|---|
+| Significant | **200** | **516** | −61% |
+| Important | 46 | **46** | ✅ correct — only because it sits under the cap |
+| Urgent | **≤200** | **1,664** | −88% |
+
+Ranking is unaffected — `order by` precedes the cap, so the rendered eight really are the top eight. Only the
+count lies.
+
+⚠️ **Two dead ends measured, so CC does not walk into either.** Re-enabling `count=exact` is precisely what
+**HP1-P0** removed — ~750 ms on the seller view alone, on the endpoint that was 500ing all three lanes; fixing a
+badge by reintroducing the outage is not a trade worth making. And `countMode:'estimated'` **cannot work here at
+all**: `reltuples` on `v_lcc_seller_prospect_queue` is **-1** — a view, never analyzed — so PostgREST has no
+estimate to hand back. The current setting is not a slightly-wrong number; for these lanes it is **no number**.
+✅ The answer is likely the pattern HP1-P2a already shipped: `inboxHygienePointer()` — exact probe, `limit=1`,
+read off the base table never the capped view, `null` on failure. **P180** made explicit: a failed count renders
+*unknown*, never `0`.
+
+🚨 **The part that matters more than the badge.** Fixing the count honestly makes Urgent read **1,664** — and
+**1,598 of those (96%) are `contact_writeback`**, CRM plumbing, against just **66** `action_items` of real deal
+correspondence. **That is the same class HP1-P2a removed from the Inbox, sitting in the Urgent lane of Today.** The
+prompt fixes the count and **files** the population as **HP1-P2f-urgent** rather than folding them together —
+leaving the cap in place to keep the number comfortable would be choosing a pretty lie, which is the exact failure
+the row exists to correct. And it carries P2a's expensively-learned caution forward: **establish where
+`contact_writeback` is actually worked before routing it anywhere** — `contact_misparse_review` had zero readers,
+and routing it off would have deleted the only place it was visible.
+
+Prompt also warns about the line-budget trap that cost two PRs today: **archive before you push, 200+ lines of
+headroom**, because STATUS.md grows on `main` while a branch is open.
+
 ## 2026-09-12 — Repo sweep done by the filed method; a duplicate SEC row folded; HP1-P1b's hold lifted (Cowork)
 
 Scott asked again for the repo to be cleaned and consolidated by topic so a future chat picks up without
@@ -1705,169 +1744,12 @@ shared normalizer** (broker surnames collide). ID4's duplicate backlog section m
 (gov agency wiring) first, then ID3e (county vocabulary), then ID3b/ID3d; **ID3c holds for BR1–BR5**; detectors prove out on
 the agency class before generalizing. **Next:** ID2a-cleanup + ID3a.
 
-## 2026-09-11 -- RO5 sized: joined the 761 gov disputes to the reconciled store; Scott decided RO3
 
-Scott answered the RO3 design question directly: repoint `resolve_ownership` at the reconciled
-store (merge into OWN-T0's conflict lane), not build it as a separate door. Before touching a live
-financial-write lane, did RO5's sizing first -- read the full current `resolve_ownership` GET/apply
-contract in `api/admin.js` (GET ~line 8757, apply ~line 12386), then pulled `v_ownership_resolution`'s
-761 genuine-dispute gov properties from the gov project and `v_lcc_property_ownership_reconciled`'s
-gov-domain current/primary rows (9,717 properties) from LCC Opps, and joined them locally in Python
-(cross-project SQL join isn't possible -- separate Postgres instances).
+> **📦 ARCHIVE (2026-09-12, sixth span):** the **RO5 → ID1 reconcile** run of 2026-09-11 entries (the RO2–RO5
+> recorded-owner arc, ID2a's operator registry, and the ID1/ID2/ID3 backlog reconciliation) was moved **verbatim**
+> to [`docs/history/STATUS_claude-code_2026-09-11_ro5_to_id1.md`](../history/STATUS_claude-code_2026-09-11_ro5_to_id1.md).
+> Nothing was dropped; every still-open item it named is tracked in `PLANNED-BACKLOG.md`.
 
-Result: 742 of 761 (97.5%) disputed properties are present in the reconciled store; 19 absent
-(mostly person-name-format mismatches, e.g. `LIDDELL ANDY` / `Andy Liddell`). Of the 742 present:
-169 (23%) match the lane's `proposed_owner_name`, 198 (26%) match only `current_recorded_owner_name`
-(reconciled store rejected the lane's proposal), 253 (33%) match only `true_owner_name` (reconciled
-store already agrees with gov's own true-owner field), and 122 (16%) are hard disagreements where
-the reconciled store's primary owner matches none of the lane's three names -- 88 of those still
-carry the reconciled store's own `conflict_class` (mostly `unclassified_rival`, largely the Boyd
-Watterson/Easterly/Gardner Tanenbaum sponsor-family SPE shapes OWN-T0e already handles), 57 are
-`is_domain_true_owner=true` (high confidence) vs 65 not.
-
-This means repointing the lane isn't a narrow fix: the reconciled store's gov `conflict` population
-is 1,752 properties today, not 761 -- a larger, different population (it carries lessor/
-relationship-graph disagreements the deed-only lane never saw, and drops the 253 that already agree
-with true_owner). Documented the migration scope in RO3's row rather than writing code: the four
-write-verdict paths (`keep`/`update_owner`/`confirm_sale`/`research`) call real gov RPCs behind
-existing guards (`DECISION_GOV_WRITEBACK`, $50k floor) and should be preserved as-is; only the
-source population/context query needs repointing, with a field mapping from the reconciled store's
-ranked-candidate shape onto the card's recorded/proposed/true-owner fields (not a 1:1 rename).
-Recommended a written field-mapping design before any code change, given this lane's live write
-actions.
-
-Updated `docs/os/PLANNED-BACKLOG.md`'s RO5 row (closed, sized) and RO3 row (decision recorded,
-migration scope documented, not built).
-
-## 2026-09-11 -- RO4 root-caused: the missing deed dates are genuinely unknown, not lost
-
-Picked up RO4 next (why 391 of 598 deed-arm properties carry no `latest_deed_date`, and whether
-`is_newer_than_recorded` is misnamed as the audit suspected). Re-measured live: 391 of 599 today
-(65.3%, matches). Traced the whole path rather than guessing: `v_ownership_resolution`'s
-`DISTINCT ON ... ORDER BY latest_deed_date DESC NULLS LAST` already prefers a dated row when one
-exists, so the view isn't swallowing dates. `properties.latest_deed_date` is fed from
-`deed_records.recording_date` via a write path (`deed-parser.js`) that always writes the grantee but
-only writes the date when one parses. Checked `deed_records` directly for all 391 properties: zero
-have a `recording_date` that `properties` is failing to pick up -- every one is null all the way down
-to the raw capture. Sampled the raw payload: a minimal grantee-only stub (`grantor`, `deed_type`,
-`document_number` all null, `consideration: 0`) across 229 distinct counties nationwide -- not one
-source's formatting bug, a genuine capture limitation spread across the whole footprint.
-
-Conclusion: nothing upstream to fix -- the date is truly unknown for these 391, not lost by a bug.
-The real, actionable finding is the one the audit already named: `is_newer_than_recorded`
-(`latest_deed_date IS NOT NULL`) collapses "confirmed not newer" and "we don't have a date" into the
-same `false`. Documented that whoever eventually builds RO3's card should expose
-`latest_deed_date IS NULL` as its own explicit "date unknown" state. Not built here -- RO3 (whether
-this lane should exist beside OWN-T0e or become OWN-T0's gov arm) is a design question for Scott,
-not decided yet, so there's no card today to fix.
-
-Updated `docs/os/PLANNED-BACKLOG.md`'s RO4 row (closed, root-caused).
-
-## 2026-09-11 — ID2a SHIPPED (unapplied): operator registry + alias table + resolver + hard write guard + reviewed backfill
-
-`prompts/ID2a-operator-registry-resolver-and-guard.md` executed. Migration
-`supabase/migrations/dialysis/20260911200000_dia_id2a_operator_registry.sql` (Dialysis_DB) rebuilds
-`operators` (kind company/category/payer/non_operator, `parent_operator_id` for brand children,
-`merged_into_operator_id` for retired dupes — retire, never delete), adds `dia_operator_aliases`
-(seeded), the single resolver `dia_resolve_operator(text)` (fails closed, never mints), `operator_id`
-FKs on `properties`/`leases`, a **hard-block** write-guard trigger on `properties.operator` (RAISEs on
-an unresolved non-blank value; leases guarded only if it turns out to carry a raw text `operator`
-column — unverified from this sandbox), and a dry-run-default reviewed backfill function.
-`api/_shared/operator-normalize.js` renamed the canonical Fresenius/US Renal Care targets to match
-Scott's §11 decisions, in lock-step with the SQL mirror re-declared in the same migration, and gained
-`resolveOperatorAgainstRegistry()` — the JS wrapper over the SQL resolver RPC. Guard
-`test/id2a-operator-registry.test.mjs` (22 tests, full suite 5,950/5,950 green).
-
-⚠️ **NOT live.** This sandbox has no Dialysis_DB credentials — the migration was never applied and
-none of its own numbers (registry before/after, alias count, auto/review split, FK coverage, the §4
-cap-band parity gate) were measured. The migration ships the exact verification queries (§13); Cowork
-or Scott must run the dry-run backfill first, read the split, apply, then run the parity check before
-ID2b (consumer switch) relies on anything here.
-
-🔴 **New finding, from this guard's own first run, not either audit pass:** `api/_shared/tenant-canonical.js`
-is a live, pre-existing FOURTH operator canonicalizer (writes `dia.leases.tenant`, not
-`properties.operator`) whose spellings now DISAGREE with the ID2a decision
-(`'DaVita Kidney Care'`/`'U.S. Renal Care'`/`'DCI'`/`'Innovative Renal Care'` vs the registry's
-`'DaVita'`/`'US Renal Care'`/`'Dialysis Clinic, Inc.'`/`'American Renal Associates'`). Out of scope
-for ID2a (different column, and "no new normalizer" means adding none, not retrofitting a pre-existing
-one) — filed as **ID2c** in `PLANNED-BACKLOG.md`.
-
-Backlog: `PLANNED-BACKLOG.md` ID2a marked shipped-unapplied; ID2b (consumer switch) and ID2c (the
-tenant-canonical.js finding) opened.
-## 2026-09-11 -- RO2a sized: 1,380 gov recorded_owners name-variant groups, merge lane deferred
-
-Picked up RO2a next (fleet-wide sizing of same-party name variants in gov `recorded_owners`, named
-but not run by the 2026-09-08 audit). Grouped live (unmerged) owners by `gov_owner_strict_core`,
-gating on core length >= 4 after finding the suffix-stripper produces false-positive collisions
-below that (`GLP` strict-cores to `g` because its trailing `lp` reads as the "Limited Partnership"
-suffix token -- 26 short-core groups / 60 rows excluded on this basis).
-
-Split what's left into two real populations rather than one number: 311 exact-duplicate-name groups
-(628 rows, 589 properties touched) where the identical literal name sits on multiple separate
-`recorded_owner_id` rows -- the safest, purely mechanical class -- and 1,069 true name-variant groups
-(2,242 rows, 800 property-referenced, 1,218 properties touched) that are genuine punctuation/
-abbreviation/suffix variants of one party. Spot-checked both the largest groups and the short (4-6
-char) end; mostly clean, but found the SAME risk class RO2b just fixed sitting inside this
-population too -- `CBRE` / `CBRE, Inc.` and a 4-way `U.S. Bank National Association` group are a
-brokerage and a lienholder, not obviously real owners to blind-merge. Flagged that any future merge
-sweep must run every group through `isCompetitorBroker` / `isFederalOwnerAntiPattern` / a bank-lender
-check before merging, same guards RO2b just added.
-
-Recommendation: this population (1,380 groups / 2,870 rows / ~1,807 properties combined) is big
-enough to be its own build, not a quick follow-on -- the merge itself has to move
-`properties.recorded_owner_id` and any deed/lease FK refs, log a reversible batch, and dry-run first.
-Did not build it this pass; sized and documented only, per the row's own ask ("size... before
-proposing a merge lane").
-
-Updated `docs/os/PLANNED-BACKLOG.md`'s RO2a row (closed, sized).
-
-## 2026-09-11 — ID2 decisions settled by Scott; ID2a prompt drafted (registry + resolver + hard guard)
-
-Scott decided the four 👤 items ID1 raised: canonical **`Fresenius Medical Care`** (with `short_operator: 'Fresenius'`
-kept for chart labels) and **`US Renal Care`**; the registry lives in **Dialysis_DB** with LCC referencing it through
-`external_identities` (`source_type='operator'`), not a second identity; the write guard is a **hard block plus alert**
-(unresolvable text is refused and routed to a review lane); gov agency identity is a **separate** build (ID3a). ID2 is
-split into **ID2a** (registry with parent/brand hierarchy, alias table, one resolver replacing the second canonical,
-`operator_id` FK, hard guard, reviewed backfill with a cap-rate-band parity gate) and **ID2b** (consumer switch with
-per-surface parity). Audit §11 records the decisions. **Next:** send `prompts/ID2a-operator-registry-resolver-and-guard.md`;
-`prompts/ID4-identity-integrity-program.md` is also unblocked and can run in parallel (detectors only, no data writes).
-
-## 2026-09-11 -- RO2b fixed: RMR/USPS/hedge-phrase can never become a recorded owner again
-
-Picked up RO2b next (the 9 named deed-grantee capture artifacts the 2026-09-08 audit found passing
-`granteePassesOwnerGuards`). Fixed at the guard, not just the 9 existing rows: `RMR` / `The RMR
-Group` (the property MANAGER of GPT/OPI-portfolio assets, 7 of the 9) and `USPS` (the federal
-TENANT, 1 of the 9) are now a small literal-name reject inside `granteePassesOwnerGuards` -- the
-audit was right that 2 capture artifacts don't earn a generalized regex class. The hedge-phrase row
-(`CIM Group or affiliated investors`, the 9th) is different: OWN-T0i sized that exact shape
-fleet-wide earlier today (57 live entities in LCC `entities`), so it IS a real class, not a one-off
--- reused the same regex here rather than writing a second one.
-
-This closes the loop the guard was supposed to close: any FUTURE deed capture of these names is now
-rejected before it can become a recorded owner, not just the 9 instances the audit already found.
-Added 3 new unit tests covering all three (RMR variants, USPS variants, two different hedge
-phrases); ran the full `owner-deed-propagation` (39/39) and `deed-parser` (58/58) suites clean.
-
-One bump along the way worth naming honestly: my first attempt at the hedge-phrase regex silently
-wrote literal backspace bytes instead of `\b` word-boundary escapes (a Python string-literal
-footgun in the edit script, not a JS issue) -- caught it because the new test for that exact case
-failed, fixed by writing the JS source as a raw string, re-ran clean. Recorded here so the pattern is
-recognized faster next time a generated regex needs debugging.
-
-Updated `docs/os/PLANNED-BACKLOG.md`'s RO2b row (closed, fixed).
-
-## 2026-09-11 — ID1 reconciled (PRs #2323/#2325 merged): figures confirmed live; composite attribution resolved; ID3i (multi-tenant + cross-lane twins); 4 decisions gate ID2
-
-Filed `responses/ID1 desktop response.docx` → `done/`; ID1 prompt → `prompts/done/`. ID1 produced
-`docs/audits/ID1_OPERATOR_IDENTITY_AUDIT_2026-09.md` (writer inventory W1–W10, registry duplication across dia `operators`,
-LCC `lcc_operator_affiliate_patterns` and `operator-normalize.js`, design §5), then a live follow-up (§9): gov already has
-`agency_canonical` (45 codes) and a 65-row `government_agencies` registry, but **neither is wired** (`agency_id` 0/20,509); LCC
-`entities` is polluted with operator-named asset entities; `cortex_market_intel` exists (writer outside the repo). Claude
-Code also merged the two ID backlog blocks into one table. **Cowork (read-only) confirmed** the gov and LCC figures exactly and
-**resolved open item 3**: the `DaVita | …` values are multi-tenant buildings stored as one piped tenant string; operators
-70–80 were minted in one bulk batch on 2026-04-28 04:26 UTC. **New:** 614 Tully Rd, San Jose exists as dia 30681 **and** gov
-30447 (`agency='ACE'`, canonical NULL) with no link → **ID3i** (multi-tenant modeling + cross-lane twins, ties to P10a). Audit
-§10 added. **ID2 waits on Scott's 4 decisions** (canonical names, registry home, DB guard, gov sequencing). **ID4 is ready to send.**
 
 ## 2026-09-11 — ID1/ID2/ID3 backlog blocks reconciled (two parallel threads, one table)
 
@@ -2179,83 +2061,14 @@ Verification: focused ASC/property-review suite **37/37 passed**; full suite **5
 unrelated errors in `sidebar-pipeline.js`, `bridge-handlers-outlook.js`, and other files; this change introduced
 no lint error in its API files. Protected-PR checks remain to run.
 
-## 2026-09-11 — BUY0 Phase 0 complete: Geller Round 1 client deliverable + email draft; build handoff written (spec §9) and backlog rows BUY1a/1b + BUY-G1…G6 filed
 
-Cowork. Round 1 for Jordan Geller is client-ready in `Team Briggs - Documents/Clients/Jordan Geller/2026 Industrial Search/Deliverables/Round 1 - Sep 2026/`
-(Buyer Showing: 19 Focused ranked best→worst on Credit/Lease/Real Estate, Market Ranking, 207-row Broad Market, Sources & Notes, How to Use; full MSA
-workbook; email draft in Scott's voice). Client folder reorganized with `00-README.md` as the pickup file. Credit leg automated on a bond-style scale
-(American Airlines Ba3/B+ and Oil States ratings looked up). Spec gains §4.7 (OM sourcing, BUY-G3) and §9 (deliverable contract, seed code, gaps, build
-order). Supersedes the unpushed local branch `docs/buy0-om-sourcing-layer` (its §4.7 content is included here). **Next:** Scott sends Round 1; build
-starts with BUY1a when authorized.
-## 2026-09-11 -- OWN-T0j verified end-to-end: real write succeeded, cache populated, closed out
+> **📦 ARCHIVE (2026-09-12, fifth span):** the **BUY0 Phase 0 → ASC frozen-50** run of 2026-09-11 entries
+> (Geller Round 1 deliverable + build handoff, OWN-T0j's end-to-end verification, MB-a2/MB1d, the ASC source
+> collection) was moved **verbatim** to
+> [`docs/history/STATUS_claude-code_2026-09-11_buy0_to_asc.md`](../history/STATUS_claude-code_2026-09-11_buy0_to_asc.md).
+> Archived BEFORE pushing this time, per the convention block above — not after CI went red. Nothing was dropped;
+> every still-open item it named is tracked in `PLANNED-BACKLOG.md`.
 
-Triggered the real POST directly via `select public.lcc_cron_post('/api/ownt0j-sponsor-classify-tick',
-'{}'::jsonb, 'railway')` after the auth-convention fix deployed (Railway `a95fef46`, confirmed via
-git merge-base against the fix commit). Got back `200 {"written":2462}`.
-
-**Cache table now holds real data**: `sponsor_family_confirmed=482`, `unclassified_rival=1,980` --
-byte-for-byte the same numbers every earlier independent measurement produced (this session's direct SQL
-replication, the live GET dry-run before this write, the build's own original claim). The reporting view
-(`v_lcc_ownt0j_sponsor_disagreement_report`) reads them back correctly too.
-
-OWN-T0j is now genuinely done: built, two real bugs found post-ship and fixed (both in the untested
-handler-level HTTP/auth code, not the well-tested pure classifier), and the whole path verified working
-end-to-end rather than trusted on a response's say-so. Condensed the PLANNED-BACKLOG.md row (it had grown
-through three separate verification passes into one very long entry) into a single closing summary; this
-file keeps the full blow-by-blow.
-
-**Next step.** Genuinely nothing left open on OWN-T0j. The ownership/contact-propagation thread's remaining
-open items: `B1b` (developer chain, gated behind an unstarted `B5`) is the one entirely untouched item;
-`OWN-T0e`'s own confirm lane still has the four candidates from the earlier investigation
-(Realty Income, Elman Investors, Gardner Tanenbaum, USAA Real Estate) sitting for a human decision; and the
-`gov`-token precision caveat above is worth a look before anyone confirms more short-token sponsor families.
-
-## 2026-09-11 — MB-a2 reconciled (PR #2307 merged): fixes confirmed live; new blocker MB1d (false-fresh CMS facts); MB-a3 drafted
-
-Filed `responses/MB-a2 desktop response.docx` + the already-reconciled `OWN-T0j desktop response.docx` (that thread's
-review is the 2026-09-11 "OWN-T0j reviewed" entry) → `done/`; MBa2 prompt → `prompts/done/`. **Cowork live check
-(read-only):** MB-a2 confirmed — `fact_key` + index, `MARKET_BRIEF_PSQL/PRSS` = off, crons `lcc-market-brief-psql`
-07:15 / `-rss` 10:10 UTC active, `v_market_brief_cms_operator_counts` faithful (sum 6,695). App `tranquil-delight`
-redeployed at `e42dbcb7` (per the OWN-T0j thread) → ticks are live behind OFF flags; 0 `producer_runs` yet. Standalone
-MCP still lacks `log_operator_note`/`get_operator_inbox` → not redeployed; `operator_notes` still 0. **New defect
-MB1d:** `buildCmsOperatorFacts` dates CMS counts with the run date (confidence 0.9) while the census is stale —
-DaVita/Fresenius last seen 2026-01-22, `last_ingested_at` NULL, no inactive rows (B6d-cms outage) — and
-**DaVita = Fresenius = 2,450 exactly** (likely capped import). Flipping PSQL now would publish a January census as
-today's fact. Spec §9 design rule 3 (source-as-of dating + feed gate); OPERATOR-ACTIONS MBa-hold extended; OC-v item 1
-marked half-done. **Next:** send `prompts/MBa3-freshness-honest-facts-and-live-flip.md`; after it merges, redeploy BOTH
-services (carries OC-a's MCP tools).
-
-## 2026-09-11 — ASC frozen 50 source collection complete; review gate is now the named next step
-
-Read-only production reconciliation against the four healthcare research tables confirms Scott completed the
-full frozen collection pass: **50/50 resolved, 0 pending — 44 captured and 6 reviewed source exceptions**.
-The 44 captured candidates have 54 distinct payload rows (retry history retained); CoStar covers 44 candidates,
-RCA covers 1, and only 1 has both licensed sources. Exception dispositions are 4
-`licensed_sources_not_found`, 1 `parcel_owner_evidence_only`, and 1 `parcel_situs_evidence_only`.
-
-Latest-capture identity distribution is 22 exact-token and 22 governed/non-exact or historical-mode-missing.
-**Sixteen captured candidates plus all six exceptions require second review: 22/50, with 0 second reviewers
-recorded.** Two historical captures have no stored identity mode; that is instrumentation missingness and must
-not be silently backfilled. Structured collection coverage is strong for lot size (44/44), contacts and land SF
-(43/44), tenant fields (42/44), parcel (41/44), and building class/SF (40/44), but weak for occupancy (12/44),
-cap rate (10/44), and NOI (2/44). Those are availability measures, not commercial gate results.
-
-Canonical docs now distinguish **collection complete** from **aggregate review complete**. New aggregate-only
-checkpoint: `docs/audits/HEALTHCARE_ASC_50_PROPERTY_CAPTURE_CHECKPOINT_2026-09-11.md`. Updated the economics/
-sampling plan, property-identity contract, CURRENT-STATE, BUILD-BACKLOG, PLANNED-BACKLOG, and documentation map.
-
-**Next step:** complete the 22 independent second reviews, populate exactly one governed scorecard for each of
-the 50 frozen fingerprints using the latest capture per candidate while preserving retries and exceptions,
-run the existing privacy-safe aggregate-review contract, and apply the predeclared lane gates. Do not start
-PI2–PI3, IDTF, canonical/CRM writes, outreach, or production promotion on collection completion alone.
-
-
-> **📦 ARCHIVE (2026-09-12, fourth span):** the **OWN-T0j URL-length → MB-a reconcile** run of 2026-09-11
-> entries (the OWN-T0j 401/502 pair, MB-a2's P-SQL source defects, the PRI5 root-cause pass) was moved
-> **verbatim** to
-> [`docs/history/STATUS_claude-code_2026-09-11_ownt0j_urllen_to_mba.md`](../history/STATUS_claude-code_2026-09-11_ownt0j_urllen_to_mba.md)
-> after a merge from `main` pushed this file to 2,503 lines, 3 over its budget. Nothing was dropped; every
-> still-open item it named is tracked in `PLANNED-BACKLOG.md`.
 
 
 ## 2026-09-12 — ID3a-d: named the owner of every database, retired LCC's government migrations (Claude Code)
