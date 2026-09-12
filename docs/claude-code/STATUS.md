@@ -311,6 +311,27 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-12 — MB-b's "needs a Railway redeploy" blocker is already cleared; two small migrations are the real remaining gap (Cowork)
+
+Continuing planned-vs-completed-vs-gaps. `MB3`/`MB4` (MB-b's Lane Briefs email block + homepage tab)
+were filed as "not deployed/live-verified — no Railway/Supabase write access" the day they were built.
+Checked live via `net.http_get` from Supabase (the same pg_net technique earlier Cowork dry-runs used):
+`tranquil-delight-production`'s `/version` reads **`54ca77699efe`**, confirmed **10 commits past the
+MB-b merge** (`git merge-base --is-ancestor 94a08eca 54ca7769` → true). **The redeploy already
+happened** — just never reported back into the backlog rows that were still waiting on it.
+
+**What's actually still missing:** the two MB-b migrations were never applied — `feature_flags_registry`
+has no `MARKET_BRIEF_RENDER` row yet, confirmed live. Both migrations
+(`...mbb_rss_dialysis_stream_cron.sql`, `...mbb_market_brief_render_flag.sql`) are additive, idempotent,
+default-off, and carry reversal runbooks — low-risk once applied. The remaining live-verify call
+(`POST /api/market-brief-psql-tick`) 401s from this session — needs an operator's `X-LCC-Key`, which
+this session doesn't hold.
+
+Updated `MB3`/`MB4` in `PLANNED-BACKLOG.md` to reflect the narrowed gap rather than leave the stale
+"needs a redeploy" framing standing. Did not apply the migrations myself this pass — flagging the
+exact remaining steps rather than acting past what this documentation-focused turn asked for.
+
+
 ## 2026-09-12 — Continuing planned-vs-completed-vs-gaps: re-verified the "CMS ingestion repaired" claim live and it does not hold (Cowork)
 
 Following the FRED/CMS thread `CONSOLIDATE3` left open, re-measured both live rather than trusting the
