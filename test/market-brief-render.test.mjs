@@ -17,8 +17,8 @@ import {
   diffFactSets,
 } from '../api/_shared/market-brief-render.js';
 
-test('KNOWN_LANES matches the EB1 chk_mbf_lane CHECK constraint (4 lanes)', () => {
-  assert.deepEqual(KNOWN_LANES, ['dialysis', 'government', 'net_lease', 'broad_net_lease']);
+test('KNOWN_LANES matches the EB1R1 chk_mbf_lane CHECK constraint (3 lanes, net_lease/broad_net_lease collapsed)', () => {
+  assert.deepEqual(KNOWN_LANES, ['dialysis', 'government', 'net_lease']);
   for (const lane of KNOWN_LANES) assert.ok(LANE_LABELS[lane], `LANE_LABELS missing a label for ${lane}`);
 });
 

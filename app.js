@@ -7369,25 +7369,61 @@ function _marketBriefFactRow(f) {
     + `${esc(f.claim_text)} ${staleBadge}${cite}</div>`;
 }
 
-/** Homepage widget teaser (dialysis only — the default lane). Best-effort; a load failure degrades to a plain link. */
+// Swimlanes MB tracks — must match api/_shared/market-brief-render.js's
+// KNOWN_LANES/LANE_LABELS exactly (frontend/backend duplicate the list on
+// purpose per CLAUDE.md's shared-const-across-runtimes limits; keep both in
+// sync by hand when a lane is added/removed).
+const MARKET_BRIEF_LANES = ['dialysis', 'government', 'net_lease'];
+const MARKET_BRIEF_LANE_LABELS = { dialysis: 'Dialysis', government: 'Government-Leased', net_lease: 'Net Lease' };
+
+function _marketBriefSnapshotLine(lane, data) {
+  const label = esc(MARKET_BRIEF_LANE_LABELS[lane] || lane);
+  const allFacts = MARKET_BRIEF_SECTION_ORDER.flatMap((s) => (data.sections?.[s] || []));
+  const real = allFacts.filter((f) => f.unit !== 'gap_marker');
+  const top = real[0];
+  const count = real.length;
+  const asOf = top?.source_date ? ` (as of ${esc(String(top.source_date))})` : '';
+  const snippet = top ? esc(top.claim_text).slice(0, 140) + (top.claim_text.length > 140 ? '…' : '') : '';
+  return `<div style="padding:8px 0;border-bottom:1px solid #E7E6E6;">`
+    + `<div style="font-size:12px;font-weight:700;color:#003DA5;">${label} <span style="font-weight:400;color:#6A748C;">— ${count} live fact${count === 1 ? '' : 's'}</span></div>`
+    + (snippet ? `<div style="font-size:13px;padding:3px 0;">${snippet}${asOf}</div>` : '')
+    + `<a href="#/briefs/${lane}" style="font-size:12px;">Open full ${label} brief &rarr;</a>`
+    + `</div>`;
+}
+
+function _marketBriefPendingLine(lane) {
+  const label = esc(MARKET_BRIEF_LANE_LABELS[lane] || lane);
+  return `<div style="padding:4px 0;color:#6A748C;font-size:12px;font-style:italic;">${label} — no live facts yet (producer not built).</div>`;
+}
+
+/**
+ * Homepage widget: a short snapshot per lane (one live-fact-count line +
+ * the single freshest claim), not the full fact list — that lives on the
+ * #/briefs/<lane> page. A lane with no live facts yet (no producer built)
+ * shows one muted "not yet" line instead of being silently omitted, so the
+ * gap is visible and self-explanatory rather than confusing. Best-effort;
+ * a load failure degrades to a plain message.
+ */
 async function renderMarketBriefsWidget() {
   const el = document.getElementById('marketBriefsWidgetContent');
   if (!el) return;
   try {
-    const data = await _fetchMarketBriefTab('dialysis');
-    if (!data.enabled) {
+    const results = await Promise.all(MARKET_BRIEF_LANES.map((lane) =>
+      _fetchMarketBriefTab(lane).then((data) => ({ lane, data })).catch(() => ({ lane, data: null }))
+    ));
+
+    const anyEnabled = results.some((r) => r.data && r.data.enabled);
+    if (!anyEnabled) {
       el.innerHTML = `<div style="padding:10px 0;color:#6A748C;font-size:12px;">Not live yet.</div>`;
       return;
     }
-    if (!data.has_facts) {
-      el.innerHTML = `<div style="padding:10px 0;color:#6A748C;font-size:12px;">No live facts yet for Dialysis.</div>`;
-      return;
-    }
-    const allFacts = MARKET_BRIEF_SECTION_ORDER.flatMap((s) => (data.sections?.[s] || []));
-    const top = allFacts.filter((f) => f.unit !== 'gap_marker').slice(0, 2);
-    el.innerHTML = top.length
-      ? top.map(_marketBriefFactRow).join('')
-      : `<div style="padding:10px 0;color:#6A748C;font-size:12px;">No live facts yet for Dialysis.</div>`;
+
+    const withFacts = results.filter((r) => r.data && r.data.enabled && r.data.has_facts);
+    const withoutFacts = results.filter((r) => r.data && r.data.enabled && !r.data.has_facts);
+
+    const html = withFacts.map((r) => _marketBriefSnapshotLine(r.lane, r.data)).join('')
+      + withoutFacts.map((r) => _marketBriefPendingLine(r.lane)).join('');
+    el.innerHTML = html || `<div style="padding:10px 0;color:#6A748C;font-size:12px;">No live facts yet.</div>`;
   } catch (e) {
     console.warn('[MarketBriefs] widget load failed:', e.message);
     el.innerHTML = `<div style="padding:10px 0;color:#6A748C;font-size:12px;">Unavailable right now.</div>`;
@@ -7405,8 +7441,8 @@ async function renderMarketBriefsPage(lane) {
   _marketBriefsCurrentLane = requestedLane;
   el.innerHTML = `<div class="loading"><span class="spinner"></span></div>`;
 
-  const laneTabs = ['dialysis', 'government', 'net_lease', 'broad_net_lease'];
-  const laneLabels = { dialysis: 'Dialysis', government: 'Government-Leased', net_lease: 'Net Lease', broad_net_lease: 'Broad Net Lease' };
+  const laneTabs = MARKET_BRIEF_LANES;
+  const laneLabels = MARKET_BRIEF_LANE_LABELS;
   const tabsHtml = `<div style="display:flex;gap:6px;margin-bottom:12px;">` + laneTabs.map((l) =>
     `<button type="button" class="pipeline-tab${l === requestedLane ? ' active' : ''}" onclick="location.hash='#/briefs/${l}'">${esc(laneLabels[l])}</button>`
   ).join('') + `</div>`;

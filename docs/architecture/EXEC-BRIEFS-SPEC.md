@@ -11,7 +11,7 @@ principle; build proceeds prompt-by-prompt. EB1 (foundation) merged PR #2291 202
 | Cadence | Brokers must be able to **recall the brief regularly in conversations**. Include it **daily** in the LCC morning email, **updated and improved as news or data is ingested**. Update schedule per section is Claude's call, based on how often each input actually changes. |
 | Integration | **Built into our systems — not a pinned Cowork task that is never revisited and goes stale/disconnected.** Get design, architecture and connections right. Use the **local Ollama model** where appropriate. |
 | Delivery | **Weekly long-format email** + a **short-form version inside the existing daily morning briefing**, linking to the long form. |
-| Swimlanes | **Dialysis, government, general net lease, broad net lease only.** New medical lanes (ASC, imaging, MOB) join only once they exist as LCC lanes. |
+| Swimlanes | **Dialysis, government, net lease only.** (Net lease and broad net lease were originally scoped as two lanes; collapsed into one 2026-09-12 per Scott — no live facts existed under either at collapse time.) New medical lanes (ASC, imaging, MOB) join only once they exist as LCC lanes. |
 | Generation | Claude's recommendation, weighted by the anti-decay concern. (Recommendation §2.) |
 | Build brief | **Lives on the dashboard always, refreshed when updated.** Email timing per the market-brief pattern. Scott-only. |
 | Operator notes | **All of the above — one large funnel sorting into one to-do list, filtered and delegated by topic to the right agent/thread.** Minimise human friction; maximise improvement loops. |
@@ -70,7 +70,7 @@ flags it. The daily brief keeps rendering from P-SQL + P-RSS.
 1. **Daily morning email (existing `briefing-email-handler.js`)** — new **"Lane Briefs"** block (upgrades
    §8 Sector Watch): per lane, one line of *what changed* (fact diff) + the 2 most material live facts +
    "Read the full brief →" link. No new email engine.
-2. **Weekly long-form email** — Monday, one email with all four lanes (exemplar structure per lane:
+2. **Weekly long-form email** — Monday, one email with all three lanes (exemplar structure per lane:
    exec 5 → operators/tenants → policy → capital markets → implications [opinion] → unverified → sources).
    Rendered from a frozen `market_brief_issues` row; same brand tokens.
 3. **App: "Market Briefs" tab on the homepage** (`#/briefs/<lane>`) — live view + issue archive + "changed
@@ -380,3 +380,23 @@ blindness rather than reading a dead feed as a quiet news day. **`MARKET_BRIEF_P
 from this change of facts actually flowing; the only live-fetch evidence on record predates this code
 (Cowork, 2026-09-12). Full repo suite unaffected: 6,130 pass / 0 fail / 6 skipped. Backlog: `docs/os/
 PLANNED-BACKLOG.md` §P18 MB2a.
+
+**Addendum 2026-09-12 "MB2a live-reconcile" (Cowork) — a sixth design rule, learned the hard way.**
+Both replacement feeds were re-fetched independently via pg_net and answer: Federal Register ESRD
+**200, 3 items**; Google News operator query **200, 100 items**. The MB2a migration is **applied live**
+to LCC Opps (`market_brief_feed_health`, `v_market_brief_feed_health_stale`,
+`lcc_check_market_brief_feed_health` — executes clean 0/0 — the two `market_brief_facts` citation
+columns, and cron `lcc-market-brief-feed-health` at 11:15 UTC).
+
+🚨 **But the producer still cannot run**: the deployed `briefing-intel-snapshot` is **v21 and has no
+`dialysis` stream at all**, so neither MB-b's feeds nor MB2a's replacements have ever executed. No
+workflow in this repo deploys `supabase/functions/**`, so the merge changed nothing and reported
+nothing. Tracked as backlog **MB2a-deploy**, and as a third **I16** instance.
+
+**Design rule 6 — a producer's source list is only real once the thing that reads it is deployed.**
+§7 gates every step behind a flag, which correctly stops us from *showing* unverified facts; it does
+not catch a producer whose new inputs were never shipped, because a flag that is OFF and a producer
+that is not deployed look identical from the outside — both produce nothing, quietly. So a P18 step
+is "done" only when the deployed body is re-read and confirmed to contain the change, never when the
+PR merges. `MARKET_BRIEF_PRSS` stays OFF until that read succeeds and relevance survival is measured
+on real items.
