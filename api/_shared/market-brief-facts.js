@@ -160,11 +160,16 @@ function pct1(v) {
  *   Falls back to asOfIso only when the caller has no comp dates (should not
  *   happen once n>=minN, kept as a defensive default).
  */
-export function buildCapRateBandFact({ lane, capRates, operator = null, sourceLabel, asOfIso, minN = MIN_N_CAP_BAND, sourceAsOfDate = null }) {
+export function buildCapRateBandFact({ lane, capRates, operator = null, operatorKey = null, sourceLabel, asOfIso, minN = MIN_N_CAP_BAND, sourceAsOfDate = null }) {
   const stats = iqrStats(capRates || []);
   if (!stats || stats.n < minN) return null; // small-n suppression — never emit a thin band
   const segLabel = operator ? ` (${operator})` : '';
-  const factKey = operator ? `cap_rate_ttm_band:${normKey(operator)}` : 'cap_rate_ttm_band';
+  // ID2b-caps: `operatorKey` is the STABLE identity to key the fact on (the
+  // registry's operator_id, when the comps engine resolved one) — `operator`
+  // stays the LABEL used in the claim text. Without a distinct id, this falls
+  // back to normKey(operator) exactly as before (the whole-market band, and
+  // any residual operator whose properties never resolved an operator_id).
+  const factKey = operator ? `cap_rate_ttm_band:${operatorKey != null ? String(operatorKey) : normKey(operator)}` : 'cap_rate_ttm_band';
   return {
     lane,
     section: 'capital_markets',
@@ -407,7 +412,10 @@ export function buildCmsOperatorFacts({ lane, counts, priorCounts, sourceLabel, 
   return facts;
 }
 
-function normKey(s) {
+// Exported (ID2b-caps) so a caller building a fact_key ALIAS outside this
+// module (the supersede-stale-text-key check in market-brief-psql-tick.js)
+// uses the identical normalization — never a second copy of this rule.
+export function normKey(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 

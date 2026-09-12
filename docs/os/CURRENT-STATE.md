@@ -209,22 +209,33 @@ name + `dba_names`); `dia_resolve_operator(text)` is the one resolver, fails clo
 (`dia_operator_write_guard`) refuses an unresolved write and routes classifications to the new
 `properties.operator_class` column instead of the human review queue. `dia_operator_write_review`:
 **71 open** (genuinely unregistered operator names), 142 resolved, 807 dismissed as classifications.
-Orphan-registry-gap detector reads 0. **ID2b (2026-09-12) started the consumer switch — one surface
-shipped, most still read raw text.** Shipped: `v_market_brief_cms_operator_counts` (the market
-brief's CMS-operator-count source) now groups on `properties.operator_id` (survivor-resolved),
+Orphan-registry-gap detector reads 0. **ID2b + ID2b-caps (2026-09-12) started the consumer switch —
+two surfaces shipped, most still read raw text.** Shipped: `v_market_brief_cms_operator_counts` (the
+market brief's CMS-operator-count source) now groups on `properties.operator_id` (survivor-resolved),
 measured row-count-parity (6,695→6,695), Satellite Healthcare(54)+Satellite Dialysis(14)→69;
-`market-brief-facts.js` unblocked with zero code change. **Still reading raw operator text, measured
-and deferred, not started:** `rpc_query_comps`/`mcp/comps-tools.js` (fuzzy comp SELECTION —
-switching risks changing which comps are chosen, needs Scott's call on a live 5-subject diff, filed
-ID2b-c), the `cm_dialysis_*` CM exhibits (`cm_dialysis_operator_unit_economics` already ILIKE-
-bucket-normalizes via `dia_operator_bucket()`, a heuristic not the registry; `cm_dialysis_available_
-by_tenant[_q]`/`cm_dialysis_industry_participants` still raw — ID2b-cm), the dossier, and MCP tools
-generally (ID2b-mods). The true population measured this round is **96 views** referencing operator
-text (not the 45 first estimated), most correctly excluded as review/audit queues where raw text is
-the deliverable.
+`market-brief-facts.js` unblocked with zero code change. Also shipped: `rpc_query_comps` (the comps
+engine's own RPC, read by the market brief's cap-rate band, BOV workbooks and every other comps
+export) now returns `operator_id`/`operator_canonical` additively, and the market brief's
+per-operator cap-rate band groups on it — the `Fresenius`/`DaVita` text fragmentation is fixed. **ID2b-caps (2026-09-12) closed the market brief's second, larger surface:** `rpc_query_comps`
+now ADDITIVELY returns `operator_id`/`operator_canonical` on its output (comp SELECTION/scoring —
+`mcp/comps-tools.js`'s `p_tenant` text filter and `operatorTier()`/`compTenantText()` — is
+UNCHANGED; only new output fields were added, never an existing one, so which comps are chosen
+could not have moved). The market brief's per-operator TTM cap-rate band now groups on the id;
+verified live, the `Fresenius`/`Fresenius Medical Care` and `DaVita`/`DaVita Dialysis`
+fragmentation is gone. **Switching comp SELECTION itself** (the `p_tenant` filter, and whether
+`mcp/comps-tools.js` should filter/score on `operator_id` rather than text) is unchanged and
+remains **ID2b-c**, still needing Scott's call on a live 5-subject diff before any filter logic
+moves. **Still reading raw operator text, measured and deferred, not started:** the `cm_dialysis_*`
+CM exhibits (`cm_dialysis_operator_unit_economics` already ILIKE-bucket-normalizes via
+`dia_operator_bucket()`, a heuristic not the registry; `cm_dialysis_available_by_tenant[_q]`/
+`cm_dialysis_industry_participants` still raw — ID2b-cm), the dossier, and MCP tools generally
+beyond the additive `rpc_query_comps` fields (ID2b-mods). The true population measured this round
+is **96 views** referencing operator text (not the 45 first estimated), most correctly excluded as
+review/audit queues where raw text is the deliverable.
 → `CLAUDE.md` (ID2a's Dialysis-repo mirror doc, if any), `docs/os/PLANNED-BACKLOG.md` §P0d
-(ID2a / ID2a-cleanup / ID2b / ID2c / ID2c-payer), `docs/audits/ID1_OPERATOR_IDENTITY_AUDIT_2026-09.md`,
-`docs/audits/ID2b_OPERATOR_ID_CONSUMER_SWITCH_2026-09-12.md`.
+(ID2a / ID2a-cleanup / ID2b / ID2b-caps / ID2c / ID2c-payer), `docs/audits/ID1_OPERATOR_IDENTITY_AUDIT_2026-09.md`,
+`docs/audits/ID2b_OPERATOR_ID_CONSUMER_SWITCH_2026-09-12.md`,
+`docs/audits/ID2b_caps_RPC_QUERY_COMPS_OPERATOR_ID_2026-09-12.md`.
 
 ### CoStar sidebar capture — the largest producer, and five defect arcs in one place
 The extension → `sidebar-pipeline.js` path writes `properties`, `sales_transactions`,

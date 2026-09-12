@@ -62,6 +62,7 @@ import {
   decideFactWrite,
   sectionTtlDays,
   staleAfterIso,
+  normKey,
 } from '../_shared/market-brief-facts.js';
 
 const FLAG = 'MARKET_BRIEF_PSQL';
@@ -100,6 +101,88 @@ export function truncationGap(rowCount, limit, label) {
 }
 
 const truthy = (v) => v === true || v === 1 || v === '1' || v === 'true';
+
+/**
+ * ID2b-caps — pure grouping/planning step for the per-operator TTM cap-rate
+ * bands. Groups `rpc_query_comps` rows on the engine's own `operator_id`
+ * (ID2a registry, survivor-resolved) instead of the free-text `tenant` field
+ * (`comp_tenant(chain_canonical, operator, tenant)`), which is what
+ * fragmented "Fresenius"/"Fresenius Medical Care" and "DaVita"/"DaVita
+ * Dialysis" into separate bands. A comp whose linked property has never
+ * resolved an `operator_id` (~20% of dia properties, ID2a) falls back to
+ * grouping on its raw tenant text exactly as before — never dropped, never
+ * silently merged into the wrong bucket.
+ *
+ * Also plans which live TEXT-keyed bands (the old fragments) an id-keyed
+ * band this run makes stale — an operator-id band never auto-supersedes a
+ * differently-keyed live fact on its own (`decideFactWrite` only compares
+ * within one `fact_key`), so without this the stale fragments would sit
+ * live beside the merged band forever. Scoped to the raw tenant-text
+ * ALIASES actually observed under a resolved `operator_id` this run — never
+ * a blanket "retire every `cap_rate_ttm_band:*` text key" sweep — and a key
+ * still equal to the group's own factKey (the operator never resolved an
+ * id) is left alone.
+ *
+ * @param {object} o
+ * @param {object[]} o.rows  rpc_query_comps rows (sale arm)
+ * @param {string} o.lane
+ * @param {string} o.asOfIso
+ * @returns {{facts: object[], retire: {section:string, fact_key:string, reason:string}[]}}
+ */
+export function planOperatorCapRateBands({ rows, lane, asOfIso }) {
+  const byOperator = new Map(); // groupKey -> { label, opId, rates: [] }
+  const byOperatorSaleDates = new Map(); // groupKey -> latest sale_date
+  const rawTenantTextsByOpId = new Map(); // opId -> Set(raw tenant strings this run observed under it)
+  for (const r of rows || []) {
+    const opId = r.operator_id != null ? String(r.operator_id) : null;
+    const rawTenant = String(r.tenant || '').trim();
+    const label = opId ? String(r.operator_canonical || rawTenant).trim() : rawTenant;
+    const groupKey = opId ? `id:${opId}` : (label ? `text:${normKey(label)}` : null);
+    const cap = reliableCompCap(r);
+    if (!groupKey || !label || !Number.isFinite(cap)) continue;
+    if (!byOperator.has(groupKey)) byOperator.set(groupKey, { label, opId, rates: [] });
+    byOperator.get(groupKey).rates.push(cap);
+    if (r.sale_date) {
+      const d = String(r.sale_date).slice(0, 10);
+      if (!byOperatorSaleDates.has(groupKey) || d > byOperatorSaleDates.get(groupKey)) byOperatorSaleDates.set(groupKey, d);
+    }
+    if (opId && rawTenant) {
+      if (!rawTenantTextsByOpId.has(opId)) rawTenantTextsByOpId.set(opId, new Set());
+      rawTenantTextsByOpId.get(opId).add(rawTenant);
+    }
+  }
+
+  const facts = [];
+  for (const [groupKey, { label, opId, rates }] of byOperator) {
+    const opFact = buildCapRateBandFact({
+      lane, capRates: rates, operator: label, operatorKey: opId, sourceLabel: 'rpc_query_comps (TTM, dialysis sales)', asOfIso,
+      sourceAsOfDate: byOperatorSaleDates.get(groupKey) || null,
+    });
+    if (opFact) facts.push(opFact);
+  }
+
+  // A raw tenant-text alias is only genuinely STALE if this run did not also
+  // just (re)emit a live fact under that exact key — which happens whenever
+  // some OTHER comp under the same raw text has no resolved operator_id and
+  // still forms its own real text-keyed band (the fallback path above). A
+  // key can be both "an alias of a resolved operator" (from some rows) and
+  // "still the only home for other, unresolved rows" in the SAME run; the
+  // fact this run just wrote for it always wins over retiring it.
+  const emittedFactKeys = new Set(facts.map((f) => f.fact_key));
+
+  const retire = [];
+  const seenRetireKeys = new Set();
+  for (const [opId, texts] of rawTenantTextsByOpId) {
+    for (const rawTenant of texts) {
+      const staleKey = `cap_rate_ttm_band:${normKey(rawTenant)}`;
+      if (staleKey === `cap_rate_ttm_band:${opId}` || seenRetireKeys.has(staleKey) || emittedFactKeys.has(staleKey)) continue;
+      seenRetireKeys.add(staleKey);
+      retire.push({ section: 'capital_markets', fact_key: staleKey, reason: `superseded_by_operator_id:${opId}` });
+    }
+  }
+
+  return { facts, retire };
+}
 
 // ---------------------------------------------------------------------------
 // Producer-run lifecycle (P123 pattern — open before the work, close on exit)
@@ -329,6 +412,22 @@ async function writeFact(candidate, fetchedAtIso, apply) {
   return { ...decision, fact_key: candidate.fact_key };
 }
 
+// ID2b-caps: retire a fact_key a lane builder named as superseded by an
+// operator-id band (see the dialysis builder's `retire` list) — mark the
+// live row `status='superseded'` with no replacement `supersedes_id` chain
+// (the replacement is a DIFFERENT fact_key, the id-keyed band, which the
+// normal writeFact() loop already wrote earlier in this same run). A no-op
+// when nothing is live under that key (idempotent — a key retired last run
+// has nothing left to retire this run).
+async function retireStaleFact({ lane, section, fact_key, reason }, apply) {
+  const existing = await fetchLiveFact(lane, section, fact_key);
+  if (!existing) return { fact_key, action: 'noop_not_live', reason };
+  if (apply) {
+    await opsQuery('PATCH', `market_brief_facts?id=eq.${existing.id}`, { status: 'superseded' }).catch(() => null);
+  }
+  return { fact_key, action: 'retired_stale_operator_key', reason, retired_id: existing.id };
+}
+
 // ---------------------------------------------------------------------------
 // Lane builder — dialysis only today; structured so a future lane is one
 // more entry in this map, not a rewrite of the handler (spec §4/§7: gov/NL
@@ -339,6 +438,10 @@ const LANE_BUILDERS = {
   dialysis: async ({ asOfIso, sinceIso, lane }) => {
     const facts = [];
     const gaps = [];
+    // ID2b-caps: fact_keys this run's operator-id cap-rate bands make stale
+    // (see the retire-loop below) -- {section, fact_key, reason}, processed
+    // by the handler AFTER the normal write loop, never written to here.
+    const retire = [];
 
     const [capRateSrc, onMarketSrc, tradesSrc, cmsSrc] = await Promise.all([
       fetchDialysisCapRates(), fetchOnMarket(), fetchTradesSince(sinceIso), fetchCmsOperatorCounts(),
@@ -365,30 +468,9 @@ const LANE_BUILDERS = {
     });
     if (wholeMarket) facts.push(wholeMarket); else if (capRates.length) gaps.push({ source: 'cap_rate_band', error: `n=${capRates.length} below small-n floor` });
 
-    const byOperator = new Map();
-    const byOperatorSaleDates = new Map();
-    for (const r of capRateSrc.rows) {
-      // `tenant` is the RPC's own resolved operator field
-      // (comp_tenant(chain_canonical, operator, tenant) for dialysis_db rows,
-      // st.tenant for salesforce-staged rows) — MB-a read a nonexistent
-      // `operator_name` column on the raw sales table.
-      const op = String(r.tenant || '').trim();
-      const cap = reliableCompCap(r);
-      if (!op || !Number.isFinite(cap)) continue;
-      if (!byOperator.has(op)) byOperator.set(op, []);
-      byOperator.get(op).push(cap);
-      if (r.sale_date) {
-        const d = String(r.sale_date).slice(0, 10);
-        if (!byOperatorSaleDates.has(op) || d > byOperatorSaleDates.get(op)) byOperatorSaleDates.set(op, d);
-      }
-    }
-    for (const [operator, rates] of byOperator) {
-      const opFact = buildCapRateBandFact({
-        lane, capRates: rates, operator, sourceLabel: 'rpc_query_comps (TTM, dialysis sales)', asOfIso,
-        sourceAsOfDate: byOperatorSaleDates.get(operator) || null,
-      });
-      if (opFact) facts.push(opFact);
-    }
+    const opPlan = planOperatorCapRateBands({ rows: capRateSrc.rows, lane, asOfIso });
+    facts.push(...opPlan.facts);
+    retire.push(...opPlan.retire);
 
     // 2. On-market count + median ask cap.
     //    v_dia_on_market's cap-rate column is `current_cap_rate`, not a bare
@@ -438,7 +520,7 @@ const LANE_BUILDERS = {
     });
     facts.push(...cmsFacts);
 
-    return { facts, gaps };
+    return { facts, gaps, retire };
   },
 };
 
@@ -482,25 +564,33 @@ export async function handleMarketBriefPsqlTick(req, res) {
     const lastRun = await fetchLastCompletedRun(lane);
     const sinceIso = lastRun?.started_at || null;
 
-    const { facts, gaps } = await LANE_BUILDERS[lane]({ asOfIso, sinceIso, lane });
+    const { facts, gaps, retire = [] } = await LANE_BUILDERS[lane]({ asOfIso, sinceIso, lane });
 
     const results = [];
     for (const candidate of facts) {
       const outcome = await writeFact(candidate, asOfIso, isApply);
       results.push({ ...outcome, claim_text: candidate.claim_text, section: candidate.section });
     }
+    // ID2b-caps: process retirements AFTER the normal write loop, so a stale
+    // text-keyed band is only ever retired once its id-keyed replacement has
+    // already been written live in this same run.
+    const retireResults = [];
+    for (const r of retire) {
+      retireResults.push(await retireStaleFact({ lane, section: r.section, fact_key: r.fact_key, reason: r.reason }, isApply));
+    }
 
     const written = results.filter((r) => r.action === 'insert_new').length;
     const superseded = results.filter((r) => r.action === 'supersede').length;
     const skipped = results.filter((r) => r.action === 'skip_duplicate').length;
     const conflicted = results.filter((r) => r.action === 'conflict').length;
+    const retired = retireResults.filter((r) => r.action === 'retired_stale_operator_key').length;
 
     if (isApply) {
       await closeRun(runId, {
         status: 'completed',
         facts_written: written + superseded, // superseding writes a new live row too
-        facts_superseded: superseded,
-        detail: { gaps, conflicted, skipped_duplicate: skipped, since: sinceIso, lane },
+        facts_superseded: superseded + retired,
+        detail: { gaps, conflicted, skipped_duplicate: skipped, retired, since: sinceIso, lane },
       });
     }
 
@@ -512,9 +602,10 @@ export async function handleMarketBriefPsqlTick(req, res) {
       since: sinceIso,
       flag: { name: FLAG, enabled, registry_state: flagRow?.state || null },
       candidates: facts.length,
-      written, superseded, skipped_duplicate: skipped, conflicted,
+      written, superseded, skipped_duplicate: skipped, conflicted, retired,
       gaps,
       results,
+      retire_results: retireResults,
     });
   } catch (err) {
     if (isApply) {
@@ -524,4 +615,4 @@ export async function handleMarketBriefPsqlTick(req, res) {
   }
 }
 
-export const __internal = { LANE_BUILDERS, writeFact, fetchDialysisCapRates, fetchOnMarket, fetchTradesSince, fetchCmsOperatorCounts };
+export const __internal = { LANE_BUILDERS, writeFact, retireStaleFact, fetchDialysisCapRates, fetchOnMarket, fetchTradesSince, fetchCmsOperatorCounts };
