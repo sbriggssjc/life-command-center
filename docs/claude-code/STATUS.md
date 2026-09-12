@@ -1,3 +1,5 @@
+# Claude Code queue — STATUS
+
 ## 2026-09-12 — PR-scanner-3 reconciled against the merged desktop response (Cowork)
 
 Read the pasted Claude Code desktop response for PR-scanner-3 in full and independently re-verified
@@ -36,8 +38,93 @@ syncing an unused signal has no payoff yet. No action taken pending Scott's call
 
 Response filed: `docs/claude-code/responses/done/PR-scanner 3 desktop response.docx`.
 
-# Claude Code queue — STATUS
+## 2026-09-12 — ID2b reconciled: real but not yet visible — the cap-rate fragmentation Scott flagged is unchanged; ID2b-caps drafted
 
+Filed `responses/ID2b desktop response.docx` → `done/`; prompt → `prompts/done/`. **ID2b (PR #2359) shipped one switch:**
+`v_market_brief_cms_operator_counts` now groups on `properties.operator_id` through `dia_operator_survivor` — verified live,
+0 rows lost (6,695 → 6,695), Satellite's two spellings collapsed into one bucket of 69, plus a repo-wide class-guard test.
+It corrected the prompt's own figure (**96** grouping-relevant views, not 45 — the remainder are review/audit surfaces where
+raw text is intentionally correct) and **refused to switch `comps-tools.js` blind** because the 5-subject comp-set diff
+hadn't been run — the right call, filed as ID2b-c. **What the reconcile found:** the switched view feeds the CMS clinic
+counts, which MB1d already withholds behind the staleness gate, so **nothing user-visible changed**. Cowork re-ran the
+P-SQL tick's dry run against the deployed build: `cap_rate_ttm_band:fresenius` **n=63** alongside `:fresenius_medical_care`
+**n=11**, `:davita` **n=67** alongside `:davita_dialysis` **n=9** — the exact defect that started the identity thread on
+2026-09-11, still live. Root cause named: the bands group on the comps RPC's `comp_tenant` **text** and key on
+`normKey(text)`, so `operator_id` never reaches the engine's output and every engine consumer re-fragments the same way.
+New row **ID2b-caps** with prompt `prompts/ID2bcaps-comps-engine-operator-id-passthrough.md`: return `operator_id` +
+`operator_canonical` from `rpc_query_comps` **additively** (existing fields byte-identical, so `operatorTier()` selection
+cannot change — proven on 5 subjects), group bands on the id, supersede the text-keyed fragments. Gate: Fresenius 63+11 →
+one band n=74, DaVita 67+9 → n=76, whole-market n≈167 unmoved.
+
+## 2026-09-12 — HP1 P0 reconciled: the Today 500 is fixed, DEPLOYED and verified — and the "See all (N)" badge was never honest
+
+Filed `responses/HP1 desktop response.docx` → `done/`; prompt → `prompts/done/`. **PR #2358 merged
+(`42158f17`) and LIVE — `/version` reads `42158f174956`** (probed from LCC Opps via `net.http_get`,
+the sandbox-reachable route), so this one is *running*, not merely merged.
+
+**What shipped, verified live in the merged source rather than from the response:** `Promise.all` →
+**`Promise.allSettled`** with a `settledQueryResult()` mapper (1b); explicit **`timeoutMs: 20000`** on
+the seller-prospect read and 12 s on the other three ops calls (1a); **`countMode` `'exact'` →
+`'estimated'`** on all four (1c); and a real per-lane failure state (1e) — `today-sections.js` now
+returns **`source_error`** per section, `app.js` renders *"This section is unavailable right now"*
+instead of the blanket "Today unavailable — HTTP 500", and `assembleTodaySections` folds a
+per-request degradation note into the existing **`named_gaps`** contract reading *"Section shown
+empty, not exhausted."* That last distinction is the whole point: before this, a lane whose source
+died rendered **"Nothing here right now. ✓"** — a green checkmark over a failure. CC also found and
+wrapped a **seventh** previously-unguarded `opsQuery` in the same handler (the entity-name lookup),
+which the brief had not named. Guard `test/today-sections-degraded-source.test.mjs` asserts a thrown
+source empties exactly its own lane, leaves the other two intact, and the endpoint returns **200**;
+full suite 6,013 pass / 0 fail / 6 skipped.
+
+🔴 **NEW FINDING, mine, found while reconciling — `total_open` is the CAPPED PAGE LENGTH, not the
+population, and two of the three "See all (N) →" badges under-report.** Every section returns
+`total_open: all.length` (`today-sections.js:79/103/182`) where `all` is the rows the query
+returned — and every source query carries **`limit=200`**. Measured live 2026-09-12:
+
+| lane | badge reads | true population | honest? |
+|---|---:|---:|---|
+| Significant (`v_lcc_seller_prospect_queue`) | **200** | **517** | ❌ under-reports 61% |
+| Urgent (`v_lcc_bd_worklist` contact_writeback half) | **≤200** | **1,587** | ❌ under-reports 87% |
+| Important (`bd_opportunities` open) | 50 | 50 | ✅ (below the cap) |
+
+**The module's own header promises the opposite** — *"`total_open` (the full population, for the
+'See all →' link)"* — and cites **P159a**, the rule that a rendered count and a population must be
+two distinct numbers and never blended. It is the honest-counts rule (Consumption Layer §5) failing
+inside the module written to enforce it. **Be precise about the blast radius: the RANKING is not
+affected.** Each query is `order=rank_value.desc` before the `limit=200`, so the eight rows rendered
+really are the top eight; only the badge lies.
+
+⚠️ **And this corrects my own filing, in place.** HP1's 1c said *"the only consumer of `total_open`
+is the 'See all (N) →' button text"*, which implies the PostgREST header count fed it. **It never
+did** — CC checked and reported correctly that `.count` is read nowhere in the handler, which is
+exactly why the downgrade to `'estimated'` was safe. What that check actually exposed is that the
+exact `COUNT(*)` we were paying ~750–800 ms for on every page load was **pure waste**, and the badge
+has been wrong since UX-T1a-today shipped. **Re-enabling `count=exact` is NOT the fix** — an
+estimated planner count over one of these views is the documented ~58× trap, and an exact one
+re-imposes the cost 1c just removed. Filed as **HP1-badge**: either a cheap dedicated count-only
+read, or render the badge as *"top 200"* and stop claiming a total. 👤 A count nobody can afford to
+compute may simply not belong on the card.
+
+**1d re-measured and correctly NOT built.** Post-1c the 200-row page is **~1.2 s warm** and the
+separate exact COUNT that 1c removed was **~0.8 s** (my own pre-fix measurement was 815 ms + 750 ms;
+wall-clock on this box moves 2–4× between sessions, so read the structural facts, not the
+milliseconds). The structural cost is untouched — seq scans on `entities` / `lcc_property_attributes`
+/ `lcc_entity_portfolio_facts` plus the `activity_events` subplan at `loops=1518` — so the
+materialized-view question stays open as **HP1-1d** rather than being taken on a number that moved.
+
+**Still open, unchanged:** **P1** (deal-backbone freshness + the deal-status confirmation lane) is
+held 👤 pending Scott's determination of whether the frozen transaction stages are a Salesforce
+hygiene gap or a Power Automate scope gap — *do not assume*. **P2** (Inbox routing/ranking, My Work
+re-rank onto the shared function) untouched. The 12 s front-end race in `renderTodaySections` was
+correctly left alone.
+
+⚠️ **Deploy note:** the doctrine is *redeploy BOTH Railway services*. `tranquil-delight` is confirmed
+on `42158f17` and serves this endpoint and `app.js`; the standalone MCP service does not serve
+`today_sections`, so the surface is fixed either way — but confirm the MCP redeploy before assuming
+any other engine change in the same merge is live.
+
+**Next:** HP1-badge (smallest, and it is an honest-counts defect on an operator surface), then P2's
+inbox routing. P1 stays 👤-blocked.
 ## 2026-09-12 — PR-scanner-3 shipped: `county_records_needed`, the sixth ownership-history-lane action
 
 Re-measured live before building (unchanged from the 2026-09-12 sizing already in `PLANNED-BACKLOG.md`):
@@ -1685,7 +1772,6 @@ actual status (Running/Crashed/Success) and to pull the full log past `15:53:16Z
 this excerpt cuts off right at the summary print. Will draft a prompt once that's confirmed — likely
 covering (a) `facility_patient_counts`'s uncovered preflight call site, (b) the tracker row never closing
 on a preflight-abort exit, and (c) whatever the fuller log shows about the 42-minute gap.
-
 
 > **START HERE for the current state:** `docs/os/CURRENT-STATE.md` (what is LIVE / flag-gated OFF /
 > PLANNED, plus the canonical-doc map). **Everything unbuilt-but-intended:**
@@ -6356,7 +6442,6 @@ closed by the role-agnostic server-side belt, not the header regex), dated live 
 transferable lessons. Pointers added from `CURRENT-STATE.md`, `public-records-source-lane.md` and
 the handoff. Five arcs that were spread across STATUS, two audits and the backlog now have one door.
 
-
 **Verified live:** `v_dia_contact_office_address_bleed_review` = **0**; 37503 gone (merged);
 37783's address NULL with `address_source='addr1a_quarantined_contact_bleed'`, city/state/zip intact;
 `dia_property_merge_backup` row **585** present. gov mirror holds **1** row.
@@ -6522,7 +6607,6 @@ rows first, which is the right bar, but the scope difference is deliberate and s
 rather than discovered. And **gov's own price-conflict rate is unmeasured** — the guard is shared,
 the measurement is not.
 
-
 **SALE1 checkpoint verified (Cowork, 2026-09-03).** CC's central claim reproduces exactly:
 `cap_rate_history` shows sale 8091 (2009) first recorded at **$1,233,000** on 2026-04-17
 (`dia_master_sales`) with the listing at **$1,593,750** the same day — the sale row now carries the
@@ -6540,7 +6624,6 @@ comp-eligibility migration, then the review view, then the 46 two-source groups.
 a "Nominal Transfer" price may be meaningless; prefer NULL + non-comp unless the deed corroborates
 (the rule CC already applied to 8090's "Not Disclosed"). The 235 "matches earliest" rows are genuine
 repeats — an A2b comp-COUNT question, not a price defect; note it so nobody re-opens them.
-
 
 - `baseFromPeriodQuote` reads a schedule period's own labelled base/additional split (ground-truthed
   against the real Chesterbrook lease); components merge into `additional_rent` deduped
@@ -6663,7 +6746,6 @@ Audit: `docs/audits/PR5d_COSTAR_CMBS_LOAN_ARM_2026-09-03.md`.
 **false**. ✅ **And the Railway redeploy already carries the merge** (`/version` = `5b3b1227`,
 09:27 UTC) — so the JS half (mint gate, un-stamp keying, junk80-seed handler) is LIVE and
 **junk80-apply is unblocked**; CC's "can't run before the deploy" caveat is superseded.
-
 
 - Funnel 8,858 → 3,529 → 259 → 31 → 23. G3 (newer lease) cuts 93% and G4 (reason to sell) 88% — both
   COVERAGE gaps: dia has no lease dates in the mirror (3,823 live leases at source), and debt (192
@@ -10051,7 +10133,6 @@ Claude Code.
 ⚠️ **The decisive question the force-run answers:** if it **completes**, the throttle was the last
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
-
 
 > **📦 ARCHIVE (2026-09-08):** entries for **2026-08-31 → 2026-09-01** (the CMS-ingestion restart,
 > DOC1–DOC18 document pipeline, C13/C14 entity-role work, and the trailing pointers for two earlier
