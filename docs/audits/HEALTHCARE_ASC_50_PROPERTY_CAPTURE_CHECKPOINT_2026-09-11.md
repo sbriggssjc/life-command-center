@@ -101,3 +101,22 @@ economics gate, Wilson intervals, research time, or weighted lane score.
    `enrichment_only`, or `stop`.
 5. Only after that decision may Phase B of the shared property-identity resolver begin. Any activation or
    production promotion remains separately authorized.
+
+## Review-workbench implementation checkpoint — 2026-09-12
+
+The source-collection checkpoint exposed a missing execution surface: the database held the six governed
+source exceptions, but it had no general scorecard writer for the other candidates and no way to preserve the
+identity of both reviewers. The implemented `/asc-review.html` workbench and `/api/asc-research-review`
+boundary close that tooling gap without supplying any review judgment.
+
+The boundary presents one frozen candidate and its newest capture first while retaining retry history. It
+accepts the exact `healthcare_property_review:1.0` property-form vocabulary, five-part research time, private
+citations, and nullable addressability/economics findings. Database functions preserve existing exception
+dispositions, force low-confidence or unknown-form rows into second review, reject the primary reviewer as the
+second reviewer, and retain an explicit agree/disagree verdict. Re-saving a primary scorecard clears a stale
+second review instead of silently carrying it forward.
+
+This implementation creates no row-level scorecard by itself. At this checkpoint the production facts remain
+50 source-collection resolutions, 0 completed primary scorecards, and 0 completed independent second reviews.
+The next action remains human, evidence-bound review; aggregate receipt generation remains blocked until all
+50 primary scorecards and every required independent second review are complete.

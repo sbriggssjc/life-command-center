@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import {
   ASC_RESEARCH_SAMPLE_SIZE,
+  assertAscPropertyReview,
   assertAscResearchImport,
   buildAscStructuredCapture,
   diagnoseAscIdentityMatch,
@@ -11,6 +12,24 @@ import {
 } from '../api/_shared/asc-research-lane.js';
 
 const sha = (digit) => digit.repeat(64);
+
+test('ASC property review contract accepts only exact governed scorecards', () => {
+  const base = {
+    run_id: '11111111-1111-4111-8111-111111111111', candidate_fingerprint: sha('a'), mode: 'primary',
+    clinical_verified: true, property_form: 'minority_mob', landlord_owner: 'Example Owner LLC',
+    ownership_evidence: [{ source: 'public_record' }], landlord_addressable: null,
+    economics_bounded: false, reviewer_confidence: 'medium', second_review_required: true,
+    research_minutes: { clinical: 1, property: 2, ownership: 3, economics: 4, contact: 5 },
+    evidence_citations: [{ source: 'capture' }], notes: 'Evidence-bound review.',
+  };
+  assert.equal(assertAscPropertyReview(base).property_form, 'minority_mob');
+  assert.throws(() => assertAscPropertyReview({ ...base, property_form: 'multi_tenant' }), /property_form/);
+  assert.throws(() => assertAscPropertyReview({ ...base, canonical_write_authorized: true }), /unsupported review fields/);
+  assert.deepEqual(assertAscPropertyReview({
+    run_id: base.run_id, candidate_fingerprint: base.candidate_fingerprint,
+    mode: 'second', verdict: 'disagree', notes: 'Conflict retained.',
+  }, 'second'), { verdict: 'disagree', notes: 'Conflict retained.' });
+});
 
 function candidates(count = ASC_RESEARCH_SAMPLE_SIZE) {
   return Array.from({ length: count }, (_, index) => ({
@@ -1150,13 +1169,31 @@ test('ASC routes are mounted and never invoke the dialysis/government propagator
     readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
     readFile(new URL('../extension/sidepanel.js', import.meta.url), 'utf8'),
   ]);
-  for (const route of ['asc-research-import', 'asc-research-target', 'asc-research-capture', 'asc-research-complete']) {
+  for (const route of ['asc-research-import', 'asc-research-target', 'asc-research-capture', 'asc-research-complete', 'asc-research-review']) {
     assert.match(server, new RegExp(`/api/${route}`));
     assert.match(intake, new RegExp(`case '${route}'`));
   }
   assert.doesNotMatch(handler, /propagateToDomainDb|processSidebarExtraction|sf_sync_queue|bd_opportunities|touchpoint_cadence/);
   assert.match(sidepanel, /sessionCtx\?\.address\s*&&\s*sessionCtx\?\.state\s*\?\s*sessionCtx\s*:\s*ctx/);
   assert.match(sidepanel, /toErrorMessage\(\s*capture\.data\?\.detail/);
+});
+
+test('ASC review workbench preserves reviewer separation and prohibited-write boundary', async () => {
+  const [sql, handler, html] = await Promise.all([
+    readFile(new URL('../supabase/migrations/20261002130000_lcc_asc_property_review_workbench.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
+    readFile(new URL('../asc-review.html', import.meta.url), 'utf8'),
+  ]);
+  assert.match(sql, /primary_reviewer uuid/i);
+  assert.match(sql, /if v_primary = p_reviewer then raise exception 'second reviewer must differ/i);
+  assert.match(sql, /second_review_verdict[^;]+\('agree','disagree'\)/is);
+  assert.match(sql, /second_review_required = healthcare_research_reviews\.second_review_required or excluded\.second_review_required/i);
+  assert.doesNotMatch(sql, /insert\s+into\s+public\.(entities|external_identities|bd_opportunities)/i);
+  assert.doesNotMatch(sql, /delete\s+from/i);
+  assert.match(handler, /assertAscPropertyReview/);
+  assert.match(handler, /'lcc_save_asc_second_review'\s*:\s*'lcc_save_asc_primary_review'/);
+  assert.match(handler, /`rpc\/\$\{rpc\}`/);
+  assert.match(html, /Independent second review/);
 });
 
 test('capture retries receive only the column update privilege required by the invoker RPC', async () => {

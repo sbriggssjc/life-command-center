@@ -23,6 +23,14 @@
 
 ---
 
+## ASC50 review gate — human work now enabled
+
+| # | Item | State | Source |
+|---|---|---|---|
+| ASC50-R1 | Complete exactly 50 primary, evidence-cited property scorecards in `/asc-review.html`. Do not infer property form from CMS enrollment. The six source-exception dispositions remain evidence, not completed scorecards. | 👤 | `HEALTHCARE_ASC_50_PROPERTY_CAPTURE_CHECKPOINT_2026-09-11.md` |
+| ASC50-R2 | Complete every required review with a different authenticated second reviewer. Preserve `disagree` rows for adjudication; never overwrite them silently. Initial measured requirement is 22 rows and may increase from low-confidence/unknown primary findings. | 👤 | `HEALTHCARE-ASC-IDTF-PRIVATE-RUN-AUTHORIZATION-v0.1.md` §13 |
+| ASC50-R3 | After R1/R2 are complete, run `healthcare_property_review:1.0`, publish only the identifier-free aggregate receipt, and record one allowed lane decision. No Phase B resolver or production activation before that separate decision. | 🔴 | `scripts/healthcare-discovery/property-review.mjs` |
+
 ## P0 — Verify, don't build (open loops on work already shipped)
 
 These are the cheapest and highest-trust items: something shipped, and the **delta has not been
