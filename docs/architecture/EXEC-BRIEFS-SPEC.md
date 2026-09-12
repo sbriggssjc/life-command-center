@@ -355,3 +355,28 @@ brief shows three canonical operator bands (rule 4, via ID2a/ID2b-caps-2), rende
 than a stale number (rules 3 and 5), and recomputes nothing. **`MARKET_BRIEF_PRSS` remains off** — the dialysis RSS URLs
 added with MB-b all fail (403/404, backlog **MB2a**), a reminder that a feed URL is not a source until it has been
 fetched once and parsed.
+
+**Addendum 2026-09-12 "MB2a" — dead dialysis RSS feeds replaced; feed-health monitor added; PRSS still
+OFF.** `RSS_FEEDS.dialysis` in `briefing-intel-snapshot/index.ts` now points at the two feeds Cowork
+fetched and parsed live (Federal Register, filtered to "end-stage renal disease" — the authoritative
+ESRD PPS policy source spec §3 names; Google News, operator query `dialysis OR DaVita OR "Fresenius
+Medical Care"`), replacing the three dead URLs (403/404/404). No third publisher-specific feed was
+added — this session's sandbox has zero egress to verify one (policy-denied CONNECT to every
+candidate host), and a feed that cannot be verified is skipped rather than shipped with a spoofed
+User-Agent, per this task's own instruction. **Google News's two caveats are handled, §2's own
+wording:** `parseRss()` splits a redirect feed's item title on the LAST `" - "`/`" – "` separator into
+`{headline, publisher}` (a headline containing its own dash still keeps the true publisher suffix; a
+title with none returns `publisher: null` rather than guessing), and `market_brief_facts` gained two
+additive columns — `source_publisher` (the real outlet) and `source_url_is_redirect` — so a citation
+never presents a `news.google.com/rss/articles/...` link as if it were the publisher's own page.
+**A dead feed cannot ship silently again, per §2 and I11:** `scripts/verify-rss-feeds.mjs` (opt-in,
+never wired into `npm test`, which stays hermetic) parses `RSS_FEEDS` straight out of the edge-function
+source and fails non-zero on any non-200 or zero-item feed; and a new `market_brief_feed_health` table
+(migration `20260912150000`) records one row per (stream, source, day) from every `fetchSectorNews()`
+run, with `lcc_check_market_brief_feed_health(3)` opening a deduped `lcc_health_alerts` row after 3
+consecutive zero-item days and auto-resolving on the next real item — the monitor alerts on its own
+blindness rather than reading a dead feed as a quiet news day. **`MARKET_BRIEF_PRSS` was NOT flipped**
+— this session has no live egress and no Railway/Supabase write access, so there is no fresh evidence
+from this change of facts actually flowing; the only live-fetch evidence on record predates this code
+(Cowork, 2026-09-12). Full repo suite unaffected: 6,130 pass / 0 fail / 6 skipped. Backlog: `docs/os/
+PLANNED-BACKLOG.md` §P18 MB2a.

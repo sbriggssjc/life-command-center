@@ -18,6 +18,17 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-12 — MB2a: dead dialysis RSS feeds replaced, feed-health monitor added, PRSS stays off
+
+`RSS_FEEDS.dialysis` now points at Federal Register (ESRD) + Google News (operator query) in place of
+the three dead URLs (403/404/404). No third feed added — this sandbox has zero verified egress and a
+spoofed UA was refused, per the task. Handled Google News's redirect-URL + broad-noise caveats
+(`source_publisher`/`source_url_is_redirect` columns; a title-suffix parser). Shipped
+`scripts/verify-rss-feeds.mjs` (opt-in, parses feeds from source so it can't drift) and
+`market_brief_feed_health` + `lcc_check_market_brief_feed_health` (I11: alerts on 3+ zero-item days,
+auto-resolves on a real item). `MARKET_BRIEF_PRSS` left OFF — no live egress this session to confirm
+facts actually flow; Cowork's prior fetch predates this code. Suite 6,130/0/6-skipped. Backlog
+`docs/os/PLANNED-BACKLOG.md` §P18 MB2a; spec addendum in `EXEC-BRIEFS-SPEC.md`.
 ## 2026-09-12 🚨 — 26 backlog IDs are used twice, and `SEC2` is two different issues. One of them bit me today. (Cowork)
 
 Two prompts are already queued for CC (**HP1-P2misparse**, **HP1-badge**), so rather than deepen the queue I took
