@@ -1,6 +1,43 @@
 # Claude Code queue — STATUS
 
-<<<<<<< HEAD
+## 2026-09-12 — PR-scanner-3 reconciled against the merged desktop response (Cowork)
+
+Read the pasted Claude Code desktop response for PR-scanner-3 in full and independently re-verified
+its claims live against both Supabase projects rather than trusting the report text:
+
+- `v_lcc_ownership_history_lane_split` action distribution on LCC Opps matches exactly:
+  `agrees` 147, `county_records_needed` 126 (27 human_actionable), `sponsor_spe` 110,
+  `mismatch` 101 (37 human_actionable), `all_guarded` 27 (4 human_actionable), 1 null —
+  `human_actionable` total unchanged at 68. Confirms the response's "predicted-vs-actual delta
+  was exact" claim rather than assuming it.
+- The new mirror table `lcc_gov_property_record_coverage` has exactly 254 rows, all synced at one
+  single timestamp (`2026-09-12 05:26:52.77913+00`) — confirms it was seeded once, live, and is
+  not yet on a recurring sync, exactly as both the response and `PLANNED-BACKLOG.md`/`STATUS.md`'s
+  own PR-scanner-3 entries already disclose.
+- **Deploy status, both Railway services** (per the repo's standing "redeploy both" rule for engine
+  changes): `tranquil-delight-production-633f.up.railway.app/version` returns `bd679c4321c8` —
+  byte-identical to this change's merge commit (`bd679c43`), so it is live at the correct commit.
+  The standalone MCP service (`life-command-center-production.up.railway.app`, the `mcp/` directory)
+  does not import any file this change touched (`ops.js`, `api/_shared/gov-property-record-coverage.js`,
+  `api/_shared/ownership-lane-split.js` are all outside `mcp/`) and exposes no git-sha `/version` route
+  to check directly — its own `/health` reports a static `"version":"1.0.0"`. **Conclusion: this
+  shipment did not require a second-service redeploy, and none is owed.**
+- CC's own doc updates (`PLANNED-BACKLOG.md` PR-scanner-3 row, `ownership-history-lane.md` §5,
+  `research-workbench.md` §7d, and this file's PR-scanner-3 entry above) were read in full and found
+  accurate, complete, and consistent with the live numbers above — no corrections needed.
+
+**Outstanding decision for Scott, not yet made:** the `lcc_gov_property_record_coverage` mirror was
+seeded once (254/254 rows) and has no recurring sync. It will silently drift stale as A2/A3 apply
+tasks and PR-scanner-1/2 scans change gov's `parcel_records`/`tax_records`/`deed_records` — a stale
+mirror can only ever fail *safe* (an unsynced row stays at its base action, `IS FALSE` not `= false`),
+but it will under-report `county_records_needed` over time rather than staying accurate. Options:
+(a) schedule `syncGovPropertyRecordCoverageForOwnershipLane()` on a cron now (a small follow-up build,
+mirroring cron 244/245's cadence), or (b) leave it manual/on-demand until PR-scanner-1/2 show real
+adoption (their writers still show 0 rows on either domain as of this reconciliation), since a cron
+syncing an unused signal has no payoff yet. No action taken pending Scott's call.
+
+Response filed: `docs/claude-code/responses/done/PR-scanner 3 desktop response.docx`.
+
 ## 2026-09-12 — ID2b reconciled: real but not yet visible — the cap-rate fragmentation Scott flagged is unchanged; ID2b-caps drafted
 
 Filed `responses/ID2b desktop response.docx` → `done/`; prompt → `prompts/done/`. **ID2b (PR #2359) shipped one switch:**
@@ -88,7 +125,37 @@ any other engine change in the same merge is live.
 
 **Next:** HP1-badge (smallest, and it is an honest-counts defect on an operator surface), then P2's
 inbox routing. P1 stays 👤-blocked.
-=======
+## 2026-09-12 — PR-scanner-3 shipped: `county_records_needed`, the sixth ownership-history-lane action
+
+Re-measured live before building (unchanged from the 2026-09-12 sizing already in `PLANNED-BACKLOG.md`):
+of gov's 68 `human_actionable` `mismatch`/`all_guarded` tasks in `v_lcc_ownership_history_lane_split`,
+27 (40%) carry no trustworthy `parcel_records`/`tax_records`/`deed_records` on file; fleet-wide (254
+tasks) it is 126 (49.6%). The spec's `ai_gpt4o_presumed` model-leg label does not exist as a literal in
+gov's tables — the live tag is `ai_recall_gpt` (11 deed / 23 parcel / 14 tax rows), used instead.
+Shipped as a RECLASSIFICATION inside the existing split (mirroring A3's `sponsor_spe` precedent) rather
+than a new lane/table. Cross-database constraint (the view is on LCC Opps, the source tables on the gov
+project) solved with a small mirror table (`lcc_gov_property_record_coverage`) synced by
+`api/_shared/gov-property-record-coverage.js`; the SQL CASE in the view stays the single owner of the
+classification, and an unsynced property (`IS FALSE`, never `= false`) is left at its base action —
+never guessed into the reclassification on an absence of information. Reuses B1's existing
+`lcc_chain_human_value_floor()` unchanged.
+
+Predicted-vs-actual delta was **exact**: `mismatch` 192→101, `all_guarded` 62→27,
+`county_records_needed` 0→126, `human_actionable` held at 68 (split 37/4/27), `agrees`/`sponsor_spe`
+untouched. Wired the first live consumer of PR-scanner-5's previously-unwired `/api/recorder-portal`
+route: a "County portal →" button on these cards (`researchOpenCountyPortal`, `ops.js`).
+
+Migration `supabase/migrations/20260912150000_lcc_pr_scanner3_county_records_needed_action.sql`
+(applied live to LCC Opps + coverage table seeded for today's 254-property population). Guards:
+`test/ownership-lane-split.test.mjs` (6 new/updated assertions) + `test/gov-property-record-coverage.test.mjs`
+(7 behavioural tests, injected deps). Full suite: 6,022 pass / 0 fail (6 pre-existing skips, unrelated).
+
+**Not done — an operator/scheduling step:** `syncGovPropertyRecordCoverageForOwnershipLane()` is not
+yet wired to a cron; today's mirror was seeded once against the live population this measurement
+covers. As PR-scanner-1/2's capture writers get adopted (still 0 rows on either domain per the
+2026-09-12 research-workbench.md §7c note), the mirror needs a periodic re-sync to stay current.
+Docs updated in the same change: `PLANNED-BACKLOG.md` (row `PR-scanner-3`), `research-workbench.md`
+§7d, `ownership-history-lane.md` §5.
 ## 2026-09-12 — ID2b partially shipped: market brief's operator-count source switched to `operator_id`; comps/CM/dossier measured and deferred
 
 Executed `prompts/ID2b-consumer-switch-to-operator-id.md`. **Re-measured the population first: the real grep hit is
@@ -112,7 +179,6 @@ registry); `cm_dialysis_available_by_tenant[_q]` and `cm_dialysis_industry_parti
 precomputed text — filed **ID2b-cm**. `dossier-generator.js`/`rent-projection.js`/`team-context.js`/
 `sidebar-pipeline.js` and the ~85 remaining views not read this round — filed **ID2b-remaining**/**ID2b-mods**.
 Full report: `docs/audits/ID2b_OPERATOR_ID_CONSUMER_SWITCH_2026-09-12.md`. Branch `claude/dreamy-pascal-i97j44`.
->>>>>>> origin/main
 
 ## 2026-09-12 — ID2b scoped: the identity fix is stored but unread — 45 views + 12 modules still group on operator text
 
@@ -1706,7 +1772,6 @@ actual status (Running/Crashed/Success) and to pull the full log past `15:53:16Z
 this excerpt cuts off right at the summary print. Will draft a prompt once that's confirmed — likely
 covering (a) `facility_patient_counts`'s uncovered preflight call site, (b) the tracker row never closing
 on a preflight-abort exit, and (c) whatever the fuller log shows about the 42-minute gap.
-
 
 > **START HERE for the current state:** `docs/os/CURRENT-STATE.md` (what is LIVE / flag-gated OFF /
 > PLANNED, plus the canonical-doc map). **Everything unbuilt-but-intended:**
@@ -6377,7 +6442,6 @@ closed by the role-agnostic server-side belt, not the header regex), dated live 
 transferable lessons. Pointers added from `CURRENT-STATE.md`, `public-records-source-lane.md` and
 the handoff. Five arcs that were spread across STATUS, two audits and the backlog now have one door.
 
-
 **Verified live:** `v_dia_contact_office_address_bleed_review` = **0**; 37503 gone (merged);
 37783's address NULL with `address_source='addr1a_quarantined_contact_bleed'`, city/state/zip intact;
 `dia_property_merge_backup` row **585** present. gov mirror holds **1** row.
@@ -6543,7 +6607,6 @@ rows first, which is the right bar, but the scope difference is deliberate and s
 rather than discovered. And **gov's own price-conflict rate is unmeasured** — the guard is shared,
 the measurement is not.
 
-
 **SALE1 checkpoint verified (Cowork, 2026-09-03).** CC's central claim reproduces exactly:
 `cap_rate_history` shows sale 8091 (2009) first recorded at **$1,233,000** on 2026-04-17
 (`dia_master_sales`) with the listing at **$1,593,750** the same day — the sale row now carries the
@@ -6561,7 +6624,6 @@ comp-eligibility migration, then the review view, then the 46 two-source groups.
 a "Nominal Transfer" price may be meaningless; prefer NULL + non-comp unless the deed corroborates
 (the rule CC already applied to 8090's "Not Disclosed"). The 235 "matches earliest" rows are genuine
 repeats — an A2b comp-COUNT question, not a price defect; note it so nobody re-opens them.
-
 
 - `baseFromPeriodQuote` reads a schedule period's own labelled base/additional split (ground-truthed
   against the real Chesterbrook lease); components merge into `additional_rent` deduped
@@ -6684,7 +6746,6 @@ Audit: `docs/audits/PR5d_COSTAR_CMBS_LOAN_ARM_2026-09-03.md`.
 **false**. ✅ **And the Railway redeploy already carries the merge** (`/version` = `5b3b1227`,
 09:27 UTC) — so the JS half (mint gate, un-stamp keying, junk80-seed handler) is LIVE and
 **junk80-apply is unblocked**; CC's "can't run before the deploy" caveat is superseded.
-
 
 - Funnel 8,858 → 3,529 → 259 → 31 → 23. G3 (newer lease) cuts 93% and G4 (reason to sell) 88% — both
   COVERAGE gaps: dia has no lease dates in the mirror (3,823 live leases at source), and debt (192
@@ -10072,7 +10133,6 @@ Claude Code.
 ⚠️ **The decisive question the force-run answers:** if it **completes**, the throttle was the last
 obstacle. If it **hangs**, the 2026-06-23 hang is still live underneath and the throttle was merely
 hiding it — **a finding, not a failure**, and the one thing two months of silence could not tell us.
-
 
 > **📦 ARCHIVE (2026-09-08):** entries for **2026-08-31 → 2026-09-01** (the CMS-ingestion restart,
 > DOC1–DOC18 document pipeline, C13/C14 entity-role work, and the trailing pointers for two earlier
