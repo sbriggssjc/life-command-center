@@ -12,6 +12,45 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-12 — HP1-P2misparse: the 117 Inbox rows are the guard saying "I blocked it", not work (Cowork)
+
+Drafted the next prompt — and the measurement changed what it is. **I filed this row yesterday-ish as *"117 rows
+with no resolution surface — build one, or decide they're machine-fixable."* That was the wrong question**, and the
+prompt says so in §0 rather than quietly building the better thing.
+
+**What they actually are.** The contact guard blocks a suspect contact and then files an Inbox row announcing the
+block. A correct block needs no broker judgment — so this is **B6a over-applied**: a skipped step must emit, but to
+a counter, not to Scott's homepage. **117 rows carry 294 rejected contacts across only 42 distinct names and ~26
+properties**: `View Less` blocked **23 times**, `Equity Funds` **31**, re-notified on every capture.
+
+**Four classes, four different right answers — they are not one problem:**
+
+| class | examples | n | disposition |
+|---|---|---|---|
+| **A** CoStar UI chrome | `View Less`, `Demographics`, `Public REIT`, `CoStar Property Contact` | ~100 | block and **say nothing** |
+| **B** firms parsed as persons | `Marcus & Millichap`, `Colliers`, `Cushman & Wakefield`, `NAI Columbia` | ~60, most **with real emails** | blocking as a *person* is right, **discarding is not** → **BR1** firm registry |
+| **C** job titles in the name slot | `Executive Vice Chairman`, `Vice Chair`, `General Mgr \| CEO` | ~25, with emails | a **parser bug** — report it, don't queue it |
+| **D** `email_fanout` | `James D. Collins`, `Edward C. Mann`, `Conrad Buhler` | **86 / 15 names / 4 properties** | see below |
+
+🔑 **The one piece of real value hiding in there.** `email_fanout` fires when the scraper staples **one** broker's
+email onto **every** name on the page — `jcollins@southpace.com` landed on 5 names (including the firm itself and a
+department); `william.collins@cushwake.com` on 3. Blocking the batch is **correct**, 4 of 5 are misattributions.
+But the name matching the email's **local part** is the true owner: **jcollins@ ↔ James D. Collins**,
+**william.collins@ ↔ William M. Collins**, **jfahner@ ↔ Jacob Fahner**. That contact is real, correctly paired, and
+currently discarded with the collateral. The prompt recovers it mechanically under a strict matching rule, mints
+nothing on a tie, and leaves every other name in the batch blocked. Expect **~4–8 people** — small, but they are
+brokers on properties we track, and we were throwing them away.
+
+**Deliberately no target count in the prompt.** HP1-P2a taught that lesson today: my §5 set a target of 65 that
+contradicted my own §3, and CC was right to report 182 instead of forcing my number. This prompt asks for the
+after-count and forbids tuning the rules to hit one.
+
+**What it does not do:** it does not weaken the guard — every block measured here is **correct**; it changes what
+gets *announced*. It builds no review surface (§0), mints nothing in A/B/C, and leaves `email_alert` (**P2b**) and
+the ranking work (**P2c/P2e**) alone.
+
+Prompt: `prompts/HP1-P2misparse-the-guard-notifies-instead-of-disposing.md`.
+
 ## 2026-09-12 — HP1-P2a reconciled: shipped and verified live; my own target number was wrong; one gap promoted out of a closed row (Cowork)
 
 PR #2389 merged. Response and prompt filed to `done/`. **Verified independently against the live DB rather than
