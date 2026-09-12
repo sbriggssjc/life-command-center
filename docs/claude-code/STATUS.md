@@ -1,3 +1,59 @@
+## 2026-09-12 — Sized the 40-property residual from B2: a small, named slice of C2g (Cowork)
+
+Continuing after B2's retirement, sized the 40-property residual flagged there (gov properties with a
+working `asset` anchor that were never resolved to an owner in `lcc_property_owner` at all — distinct
+from the 2,496-property mint gap, which is `C2e-T2b`).
+
+**Findings:** these 40 are stuck, not merely queued — anchors range from 2026-04-24 to 2026-08-19 (up
+to ~4.5 months old) with no resolution having landed. Two sub-shapes: 10 of 40 carry a real
+`assessed_owner` name (LLCs, a trust, an individual, a corp, a city) and simply never resolved; the
+other 30 have no `assessed_owner` at all despite a `true_owner_id` and a working anchor — thinner data
+than the first ten, worth separating before diagnosing either. Checked and ruled out: not a
+`cmbs_discovery`-status artifact (all 40 are `status='active'`); not a timing/backlog-catch-up issue
+(ages rule that out).
+
+**This is very likely the same machinery as `C2g`** ("why are 489 anchored owner-orgs still
+unresolved?" — `lcc_reconcile_property_owner`'s 0.55 confidence gate, a dia-operator-in-owner-slot
+case, or a cross-domain anchor), just counted at the property level with no Salesforce-people filter,
+so the two counts (40 vs 489) aren't directly comparable. Filed as `C2g-40` right under `C2g` in
+`PLANNED-BACKLOG.md` rather than as a new independent row — per the repo's own standing rule against
+building a second detector for the same defect class, this should be diagnosed alongside C2g's own
+investigation, not separately.
+
+No build taken. Docs updated: `PLANNED-BACKLOG.md` (new `C2g-40` row).
+
+## 2026-09-12 — B2 retired: it's `C2e-T2b`, not a separate gap; asset-anchor coverage re-measured live (Cowork)
+
+Picked B2 as the next gap after PR-scanner-3, per the standing "measure before building" discipline
+and the row's own `owner_needs_salesforce` warning about wrong-key artifacts. Re-derived the real join
+chain instead of trusting the row's 9,830/6,362/3,468 figures: `properties.true_owner_id` (gov) →
+`external_identities(source_system='gov', source_type='true_owner')` (LCC Opps) → gov `asset` anchor →
+`lcc_property_owner`.
+
+**Found: B2's premise was itself a wrong-key artifact, the exact class its own warning named.** Of
+9,842 live gov properties carrying a `true_owner_id`, only 163 (1.7%) are unindexed at the identity
+layer — 97.7% already ARE indexed as a `gov/true_owner` identity. "Never reached the entity graph" is
+false at that layer. The real bottleneck is asset-anchor coverage: **2,496 properties have no gov
+`asset` entity anchor at all** (resolution can't even be attempted — the anchor-then-resolve chain
+never starts), plus a small, previously-uncounted **40-property residual that IS anchored but was
+never resolved to an owner link**.
+
+**This 2,496-property gap is not new — it is `C2e-T2b`** (`connectivity-and-open-threads.md` §4k.1),
+sized 2026-08-28 at 2,241 properties / 2,054 owners, already measured safe-to-run and low-value, and
+already left as an explicit, un-taken decision for Scott ("safe to run, low-value to run. No default
+taken."). The two-week population growth (2,241 → 2,496) is ordinary property-intake drift, not a new
+finding. `PLANNED-BACKLOG.md`'s `B2` row had drifted out of sync with `C2e-T2b` and was carrying stale,
+wrong-key numbers as if it were a distinct, still-unsized gap — retired into a pointer at `C2e-T2b` so
+there is one authoritative row for this population, not two disagreeing ones.
+
+**New, smaller finding not previously counted anywhere:** 40 gov properties that DO have an asset
+anchor but were never resolved to an owner in `lcc_property_owner` — distinct from T2b's mint-eligible
+population (T2b is entirely about properties with no anchor yet). Small enough to be worth a quick
+look on its own rather than folding into the T2b decision.
+
+**No build taken** — T2b remains explicitly Scott's call, and this session did not override that.
+Docs updated: `PLANNED-BACKLOG.md` (`B2` row retired/redirected to `C2e-T2b`).
+
 # Claude Code queue — STATUS
 
 ## 2026-09-12 — ID2b-caps SHIPPED: rpc_query_comps carries operator_id, the cap-rate band fragmentation is fixed
@@ -31,6 +87,61 @@ skipped (all pre-existing skips, unrelated). `MARKET_BRIEF_PSQL` not touched (MB
 sized ID2b-remaining follow-up (CM views, dossier, MCP tools): `docs/audits/ID2b_caps_RPC_QUERY_COMPS_OPERATOR_ID_2026-09-12.md`.
 Backlog rows ID2b-caps and MB1e (item 1) updated to ✅ in `docs/os/PLANNED-BACKLOG.md`;
 `docs/architecture/EXEC-BRIEFS-SPEC.md` §9 addendum added.
+## 2026-09-12 — HP1-P1a ANSWERED read-only: it is NOT a Salesforce hygiene gap. The opportunity feed has written 5 rows in 36 days.
+
+HP1 framed the frozen deal backbone as *"a Salesforce hygiene gap or a Power Automate scope gap — do
+not assume"* and sent Scott to check Salesforce. **Both options were wrong, and one column settled it
+without leaving the database.** `bd_opportunities.last_synced_at` is stamped unconditionally on every
+ingest write (`mcp/opportunity-sync.js:217`), so it records *the feed touched this row*, independently
+of whether anything changed. Its write history:
+
+| date | rows written by the SF feed |
+|---|---:|
+| **2026-08-03** | **590** ← one bulk backfill |
+| 2026-08-04 | 15 |
+| 2026-08-20 | 1 |
+| 2026-09-03 | 1 |
+| 2026-09-07 | 2 |
+| 2026-09-09 | 1 |
+
+**Five rows in 36 days — and one of the five is `Test Property SN 05032024`.** Of 569 CLOSED
+opportunities, **zero have been synced since the backfill** (`max(last_synced_at)` on closed rows is
+2026-08-04 21:00:45, the backfill itself). A brokerage does not go 36 days with no closes. **The feed
+ran once and stopped.** The surviving five carry `:00:4x`-second timestamps on the hour, which reads
+like a scheduled flow that still fires and delivers almost nothing — a too-narrow filter or a broken
+query, not a dead trigger. Distinguishing those two is a **Power Automate run-history** question, not
+a Salesforce one.
+
+⚠️ **This corrects my own HP1 finding 2c, which said the opposite.** It read *"the table as a whole is
+still being written (`max(updated_at)` 2026-09-10, 619 rows), so the pipe is not dead — the
+transaction-stage rows specifically have not changed."* **`updated_at` was the wrong column.** It also
+moves for LCC-side writers, and the proof is on one row: `DaVita Dialysis - Succasunna - NJ` reads
+`last_synced_at` **2026-09-07** against `updated_at` **2026-09-10** — that later change came from
+inside LCC, not from Salesforce. Reading `updated_at` as feed liveness produced a confident, plausible
+and wrong conclusion, and it is the same class this file documents a dozen times: *the convenient
+counter answered instead of erroring.* **For any pushed feed, read the column the WRITER stamps
+unconditionally, never the row's own mtime.**
+
+**This re-orders HP1's P1 and kills one premise.** The stale tasks, the 22 past-close deals and the
+graveyard My Work are **symptoms of a dead feed**, not of missing task hygiene — so **P1d (the
+backbone freshness assertion) is now FIRST**, not last. It should have fired on 2026-08-05 and there
+was nothing to fire it: `lcc-bd-sync-health-check` (05:00) and `lcc-feed-freshness-sync` (05:30) watch
+other feeds, and `bd_opportunities` is in neither registry. ⚠️ **Do NOT build P1b (the deal-status
+confirmation lane) next** — on a stopped feed it becomes a surface that asks Scott to hand-reconcile
+data we stopped receiving, which is the producer/consumer inversion, and it would make the outage
+*more* comfortable to live with rather than fixing it.
+
+⚠️ **And note what a restarted feed will do on its first run:** 569 closed rows and 37 frozen open rows
+will all arrive at once. `lcc_generate_deal_next_steps()` retires on stage change, so a backlog of
+real closes lands in one batch — expect a large auto-retire and verify it against the ledger rather
+than being surprised by it.
+
+**👤 Scott's step changed:** not "check the stage in Salesforce" but **"open the Power Automate
+opportunity-sync flow and read its run history since 2026-08-04"** — is it failing, is it succeeding
+with 0 records, or has it been turned off? Each answer is a different fix. Backlog **HP1-P1a** rewritten.
+
+**Next:** HP1-P1d (freshness assertion on the deal backbone) once the flow's state is known; HP1-badge
+is unaffected and still ready to build.
 
 ## 2026-09-12 — PR-scanner-3 reconciled against the merged desktop response (Cowork)
 
