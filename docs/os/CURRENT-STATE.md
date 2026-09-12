@@ -121,7 +121,7 @@ gov `government_agencies` (65 rows) existed and nothing pointed at it. Now:
 132,243 (**0.12% → 90.3%**). VA collapses **37 raw strings → 1 code** (2,063 properties), SSA
 **13 → 1** (1,248). One resolver (`gov_resolve_agency`, exact alias match, fails closed,
 service_role only), a hard write guard on BOTH columns (proven live: an unknown `agency_id` RAISEs),
-a reason-classified review lane (1,493 strings / 23,025 rows, raw text intact) and the first
+a reason-classified review lane (1,483 rows over 23,025 source rows, raw text intact) and the first
 identity detector for the ID4 program, **run once and deliberately unscheduled**.
 ⚠️ **The alias table is NOT seeded from `agency_canonical`** — measured, that column conflates
 federal agencies with same-named STATE bodies and COMMERCIAL lookalikes (`NAVY` is 145× *Navy

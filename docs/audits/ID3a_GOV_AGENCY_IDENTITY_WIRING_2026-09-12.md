@@ -14,7 +14,7 @@ safe to wire from.
 |---|---:|---:|
 | `properties.agency_id` | **0** / 20,509 | **7,369** / 20,509 (35.9%) |
 | `property_agencies.agency_id` | **160** / 132,243 (0.12%) | **119,361** / 132,243 (**90.3%**) |
-| review lane | — | 1,107 + 386 strings / 23,025 rows, raw text intact |
+| review lane | — | **1,483** rows (1,097 + 386) / 23,025 source rows, raw text intact |
 | registry codes in use | — | 44 (properties) / 45 (bridge) |
 
 ---
@@ -156,8 +156,9 @@ is recorded rather than relied on.
    collapse, upper. **Word boundaries preserved**, so `USDA` and `US DEPARTMENT OF AGRICULTURE`
    stay distinct strings that an explicit alias row relates.
 2. **`gov_agency_aliases`** — raw string → `agency_id`, unique on the key, provenance-tagged.
-   **217 rows**: 65 `registry_code` + 57 `registry_full_name` + 88 `id3a_curated` + 7
-   `id3a_frpp_cabinet`. Covering all 65 registry rows.
+   **224 rows**: 88 `id3a_curated` + 65 `registry_code` + 64 `registry_full_name` + 7
+   `id3a_frpp_cabinet`. Covering all 65 registry rows. (`registry_full_name` is 64, not 65 — the
+   `CIS`/`USCIS` duplicate full_name collides on one key; see §7.)
 3. **`gov_resolve_agency(text)`** → `{agency_id, code, status}` where status is
    `blank` | `matched` | `unresolved`. **Exact alias match only; fails closed; never mints; never
    fuzzy.** `service_role` only, revoked from `public` **and** `anon` **and** `authenticated`,
@@ -195,6 +196,12 @@ the set-based apply is equivalent to the per-row resolver.
 | `property_agencies` | **119,201** | 106 | 12,882 | 386 | 0 |
 
 `7,369 + 10,143 + 2,997 = 20,509` ✅ · `119,201 + 12,882 + 160 (pre-existing) = 132,243` ✅
+
+⚠️ **The review lane holds 1,483 rows, not 1,493 — say which grain.** The table above counts
+distinct RAW STRINGS (1,107 on `properties`); the review lane is keyed on the NORMALIZED KEY, so
+**10 raw strings collapse onto keys they share** (case/punctuation variants of one unresolvable
+string). Both numbers are correct about different questions; quoting one as the other is the
+rows-vs-assets-vs-owners mistake at string grain.
 
 ⚠️ **The apply had to be chunked.** `gov_id3a_backfill_agency_ids(false, …)` **timed out at 60 s**
 on the 132k-row bridge (a per-row plpgsql resolver invoked 152,752 times). The whole transaction
