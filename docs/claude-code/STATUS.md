@@ -67,6 +67,26 @@ Docs updated: `PLANNED-BACKLOG.md` (`PR5c-enforce` deduped + re-measured), 3 pro
 
 # Claude Code queue — STATUS
 
+## 2026-09-12 — ID2b-caps reconciled: passthrough works, but the gate FAILED — two bands now share one display name; root cause is our own SF-staged comps
+
+Filed `responses/ID2b caps desktop response.docx` → `done/`; prompt → `prompts/done/`. ID2b-caps (PR #2366) did the
+additive work correctly: `rpc_query_comps` returns `operator_id`/`operator_canonical` on the sale and listing arms with
+every pre-existing field byte-identical (so `operatorTier()` comp selection is structurally unchanged), the tick groups
+on the id, and it caught a real retire-logic bug in testing before touching the live DB. 12 new tests, suite 6,044/0.
+**But the prompt's gate did not hold.** Cowork's dry run against deployed `c5fc261f` returns five per-operator bands,
+two pairs sharing a display name: `:5` **Fresenius Medical Care n=63** beside `:fresenius_medical_care` **n=12**, and
+`:4` **DaVita n=68** beside `:davita_dialysis` **n=10**. Expected one band each (74 / 76). **That is worse than the
+original defect** — before, two bands had different labels; now two bands claim the same operator with different
+numbers. **Root cause (measured):** the passthrough covers the sale and listing arms, which read dia `properties` where
+coverage is fine (every TTM DaVita/Fresenius sale resolves). The leftovers come from a **third source —
+`sf_comp_staging`, our own Salesforce-staged closed deals** — which has no property link and no `operator_id`, and
+carries **196 `DaVita Dialysis` + 179 `Fresenius Medical Care`** rows spelled exactly as `dia_operator_aliases` already
+maps them. The tick's text fallback never consults that alias table. New row **ID2b-caps-2** with prompt
+`prompts/ID2bcaps2-sf-staged-comps-operator-resolution.md`: resolve the SF-staged arm through the aliases (or give it a
+guarded `operator_id`), plus the invariant this class needs — **no two live band facts may share a display label** — as
+a test. Audit doc `ID2b_caps_RPC_QUERY_COMPS_OPERATOR_ID_2026-09-12.md` has an addendum recording the failed gate; its
+original claim was left intact.
+
 ## 2026-09-12 — HP1-P1a CORRECTED: the opportunity feed never STOPPED — its upsert has never UPDATED a row, since the day it was built
 
 Six hours ago I filed *"the feed ran once and stopped."* **That was wrong in a way that understated
