@@ -113,6 +113,64 @@ dialysis lane before/after, then flip both flags. `cortex_market_intel` (a live 
 unlocated) and gov GSA lease events are NOT wired yet. → `docs/architecture/EXEC-BRIEFS-SPEC.md` §2/§9,
 `docs/architecture/market_brief_payload_contract.md`, PLANNED-BACKLOG.md §P18 (MB1/MB2/MB1a/MB1b).
 
+### MB-b — first user-facing P18 surface: daily "Lane Briefs" email block + homepage tab — BUILT, flag OFF, NOT deployed/live-verified
+Per `docs/claude-code/prompts/MBb-lane-briefs-daily-block-and-tab.md`. Operator identity (spec §0.1) was
+already closed by ID2b/ID2b-caps/ID2b-caps-2 before this prompt started — `planOperatorCapRateBands()`
+(`api/_handlers/market-brief-psql-tick.js`) already groups every per-operator cap-rate band on the comps
+engine's own `operator_id`, refuses to ever emit two live band facts under one operator_id, and retires the
+stale text-keyed fragment an id-keyed band supersedes. Two producer defects fixed here:
+- **MB1e item 2 (trades fact re-mint) — FIXED.** `buildTradesSinceLastRunFact`/`buildTradesZeroFact`
+  (`api/_shared/market-brief-facts.js`) used to key on `trades_since_last_run:<run-day>`, so a zero-trade
+  day accumulated a fresh fact beside yesterday's instead of superseding it. Now a single stable key,
+  `TRADES_FACT_KEY = 'trades_trailing_7d'`, and the claim states its window explicitly ("in the trailing 7
+  days as of <date>"). The tick (`market-brief-psql-tick.js`) reads a FIXED trailing 7-day window
+  (`TRADES_WINDOW_DAYS`) rather than "since the producer's last run" — a cursor that cannot carry a stable
+  identity because it moves with run cadence.
+- **MB2 dialysis RSS feed — ADDED, NOT egress-verified.** `supabase/functions/briefing-intel-snapshot/index.ts`
+  gained a new `dialysis` RSS stream (Renal & Urology News, Nephrology News & Issues, CMS Newsroom) separate
+  from the generic `healthcare` stream that MB-a3-reconcile measured carries 0 dialysis content most days.
+  Migration `20260912120000_lcc_mbb_rss_dialysis_stream_cron.sql` repoints the `lcc-market-brief-rss` cron at
+  `stream=dialysis`. ⚠️ **The sandbox has no outbound reach to verify these URLs actually parse as
+  RSS/Atom** — same limitation MB-a3-reconcile already recorded for this exact task. Operator step: hit each
+  feed, confirm `parseRss()` handles it, check the tick's `gaps[]`/`results` on a dry run.
+
+New surfaces (both flag-gated `MARKET_BRIEF_RENDER`, migration `20260912121500_lcc_mbb_market_brief_render_flag.sql`,
+registered `off`):
+- **Daily "Lane Briefs" email block** (`renderMarketBriefLanes`, `api/_handlers/briefing-email-handler.js`) —
+  sits above Sector Watch (kept, unchanged, below it). Per lane with live facts: "changed since yesterday"
+  (a fact-set diff against the prior frozen daily issue, `diffFactSets`), the 2–3 most material live facts
+  (section-weighted, `selectTopFacts`), named gaps rendered plainly (`selectGapFacts` — e.g. a
+  `cms_census_gap:*` fact), and a "Read the full brief →" link to `#/briefs/<lane>`. A lane with no live
+  facts is omitted entirely. Every number traces to a fact object — no client-side computation (tripwire
+  test asserts this over the rendered HTML). Freezes one `market_brief_issues` row per lane per day
+  (`issue_type='daily'`), idempotent via the EB1 unique index on `(lane, issue_type, issue_date)` — a
+  same-day re-render upserts, never duplicates.
+- **Homepage Market Briefs tab** (`#/briefs/<lane>`, default `dialysis`) — new route in `app.js`
+  (`ROUTE_SLUG_TO_PAGE.briefs`, sub-path parsed like `#/inbox/<id>`), new `pageMarketBriefs` page in
+  `index.html`, rendered by `renderMarketBriefsPage()` from `GET /api/market-brief-tab` (new handler,
+  `api/_handlers/market-brief-tab.js`, registered in `server.js`). Shows live facts by section
+  (operators/policy/capital_markets/trades/implications), citation + staleness per fact, the issue archive,
+  and the same changed-since diff the email uses. Read-only; returns `{enabled:false}` while the flag is
+  off, never a 404/500. A small teaser (`renderMarketBriefsWidget()`, `#marketBriefsWidgetContent`) sits
+  beside `#dailyBriefingWidget` on the homepage.
+- Shared fetch/diff/select logic lives in `api/_shared/market-brief-render.js` — one implementation for
+  both surfaces, so the email and the tab can never disagree about "live" or "changed".
+
+Guards added: `test/market-brief-render.test.mjs` (14), `test/market-brief-lane-briefs-email.test.mjs` (11,
+incl. the number-tripwire and the omitted-empty-lane case), `test/market-brief-operator-canonicalization.test.mjs`
+(3, "no two live band facts share an operator_id"), plus additions to `test/market-brief-facts.test.mjs` and
+`test/market-brief-tick-handlers.test.mjs`. Full repo suite: **6,114 pass / 0 fail / 6 skipped** (962
+suites) — no pre-existing failures were masked; the only failures seen before the fix were a missing
+`node_modules` in this sandbox, not real regressions.
+
+⚠️ **NOT deployed, NOT live-verified, flag NOT flipped.** This session had no Railway/Supabase write
+access. Two migrations are committed but unapplied (`20260912120000`, `20260912121500`). Operator sequence
+per the prompt's §5: apply both migrations, redeploy Railway, run the P-SQL tick once via POST with the
+flag forced on and confirm the supersede chain clears the old date-suffixed trades fragments, render the
+email with a preview and load `#/briefs/dialysis`, THEN flip `MARKET_BRIEF_RENDER`. → `docs/claude-code/
+prompts/MBb-lane-briefs-daily-block-and-tab.md`, `docs/architecture/EXEC-BRIEFS-SPEC.md` §9 "MB-b" addendum,
+PLANNED-BACKLOG.md §P18 (MB1e, MB2, MB3, MB4).
+
 ### Deal-intelligence spine — LIVE end to end
 SF Opportunity sync → `bd_opportunities` (592 deals) → Team-Briggs scope (roster edges) → deal-email
 matcher → cadence-scan → weekly pipeline email; deal dossier + link-only Salesforce write-back.

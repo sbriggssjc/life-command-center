@@ -295,3 +295,55 @@ one label. Live re-verified: exactly three resolved bands (DaVita, Fresenius Med
 Renal Care), no duplicate label. **Design rule 4 is fully satisfied for the market brief's
 operator identity as of ID2b-caps-2, not ID2b-caps.** Full measurement: the addendum appended to
 `docs/audits/ID2b_caps_RPC_QUERY_COMPS_OPERATOR_ID_2026-09-12.md`.
+
+**Addendum 2026-09-12 "MB-b" (this branch; unmerged) — first user-facing P18 surfaces built, flag NOT
+flipped.** Per `docs/claude-code/prompts/MBb-lane-briefs-daily-block-and-tab.md`. §0.1 (operator
+canonicalization) was already satisfied by ID2b-caps-2 above before this build started —
+`planOperatorCapRateBands()` groups every per-operator cap-rate band on `operator_id`, never a
+locally-added name map, and refuses a second live band under one label; a new guard test
+(`test/market-brief-operator-canonicalization.test.mjs`) pins "no two live band facts share an
+operator_id" directly, as the prompt required. §0.2 (the trades fact's date-suffixed key re-minting a
+fresh zero-fact every day) is fixed: `TRADES_FACT_KEY = 'trades_trailing_7d'`
+(`api/_shared/market-brief-facts.js`) is now a single stable key regardless of run day, the tick reads a
+fixed trailing 7-day window instead of "since last run" (a cursor whose meaning drifts with run cadence),
+and the claim states its window explicitly ("… in the trailing 7 days as of <date>"). §0.3: a `dialysis`
+RSS stream (Renal & Urology News, Nephrology News & Issues, CMS Newsroom) was added to
+`briefing-intel-snapshot`'s `RSS_FEEDS`, separate from `healthcare` (which MB-a3-reconcile measured
+carries 0 dialysis content most days) — **not egress-verified from this sandbox**, same limitation that
+addendum already recorded for this exact task; the cron for `lcc-market-brief-rss` is repointed at
+`stream=dialysis` in a new migration.
+
+Built: the daily email's "Lane Briefs" block (`renderMarketBriefLanes`, `api/_handlers/briefing-email-
+handler.js`, sits above Sector Watch — kept, unchanged, below it — per lane with live facts: what
+changed since yesterday via `diffFactSets`, the 2–3 most material live facts via section-weighted
+`selectTopFacts`, named gaps rendered plainly via `selectGapFacts`, "Read the full brief →"); the
+homepage `#/briefs/<lane>` tab (`GET /api/market-brief-tab`, new handler + new `pageMarketBriefs` page +
+`app.js` route wiring for the `#/briefs/<lane>` sub-path, a small teaser beside `#dailyBriefingWidget`);
+shared fetch/diff/select logic in `api/_shared/market-brief-render.js` so both surfaces read the
+identical live-fact selection and diff — they can never disagree about "live" or "changed". Both ship
+behind a new flag, `MARKET_BRIEF_RENDER` (migration `20260912121500`, registered `off`); the homepage
+tab's endpoint returns `{enabled:false}` while off, never a 404/500. Every number in the rendered email
+block traces to a fact object — a dedicated tripwire test extracts every numeric token from the rendered
+HTML (stripping tags/CSS/entity-escaping artifacts) and asserts each is present verbatim in the facts
+handed to the renderer. A daily render freezes one `market_brief_issues` row per lane
+(`issue_type='daily'`), idempotent via the EB1 unique index `(lane, issue_type, issue_date)` — a same-day
+re-render upserts the same row rather than accumulating; a lane with no live facts is never frozen and
+never rendered (omitted, not an empty section).
+
+Guards: `test/market-brief-render.test.mjs` (14 tests — selection/diff/freeze-shape), `test/market-
+brief-lane-briefs-email.test.mjs` (11 — the diff/gap/omitted-lane snapshot cases + the number tripwire),
+`test/market-brief-operator-canonicalization.test.mjs` (3), plus additions to `test/market-brief-
+facts.test.mjs` and `test/market-brief-tick-handlers.test.mjs`. Full repo suite: **6,114 pass / 0 fail /
+6 skipped** across 962 suites — the failures first observed in this session were a missing
+`node_modules` in the sandbox (`npm ci` fixed it), never a real regression; no pre-existing failure was
+masked, per the repo's CI-masking doctrine.
+
+⚠️ **Nothing here is deployed or live-verified — this session had no Railway/Supabase write access.**
+Two new migrations are committed and unapplied: `20260912120000_lcc_mbb_rss_dialysis_stream_cron.sql`
+(repoints the RSS cron at the new stream) and `20260912121500_lcc_mbb_market_brief_render_flag.sql`
+(registers `MARKET_BRIEF_RENDER`, off). `MARKET_BRIEF_RENDER` stays off. Per §5, an operator must: apply
+both migrations, redeploy Railway, run the P-SQL tick once via POST with the flag forced on and confirm
+the trades supersede chain clears the old date-suffixed fragments (any live
+`trades_since_last_run:<date>` fact should read `status='superseded'` after the first post-fix run),
+render the email with a preview and load `#/briefs/dialysis`, verify each new RSS feed URL actually
+parses, THEN flip `MARKET_BRIEF_RENDER`.

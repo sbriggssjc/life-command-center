@@ -1,3 +1,32 @@
+## 2026-09-12 — MB-b: first user-facing P18 surface built (Lane Briefs email block + homepage tab); flag OFF, not deployed
+
+Built `docs/claude-code/prompts/MBb-lane-briefs-daily-block-and-tab.md` end to end. §0 producer cleanups:
+operator identity (§0.1) was already closed by ID2b-caps-2 before this build started (nothing to do, verified
+with a new guard `test/market-brief-operator-canonicalization.test.mjs`); the trades fact's date-suffixed
+`fact_key` (§0.2, re-minting a fresh zero-fact every day) is fixed — `TRADES_FACT_KEY = 'trades_trailing_7d'`
+is now a single stable key, the tick reads a fixed trailing 7-day window, and it retires any old-format live
+fact it finds; a `dialysis` RSS stream (§0.3, Renal & Urology News / Nephrology News & Issues / CMS Newsroom)
+was added to `briefing-intel-snapshot`'s `RSS_FEEDS`, **not egress-verified from this sandbox** (no outbound
+reach). Built: the daily email's "Lane Briefs" block (`renderMarketBriefLanes`, above Sector Watch, which
+stays below it), the homepage `#/briefs/<lane>` tab (`GET /api/market-brief-tab`, new page + route), and
+shared selection/diff logic (`api/_shared/market-brief-render.js`) so both read the same live facts. Both
+ship behind a new flag `MARKET_BRIEF_RENDER` (registered off). Every number in the rendered block traces to
+a fact object, asserted by a dedicated tripwire test. New guards: `test/market-brief-render.test.mjs` (14),
+`test/market-brief-lane-briefs-email.test.mjs` (11, incl. diff/gap/omitted-empty-lane), `test/market-brief-
+operator-canonicalization.test.mjs` (3), plus additions to the existing MB-a suites. **Full repo suite green:
+6,114 pass / 0 fail / 6 skipped** across 962 suites (this session had to `npm ci` first — 0 dependencies were
+installed at session start, which produced 28 misleading `ERR_MODULE_NOT_FOUND` failures on the first run;
+none were real regressions, confirmed by re-running after install).
+
+**Nothing here is deployed or live-verified** — no Railway/Supabase write access this session. Two new
+migrations are committed, unapplied: `20260912120000_lcc_mbb_rss_dialysis_stream_cron.sql` and
+`20260912121500_lcc_mbb_market_brief_render_flag.sql`. `MARKET_BRIEF_RENDER` stays off. Operator sequence
+(spec §5): apply both migrations, redeploy Railway (both services), run the P-SQL tick once via POST with
+the flag forced on and confirm the trades supersede chain clears the old date-suffixed fragments, preview
+the email block and load `#/briefs/dialysis`, verify each new RSS feed URL parses, THEN flip
+`MARKET_BRIEF_RENDER`. Full detail: `docs/architecture/EXEC-BRIEFS-SPEC.md` §9 "MB-b" addendum;
+`docs/os/CURRENT-STATE.md` §2 "MB-b" subsection; `docs/os/PLANNED-BACKLOG.md` §P18 MB1e/MB3/MB4.
+
 ## 2026-09-12 — CONSOLIDATE2's first flagged contradiction resolved: the stale "FINAL STATE" box defused (Cowork)
 
 Continuing the doc-consolidation work after CONSOLIDATE2 (round 2) flagged three canonical-doc
