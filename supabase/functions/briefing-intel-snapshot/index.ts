@@ -147,34 +147,52 @@ const COMMODITY_TICKERS = [
 
 // RSS feeds grouped by stream. Keep concise — 3-5 per stream is enough.
 //
-// MB-b (spec §0.3): the generic "healthcare" stream carries hospital/health-
-// system news with no dialysis content most days (MB-a3 reconcile: Ollama
-// reachable, 0 facts — "the healthcare stream has no dialysis content, so
-// P-RSS value depends on lane-specific feeds"). `dialysis` is a NEW stream,
-// separate from `healthcare` (never merged into it — a market-brief-rss-tick
-// caller asks for one stream by name via `?stream=`), carrying feeds
-// specific to nephrology/ESRD industry + policy news rather than general
-// healthcare. Sources, and why: Renal & Urology News and Nephrology News &
-// Issues are trade publications dedicated to the nephrology/dialysis
-// industry (operator, reimbursement, and clinical-practice news a broker in
-// this lane would actually read); CMS Newsroom is the official federal
-// source for ESRD PPS rule announcements (the policy input this lane's TTL
-// table names explicitly, spec §3). ⚠️ These URLs were NOT egress-verified
-// from this session (the sandbox has no outbound reach to any of these
-// hosts — same limitation the MB-a3-reconcile addendum already recorded for
-// this exact task). Operator verify-before-flip step: hit each URL, confirm
-// it parses as RSS/Atom under `parseRss()`, and check the tick's own
-// `gaps`/`results` on a dry run before relying on it.
-const RSS_FEEDS: Record<string, { url: string; source: string }[]> = {
+// MB2a (2026-09-12, this change): the `dialysis` stream shipped by MB-b was
+// dead on arrival — all three URLs failed egress-verification (403/404,
+// backlog MB2/MB2a). Replaced with the two feeds Cowork actually fetched and
+// parsed live on 2026-09-12 (200 + real `<item>`/`<entry>` content):
+//   - Federal Register, filtered to "end-stage renal disease" — the
+//     authoritative federal source for ESRD PPS rule text (the policy input
+//     this lane's TTL table names explicitly, spec §3). A `.gov` API feed,
+//     no UA spoofing needed.
+//   - Google News, operator query (dialysis OR DaVita OR "Fresenius Medical
+//     Care") — broad by design, so `redirect: true` below marks its links as
+//     Google redirect URLs (never the publisher's own page) and its title
+//     carries a " - Publisher" suffix `fetchSectorNews` parses into
+//     `publisher` (see NewsItem). Feed relevance is filtered downstream by
+//     the on-box Ollama classifier + the verbatim-number check
+//     (market-brief-rss.js) — this feed is NOT itself dialysis-scoped.
+// A third publisher-specific feed (Renal & Urology News, Nephrology News &
+// Issues, CMS Newsroom variants) was deliberately NOT added this round: this
+// session's sandbox has no outbound egress to verify one (policy-denied
+// CONNECT to every candidate host, confirmed via the agent-proxy status
+// endpoint), and per MB2a's own instruction a feed that cannot be verified
+// is skipped rather than shipped with a spoofed User-Agent. Operator
+// follow-up: verify a trade-publication candidate from a reachable host,
+// confirm it returns `<item>`/`<entry>` content under `parseRss()`, then add
+// it here.
+//
+// ⚠️ EVERY FEED HERE NOW GETS A HEALTH RECORD (`market_brief_feed_health`,
+// MB2a) written per (stream, source) on every `fetchSectorNews()` call — a
+// feed returning zero items for `MARKET_BRIEF_FEED_STALE_DAYS` consecutive
+// days is a named gap (`lcc_check_market_brief_feed_health`), never silence,
+// per invariant I11 ("a monitor must alert on its own blindness").
+const RSS_FEEDS: Record<string, { url: string; source: string; redirect?: boolean }[]> = {
   healthcare: [
     { source: "MedCity News",    url: "https://medcitynews.com/feed/" },
     { source: "KFF Health News", url: "https://kff.org/feed/" },
     { source: "Health Affairs",  url: "https://www.healthaffairs.org/rss/site" },
   ],
   dialysis: [
-    { source: "Renal & Urology News",     url: "https://www.renalandurologynews.com/feed/" },
-    { source: "Nephrology News & Issues", url: "https://www.nephrologynews.com/feed/" },
-    { source: "CMS Newsroom",             url: "https://www.cms.gov/newsroom/rss" },
+    {
+      source: "Federal Register (ESRD)",
+      url: "https://www.federalregister.gov/api/v1/documents.rss?conditions%5Bterm%5D=end-stage%20renal%20disease&per_page=20",
+    },
+    {
+      source: "Google News (dialysis operators)",
+      url: "https://news.google.com/rss/search?q=dialysis+OR+DaVita+OR+%22Fresenius+Medical+Care%22&hl=en-US&gl=US&ceid=US:en",
+      redirect: true,
+    },
   ],
   government: [
     { source: "GSA News",        url: "https://www.gsa.gov/about-us/newsroom/news-releases/rss" },
@@ -390,6 +408,13 @@ interface NewsItem {
   published_at: string | null;
   source:       string;
   summary:      string | null;
+  // MB2a: set only for feeds flagged `redirect: true` (Google News). `url`
+  // is a news.google.com/rss/articles/... redirect, never the publisher's
+  // own page, and `publisher` is parsed from the title's " - Publisher"
+  // suffix (Google News' own title format) so a citation can name the real
+  // source even though `url` cannot link straight to it.
+  publisher?:      string | null;
+  url_is_redirect?: boolean;
 }
 
 function stripTags(s: string): string {
@@ -401,7 +426,18 @@ function stripTags(s: string): string {
           .trim();
 }
 
-function parseRss(xml: string, source: string): NewsItem[] {
+// MB2a: Google News item titles are "Headline - Publisher" (an em/en dash or
+// hyphen). Split ONLY on the LAST " - "/" – " so a headline that itself
+// contains a dash (common in policy headlines: "CMS Proposes 2.9% ESRD PPS
+// Increase - DaVita Reacts") still keeps the true publisher suffix, and a
+// headline with no separator returns publisher=null rather than guessing.
+function splitGoogleNewsTitle(rawTitle: string): { headline: string; publisher: string | null } {
+  const m = rawTitle.match(/^(.*)[\s]+[-–—][\s]+([^-–—]+)$/);
+  if (!m) return { headline: rawTitle, publisher: null };
+  return { headline: m[1].trim(), publisher: m[2].trim() || null };
+}
+
+function parseRss(xml: string, source: string, opts: { redirect?: boolean } = {}): NewsItem[] {
   const out: NewsItem[] = [];
   const itemRegex = /<(item|entry)\b[\s\S]*?<\/\1>/gi;
   const matches = xml.match(itemRegex) || [];
@@ -418,14 +454,23 @@ function parseRss(xml: string, source: string): NewsItem[] {
       item.match(/<description[^>]*>([\s\S]*?)<\/description>/i)?.[1] ||
       item.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i)?.[1];
     if (!title || !link) continue;
-    const cleanTitle = stripTags(title);
+    let cleanTitle = stripTags(title);
     const cleanDesc  = desc ? stripTags(desc).slice(0, 240) : null;
     let isoPub: string | null = null;
     if (pub) {
       const d = new Date(pub.trim());
       if (!isNaN(d.getTime())) isoPub = d.toISOString();
     }
-    out.push({ title: cleanTitle, url: link.trim(), published_at: isoPub, source, summary: cleanDesc });
+    let publisher: string | null = null;
+    if (opts.redirect) {
+      const split = splitGoogleNewsTitle(cleanTitle);
+      cleanTitle = split.headline;
+      publisher = split.publisher;
+    }
+    out.push({
+      title: cleanTitle, url: link.trim(), published_at: isoPub, source, summary: cleanDesc,
+      ...(opts.redirect ? { publisher, url_is_redirect: true } : {}),
+    });
   }
   return out;
 }
@@ -442,12 +487,30 @@ async function fetchSectorNews(): Promise<Record<string, NewsItem[]>> {
   // Drop articles older than 72h so the briefing stays current.
   const cutoff = Date.now() - 72 * 3600 * 1000;
 
+  // MB2a: one health row per (stream, source) every call — the instrument
+  // that lets `lcc_check_market_brief_feed_health` alert on a feed silently
+  // returning zero for N consecutive days instead of the failure looking
+  // identical to a quiet news day (I11: a monitor must alert on its own
+  // blindness).
+  const feedHealth: { stream: string; source: string; url: string; ok: boolean; item_count: number; error: string | null }[] = [];
+
   await Promise.all(
     Object.entries(RSS_FEEDS).flatMap(([stream, feeds]) =>
       feeds.map(async (feed) => {
-        const xml = await fetchText(feed.url);
-        if (!xml) return;
-        const items = parseRss(xml, feed.source);
+        let xml: string | null = null;
+        let error: string | null = null;
+        try {
+          xml = await fetchText(feed.url);
+          if (!xml) error = "fetch_failed_or_non_200";
+        } catch (err) {
+          error = (err as Error)?.message || String(err);
+        }
+        if (!xml) {
+          feedHealth.push({ stream, source: feed.source, url: feed.url, ok: false, item_count: 0, error });
+          return;
+        }
+        const items = parseRss(xml, feed.source, { redirect: feed.redirect });
+        feedHealth.push({ stream, source: feed.source, url: feed.url, ok: true, item_count: items.length, error: null });
         for (const it of items) {
           if (it.published_at && new Date(it.published_at).getTime() < cutoff) continue;
           result[stream].push(it);
@@ -455,6 +518,8 @@ async function fetchSectorNews(): Promise<Record<string, NewsItem[]>> {
       }),
     ),
   );
+
+  await recordFeedHealth(feedHealth).catch(() => null); // best-effort; never blocks the snapshot
 
   // Per-stream: dedupe by URL, sort by published_at desc, cap at 6.
   for (const stream of Object.keys(result)) {
@@ -605,6 +670,39 @@ async function generateAnalystTake(
     empty.warnings.push(`AI generation error: ${(err as Error).message}`);
     return empty;
   }
+}
+
+// ---------------------------------------------------------------------------
+// MB2a — per-feed health writer (upsert one row per (stream, source, date)).
+// Best-effort: a failure here must never abort the snapshot build, so every
+// call site wraps this in `.catch(() => null)`.
+// ---------------------------------------------------------------------------
+
+async function recordFeedHealth(
+  rows: { stream: string; source: string; url: string; ok: boolean; item_count: number; error: string | null }[],
+): Promise<void> {
+  if (!OPS_URL || !OPS_KEY || !rows.length) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const payload = rows.map((r) => ({
+    stream: r.stream,
+    source: r.source,
+    feed_url: r.url,
+    checked_date: today,
+    ok: r.ok,
+    item_count: r.item_count,
+    error: r.error,
+    checked_at: new Date().toISOString(),
+  }));
+  await fetch(`${OPS_URL}/rest/v1/market_brief_feed_health?on_conflict=stream,source,checked_date`, {
+    method: "POST",
+    headers: {
+      "apikey":        OPS_KEY,
+      "Authorization": `Bearer ${OPS_KEY}`,
+      "Content-Type":  "application/json",
+      "Prefer":        "resolution=merge-duplicates",
+    },
+    body: JSON.stringify(payload),
+  }).catch(() => null);
 }
 
 // ---------------------------------------------------------------------------
