@@ -378,6 +378,16 @@ case alone; dia `medicare_clinics.city` has 766 collapsed values; dia `property_
 Round-number caps, or tied counts across partitions loaded together, are truncation signatures. **Found by:** MB-a3 —
 DaVita = Fresenius = 2,450 CMS rows, one batch, 17 s apart (B6d-cms).
 
+### I16 — The DEPLOYED object must match its committed source; drift is invisible and outlives the fix (2026-09-12)
+
+A function, view, trigger or policy edited by hand in the database and never committed reads, to every later session,
+as if the repo were the source of truth. **Found by ID3a-b:** the live `canonicalize_agency()` had already diverged
+from `gov_round_76bg_agency_canonicalizer.sql` — its regexes carried word boundaries the committed file lacked — so a
+fix written against the committed source would have been written for a function that no longer existed. The inverse of
+the "MERGED is not RUNNING" doctrine: *running is not committed*. **Detector:** hash every routine/view definition in
+each DB against the definition the migrations produce, and alert on any difference. Until it exists, a session that
+touches a DB object reads the DEPLOYED definition first and says so.
+
 ### I10 — A one-shot backfill is not a producer
 
 If the mechanism that filled a store was a migration or a script, the store **decays from the moment
@@ -421,6 +431,7 @@ Supabase project"; it is a new set of connections that must be asserted on day o
 | **I13** | identity: normalized-collapse probe + identical-canonical groups | ⚠️ **manual, 2026-09-11** (`docs/audits/ID0_IDENTITY_VALUE_DOMAIN_PROBE_2026-09-11.md`) → standing detector in **ID4** |
 | **I14** | controlled-vocabulary drift | ⚠️ **manual, 2026-09-11** (same probe) → **ID4** |
 | **I15** | import count reconciliation / truncation signature | ❌ **none** → **ID4** |
+| **I16** | deployed-vs-committed definition drift | ❌ **none — one instance found 2026-09-12 (ID3a-b, `canonicalize_agency()`).** Until a detector exists, read the deployed definition before editing any DB object. |
 | I9 | fact stores lacking `created_at` | ❌ **none** |
 | **I13** | identity collapse (byte-identical entity under case/punctuation/format variants) | ⚠️ **PARTIAL — one class now has a standing detector.** ✅ **gov AGENCY (ID3a, 2026-09-12):** `v_gov_agency_identity_detector` over `properties.agency_id` + `property_agencies.agency_id`, using an AGENCY-SPECIFIC comparator (`gov_agency_alias_key` — word boundaries preserved, deliberately NOT a shared alnum key), reporting collapse, orphans and `rows_no_raw_text` as a SEPARATE state (blank ≠ unresolvable, P180). First live run: properties 7,369 resolved / 10,143 orphan / 179 strings collapsed onto 44 agencies; bridge 119,361 / 12,882 / 110 onto 45. Run once, **not scheduled** (ID3a-detector-schedule). Registry wired 0% → 35.9% and 0.12% → **90.3%**. ⚠️ **And ID3a proves the per-class rule from the other direction:** gov already had a 45-code normalizer (`agency_canonical`) and it was **unsafe to wire from** — it conflates federal agencies with same-named state bodies and commercial lookalikes (`NAVY` = Navy Federal Credit Union ×145; `ICE` includes an ice-cream shop). **A column named for the answer is not the answer.** Audit `docs/audits/ID3a_GOV_AGENCY_IDENTITY_WIRING_2026-09-12.md`.
     ✅ **ID3a-b (2026-09-12) fixed the display column itself** — `canonicalize_agency()`

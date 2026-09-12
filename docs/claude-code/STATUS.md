@@ -1,5 +1,23 @@
 # Claude Code queue — STATUS
 
+## 2026-09-12 — ID3a-b reconciled: agency contamination fixed live (NAVY 150→3, STATE 213→9), but registry + wiring didn't land; new invariant I16
+
+Filed `responses/ID3a-b desktop response.docx` → `done/`; prompt → `prompts/done/`. **Verified live (Cowork, read-only):**
+`canonicalize_agency()` now returns NULL for `Navy Federal Credit Union`, `State of Texas`, `Handel's Homemade Ice Cream`,
+bare `DOC` and `RICHMOND FIELD OFFICE (VA)`, while `Department of the Navy` still resolves to NAVY. NAVY 150→3, STATE 213→9,
+ICE 44→43, DOC 16→1. The `(XX)` state-suffix rule is general across 15 `<CITY> FIELD OFFICE (XX)` strings. `using_agency_*`
+columns exist on properties/leases/sales_transactions, 456 of 623 GSA-compound rows populated. **ID3a-b's own key discovery:
+the DEPLOYED `canonicalize_agency()` had drifted from its committed migration** (undocumented hand-patch; the regexes already
+had word boundaries and were merely too permissive) → new invariant **I16: running is not committed** — the inverse of the
+repo's "MERGED is not RUNNING" doctrine — with the detector specified and the interim rule (read the deployed definition
+before editing any DB object). **Three gaps found by the live check → ID3a-c:** (1) `Immigration & Customs Enforcement`
+canonicalizes to **CBP** (the `customs` branch wins), so 16 properties carry the wrong DHS component; `Border Patrol` and
+`Dept of Homeland Security` resolve to NULL though DHS is in the registry. (2) The GSA-compound rule is inconsistent —
+150 `GSA - Social Security Admin` rows put SSA in the lease-counterparty column while 473 others correctly keep GSA there;
+Scott's rule is *tenant is GSA, user is whatever is second*. (3) §3/§4 never landed: `government_agencies` still 65 rows
+(no NAVY/ARMY/LSC/…), `properties.agency_id` still **7,369/20,509**, 1,347 canonicalized-but-unlinked, review lane 1,483 open.
+**Next:** send `prompts/ID3ac-agency-finish-registry-wiring-and-dhs-components.md`. ID3e (county vocabulary) remains ready.
+
 ## 2026-09-12 — ID3a-b SHIPPED: canonicalize_agency() contamination fixed (NAVY/STATE/DOC/ICE), GSA using-agency added
 
 Ran the ID3a-b prompt live against gov (`scknotsqkcheojiaewwh`). Migration
