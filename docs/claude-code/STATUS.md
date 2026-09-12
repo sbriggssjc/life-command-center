@@ -18,6 +18,22 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-12 — MB2a reconciled live: feeds confirmed, migration applied, and the code is NOT DEPLOYED (Cowork)
+
+**Both replacement feeds re-verified independently** via pg_net (the check CC's sandbox could not run —
+zero egress): Federal Register ESRD **200, 3 items**; Google News operator query **200, 100 items**.
+**Migration applied live to LCC Opps** — `market_brief_feed_health`, `v_market_brief_feed_health_stale`,
+`lcc_check_market_brief_feed_health` (runs clean, 0 opened / 0 resolved), both `market_brief_facts`
+citation columns, cron `lcc-market-brief-feed-health` at 11:15 UTC.
+🚨 **The blocker is a deploy, not the feeds.** Deployed `briefing-intel-snapshot` is **v21 and has NO
+`dialysis` stream at all** — MB-b's three dead URLs were never deployed either, so nothing MB-b or MB2a
+wrote to `RSS_FEEDS` has ever run. **This repo has no workflow that deploys edge functions** (checked
+`.github/workflows/`), so merging one changes nothing by itself. New **I16** instance; DRIFT1's census
+called this function "committed, not in scope" on 2026-09-07 — true then, stale now. → **MB2a-deploy**.
+`MARKET_BRIEF_PRSS` stays OFF, correctly: relevance survival cannot be measured until the deploy lands.
+Verified separately that CC handled the bucket hazard — `fetchSectorNews()` derives its result keys from
+`RSS_FEEDS` in both the initializer and the catch fallback, so a new stream cannot throw.
+
 ## 2026-09-12 — MB2a: dead dialysis RSS feeds replaced, feed-health monitor added, PRSS stays off
 
 `RSS_FEEDS.dialysis` now points at Federal Register (ESRD) + Google News (operator query) in place of
