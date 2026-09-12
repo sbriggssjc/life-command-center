@@ -75,6 +75,19 @@ documentation + one new test file).
 
 Closed `BACKLOG-ids` in `docs/os/PLANNED-BACKLOG.md` §P0d (added as a done row, since the item
 existed only as the standalone prompt file, not a backlog row).
+## 2026-09-12 — FEED1 scoped: five replacement feeds fetched live for the three dead ones (Cowork)
+
+Verified via pg_net, with newest-pubDate recorded per feed because MB2a proved 200-with-items is not the
+same as contributing: `government` → Federal Register GSA-agency feed (**200, 14**, newest 09-11);
+`healthcare` → STAT News (**200, 20**, 09-12) + Healthcare Dive (**200, 10**, 09-11); `net_lease` →
+Connect CRE (**200, 10**) + REBusinessOnline (**200, 20**), both 09-11. Measured and rejected: Modern
+Healthcare **403**, The Real Deal **403**. Government Executive re-verified (**200, 23**) — the only
+reason that lane is not at zero. **All five publish daily, so all five clear the 72h cutoff as-is**,
+which keeps FEED1 a clean URL swap and leaves MB2b out of it. Sharper read on the ESRD feed while here:
+its problem is a narrow query returning 3 items spanning weeks, **not** Federal Register — the GSA
+agency feed on the same service is high-volume and behaves normally. Prompt carries the deploy step
+explicitly (`--project-ref` required; merged is not running).
+
 ## 2026-09-12 — MB2a deployed: the dialysis stream is live, and its first run found 3 OTHER dead feeds (Cowork)
 
 Scott deployed `briefing-intel-snapshot` (CLI, `--project-ref xengecqvemvfknjvbvrq`). Verified live via
