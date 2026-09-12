@@ -384,8 +384,7 @@ A function, view, trigger or policy edited by hand in the database and never com
 as if the repo were the source of truth. **Found by ID3a-b:** the live `canonicalize_agency()` had already diverged
 from `gov_round_76bg_agency_canonicalizer.sql` — its regexes carried word boundaries the committed file lacked — so a
 fix written against the committed source would have been written for a function that no longer existed. The inverse of
-the "MERGED is not RUNNING" doctrine: *running is not committed*. **Detector:** hash every routine/view definition in
-each DB against the definition the migrations produce, and alert on any difference. Until it exists, a session that
+the "MERGED is not RUNNING" doctrine: *running is not committed*. **Second instance, 2026-09-12 (repo-level, worse):** the government DB is written by migrations in **two** repos — `life-command-center` (213 `migrations/government/*`) and `government-lease` — and ID3a-c's fix landed in the latter, so LCC's committed copy of the same function is now **older than live and still applicable**: re-running it would restore the state-agency contamination and the ICE/CBP conflation. **Rule (Scott, 2026-09-12): one repo owns each database's objects — `government-lease` owns the government DB.** A migration directory in a non-owning repo is historical, and must say so. **Detector:** hash every routine/view definition in each DB against the definition the OWNING repo's migrations produce, and alert on any difference. Until it exists, a session that
 touches a DB object reads the DEPLOYED definition first and says so.
 
 ### I10 — A one-shot backfill is not a producer

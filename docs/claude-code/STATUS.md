@@ -1,5 +1,23 @@
 # Claude Code queue — STATUS
 
+## 2026-09-12 — ID3a-c reconciled: agency class closed (live-verified), and a repo-ownership hazard found — gov DB now owned by `government-lease`
+
+Filed `responses/ID3a-c desktop response.docx` → `done/`; prompt → `prompts/done/`. **Verified live (Cowork, read-only):**
+`Immigration & Customs Enforcement` → **ICE** (root cause: `&` never normalized to `and`, so ICE fell through CBP's bare
+`customs` match), `Border Patrol` → CBP, `Dept of Homeland Security` → DHS; **9 federal `Department of X` patterns were
+matching state departments of the same name** — `TEXAS DEPARTMENT OF AGRICULTURE` → USDA, now NULL with `US Department of
+Agriculture` intact, via one shared state-qualifier guard. GSA rule **474/624 → 624/624** (Scott's own `GSA - Social
+Security Admin` example was the broken one). Registry **65 → 79**; `properties.agency_id` **7,369 → 8,875**;
+`property_agencies.agency_id` **119,361 → 120,471**; review lane gained a retire mechanism (348 retired, 1,135 open).
+**The finding that outranks all of it:** this work shipped in the **`government-lease`** repo (PR #398), while
+`life-command-center` holds 213 `migrations/government/*` files — including its own copy of this same function **without**
+the state guard and with the old ICE branch order. Re-applying it would silently restore both defects. 👤 **Scott decided:
+`government-lease` owns the government DB.** Recorded as a new `CLAUDE.md` core doctrine, as the repo-level instance of
+invariant **I16**, and as backlog **ID3a-d** (retire LCC's gov migrations with a pointer, name the owning repo for dia and
+LCC Opps, ship the deployed-vs-committed drift check). **Next:** `prompts/ID3ad-db-ownership-and-drift-guard.md`, then ID3e
+(county vocabulary, ready). Deferred from ID3a-c: USFS/BLM/NSF regex gaps, 10 FK granularity judgment calls, the
+drift-detector views (built, unscheduled).
+
 ## 2026-09-12 — ID3a-b reconciled: agency contamination fixed live (NAVY 150→3, STATE 213→9), but registry + wiring didn't land; new invariant I16
 
 Filed `responses/ID3a-b desktop response.docx` → `done/`; prompt → `prompts/done/`. **Verified live (Cowork, read-only):**
