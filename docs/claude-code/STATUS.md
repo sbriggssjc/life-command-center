@@ -12,6 +12,62 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-12 — `PRI6` response reviewed: three real defects found (not the two-explanation guess from the prompt), the self-reclaim bug explains months of failed daily runs — cross-referenced with a parallel session's own live re-check
+
+`PRI6`'s response (`"PRI6 surface response.docx"`, saved by Scott) read in full and transcribed to
+`docs/claude-code/responses/done/PRI6-ingestion-lock-survives-redeploy-and-reclaim-safety-window.response.md`.
+**Repo: `Dialysis`.** Stronger than either Section-0 guess in the prompt — neither "different Railway
+service" nor "silently reused stale lock" was quite right; the actual mechanism is a self-reclaim bug.
+
+**(a) No real time cap exists — confirmed, not assumed.** `CMS_ORPHAN_RECLAIM_HOURS` (2h) and
+`DEFAULT_STALE_HOURS` (6h) both rested on the same "~90 minutes" observation `PRI5` used, but that budget
+is env-tunable for catch-up runs and only blocks *launching* the next step, never preempts one in flight —
+exactly what this session's own live check proved by finding a genuinely in-flight run at 17.9+ hours.
+Fixed with a new `probe_recent_activity()`: corroborates any reclaim (age-based or `force=True`) against a
+real recent write to the dataset's own table before touching the row — age alone is no longer sufficient.
+
+**(b) The actual `acquire_ingestion_lock` behavior, and the real root cause — not a guess.** With `force`
+resolving true, it unconditionally marks the existing row `failed` and opens a new one — no age check, no
+self-exclusion. The mechanism making `force` true on every call: `ingest_medicare_clinics()` calls
+`acquire_ingestion_lock(force=force or force_refresh)`, and the **daily production entry point hard-codes
+`force_refresh=True` on every single call** — so every day's run force-reclaims its own just-opened row.
+Caught live: three `"Reclaimed by ingestion_lock (force)"` events, including one row reclaiming itself
+**0.0 hours** after creation.
+
+**(c) Both root causes fixed, and the two Section-0 hypotheses were both wrong.** This was one continuous
+process the whole time (started 2026-09-11 19:45:43 UTC, ~18h runtime) — its own startup self-reclaimed its
+own row via the `force_refresh` bug, then kept running unaffected by it. Separately,
+`facility_patient_counts`'s lock never closes on success because `release_ingestion_lock(status="success")`
+sat in an unreachable `else:` clause after a `return` inside a `try` — confirmed live as a completed no-op
+(0 new rows in 18h), not a stall.
+
+**This directly explains a much bigger, previously-unconnected problem.** A parallel documentation session
+today (`docs(doc-contra)` commit `2346713e`, merged as PR #2394) independently re-verified `cms_ingestion`
+live and found it **failing 34 of 36 runs in the last 30 days**, `last_success_at` frozen at **2026-04-04**
+— five months — with `medicare_clinics.source_last_seen` stuck at 2026-08-31 (2.9% refreshed) for 12 days,
+and every recent failed row reading `"Reclaimed by ingestion_lock (force) after 0.0h in 'started'"`. That is
+this exact bug, hitting the daily production schedule for months, not just this one long run. `PRI6`'s fix
+is a materially bigger deal than the prompt framed it as — cross-referenced in `B6d-cms-restart`.
+
+**Live-rechecked this session, unchanged as expected**: the two lock rows this arc has been tracking
+(`8c9978b3…` `cms_medicare_clinics`, `3093e28a…` `facility_patient_counts`) are still open at ~19 hours old
+— correct and expected, since the fix hasn't reached this already-running process (no redeploy has
+happened yet) and nothing in this arc's discipline touches live rows without Scott's own trigger.
+`properties.estimated_annual_revenue` still shows real recent writes (992 rows in the trailing 15 minutes at
+last check) — the run itself remains healthy, unaffected by any of this.
+
+Tests: 12 new (`test_pri6_lock_reclaim_safety.py`), 8/12 independently confirmed red against pre-fix code
+(mutation-style, the other 4 are correctly-green positive controls) — a step further than most rounds in
+this arc, which usually report post-fix green only. Full suite: **3,131 passed, 0 failed**.
+
+**PR `sbriggssjc/Dialysis#7409` opened this round** — Scott's "This PR is merged" this round most likely
+refers to the `life-command-center` documentation PR that filed this review (same recurring ambiguity as
+every prior round in this arc) — **the `Dialysis`-side PR #7409's merge status needs Scott's separate
+confirmation before this is treated as deployed.** `PLANNED-BACKLOG.md`'s `PRI6` row updated to 🟡 pending
+that. Prompt moved to `docs/claude-code/prompts/done/`. Response `.docx` pending archive to `responses/done/`
+on Scott's machine.
+
+
 ## 2026-09-12 — HP1-P2a reconciled: shipped and verified live; my own target number was wrong; one gap promoted out of a closed row (Cowork)
 
 PR #2389 merged. Response and prompt filed to `done/`. **Verified independently against the live DB rather than
