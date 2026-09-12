@@ -66,17 +66,17 @@ test('urgent: an OVERDUE action item always outranks a merely-valuable worklist 
     { id: 'ai1', entity_id: 'x', action_type: 'reply_overdue', title: 'Reply overdue', due_date: '2020-01-01' },
   ];
   const bdWorklistRows = [
-    { signal_type: 'contact_writeback', entity_id: 'y', what: 'Push contact', rank_value: 50000000 },
+    { signal_type: 'owner_source_conflict', entity_id: 'y', what: 'Owner conflict', rank_value: 50000000 },
   ];
   const { items } = buildUrgentSection({ actionItems, bdWorklistRows }, new Map(), { today: new Date('2026-09-03') });
   assert.equal(items[0].kind, 'deal_correspondence');
   assert.equal(items[0].overdue, true);
-  assert.equal(items[1].kind, 'contact_writeback');
+  assert.equal(items[1].kind, 'owner_source_conflict');
 });
 
 test('urgent: within the same overdue class, value breaks the tie', () => {
   const bdWorklistRows = [
-    { signal_type: 'contact_writeback', entity_id: 'a', rank_value: 100 },
+    { signal_type: 'owner_source_conflict', entity_id: 'a', rank_value: 100 },
     { signal_type: 'owner_source_conflict', entity_id: 'b', rank_value: 900 },
   ];
   const { items } = buildUrgentSection({ actionItems: [], bdWorklistRows }, new Map());
@@ -95,11 +95,41 @@ test('urgent: a not-yet-due action item is not marked overdue', () => {
 
 test('urgent: count equals rows shown across BOTH producers combined', () => {
   const actionItems = Array.from({ length: 6 }, (_, i) => ({ id: 'ai' + i, entity_id: 'x' + i, action_type: 'deal_next_step', due_date: '2020-01-0' + (i + 1) }));
-  const bdWorklistRows = Array.from({ length: 6 }, (_, i) => ({ signal_type: 'contact_writeback', entity_id: 'y' + i, rank_value: 1000 - i }));
+  const bdWorklistRows = Array.from({ length: 6 }, (_, i) => ({ signal_type: 'owner_source_conflict', entity_id: 'y' + i, rank_value: 1000 - i }));
   const { items, count, total_open } = buildUrgentSection({ actionItems, bdWorklistRows }, new Map(), { limit: 8 });
   assert.equal(items.length, 8);
   assert.equal(count, 8);
   assert.equal(total_open, 12);
+});
+
+// ── HP1-P2f-urgent: contact_writeback is CRM plumbing, never deal work ─────
+test('urgent NEVER admits contact_writeback rows into the ranked union, whatever their value', () => {
+  const bdWorklistRows = [
+    { signal_type: 'contact_writeback', entity_id: 'v', what: 'Push contact', rank_value: 999999999 },
+    { signal_type: 'owner_source_conflict', entity_id: 'b', rank_value: 1 },
+  ];
+  const { items, total_open } = buildUrgentSection({ actionItems: [], bdWorklistRows });
+  assert.equal(items.length, 1);
+  assert.equal(items[0].kind, 'owner_source_conflict');
+  assert.ok(!items.some((i) => i.kind === 'contact_writeback'), 'contact_writeback must never reach Urgent\'s items');
+  assert.equal(total_open, 1, 'total_open must not count the excluded contact_writeback rows either');
+});
+
+test('urgent: pointer carries the TRUE contact_writeback count, separate from the union', () => {
+  const { pointer } = buildUrgentSection({ actionItems: [], bdWorklistRows: [], contactWritebackCount: 1598 });
+  assert.equal(pointer.source_type, 'contact_writeback');
+  assert.equal(pointer.count, 1598);
+  assert.equal(pointer.surface, 'bd_worklist_contact_writeback');
+});
+
+test('urgent: pointer is null (unknown), never 0, when the count probe was not supplied (P180)', () => {
+  const { pointer } = buildUrgentSection({ actionItems: [], bdWorklistRows: [] });
+  assert.equal(pointer, null);
+});
+
+test('urgent: pointer renders even a genuine zero count, distinct from "unknown"', () => {
+  const { pointer } = buildUrgentSection({ actionItems: [], bdWorklistRows: [], contactWritebackCount: 0 });
+  assert.equal(pointer.count, 0);
 });
 
 // ── loan_maturity / ownership_chain exclusion (the prompt's own rule) ──────
@@ -107,18 +137,20 @@ test('urgent never admits loan_maturity or ownership_chain rows even if handed s
   const bdWorklistRows = [
     { signal_type: 'loan_maturity', entity_id: 'z', rank_value: 999999999 },
     { signal_type: 'ownership_chain', entity_id: 'w', rank_value: 999999999 },
-    { signal_type: 'contact_writeback', entity_id: 'v', rank_value: 1 },
+    { signal_type: 'owner_source_conflict', entity_id: 'v', rank_value: 1 },
   ];
   const { items } = buildUrgentSection({ actionItems: [], bdWorklistRows });
-  // buildUrgentSection does not itself filter signal_type -- the HANDLER is the
-  // one place that decides which signal types reach it (never fetches
-  // loan_maturity/ownership_chain for this section). This test locks the
-  // module's own basis-labelling contract for whatever signal_type it IS given,
-  // so a future handler change that starts feeding it loan_maturity is at least
-  // forced to notice the label reads generically rather than as pipeline hygiene.
+  // buildUrgentSection does not itself filter loan_maturity/ownership_chain --
+  // the HANDLER is the one place that decides which signal types reach it
+  // (never fetches those two for this section). contact_writeback IS filtered
+  // in-module now (HP1-P2f-urgent), unlike those two. This test locks the
+  // module's own basis-labelling contract for whatever signal_type it IS
+  // given, so a future handler change that starts feeding it loan_maturity is
+  // at least forced to notice the label reads generically rather than a named
+  // basis.
   assert.equal(items.length, 3);
-  const cw = items.find((i) => i.kind === 'contact_writeback');
-  assert.match(cw.basis, /pipeline hygiene/);
+  const oc = items.find((i) => i.kind === 'owner_source_conflict');
+  assert.match(oc.basis, /blocks the deal moving/);
 });
 
 // ── assembleTodaySections: named gaps are always present, never silently dropped ──

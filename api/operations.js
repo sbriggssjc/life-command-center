@@ -2031,10 +2031,13 @@ async function getBdWorklist(req, res, user, workspaceId) {
 //     for "a touch that generates a BOV or a working buyer"; no BOV-generation
 //     or marketing-live-listing producer exists — named gap).
 //   Urgent      — action_items open/in_progress rows tied to a deal (deal
-//     correspondence) UNIONED with v_lcc_bd_worklist's contact_writeback +
-//     domain owner_source_conflict(auto_fixable) rows (pipeline hygiene).
-//     loan_maturity and ownership_chain are deliberately excluded (see
-//     today-sections.js header for why).
+//     correspondence) UNIONED with domain owner_source_conflict(auto_fixable)
+//     rows (a data-integrity block on the deal moving). v_lcc_bd_worklist's
+//     contact_writeback is CRM plumbing, not deal work (HP1-P2f-urgent,
+//     2026-09-12) — it is EXCLUDED from the union and surfaced instead as
+//     `urgent.pointer` (true, uncapped count + a link to the BD worklist's
+//     own contact_writeback chip). loan_maturity and ownership_chain are
+//     deliberately excluded too (see today-sections.js header for why).
 // ============================================================================
 // HP1 Finding 1 (P0, 2026-09-12) — settle a Promise that may REJECT (opsQuery's
 // fetchWithTimeout throws on abort; it does not resolve {ok:false}) into the
@@ -2122,15 +2125,17 @@ export async function getTodaySections(req, res, user, workspaceId) {
   // unknown (never the 0 it happens to carry).
   const ocGovTrueCount = exactCountOrNull(ocGovCountR, 'gov v_owner_source_conflict count (urgent)');
   const ocDiaTrueCount = exactCountOrNull(ocDiaCountR, 'dia v_owner_source_conflict count (urgent)');
-  // Urgent has FOUR independent producers feeding total_open; summing them is
-  // only honest when every one of the four actually resolved — a partial sum
-  // both under-reports (a failed leg silently contributes 0) and would be
-  // indistinguishable from a genuinely small population, so ANY unresolved
-  // leg makes the whole Urgent total "unknown" rather than a guess.
+  // HP1-P2f-urgent: contact_writeback no longer feeds Urgent's union (it is
+  // CRM plumbing, surfaced instead as a `pointer` — see today-sections.js),
+  // so it is dropped from this sum. Urgent's total_open now has THREE
+  // independent producers; summing them is only honest when every one
+  // actually resolved — a partial sum both under-reports (a failed leg
+  // silently contributes 0) and would be indistinguishable from a genuinely
+  // small population, so ANY unresolved leg makes the whole Urgent total
+  // "unknown" rather than a guess.
   const urgentTrueCount = (
-    actionItemsTrueCount !== null && contactWritebackTrueCount !== null
-    && ocGovTrueCount !== null && ocDiaTrueCount !== null
-  ) ? (actionItemsTrueCount + contactWritebackTrueCount + ocGovTrueCount + ocDiaTrueCount) : null;
+    actionItemsTrueCount !== null && ocGovTrueCount !== null && ocDiaTrueCount !== null
+  ) ? (actionItemsTrueCount + ocGovTrueCount + ocDiaTrueCount) : null;
 
   const significantRows = sellerQR.ok ? (sellerQR.data || []) : [];
   const bdOppRows = bdOppR.ok ? (bdOppR.data || []) : [];
@@ -2192,6 +2197,7 @@ export async function getTodaySections(req, res, user, workspaceId) {
 
   const sections = assembleTodaySections({
     significantRows, bdOppRows, actionItems, bdWorklistRows, entityById,
+    contactWritebackCount: contactWritebackTrueCount,
   }, {
     limit, sourceErrors,
     trueTotalOpen: { significant: significantTrueCount, important: importantTrueCount, urgent: urgentTrueCount },

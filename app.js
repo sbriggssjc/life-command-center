@@ -7656,6 +7656,27 @@ function _renderTodaySection(contentId, section, viewAllLabel, viewAllOnclick) {
   el.innerHTML = html;
 }
 
+// HP1-P2f-urgent (2026-09-12): Urgent excludes v_lcc_bd_worklist's
+// contact_writeback rows (CRM plumbing, not deal work) from its ranked union
+// and instead reports the TRUE, uncapped count of what was moved — never a
+// silent absence (P159a's "excluding is not hiding"). Renders a persistent
+// row appended below the section (mirrors the Inbox hygiene_pointer pattern,
+// ops.js renderInbox), linking to the BD worklist's own contact_writeback
+// chip, where every one of these rows already carries a "Push to CRM" action.
+function _renderUrgentHygienePointer(pointer) {
+  const el = document.getElementById('todayUrgentContent');
+  if (!el || !pointer || !(pointer.count > 0)) return;
+  el.innerHTML += '<div class="ops-hygiene-pointer" style="padding:10px 12px;margin:8px 0 0;'
+    + 'background:var(--s2);border-radius:8px;font-size:12px;color:var(--text2);'
+    + 'display:flex;justify-content:space-between;align-items:center;gap:10px">'
+    + '<span>🧹 ' + esc(pointer.label) + ' — <b>' + pointer.count.toLocaleString() + ' contact'
+    + (pointer.count === 1 ? '' : 's') + '</b> (not deal work; not shown here)</span>'
+    + '<button class="q-action" style="font-size:11px;padding:4px 10px" '
+    + 'onclick="navTo(\'pagePriorityQueue\');setTimeout(function(){if(typeof renderBdWorklist===\'function\')'
+    + 'renderBdWorklist(\'contact_writeback\');},300)">Review →</button>'
+    + '</div>';
+}
+
 async function renderTodaySections(force) {
   const el = document.getElementById('todaySignificantContent');
   if (!el) return;
@@ -7685,6 +7706,7 @@ async function renderTodaySections(force) {
       "navTo('pagePipeline')");
     _renderTodaySection('todayUrgentContent', data.urgent, 'See all BD actions',
       "navTo('pagePriorityQueue');setTimeout(function(){if(typeof renderBdWorklist==='function')renderBdWorklist();},300)");
+    _renderUrgentHygienePointer(data.urgent && data.urgent.pointer);
   } catch (e) {
     _todaySectionsFallback('Today unavailable — ' + ((e && e.message) ? String(e.message).slice(0, 160) : 'request threw'));
     console.error('renderTodaySections threw:', e);
