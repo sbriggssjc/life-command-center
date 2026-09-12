@@ -1,3 +1,9 @@
+-- ⚠️ HISTORICAL — DO NOT RE-APPLY. This directory does not own the government database;
+-- `government-lease` does (see supabase/migrations/government/README.md, 2026-09-12).
+-- This file is kept as a record of what this repo applied in the past. The live, correct
+-- copy of any object it defines may have since diverged -- read the deployed database or
+-- government-lease's committed source, never this file, before trusting its content.
+
 -- =============================================================================
 -- CM Round 74 — gov: ONE canonical active-lease-inventory definition (≈ 8,000).
 -- Project: government-lease (scknotsqkcheojiaewwh). APPLIED LIVE 2026-06-22.
