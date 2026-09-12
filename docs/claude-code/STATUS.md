@@ -449,6 +449,23 @@ first item was local EMS news — so the Ollama relevance filter's survival rate
 is flipped. The real deliverable is the guard: a test that fetches every `RSS_FEEDS` URL and fails on non-200/zero
 items, plus per-stream feed health so an empty stream is a **named gap** (I11), not silence.
 Prompt: `prompts/MB2a-dialysis-feeds-that-actually-respond.md`.
+## 2026-09-12 — MB-b is fully LIVE: migrations applied, and the full flip-and-verify sequence actually ran (Cowork/Scott)
+
+Applied both pending MB-b migrations (the RSS-cron repoint and the `MARKET_BRIEF_RENDER` flag
+registration) after confirming both were additive, idempotent, and default-off. The flag insert's
+`ON CONFLICT DO UPDATE` found the row already existed with `state='on'` — Scott (or an operator
+session) had run the real live-verify sequence in parallel: `MARKET_BRIEF_PSQL` flipped on at 14:48
+UTC, the tick wrote **31 live facts**, the render froze a `market_brief_issues` row for
+`dialysis`/`daily`/2026-09-12 at 14:49, and `MARKET_BRIEF_RENDER` was flipped on. My migration
+correctly left that live `on` state untouched rather than clobbering it back to the file's own
+default `off`.
+
+**MB-b (Lane Briefs email block + homepage Market Briefs tab) is now genuinely live**, not just
+deployed-in-code. `MARKET_BRIEF_PRSS` stays off (no dialysis RSS content yet — unrelated to this).
+Updated `MB3`/`MB4` in `PLANNED-BACKLOG.md` to `✅ live`. This closes the loop that started with
+"the redeploy already happened, just never reported" a few hours ago — the whole remaining sequence
+happened live today.
+
 
 ## 2026-09-12 — MB-b reconciled and TURNED ON: the market brief is live in the daily email and on the homepage tab
 
