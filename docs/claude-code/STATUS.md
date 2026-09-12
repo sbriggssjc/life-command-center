@@ -1,3 +1,40 @@
+## 2026-09-12 — DOC2-DOC6 re-measured live: mostly still open, one materially bigger than filed (Cowork)
+
+Continuing the doc-cleanup pass: `DOC2`-`DOC6` (gov-side document-capture defects B2-B6) were flagged
+in the P1a retitle as a genuinely still-open 🔴 cluster hiding under a stale "top priority" header.
+Rather than trust the 2026-08-31/09-01 numbers on file, re-measured each live against
+`scknotsqkcheojiaewwh` and this repo's own code.
+
+- **DOC2 (B2 — gov crons/docs said stale):** NOT independently re-verifiable from this session. The
+  claim is about `GovernmentProject` repo's own docs/crons, cross-repo by the row's own admission —
+  this session has no access to that repo or its scheduler. Left as filed, unchanged.
+- **DOC3 (B3 — firm-term queue expects an unwired chain):** `v_gov_firm_term_reextract_queue` is
+  **90 rows today** (was 99) — essentially unchanged, still real. **New: broke it down by
+  `document_type`** — 32 `brochure` / 31 `om` / 27 `lease`, all `needs_ocr`. Only the 27 leases are
+  actually B3's "wire `runLeaseExtraction`" gap; the other 63 (70%) are DOC6's population, not DOC3's.
+- **DOC4 (B4 — no cron on `doc-bytes-backfill`):** reconfirmed live and essentially unchanged —
+  **87 url-only** (was 85), **125 with neither bytes nor text** (was 120), both drifted up slightly
+  rather than down. No `doc-bytes-backfill`-named job exists anywhere in the gov project's `cron.job`
+  table (44 jobs total, checked by name). Still real, still nobody's.
+- **DOC5 (B5 — silent per-profile extension reload):** the extension manifest is now **1.0.53** (was
+  1.0.45 when B5 was filed, floor named was ≥1.0.39) — the version-floor half of this row is stale
+  and cleared. ⚠️ But the actual defect named — reload is silent, per-profile, no telemetry on which
+  profile is on which version — is a behavioral claim this session found no code addressing (no
+  version-telemetry columns/fields anywhere in `extension/` or `api/`). Still open on the real
+  complaint, just not on the version number quoted.
+- **DOC6 (B6 — brochures excluded from byte capture):** reconfirmed unchanged at the code level —
+  `api/_handlers/sidebar-pipeline.js:3160` still skips `is_offering_material`/`marketing_brochure`
+  docs, now with a comment explaining it's deliberate (they route client-side through
+  `STAGE_OM_VIA_TAB` instead). **The bigger news is DOC3's breakdown above:** the firm-term queue's
+  32 brochures + 31 OMs (63 of 90, 70%) are exactly this excluded population — more than double B6's
+  original "25" estimate, and it means whatever the OM-via-tab path does, it is not the thing draining
+  this particular queue. DOC3 and DOC6 are the same defect looked at from two ends, not two.
+
+**Not fixed here — these are cross-cutting pipeline-wiring decisions (does OM-via-tab need to also
+write into this queue's expected shape, or does the queue need to stop expecting brochures/OMs at
+all), a real build decision, not a measurement.** Docs updated: `PLANNED-BACKLOG.md` (DOC3-DOC6 rows
+re-measured with the live numbers and the DOC3/DOC6 link made explicit; DOC2 left as-is).
+
 ## 2026-09-12 — HP1-P1a-fix reconciled: code is merged, but live production is NOT confirmed running it (Cowork)
 
 Reconciling two Claude Code desktop responses sitting in `docs/claude-code/responses/` against git
