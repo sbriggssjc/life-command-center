@@ -1,5 +1,22 @@
 # Claude Code queue — STATUS
 
+## 2026-09-12 — ID2b scoped: the identity fix is stored but unread — 45 views + 12 modules still group on operator text
+
+With ID2a/ID2a-cleanup live (`operator_id` on 9,449/11,804, guards on, 207 aliases, 71-row queue) Cowork measured how far
+the canonical truth actually reaches: **45 Dialysis_DB views reference an operator text column and never mention
+`operator_id`**, and at least 12 repo modules do the same (`mcp/comps-tools.js`, `api/_shared/dossier-generator.js`,
+`market-brief-facts.js`, `rent-projection.js`, `team-context.js`, `api/_handlers/sidebar-pipeline.js`). So the split Scott
+flagged is still live in every report — only storage is fixed. Drafted `prompts/ID2b-consumer-switch-to-operator-id.md`:
+inventory every consumer with its current numbers as the parity baseline, switch by category (grouping → `operator_id`,
+display → registry canonical name with the existing `short_operator` chart label, filtering → accept canonical **and**
+aliases), and state per surface how the 2,355 properties with no `operator_id` are treated so nothing silently drops out of
+a count. **One surface is deliberately not switched blind:** `comps-tools.js` scores comps with `operatorTier()` over joined
+tenant/operator text, so an id-based switch changes **which comps are selected**, not just their labels — the prompt
+measures 5 real subjects and hands the decision to Scott. Switching grouping also drops MB-b's
+`operator_identity_pending:ID2` gap and unblocks the per-operator brief bands. **Also open:** PR #2352 (ID3a-d) to merge,
+ID3a-e (the real drift run, needs both repos), ID3e (county vocabulary), OC-v (redeploy the standalone MCP so the notes
+funnel goes live).
+
 ## 2026-09-12 — ID3a-d reconciled: ownership table settled (LCC owns Dialysis_DB); blast radius measured at 188 live objects; drift run still owed
 
 Filed `responses/ID3a-d desktop response.docx` → `done/`; prompt → `prompts/done/`. ID3a-d shipped on branch
@@ -761,6 +778,22 @@ access) -- named as an operator-verification item, not assumed either way.
 
 See `docs/os/PLANNED-BACKLOG.md` §P18 row MB1d and `docs/architecture/EXEC-BRIEFS-SPEC.md` §9
 "MB-a3" addendum for full detail.
+## 2026-09-12 — ASC50 governed review workbench built and locally verified; publication pending
+
+The completed 50-property source pass exposed two execution gaps: only the six source exceptions had review
+rows, and their legacy property-form vocabulary did not match `healthcare_property_review:1.0`. Implemented an
+authenticated `/asc-review.html` workbench plus `/api/asc-research-review`, exact request validation, and two
+invoker RPCs for primary and independent second review. The migration maps persisted legacy forms to the
+aggregate contract, retains `unresolved` only as a pre-scorecard exception sentinel for compatibility, stores
+the two reviewer identities/timestamps separately, rejects self-second-review, and preserves disagreement.
+Existing `final_disposition` values are never overwritten by primary scorecards. No candidate judgment or
+production row-level review was made.
+
+Verification: focused ASC/property-review suite **37/37 passed**; full suite **5,933 total / 5,927 passed /
+0 failed / 6 skipped**; app boot passed after lockfile dependency install; changed files pass syntax and whitespace checks. Repository-wide lint remains red on pre-existing,
+unrelated errors in `sidebar-pipeline.js`, `bridge-handlers-outlook.js`, and other files; this change introduced
+no lint error in its API files. Protected-PR checks remain to run.
+
 ## 2026-09-11 — BUY0 Phase 0 complete: Geller Round 1 client deliverable + email draft; build handoff written (spec §9) and backlog rows BUY1a/1b + BUY-G1…G6 filed
 
 Cowork. Round 1 for Jordan Geller is client-ready in `Team Briggs - Documents/Clients/Jordan Geller/2026 Industrial Search/Deliverables/Round 1 - Sep 2026/`
