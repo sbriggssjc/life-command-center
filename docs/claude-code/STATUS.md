@@ -2397,3 +2397,35 @@ stale by the time this ran — `inbox_items WHERE status='new'` is **1,061**, no
 people, stamps cadences; a separate decision); no `priority_score` ranking (HP1-P2c, sequenced
 after this); `contact_misparse_review` resolution surface not built (filed, not fixed);
 `inbox_items.domain` four-spelling drift not touched (already filed as HP1-P2-domain).
+
+## BACKLOG-ids-dedupe — a 3-way merge silently reintroduced the duplicate class it was fixing (2026-09-12)
+
+PR #2410 fixed 27 duplicate `PLANNED-BACKLOG.md` row IDs and shipped
+`test/backlog-id-uniqueness.test.mjs` to guard it — then **failed its own new guard in CI**. A
+separate PR (#2409, later #2411) merged into `main` in between, adding its own restatement content
+for `MB2a`/`MB3`/`MB4` rather than editing those rows in place. Git's 3-way merge (pure line
+inserts in nearby but distinct regions, no textual conflict) kept **both** versions on the PR
+branch — the exact duplicate-row class the guard exists to catch, produced by the merge itself
+rather than by either PR's authored diff.
+
+- **Re-measured, not assumed.** `node --test test/backlog-id-uniqueness.test.mjs` on the already
+  `main`-merged branch (`b8c27f4`, later `7acd65e` after #2411 landed) found exactly the 3 IDs the
+  diagnosis named — `MB2a` 2x, `MB3` 4x, `MB4` 4x — and nothing new from #2411's independent merge.
+  All RESTATEMENT (same issue, told progressively as it moved toward live), not COLLISION.
+- **Merged each into one row, keeping every distinct fact** (verified programmatically — every
+  fragment from every original copy located byte-for-byte inside the merged text before/after):
+  `MB2a` = the build note + Cowork's "feeds fine, code not deployed" reconciliation (already a
+  clean superset in one copy — kept verbatim). `MB3` = base build → "partially unblocked, redeploy
+  confirmed" → "PR #2391, Cowork applied migrations + flipped flags" → "Scott, in parallel — PSQL
+  flag flipped 14:48 UTC, 31 live facts written, `market_brief_issues` frozen,
+  `MARKET_BRIEF_RENDER` confirmed `on`". `MB4` = base build → redeploy-confirmed pointer → "same
+  sequence as MB3" final-live note → the functional `#/briefs` + `/api/market-brief-tab` check.
+  Final `State` = the latest/most complete (`✅ live`); `Source` cells combined rather than picking
+  one.
+- **Also fixed the malformed-table byproduct of the same merge**: three of the four copies each of
+  `MB3`/`MB4` had grown two extra trailing cells beyond the table's real 4-column schema
+  (`# | Item | State | Source`), because a later restatement was appended as new cells instead of
+  new prose. Folded back into the `Item` narrative; no row now carries more than 4 cells.
+- Verify: `node --test test/backlog-id-uniqueness.test.mjs` → 6/6 pass. Full suite:
+  `npm test` → 6150 tests / 6144 pass / 0 fail / 6 skipped (unchanged skip count — no test was
+  removed or quarantined, only doc content merged).
