@@ -194,6 +194,16 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-12 — DOC-CONTRA #2 found a live bug, not just a stale doc: TIER0_AUTO_ATTACH silently off for 16 days (Cowork)
+
+Re-verifying `tier0-owner-contact-system.md` against reality (CONSOLIDATE2's 2nd flagged
+contradiction) found the flag's 2026-08-28 "RESOLVED" note was never actually verified: the tick's
+run log shows `flag_off` on all 17 runs since, because `tier0-auto-attach-tick.js:208` called the
+shared `flagEnabled()` helper with one argument instead of two — every other of 7 callers in the
+repo got it right. Fixed the call, added a source-guard test, corrected the doc's live-state table
+and history (kept the wrong 08-28 note verbatim, marked corrected). New backlog row
+`TIER0-flag-arity`. DOC-CONTRA now 2 of 3; FRED/CMS scattered verdict still open.
+
 ## 2026-09-12 — CONSOLIDATE2 reconciled: STATUS 10,742 → 2,461 lines; two structural fixes + next cadence filed
 
 Verified live: archive `docs/history/STATUS_claude-code_2026-08-29_to_2026-09-11.md` written verbatim; 78 ✅ backlog rows
