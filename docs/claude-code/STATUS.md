@@ -2190,3 +2190,15 @@ rather than by either PR's authored diff.
 - Verify: `node --test test/backlog-id-uniqueness.test.mjs` → 6/6 pass. Full suite:
   `npm test` → 6150 tests / 6144 pass / 0 fail / 6 skipped (unchanged skip count — no test was
   removed or quarantined, only doc content merged).
+
+## HP1-badge — `total_open` was the capped page length; now the true SQL count (2026-09-12)
+
+Full detail in `PLANNED-BACKLOG.md` (row **HP1-badge**), not restated here. Summary:
+`today-sections.js`'s `total_open` was the row-fetch's own `LIMIT`, not the population
+(Significant 200 vs true 516, Urgent ≤200 vs true 1,730). Fixed with a separate, narrow,
+`Prefer: count=exact` probe per lane run in the SAME `Promise.allSettled` batch as the row
+fetches (the `inboxHygienePointer` idiom) — never reintroducing HP1-P0's removed ~750 ms/request
+cost. A failed probe renders `total_open: null` end to end (server AND `app.js`), never `0` and
+never the row count. Guard: `test/hp1-badge-today-total-open.test.mjs` (2 tests); full suite
+unchanged and green. Urgent's true population is 96% `contact_writeback` pipeline hygiene —
+filed as **HP1-P2f-urgent**, not routed off here.
