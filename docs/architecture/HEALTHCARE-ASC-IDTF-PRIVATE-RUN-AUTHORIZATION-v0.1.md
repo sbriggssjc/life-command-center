@@ -168,3 +168,20 @@ receipt may leave the boundary.
 
 This validator has no download, sampling, database, CRM, or production-write capability. Passing it authorizes
 only the explicitly governed next lane action; it does not itself perform that action.
+
+## 13. ASC governed property-review workbench
+
+The ASC source-collection run now has a private authenticated workbench at `/asc-review.html`. Its API is an
+operator-only sub-route of the existing intake handler, and its database writes are limited to two invoker
+functions over `healthcare_research_reviews` and the matching candidate review state.
+
+The persisted scorecard vocabulary matches `healthcare_property_review:1.0`: `stnl`, `dominant_user`,
+`minority_mob`, `campus`, `operator_owned`, or `unknown`. The earlier `unresolved` value remains accepted only
+as a source-exception sentinel so the existing completion functions remain operable; a primary scorecard
+cannot submit it. The migration converts the six existing exception sentinels to `unknown` without changing
+their final dispositions.
+
+Primary and second-review identities and timestamps are stored separately. A required second reviewer must be
+a different authenticated user. Agreement can close the row-level review; disagreement remains visible and
+keeps the candidate in `second_review`. Neither function grants or performs a canonical-property, Salesforce,
+outreach, production-opportunity, or IDTF write.
