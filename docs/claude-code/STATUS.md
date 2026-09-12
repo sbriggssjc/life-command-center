@@ -1,5 +1,54 @@
 # Claude Code queue — STATUS
 
+## 2026-09-12 — ID3a-b SHIPPED: canonicalize_agency() contamination fixed (NAVY/STATE/DOC/ICE), GSA using-agency added
+
+Ran the ID3a-b prompt live against gov (`scknotsqkcheojiaewwh`). Migration
+`supabase/migrations/government/20260912030000_gov_id3ab_agency_canonicalizer_contamination_fix.sql`,
+applied and backfilled (properties/leases/sales_transactions), reversible via
+`_gov_id3ab_agency_backup_20260912`. Guard `test/gov-id3ab-agency-canonicalizer.test.mjs` (14
+tests); full suite green (5,992 pass / 0 fail / 6 skipped).
+
+**The regex fixes, live-measured before/after (properties table):**
+- NAVY **150 → 3** — `*federal credit union` excluded before the NAVY branch (145 *Navy Federal
+  Credit Union* rows now resolve NULL → review `private_company_name_collision`).
+- STATE **213 → 9** — bare `\mstate\M` replaced with a closed allowlist. It was matching the
+  ordinary English word inside 213 STATE-GOVERNMENT names: "State of Texas", "Washington State
+  Dept of Social and Health Services", and "DEPARTMENT OF STATE HEALTH SERVICES" (Texas DSHS),
+  which contains the literal substring "department of state" and would have survived a
+  substring-only fix.
+- Bare DOC **16 → 1** (the 1 survivor is "North Carolina Department of Commerce", spelled-out
+  phrase). The other 15 (`DOC`, `DOC/P&PO`, `DOC&PS`) route to review as
+  `ambiguous_doc_commerce_or_corrections` — never auto-linked to Commerce.
+- **Found while shipping, not in the original brief:** ICE **44 → 43** — `\mice\M` was matching
+  "Handel's Homemade Ice Cream & Yogurt". Same shape as NAVY, fixed the same way.
+- `RICHMOND FIELD OFFICE (VA)` and every trailing `"(<two letters>)"` state-code suffix are now
+  stripped BEFORE any keyword match, generally — not a Richmond/VA-specific patch.
+- ACE aliased to USACE **case-sensitively on the raw input only** — a bare lowercase `\mace\M`
+  was deliberately NOT added (this exact repo's gov CLAUDE.md documents an "Ace Hardware" sale
+  existing in this database; a lowercase word-boundary match would misread it as the Army Corps).
+- NAVY/ARMY/DOC/LSC/DOL/USGS/NRC/NIH/NLRB/USAF/TREAS were **already live** in
+  `canonicalize_agency_full()` — a QA-24/QA-30 hand-patch the committed migration never reflected
+  (a "running but not merged" case). Committed the live body verbatim rather than re-adding rows
+  that already existed.
+- `GSA - <AGENCY>` measured at **624 properties / 106 distinct raw strings** (not the ~168–330
+  estimated). `agency_canonical` stays GSA (lease counterparty, unchanged); a second pair of
+  columns, `using_agency_canonical`/`using_agency_full`, carries the occupying agency — one lease,
+  two facts. 456 of 624 resolve today; the rest use an abbreviated form ("dept of" not "department
+  of") the comparator doesn't expand — a stated gap, NULL not guessed.
+
+**Still live, confirmed, filed as ID3a-c, NOT fixed here (scope discipline):** DOJ (includes
+`TEXAS JUVENILE JUSTICE DEPARTMENT` ×5), EPA (a Georgia state environmental dept), DOL (two
+Pennsylvania Dept-of-Labor-and-Industry variants), ED (Alabama's + a NJ school board's education
+depts), DOT (California's + NY State's transportation depts) each fold in a same-named STATE
+agency, the identical shape STATE just had fixed. The separate `government_agencies`/
+`gov_agency_aliases` FK registry ID3a wired is untouched by this change — display column and FK
+registry are two different systems on purpose (`ID3a-regdup`, `ID3a-registry-gaps`,
+`ID3a-detector-schedule`, `ID3a-consumer-switch` all remain open, unrelated to this fix).
+
+Docs updated in the same change: `PLANNED-BACKLOG.md` (§P0d rows ID3a-b, ID3a-canonical-repair,
+ID3a-gsa-compound closed/updated; new row ID3a-c filed), `data-coherence-invariants.md` (I13),
+`CURRENT-STATE.md`.
+
 ## 2026-09-12 — ID2a-cleanup + ID3a reconciled: operator registry clean; gov agency WIRED but the NAVY regex is still live
 
 Both responses filed. **ID2a-cleanup (PR #2337) verified live:** aliases 42 → 207, review queue 1,020 → 71 open, 807
