@@ -18,6 +18,17 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## FEED1 — three more dead RSS feeds (outside dialysis) replaced + deployed (2026-09-12)
+
+MB2a's `market_brief_feed_health` monitor found three more dead feeds nobody was checking:
+`government` (GSA News, 404), `healthcare` (Health Affairs, 410 Gone — retired), `net_lease`
+(GlobeSt, 403). Sandbox had zero egress (same policy denial as MB2a); re-verified all six
+URLs via `net.http_get` from LCC Opps instead of trusting Cowork's prior fetch — all 200,
+counts matched. `RSS_FEEDS` updated, deployed to LCC Opps (`v22 → v23`), deployed body
+re-read to confirm, then triggered a live `dry_run=1` and read `market_brief_feed_health`
+for today: all six new feeds wrote `ok=true` with real item counts. No `market_brief_feed_stale`
+alert had opened for the three dead ones, so nothing to resolve. See `PLANNED-BACKLOG.md` FEED1.
+
 ## 2026-09-12 — HP1-P2misparse: the Inbox's 130 misparse rows were success notifications (Inbox 196 → 91)
 
 **Shipped.** `contact_misparse_review` `status='new'` **130 → 25**; the whole Inbox **196 → 91**;

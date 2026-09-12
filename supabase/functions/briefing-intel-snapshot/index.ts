@@ -147,10 +147,10 @@ const COMMODITY_TICKERS = [
 
 // RSS feeds grouped by stream. Keep concise — 3-5 per stream is enough.
 //
-// MB2a (2026-09-12, this change): the `dialysis` stream shipped by MB-b was
-// dead on arrival — all three URLs failed egress-verification (403/404,
-// backlog MB2/MB2a). Replaced with the two feeds Cowork actually fetched and
-// parsed live on 2026-09-12 (200 + real `<item>`/`<entry>` content):
+// MB2a (2026-09-12): the `dialysis` stream shipped by MB-b was dead on
+// arrival — all three URLs failed egress-verification (403/404, backlog
+// MB2/MB2a). Replaced with the two feeds Cowork actually fetched and parsed
+// live on 2026-09-12 (200 + real `<item>`/`<entry>` content):
 //   - Federal Register, filtered to "end-stage renal disease" — the
 //     authoritative federal source for ESRD PPS rule text (the policy input
 //     this lane's TTL table names explicitly, spec §3). A `.gov` API feed,
@@ -172,6 +172,20 @@ const COMMODITY_TICKERS = [
 // confirm it returns `<item>`/`<entry>` content under `parseRss()`, then add
 // it here.
 //
+// FEED1 (2026-09-12): the `market_brief_feed_health` MB2a itself shipped
+// found three MORE dead feeds, all in streams nobody was checking:
+// `government` (GSA News, gsa.gov/.../rss → 404, an HTML page not a feed),
+// `healthcare` (Health Affairs, healthaffairs.org/rss/site → 410 Gone — the
+// publisher retired it), `net_lease` (GlobeSt, globest.com/feed/ → 403,
+// bot-blocked). All six replacements below were fetched live via pg_net from
+// LCC Opps on 2026-09-12 (this session's own sandbox has no egress to any
+// news host — same policy denial as the dialysis-stream note above) and each
+// returned HTTP 200 with real `<item>` content and a pubDate inside 72h, so
+// none needs the 72h-cutoff work MB2b/MB2c own — do not pull that in here.
+// Measured and REJECTED, do not re-try: Modern Healthcare
+// (modernhealthcare.com/section/rss → 403), The Real Deal
+// (therealdeal.com/feed/ → 403).
+//
 // ⚠️ EVERY FEED HERE NOW GETS A HEALTH RECORD (`market_brief_feed_health`,
 // MB2a) written per (stream, source) on every `fetchSectorNews()` call — a
 // feed returning zero items for `MARKET_BRIEF_FEED_STALE_DAYS` consecutive
@@ -181,7 +195,8 @@ const RSS_FEEDS: Record<string, { url: string; source: string; redirect?: boolea
   healthcare: [
     { source: "MedCity News",    url: "https://medcitynews.com/feed/" },
     { source: "KFF Health News", url: "https://kff.org/feed/" },
-    { source: "Health Affairs",  url: "https://www.healthaffairs.org/rss/site" },
+    { source: "STAT News",       url: "https://www.statnews.com/feed/" },
+    { source: "Healthcare Dive", url: "https://www.healthcaredive.com/feeds/news/" },
   ],
   dialysis: [
     {
@@ -195,13 +210,17 @@ const RSS_FEEDS: Record<string, { url: string; source: string; redirect?: boolea
     },
   ],
   government: [
-    { source: "GSA News",        url: "https://www.gsa.gov/about-us/newsroom/news-releases/rss" },
+    {
+      source: "Federal Register (GSA)",
+      url: "https://www.federalregister.gov/api/v1/documents.rss?conditions%5Bagencies%5D%5B%5D=general-services-administration&per_page=20",
+    },
     { source: "Government Executive", url: "https://www.govexec.com/rss/all/" },
   ],
   net_lease: [
-    { source: "GlobeSt",          url: "https://www.globest.com/feed/" },
+    { source: "Connect CRE",      url: "https://www.connectcre.com/feed/" },
     { source: "Bisnow National",  url: "https://www.bisnow.com/rss" },
     { source: "Commercial Observer", url: "https://commercialobserver.com/feed/" },
+    { source: "REBusinessOnline", url: "https://rebusinessonline.com/feed/" },
   ],
   tax_policy: [
     { source: "Tax Foundation",   url: "https://taxfoundation.org/feed/" },
