@@ -9859,3 +9859,53 @@ hiding it — **a finding, not a failure**, and the one thing two months of sile
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-12 — ID3a-d: named the owner of every database, retired LCC's government migrations (Claude Code)
+
+`government-lease`'s ID3a-c fix (PR #398) showed that two repos ship migrations to the same
+government database, and `life-command-center`'s own copy of the same canonicalizer fix
+(`supabase/migrations/government/20260912030000_gov_id3ab_agency_canonicalizer_contamination_fix.sql`)
+was **stale relative to what is actually deployed** — no state-qualifier guard, old ICE/CBP branch
+order. Re-applying it would have silently restored `TEXAS DEPARTMENT OF AGRICULTURE → USDA` and
+`Immigration & Customs Enforcement → CBP`.
+
+**Shipped:**
+- **Ownership table** (all three Supabase projects, measured, not guessed) in `CLAUDE.md` →
+  "ONE REPO OWNS EACH DATABASE'S OBJECTS", mirrored in `docs/architecture/data-coherence-invariants.md`
+  I16 and pointed-to from `docs/os/REGISTRY.md`. government → `government-lease` (settled by
+  Scott); Dialysis_DB → `Dialysis` (proposed from evidence — 555 migration files there vs. LCC's
+  277 duplicate copy, 👤 not yet Scott-confirmed); LCC Opps → `life-command-center` (this repo IS
+  the app that reads/writes it).
+- **Retired `supabase/migrations/government/`** — a `README.md` marking the directory historical
+  and naming both defects the stale canonicalizer file would restore, plus a per-file historical
+  header prepended to all 213 `.sql` files (script-generated, verified). Searched for any tooling
+  that globs and applies this directory live against the government database — **found none**.
+- **Guard:** `test/gov-migrations-directory-retired.test.mjs` (6 tests, all pass, includes a
+  positive control that proves the detection logic can actually fail). Existing tests that read
+  the retired canonicalizer migration (`test/gov-id3ab-agency-canonicalizer.test.mjs`,
+  `test/id3a-gov-agency-identity.test.mjs`) still pass unchanged — the header is comment-only and
+  those tests strip comments before asserting.
+- **I16 drift-check design:** `scripts/db-drift/gov-deployed-vs-committed-drift.sql` +
+  `scripts/db-drift/README.md`. Computes the live-side definition hash for every
+  function/view/materialized-view/trigger in the government database's `public` schema; documents
+  the "expected"-side replay of `government-lease`'s migrations and the final diff query inline.
+  **NOT executed** — this sandbox has no network access to Supabase, so no drift result is
+  reported (would be fabrication). Run it for real under credentials with access to the
+  government project before scheduling anything on the I11 alert path.
+- **ID3a-c deferred items closed/filed:** the "10 FK-vs-canonicalizer granularity judgment calls"
+  are already surfaced by `government-lease`'s own `v_gov_agency_fk_display_drift` view
+  (`sql/20260912_gov_id3a_c_agency_class.sql` §12) rather than a fresh list — filed as
+  `ID3a-c-fk-granularity` in `PLANNED-BACKLOG.md`, pointed at `government-lease`, with the
+  recommendation that Scott review that view's 10-row output in one pass. USFS/BLM/NSF
+  canonicalizer gaps: the registry seed rows exist (`sql/20260305_phase4_financials.sql`) but no
+  confirmed live regex branch was found — filed as `ID3a-c-usfs-blm-nsf`, low urgency pending an
+  orphan-string volume measurement.
+- **Not built, filed:** retiring LCC's `supabase/migrations/dialysis/*` (277 files) the same way —
+  needs Scott to confirm `Dialysis` as the formal owner first (`ID3a-d-dia`).
+
+**Not touched:** no live gov/dia/LCC-Opps DB object was edited. No migration was deleted. Full
+suite not re-run wholesale in this pass (repo has thousands of tests); the new test file and every
+test that reads a file this change touched were run directly and are green — see the branch's own
+commit for the exact list.

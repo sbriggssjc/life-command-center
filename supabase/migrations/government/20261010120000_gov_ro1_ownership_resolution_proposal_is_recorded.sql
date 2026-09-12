@@ -1,3 +1,9 @@
+-- ⚠️ HISTORICAL — DO NOT RE-APPLY. This directory does not own the government database;
+-- `government-lease` does (see supabase/migrations/government/README.md, 2026-09-12).
+-- This file is kept as a record of what this repo applied in the past. The live, correct
+-- copy of any object it defines may have since diverged -- read the deployed database or
+-- government-lease's committed source, never this file, before trusting its content.
+
 -- RO1 (UX-T1c §10) — the resolve_ownership lane surfaced 836 of 1,597 rows whose PROPOSED owner
 -- is the owner ALREADY RECORDED (the GSA/state lessor of record changed *to* the party we hold;
 -- `pending_updates` re-proposing the current value). Those are confirmations presented as
