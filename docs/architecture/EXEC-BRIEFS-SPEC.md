@@ -380,3 +380,23 @@ blindness rather than reading a dead feed as a quiet news day. **`MARKET_BRIEF_P
 from this change of facts actually flowing; the only live-fetch evidence on record predates this code
 (Cowork, 2026-09-12). Full repo suite unaffected: 6,130 pass / 0 fail / 6 skipped. Backlog: `docs/os/
 PLANNED-BACKLOG.md` §P18 MB2a.
+
+**Addendum 2026-09-12 "MB2a live-reconcile" (Cowork) — a sixth design rule, learned the hard way.**
+Both replacement feeds were re-fetched independently via pg_net and answer: Federal Register ESRD
+**200, 3 items**; Google News operator query **200, 100 items**. The MB2a migration is **applied live**
+to LCC Opps (`market_brief_feed_health`, `v_market_brief_feed_health_stale`,
+`lcc_check_market_brief_feed_health` — executes clean 0/0 — the two `market_brief_facts` citation
+columns, and cron `lcc-market-brief-feed-health` at 11:15 UTC).
+
+🚨 **But the producer still cannot run**: the deployed `briefing-intel-snapshot` is **v21 and has no
+`dialysis` stream at all**, so neither MB-b's feeds nor MB2a's replacements have ever executed. No
+workflow in this repo deploys `supabase/functions/**`, so the merge changed nothing and reported
+nothing. Tracked as backlog **MB2a-deploy**, and as a third **I16** instance.
+
+**Design rule 6 — a producer's source list is only real once the thing that reads it is deployed.**
+§7 gates every step behind a flag, which correctly stops us from *showing* unverified facts; it does
+not catch a producer whose new inputs were never shipped, because a flag that is OFF and a producer
+that is not deployed look identical from the outside — both produce nothing, quietly. So a P18 step
+is "done" only when the deployed body is re-read and confirmed to contain the change, never when the
+PR merges. `MARKET_BRIEF_PRSS` stays OFF until that read succeeds and relevance survival is measured
+on real items.

@@ -402,6 +402,20 @@ the hash comparison against government (the database where drift has already bit
 inline but require real Supabase credentials this sandbox does not have. Do not fabricate a
 result — run it for real, record what it finds, and only then schedule it on I11.
 
+**I16 is not only about DB objects — 2026-09-12 (Cowork), MB2a.** The same invariant was found
+broken on an **edge function**, where it is worse: `briefing-intel-snapshot` is deployed at **v21
+with no `dialysis` key in `RSS_FEEDS` at all**, read from the DEPLOYED body. MB-b committed three
+dialysis feeds on 2026-09-12 and MB2a replaced them the same day; **neither has ever run**. What
+makes this class distinct from a drifted DB object is that nothing anywhere reports it: this repo
+has **no workflow that deploys `supabase/functions/**`** (`.github/workflows/` has none), so a
+merged change to an edge function deploys nothing AND fails nothing — the build stays green while
+the live behaviour is unchanged. A DB migration at least fails loudly when it is not applied.
+So the I16 detector must cover BOTH halves: committed-vs-deployed for DB objects, and
+committed-vs-deployed for every `supabase/functions/*/index.ts`. Note also that DRIFT1's census
+(2026-09-07) listed this exact function as "committed, not in scope" — accurate on that date and
+stale five days later, which is the general lesson: **a one-time census cannot hold a drift
+invariant; only a repeated check can.** → backlog `MB2a-deploy`.
+
 ### I10 — A one-shot backfill is not a producer
 
 If the mechanism that filled a store was a migration or a script, the store **decays from the moment
@@ -445,7 +459,7 @@ Supabase project"; it is a new set of connections that must be asserted on day o
 | **I13** | identity: normalized-collapse probe + identical-canonical groups | ⚠️ **manual, 2026-09-11** (`docs/audits/ID0_IDENTITY_VALUE_DOMAIN_PROBE_2026-09-11.md`) → standing detector in **ID4** |
 | **I14** | controlled-vocabulary drift | ⚠️ **manual, 2026-09-11** (same probe) → **ID4** |
 | **I15** | import count reconciliation / truncation signature | ❌ **none** → **ID4** |
-| **I16** | deployed-vs-committed definition drift | ⚠️ **designed 2026-09-12 (ID3a-d), not yet run.** `scripts/db-drift/gov-deployed-vs-committed-drift.sql` computes the live-side hash for government (the database drift has bitten twice); the expected-side replay + diff are specified but unexecuted — no Supabase network access from this sandbox. Two instances found so far (ID3a-b's `canonicalize_agency()`; ID3a-d's two-repo copy of the same function). Until a run exists, read the deployed definition before editing any DB object, and know which repo owns it (see `CLAUDE.md` ownership table). |
+| **I16** | deployed-vs-committed definition drift | ⚠️ **designed 2026-09-12 (ID3a-d), not yet run.** `scripts/db-drift/gov-deployed-vs-committed-drift.sql` computes the live-side hash for government (the database drift has bitten twice); the expected-side replay + diff are specified but unexecuted — no Supabase network access from this sandbox. Two instances found so far (ID3a-b's `canonicalize_agency()`; ID3a-d's two-repo copy of the same function). Until a run exists, read the deployed definition before editing any DB object, and know which repo owns it (see `CLAUDE.md` ownership table). **Third instance 2026-09-12 (Cowork, MB2a): the `briefing-intel-snapshot` EDGE FUNCTION is deployed at v21 without the `dialysis` stream two commits after it was added — and no workflow deploys `supabase/functions/**` at all, so the drift is both unfixed and unreported.** The detector must therefore cover edge-function bodies, not just DB object definitions. |
 | I9 | fact stores lacking `created_at` | ❌ **none** |
 | **I13** | identity collapse (byte-identical entity under case/punctuation/format variants) | ⚠️ **PARTIAL — one class now has a standing detector.** ✅ **gov AGENCY (ID3a, 2026-09-12):** `v_gov_agency_identity_detector` over `properties.agency_id` + `property_agencies.agency_id`, using an AGENCY-SPECIFIC comparator (`gov_agency_alias_key` — word boundaries preserved, deliberately NOT a shared alnum key), reporting collapse, orphans and `rows_no_raw_text` as a SEPARATE state (blank ≠ unresolvable, P180). First live run: properties 7,369 resolved / 10,143 orphan / 179 strings collapsed onto 44 agencies; bridge 119,361 / 12,882 / 110 onto 45. Run once, **not scheduled** (ID3a-detector-schedule). Registry wired 0% → 35.9% and 0.12% → **90.3%**. ⚠️ **And ID3a proves the per-class rule from the other direction:** gov already had a 45-code normalizer (`agency_canonical`) and it was **unsafe to wire from** — it conflates federal agencies with same-named state bodies and commercial lookalikes (`NAVY` = Navy Federal Credit Union ×145; `ICE` includes an ice-cream shop). **A column named for the answer is not the answer.** Audit `docs/audits/ID3a_GOV_AGENCY_IDENTITY_WIRING_2026-09-12.md`.
     ✅ **ID3a-b (2026-09-12) fixed the display column itself** — `canonicalize_agency()`
