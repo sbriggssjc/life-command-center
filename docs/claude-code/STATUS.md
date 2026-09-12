@@ -18,6 +18,47 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-12 — Repo sweep done by the filed method; a duplicate SEC row folded; HP1-P1b's hold lifted (Cowork)
+
+Scott asked again for the repo to be cleaned and consolidated by topic so a future chat picks up without
+misdirection. Did the **REPO1-root-clutter** sweep using the method filed earlier today — grep every candidate
+first, move only the unreferenced, document the rest — rather than a bulk move.
+
+**Moved (12, all verified unreferenced outside `STATUS.md`/`docs/history`)** → `_superseded/scratch-2026-09-12/`,
+with a manifest row in the graveyard README: `err.txt` (0 bytes), `draft1/draft2/draftsave.json`, `harvest.json`,
+`twin.json`, `seed-apply/seed-dryrun.json`, `acq-dryrun.json`, `fix-allother-pagination.patch`, `_commit.bat`,
+`_deploy_hardening.bat`.
+
+**Deliberately NOT moved — and this is the point of the sweep, not a shortfall.** Three groups are referenced by
+name from live docs, code comments or a guard test, so moving them converts accurate references into stale ones,
+which is worse than an untidy root. Recorded under `_superseded/README.md`'s own *"left in place — documented
+instead"* convention:
+
+- **The 15 `flow-*.json`** — cited in `CLAUDE.md`, `.env.example`, `api/_shared/outlook-draft.js`,
+  `api/draft-assist.js` and ~10 docs. **Consolidated by TOPIC in documentation instead: new
+  `docs/flows/README.md`** names every flow, what it does, and the write-up to read — find the flow there, open
+  the JSON at the root.
+- **The ~10 loose `.docx`/`.xlsx`** — cited from `audit/ROUND_2_FINDINGS_2026-05-19.md` and several
+  `audit/patches/*/COMMIT_MSG.txt`. Historical; nothing live reads them, and none should be cited as current state.
+- 🔐 **`wave0-config-values.txt`** — `test/retired-identifiers-guard.test.mjs` allowlists it **BY PATH**, so a move
+  breaks that guard. `ACTIVATE_unit4.sql` likewise (cited in `document-capture-ocr-and-deeds.md`).
+
+⛔ **The sweep caught me duplicating an existing row — exactly the misdirection it was meant to find.** I filed
+`HP1-P1a-sec` this morning as a new escalation on discovering the committed `LCC_API_KEY`. **`SEC2` had already
+recorded precisely that on 2026-08-28**, with a better remediation order than mine (rotate → update Railway →
+`git rm --cached` → *only then* consider history) and a warning I did not have: **do not reach for
+`filter-branch`** — this repo nearly lost a 475 MB mailbox that way. My row is now a pointer at SEC2, and the one
+fact worth keeping moved onto SEC2: the committed value is **byte-identical to the live Bearer token in the
+Salesforce flow**, so it is the live key, and a rotation must update every `flow-*.json` header carrying it in the
+same change — a flow left on the old key fails silently under an HTTP 200, which is exactly how HP1-P1a hid a
+six-week outage. `OPERATOR-ACTIONS.md` already carries SEC2 as ⏸️ DEFERRED, consistent with Scott's decision today.
+
+✅ **HP1-P1b's hold is lifted — a held row whose condition has cleared is stale documentation.** It said *"build
+after the feed is restored and P1d is watching it."* Both happened today. Two stale figures inside it corrected
+while there: the feared mass auto-retire **did not happen** (six weeks of drift was 10 stage changes, not the
+569+37 the row was written on — re-measure live), and **there is no `deal_next_step` table** —
+`lcc_generate_deal_next_steps()` writes into `action_items`. Also cross-linked to **HP1-P1a-orphan**: decide the
+`sf_absent` rule first, or P1b will ask Scott to confirm deals Salesforce no longer has.
 ## 2026-09-12 — REPO1 sweep failed CI on the line budget; archived a fourth span (Cowork)
 
 The REPO1 root sweep could not merge: `test/status-line-budget.test.mjs` went red at **2,503 lines**, 3 over.
