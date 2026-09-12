@@ -152,8 +152,59 @@ export function planOperatorCapRateBands({ rows, lane, asOfIso }) {
     }
   }
 
+  // ID2b-caps-2 -- duplicate-display-label invariant. This ONLY applies
+  // among ID-KEYED groups (opId != null): two DIFFERENT resolved operator_id
+  // groups must never render under the identical canonical label -- that
+  // can only happen if the registry itself holds two operator rows nobody
+  // merged (a registry defect), or a resolution bug hands two different
+  // rows two different ids for what should be one operator. It is
+  // DELIBERATELY NOT applied to a text-keyed (opId == null) group sharing a
+  // label with an id-keyed one -- that is the documented ID2a coverage-gap
+  // fallback (a property whose operator_id has never resolved forms its own
+  // live band under the same raw text a resolved sibling also carries, and
+  // "never dropped, never silently merged" is the whole point of that
+  // fallback -- see the "raw-text alias is never retired if OTHER,
+  // unresolved rows still need it" test). Collapsing that case here would
+  // undo the ID2a fallback this same file documents and tests elsewhere.
+  const labelCollisions = [];
+  {
+    const byLabel = new Map(); // normLabel -> {groupKey, opId, label, n}
+    for (const [groupKey, info] of byOperator) {
+      if (info.opId == null) continue; // only id-keyed groups participate
+      const normLabel = normKey(info.label);
+      if (!normLabel) continue;
+      const n = info.rates.length;
+      const existing = byLabel.get(normLabel);
+      if (!existing) {
+        byLabel.set(normLabel, { groupKey, opId: info.opId, label: info.label, n });
+        continue;
+      }
+      const existingIsWinner = existing.n >= n;
+      const winner = existingIsWinner ? existing : { groupKey, opId: info.opId, label: info.label, n };
+      const loser = existingIsWinner ? { groupKey, opId: info.opId, label: info.label, n } : existing;
+      byLabel.set(normLabel, winner);
+      labelCollisions.push({ label: info.label, winnerGroupKey: winner.groupKey, loserGroupKey: loser.groupKey, loserOpId: loser.opId, loserN: loser.n });
+    }
+  }
+  const loserGroupKeys = new Set(labelCollisions.map((c) => c.loserGroupKey));
+  for (const c of labelCollisions) {
+    // Loud, structural refusal -- this must never ship two live id-keyed
+    // bands under one display label. Logged, never thrown: this runs inside
+    // a scheduled producer tick and a registry defect on ONE operator pair
+    // must not take the whole lane down.
+    // eslint-disable-next-line no-console
+    console.error(
+      `[market-brief-psql] DUPLICATE BAND LABEL invariant fired: "${c.label}" would be emitted `
+      + `under BOTH ${c.winnerGroupKey} and ${c.loserGroupKey} -- keeping ${c.winnerGroupKey} `
+      + `(larger n), refusing to write ${c.loserGroupKey} (n=${c.loserN}). This means two `
+      + `operator_id rows in the registry resolve to the identical canonical name and were `
+      + `never merged -- file a registry fix, this is not something a re-run corrects.`
+    );
+  }
+
   const facts = [];
   for (const [groupKey, { label, opId, rates }] of byOperator) {
+    if (loserGroupKeys.has(groupKey)) continue; // duplicate-label invariant: refuse to write
     const opFact = buildCapRateBandFact({
       lane, capRates: rates, operator: label, operatorKey: opId, sourceLabel: 'rpc_query_comps (TTM, dialysis sales)', asOfIso,
       sourceAsOfDate: byOperatorSaleDates.get(groupKey) || null,
@@ -179,6 +230,16 @@ export function planOperatorCapRateBands({ rows, lane, asOfIso }) {
       seenRetireKeys.add(staleKey);
       retire.push({ section: 'capital_markets', fact_key: staleKey, reason: `superseded_by_operator_id:${opId}` });
     }
+  }
+  // A duplicate-label loser is superseded, never left live beside its
+  // winner -- same retireStaleFact() mechanism (status='superseded'), never
+  // a second live fact under a different key. Idempotent: a loser key with
+  // nothing live under it is a no-op in retireStaleFact.
+  for (const c of labelCollisions) {
+    const staleKey = `cap_rate_ttm_band:${c.loserOpId}`;
+    if (seenRetireKeys.has(staleKey) || emittedFactKeys.has(staleKey)) continue;
+    seenRetireKeys.add(staleKey);
+    retire.push({ section: 'capital_markets', fact_key: staleKey, reason: `duplicate_label:${c.winnerGroupKey}` });
   }
 
   return { facts, retire };

@@ -164,3 +164,31 @@ then `npm run verify:deploy`. The migration ships first, the JS after.
 **Standing rules:** never fabricate — "Not on file" / "Derived" / "Conflict"; Supabase is reconcilable,
 never automatic truth; review existing machinery before building; document at every step; commit with
 the repo's `Co-Authored-By` + `Claude-Session` trailer.
+
+
+---
+
+## Root cause — VERIFIED 2026-09-12 (post-PR #2371)
+
+CC's reported root cause is **correct**, and the reason it is correct is not obvious from the file it
+names. Recorded here so no future turn re-litigates it:
+
+- `mcp/opportunity-sync.js` calls `opsQuery('POST', 'bd_opportunities?on_conflict=...', row,
+  { Prefer: 'resolution=merge-duplicates,return=representation' })` — an options **object** in the 4th
+  position.
+- Two different `opsQuery` implementations exist. `api/_shared/ops-db.js` takes an options object and
+  builds the header correctly (proven in node). `mcp/server.js:92` takes a **positional** `prefer`
+  string and passes it straight into `supabaseQuery`, where `Prefer: prefer || ...` places the object
+  in the header — `fetch` stringifies it to `"[object Object]"`. PostgREST sees no
+  `resolution=merge-duplicates` and runs a plain INSERT. That is the 608 duplicate-key violations,
+  exactly.
+- **Which one serves the live request was the open question.** Answer: `server.js:176` calls
+  `mountLccMcp(app)` with no options → `apiPrefix = ""` → `mcp/server.js:2382` registers
+  `POST /api/pipeline/ingest-opportunities` behind `authenticate` (Bearer `LCC_API_KEY`, which is what
+  the PA flow sends). `server.js:369` registers the same path again at line 369 — **after** — so it
+  never runs. The broken client wins by 193 lines.
+
+So the RPC-first fix (Unit 2) resolves the symptom by bypassing the `Prefer` header entirely, **and**
+the stated mechanism is accurate. The duplicate registration itself is filed separately as
+**HP1-P1a-dup** — it is a live hazard independent of this fix (two handlers, one path, different auth,
+different DB client).

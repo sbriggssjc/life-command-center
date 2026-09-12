@@ -151,3 +151,110 @@ canonical-looking label.
 `sf_comp_staging` its own resolved `operator_id`, guarded like the others); (2) a rendering-level invariant — **two
 live band facts may never share a display label** — as a test, so this class cannot ship again. Tracked as
 **ID2b-caps-2**.
+
+## Addendum — ID2b-caps-2 SHIPPED + VERIFIED LIVE, 2026-09-12
+
+Both fixes above landed, and the gate now holds. Migrations
+`supabase/migrations/dialysis/20260912140000_dia_id2bcaps2_sf_comp_staging_operator_id.sql` and
+`.../20260912150000_dia_id2bcaps2_rpc_query_comps_sf_operator_id.sql`, applied live to `zqzrriwuavgrquhisnoa`.
+
+**Chose option (b) — a first-class `sf_comp_staging.operator_id` column — not the query-time resolve.**
+Checked first, per the doctrine this file itself is an instance of ("trace it to the source of record"): a repo
+grep for `sf_comp_staging` outside migrations/SQL found exactly two readers
+(`api/_handlers/entities-handler.js`, `api/_handlers/om-comp-resolver.js`), both reading only linkage keys
+(`sf_comp_id`/`linked_property_id`/`linked_sale_id`) — **neither reads `.tenant`.** So today `rpc_query_comps`
+is the only consumer of this fact. Chose (b) anyway, for the same reason ID2a gave `properties` an `operator_id`
+column instead of resolving `properties.operator` at read time everywhere it's queried: `sf_comp_staging.tenant`
+IS the raw fact for this row (there is no `properties` row to hang an id off), so a future second consumer of
+this table should not have to re-derive the same resolution a second way. The resolver itself is not
+duplicated — both the column's fill-blanks trigger and the RPC's lateral join call the SAME
+`dia_resolve_operator(text)` ID2a already ships, resolved through the same survivor chain
+(`dia_operator_survivor`) the sale/listing arms already use.
+
+**Deliberately lighter than the `properties` precedent in one respect.** `properties.operator` is written only
+from inside this repo's own JS/SQL, so ID2a's hard-block `dia_operator_write_guard()` trigger (RAISE on an
+unresolved write) is safe there. `sf_comp_staging` is fed by the Salesforce sync pipeline in the separate
+Dialysis repo (`sf_object_sync.py`), which this session did not read or touch — a hard block here could either
+fail that external writer's upserts outright, or, if it silently retries, spam `dia_operator_write_review` once
+per sync cycle for the same unresolved tenant. The trigger shipped instead
+(`dia_sf_comp_staging_operator_fill()`) is **fill-blanks only** (never overwrites a non-null `operator_id`,
+never raises) and **de-dupes its own review-lane writes** against an already-open row for the same
+`(table_name, record_pk, raw_operator_text)`, so a row re-touched by every sync cycle logs once, not once per
+sync.
+
+**Live dry-run before applying anything, against `zqzrriwuavgrquhisnoa` (via `mcp__Supabase__execute_sql`):**
+
+```
+select st.tenant, r.operator_id, r.canonical_name, r.status, count(*)
+from sf_comp_staging st cross join lateral dia_resolve_operator(st.tenant) r
+where st.tenant is not null and btrim(st.tenant) <> '' group by 1,2,3,4 order by count(*) desc;
+```
+
+confirmed the resolver already agrees exactly with the audit's numbers: `DaVita Dialysis` → operator_id 4
+(196), `Fresenius Medical Care` → operator_id 5 (179), plus `US Renal Care`→73 (13), `Dialysis Clinic Inc
+(DCi)`→79 (4), `Southside Kidney Clinic`→76 (4), `Innovative Renal Care`/`American Renal Associates`→8 (4). Six
+rows failed to resolve (`Reliant Renal Care`, `Dialysis Care Center`, `Georgia Nephrology`, `KidneySpa`,
+`Physicians Choice Dialysis` → `needs_review`; `Vanderbilt University` → `non_dialysis`) — 406 total, matching
+24 NULL-tenant rows to reach the table's full population.
+
+**Live backfill result** (`dia_id2acleanup2_backfill_sf_comp_staging_operator_ids`): dry-run reported
+`candidates: 406, would_auto_apply: 400, would_review: 6` — applied with `p_dry_run=false`, got
+`auto_applied: 400, sent_to_review: 6`, byte-identical to the prediction. `dia_operator_write_review` gained
+exactly 6 open rows tagged `table_name='sf_comp_staging'`.
+
+**Live re-check of the tick's own TTM window after both migrations** (the exact `rpc_query_comps` call
+`market-brief-psql-tick.js::fetchDialysisCapRates()` makes, `p_date_from = today-366d`, `p_limit=900`, grouped
+the way `planOperatorCapRateBands` groups):
+
+| group_key | label | n |
+|---|---|---:|
+| `id:4` | DaVita | 58 |
+| `id:5` | Fresenius Medical Care | 48 |
+| `id:73` | US Renal Care | 7 |
+| `text:fresenius_medical_care` | Fresenius Medical Care | 1 |
+| `id:8` | American Renal Associates | 1 |
+| `text:assured_home_health` | Assured Home Health | 1 |
+| `text:indiana_university_health` | Indiana University Health | 1 |
+
+**Exactly three bands clear `MIN_N_CAP_BAND=5` and ship: DaVita, Fresenius Medical Care, US Renal Care.** The
+four n≤1 fragments never reach the small-n floor, so nothing duplicate-labeled is ever written even before the
+new invariant runs. ⚠️ **These absolute counts (58/48/7) do not match the prompt's stated targets (75/78/6) or
+the original addendum's numbers (63+12/68+10/6)** because the rolling 366-day TTM window moves with `today()` —
+every prior measurement in this document was taken on a different calendar day against a different window.
+**The population SHAPE is what was predicted and is now correct**: one band per resolved operator, no
+duplicate-labeled live pair. Traced the one residual same-label fragment
+(`text:fresenius_medical_care`, n=1) to `comp_id: dia_db:14785` — the `dialysis_db` (properties) arm, NOT
+`sf_comp_staging` — a single property whose `operator_id` has never resolved (the documented ~20% ID2a
+coverage gap this file already named as out of scope). This is the SAME accepted fallback class the pre-existing
+test suite protects (`test/id2b-caps-operator-id-bands.test.mjs`, "a raw-text alias is never retired if OTHER,
+unresolved rows still need it") — not a re-emergence of the SF-staging defect, and it self-suppresses below the
+floor regardless.
+
+**Duplicate-label invariant, shipped in `planOperatorCapRateBands()`.** Scoped deliberately to **id-keyed
+groups only** — two DIFFERENT resolved `operator_id`s rendering under one canonical label (a registry defect:
+two operator rows nobody merged, or a resolution bug minting two ids for one operator) — and explicitly NOT
+applied to an id-keyed group sharing a label with a text-keyed (unresolved) fallback group, which is the
+documented, tested, intentional ID2a coverage-gap behaviour above. A blanket "no two live facts may ever share
+a label" rule was considered and rejected: it would have broken that exact accepted fallback and the existing
+test asserting it. On a genuine collision the guard logs loudly (`console.error`, named reason), keeps the
+larger-`n` band, and routes the loser through the SAME `retireStaleFact()` supersede mechanism the raw-text
+aliases already use (`status='superseded'`, never a second live fact, never a silent drop) — verified with a
+constructed fixture (two operator_ids, same canonical label) since no live instance of this specific defect
+exists in the registry today; the invariant exists to make the CLASS structurally impossible, not to describe
+a currently-open one.
+
+**Tests:** `test/id2bcaps2-sf-operator-resolution.test.mjs` (13 tests) — SF-arm resolution fixtures (merge,
+DaVita spelling, unresolvable-tenant fallback), the duplicate-label invariant (collision, no-op on genuinely
+different labels, exemption for the coverage-gap fallback), source-level regression checks (sale/listing arms'
+operator resolution untouched — exactly 2 occurrences of the pre-existing resolve pattern; the SF arm's old
+`null::bigint` literal is gone; `mcp/comps-tools.js` reads none of the `operator_id` fields), and the migration
+shape (fill-blanks trigger never raises inside its own function body — the migration's unrelated startup guard
+DOES raise on a wrong-DB target, scoped out of that assertion; review-lane de-dup; dry-run-default backfill).
+Full suite: **6,057 pass / 0 fail / 6 skipped** (up from 6,044 — exactly the 13 new tests).
+
+**Not done, deliberately:** `MARKET_BRIEF_PSQL` was not flipped (MB-b's call); no change to comp
+SELECTION/scoring, the registry merge machinery, or any alias-table write path beyond the one new alias-lookup
+consumer (`sf_comp_staging`'s trigger/backfill call the EXISTING resolver, they do not add rows to
+`dia_operator_aliases`); no gov work; the 6 unresolvable `sf_comp_staging` tenants sit in
+`dia_operator_write_review` exactly like any other unresolved operator string — resolve them via
+`dia_id2a_resolve_review(review_id, operator_id)` the same way any other review row is resolved.

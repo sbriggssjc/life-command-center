@@ -331,3 +331,37 @@ select * from public.lcc_feed_freshness_sync_status;
 **Reverse** with the runbook at the foot of the LCC migration (both functions restored from the R56
 bodies, the single finalize schedule re-registered, the additive tables optionally dropped), and the
 dia grant with the `REVOKE`/`GRANT` pair in its own header.
+
+---
+
+## 11. HP1-P1d (2026-09-12) — the sharpest real instance of this whole doctrine
+
+Everything §1–§10 argues in the abstract (a monitor that goes green over its own blindness; a
+registry shape that cannot express a filtered assertion; "assert on the state delta, never the
+worker's tally") happened again, on a different table, in the most legible form yet.
+
+`feed_freshness_registry`'s `salesforce_sync` row watches `sf_sync_log` — a real, live, correctly-
+green Salesforce pipe (`object_intake`/`crawl_run` activity). It has **never** had anything to do
+with the Salesforce **opportunity** feed into `bd_opportunities`, which 502'd on every write for 36
+days under an HTTP 200 (HP1-P1a). So the registry answered *"is the Salesforce feed healthy?"*
+with a confident, correct-for-what-it-watches **yes**, every day, throughout the entire outage —
+this doc's own §1 finding ("a monitor that goes quiet at the moment it goes blind") one level
+sharper: this monitor never even went quiet. It was never watching that pipe to begin with, and its
+name was the only thing suggesting it did.
+
+The registry's `(src_table, ts_column)` shape is exactly the limitation §1's `lcc_check_bd_sync_freshness`
+precedent was built to route around for the BD mirror — and `bd_opportunities` needed the same
+routing, for the same reason: it has **two producers** (the SF sync + an LCC-side `priority_queue`
+writer, HP1-P1a-nullsf, left open), so a bare `max(last_synced_at)` or a table-keyed registry row
+would go green on the second producer's writes over a dead first one. Fixed the same way this file's
+own §1 machinery already handles it — a dedicated check function
+(`lcc_check_sf_opportunity_freshness`, migration `20261101180000`) with a hand-written filtered
+predicate, wired into the same `lcc_health_alerts` surface — rather than stretching the registry to
+cover a shape it cannot express.
+
+**The durable addition to this file's own doctrine:** a feed name is not evidence of what a
+monitoring row actually reads. Before trusting (or reusing) any `feed_freshness_registry` row,
+read its `src_table`/`ts_column`, not its `feed_name` — the same "grep the symbol, not the file"
+discipline this repo states elsewhere, applied to a monitoring registry rather than an import.
+
+Full writeup: STATUS.md 2026-09-12 ("HP1-P1d SHIPPED"); backlog row HP1-P1d.
