@@ -1,5 +1,50 @@
 # Claude Code queue — STATUS
 
+## 2026-09-12 — Resumed the ownership→developer→contact lane (this thread's actual prior work): D1a' closed as a measured dead end, PR-scanner-3 sized live
+
+Scott flagged that recent identity-class-sprint work in this thread had drifted from what it was
+actually working before: the ownership-history → developer-chain → contact-connectivity audit
+(`ownership-history-lane.md`, `connectivity-and-open-threads.md`, `public-records-source-lane.md`,
+last touched here on 2026-09-11 when `B1b` graded `trace_ownership_to_developer` and declined to lift
+its floor). Picked that back up, re-read the audit trail, and looked for the next biggest gap.
+
+**D1a' (buyer/seller sale-role contacts never persisted) — CLOSED AS A MEASURED DEAD END.** Re-queried
+both domains live: still zero `buyer`/`seller` rows in `contacts` on either side (dia 56 sale-linked
+rows, gov 1,363, all broker roles). But this time read the code, not just the data:
+`persistSaleContacts`'s `roleMap` already supports `buyer`/`seller` — this was never a missing-role
+bug. The CoStar extractor that feeds it (`extension/content/costar.js:3310`/`3320`) never captures
+phone/email/address/website for those two roles, only for brokers — `contacts.push({ role: 'seller'|
+'buyer', name: next, type: 'entity' })`, name only. The `hasPii` gate at persist therefore rejects
+every buyer/seller candidate by construction, forever. **The ceiling on this avenue is a proven,
+permanent zero, not an unsized fraction** — the row is closed, not because it doesn't matter, but
+because this specific path cannot ever produce it. The bare name is already captured correctly
+elsewhere (`sales_transactions.buyer`/`buyer_name`) and flows into ownership history via B5/A2.
+
+**PR-scanner-3 (`county_records_needed`, the sixth ownership-history-lane action) — SIZED LIVE,
+UNBLOCKING research-workbench.md §7b's three open items.** That row had been sized but explicitly not
+built 2026-09-10 for lack of DB access in that session. This session has it. Measured: of gov's 68
+currently `human_actionable` blocked ownership-chain tasks (`mismatch`/`all_guarded`), joined against
+gov's own `parcel_records`/`tax_records`/`deed_records` (excluding the `ai_gpt4o_presumed` model leg —
+real sources only), **27 of 68 (40%) carry no trustworthy public record on file at all.** Real, sizable,
+correctly distinct from the identity-blocked residue in `v_lcc_ownership_chain_apply_blocked`.
+
+**Also confirmed live, the same session — a genuine adoption-gap finding worth carrying forward:**
+`PR-scanner-1`/`-2`'s shipped writers (`assessor_sidebar_manual`/`recorder_sidebar_manual`/
+`llc_member`/`llc_manager`) have **zero rows on either domain**, nine days after shipping. The capture
+path works; nobody has exercised it, because there has never been a ranked "go scan this property
+next" signal — which is exactly what `PR-scanner-3` would supply. This reframes `PR-scanner-3` from a
+nice-to-have ranking feature into the missing piece that would give the already-built scanner a reason
+to get used at all.
+
+**Build prompt drafted:** `docs/claude-code/prompts/PR-scanner-3-county-records-needed-action.md`.
+Docs updated in the same change: `PLANNED-BACKLOG.md` (`D1a'` closed, `PR-scanner-3` re-graded 🔴→🟡
+with the measurement), `research-workbench.md` (new §7c). **Next:** send the PR-scanner-3 prompt to
+Claude Code, or continue this same audit trail for the next-biggest gap after it (candidates surfaced
+but not yet sized: `B2` — ~3,468 gov properties whose `true_owner` never reached the entity graph,
+locked behind a measure-why-first gate; `B6h` — the `parcel_owner_xref` corroboration engine's
+divergences have no consumer).
+
+
 ## 2026-09-12 — ID3a-c reconciled: agency class closed (live-verified), and a repo-ownership hazard found — gov DB now owned by `government-lease`
 
 Filed `responses/ID3a-c desktop response.docx` → `done/`; prompt → `prompts/done/`. **Verified live (Cowork, read-only):**
