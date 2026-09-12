@@ -1,3 +1,58 @@
+# Claude Code queue — STATUS
+
+<!-- ============================================================================
+     CONVENTION — READ BEFORE PREPENDING AN ENTRY.
+     This file is newest-first. New entries go DIRECTLY BELOW this block, never
+     above it. The `# Claude Code queue — STATUS` H1 above must remain line 1.
+     On 2026-09-12 four separate sessions prepended above the H1, burying it at
+     lines 57, 83, 212 and 25 and leaving duplicate H1s mid-file. If you find a
+     `# Claude Code queue — STATUS` line anywhere but line 1, it is a burial:
+     delete it, do not add another.
+     Line budget: 2,500 (test/status-line-budget.test.mjs). When you approach it,
+     move the OLDEST contiguous span verbatim to docs/history/ and extend the
+     archive pointer — never reword or drop an entry to make room.
+     ============================================================================ -->
+
+## 2026-09-12 — HP1-P1d reconciled: monitor verified independently, my own row arithmetic corrected, two SF ghosts found (Cowork)
+
+PR #2383 merged. Response and prompt filed to `done/`. **CC's work holds up under independent measurement** — re-ran
+the gate from this side rather than reading the report:
+
+- `lcc_check_sf_opportunity_freshness(p_stale_hours DEFAULT 3)` **exists live**; cron
+  `lcc-sf-opportunity-freshness-check` is **active, hourly at :20**, 1 run, succeeded.
+- **Live now → green:** `{stale:false, age_hours:0.2, sf_linked_rows:612, max_last_synced_at:13:30:44Z}`.
+- ✅ **The B6a trap test passes — the one that mattered.** In a rolled-back transaction, back-dating every SF-linked
+  `last_synced_at` by 30 days **and** writing `now()` to the non-SF rows still returns
+  `{stale:true, age_hours:720.2, alerts_opened:1}`. The assertion is genuinely producer-scoped, not table-keyed in
+  disguise. CC chose `producer_runs` over a `feed_freshness_registry` row for exactly that reason, and made
+  `ingestBatch` write its run row on a **3-arg** `opsQuery` call so the P1a-fix Prefer-mangling class cannot recur.
+- CC's disclosed limitation — the historical replay fires on **13 of 16** checkpoints, the 3 misses being windows
+  where fresh INSERTs briefly kept a MAX-based predicate clean while UPDATEs were 100% broken — is real and **is
+  already written into `PLANNED-BACKLOG.md` and `STATUS.md`**, not left in the response. Checked, because a disclosed
+  limitation that lives only in a chat transcript is an undisclosed one.
+
+⚠️ **My own arithmetic was wrong and is corrected in place.** I wrote *"619 rows against the feed's 608 — 11 rows a
+second producer mints"* into the prompt, the backlog and CURRENT-STATE. The real split is **612 SF-linked / 7
+non-SF**. The 7 are the second producer (all `last_synced_at IS NULL`, `metadata->>'source'='priority_queue'`) — CC
+measured this correctly and I did not. P1d's conclusion is unchanged; the number behind it was mine and it was sloppy.
+
+🚨 **The 612-vs-608 gap turned out to be a real finding — filed as HP1-P1a-orphan.** Two rows carry an `sf_opp_id`,
+are **still open at `stage='qualified_lead'`**, and the feed **stopped sending them**:
+
+- **`Action Behavior Centers — Duncanville — TX`** (`006Vs00000fQ1nFIAS`), last synced **2026-08-04**. A *second, live*
+  Duncanville opportunity correctly moved `loi_executed → in_escrow` on the first good run — so this is a
+  **superseded duplicate** stranded at a stage that has been false for five weeks.
+- **`Test Property SN 05032024`** (`006Vs00000gT8mnIAC`), last synced **2026-08-20** — a **Salesforce test record**
+  sitting in the production deal backbone as an open deal.
+
+**Both render in the Important lane right now.** This is Scott's original *"My Work is well behind where the actual
+status of each deal is"* complaint — still live after P1a-fix, because fixing the feed fixes rows the feed *sends*
+and says nothing about rows it has **stopped** sending. ⚠️ **Do not just delete them:** on a full-refresh feed,
+"absent from the payload" is indistinguishable from "deleted in Salesforce", so the rule comes first (mark
+`sf_absent` after N consecutive full payloads — surfaced, never silently dropped), and test records should be excluded
+at ingest. 👤 Cheaper first move: confirm in Salesforce whether the Duncanville duplicate and the test record should
+simply be deleted there.
+
 ## 2026-09-12 — CONSOLIDATE2's first flagged contradiction resolved: the stale "FINAL STATE" box defused (Cowork)
 
 Continuing the doc-consolidation work after CONSOLIDATE2 (round 2) flagged three canonical-doc
@@ -125,7 +180,6 @@ all), a real build decision, not a measurement.** Docs updated: `PLANNED-BACKLOG
 re-measured with the live numbers and the DOC3/DOC6 link made explicit; DOC2 left as-is).
 
 ## 2026-09-12 — HP1-P1a-fix reconciled: code is merged, but live production is NOT confirmed running it (Cowork)
-# Claude Code queue — STATUS
 
 ## 2026-09-12 ✅ — HP1-P1d SHIPPED: the SF opportunity feed now has a real freshness assertion (Claude Code)
 
