@@ -17,11 +17,12 @@
 
 ## 2026-09-12 ASC frozen-50 review boundary
 
-**Local, not yet live:** a reviewer-guidance pass now renders capture evidence as readable cards while retaining
-raw JSON in a collapsed audit view, defines every scorecard field, makes the authenticated identity continuously
-visible, presents existing primary/second-review state, explains the governed `Unknown`/`Unresolved` path, and
-shows validation blockers before save. It changes no review contract, API, migration, or candidate data. Do not
-credit this UX as deployed until its PR merges and Railway serves the resulting revision.
+**Live and deployment-verified:** PR #2384 merged as `3f60666055892616648b2348f952d1d53fbefd42` and
+Railway `/version` reported the pinned revision `3f6066605589` on 2026-09-12; `/asc-review.html` returned HTTP
+200. The reviewer-guidance layer renders capture evidence as readable cards while retaining raw JSON in a
+collapsed audit view, defines every scorecard field, keeps the authenticated identity continuously visible,
+presents existing primary/second-review state, explains the governed `Unknown`/`Unresolved` path, and shows
+validation blockers before save. It changed no review contract, API, migration, or candidate data.
 
 The ASC source-collection pass is complete (50/50 resolved; 44 licensed-source captures and six governed
 source exceptions), but commercial review is not. A governed workbench is implemented at `/asc-review.html`
@@ -34,8 +35,9 @@ outreach, production opportunities, or IDTF activation. PR #2355 merged as `9829
 the migration is applied, Railway reports that exact pinned revision, `/asc-review.html` returns 200, and the
 unauthenticated review API fails closed with JSON 401. Post-migration read-only verification remains **0/50
 primary** and **0/22 initially required second reviews** (50 candidates: 44 captured, 6 reviewed exceptions;
-6 existing exception rows, all requiring second review). After the pending UX publication is verified, the next
-action is human review, not another data or workflow build.
+6 existing exception rows, all requiring second review). Those counts are the last database-verified baseline,
+not a claim about work completed after the deployment. The next action is human review, not another data or
+workflow build.
 See the capture checkpoint and `PLANNED-BACKLOG.md` ASC50-R1–R3.
 
 ## 1. Runtime truth — where the app actually runs

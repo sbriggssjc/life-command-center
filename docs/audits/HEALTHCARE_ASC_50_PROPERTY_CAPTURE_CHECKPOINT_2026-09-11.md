@@ -130,3 +130,12 @@ remain 4 `licensed_sources_not_found`, 1 `parcel_owner_evidence_only`, and 1
 `parcel_situs_evidence_only`. Railway reports the merge revision, the workbench returns HTTP 200, and its
 unauthenticated API returns JSON 401. This closes the tooling/deployment prerequisite only; ASC50-R1 is now the
 active human gate and no review conclusion is implied.
+
+## Reviewer-guidance deployment verification — 2026-09-12
+
+PR #2384 merged as `3f60666055892616648b2348f952d1d53fbefd42` with exactly eight files; the previously
+considered `docs/claude-code/STATUS.md` and `docs/os/PLANNED-BACKLOG.md` changes were explicitly excluded.
+Both required checks passed before merge. Railway `/version` subsequently returned the pinned revision
+`3f6066605589`, and `/asc-review.html` returned HTTP 200. This verification covers publication and deployment
+only. It performed no database mutation and did not re-measure the 0/50 primary or 0/22 initially required
+second-review baseline recorded above.

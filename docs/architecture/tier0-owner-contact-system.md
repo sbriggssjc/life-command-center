@@ -6,7 +6,9 @@
 > the traps already paid for.
 >
 > **Nothing here replaces the per-round audits — they are the evidence and they stay.** This page
-> tells you which one to open. Last measured **2026-08-27 22:25 UTC**.
+> tells you which one to open. Last measured **2026-08-27 22:25 UTC**; §2's headline numbers
+> re-measured live and §5/§6 corrected **2026-09-12 (Cowork)** — a real bug was found keeping
+> `TIER0_AUTO_ATTACH` silently off for 16 days despite the registry saying `on`.
 >
 > 📇 **Topic index for the whole ownership→contact chain (~20 files, and two that are named
 > misleadingly): [`connectivity-and-open-threads.md`](connectivity-and-open-threads.md) §0.**
@@ -33,13 +35,13 @@ separate, standing decision** (`account-based-contact-intelligence.md`).
 
 | | |
 |---|---|
-| candidate pairs | **684** |
-| lane cards shown to the operator | **91** (ask 82 + auto 9) |
-| parked, not shown | **141** — +4 are Montecito Medical, newly visible after N19 consolidated its rent onto the entity carrying its candidates |
-| human attaches recorded | **27** |
-| owner merges logged (all reversible) | **66** |
-| `tier0_auto` writes | **0** — see §6, this is a pending verification, not a failure |
-| curated sponsor entries | **8** |
+| candidate pairs | **758** (was 684 on 08-27) — re-measured live 2026-09-12 |
+| lane cards shown to the operator | **83** (215 candidates), was 91 (ask 82 + auto 9) on 08-27 |
+| parked, not shown | 141 as of 08-27 — not re-measured this pass |
+| human attaches recorded | **27 — UNCHANGED since 08-27**, the tell that auto-attach never wrote anything |
+| owner merges logged (all reversible) | **176** (was 66 on 08-27) — real growth, unrelated to auto-attach |
+| `tier0_auto` writes | **0 — CONFIRMED A REAL BUG, not a pending verification** (see §5 trap 14 / §6) |
+| curated sponsor entries | 8 as of 08-27 — not re-measured this pass |
 | `TIER0_AUTO_ATTACH` | ✅ **`on` since 2026-08-28.** ⚠️ **THE GATE IS THE `feature_flags_registry` TABLE, NOT A RAILWAY ENV VAR** — `tier0-auto-attach-tick.js:208` calls `flagEnabled(await fetchFeatureFlag(FLAG))`. Setting the env var on 08-27 had **no effect**: cron 241 logged `flag_enabled=false, planned=9, attached=0` on both 08-27 and 08-28 |
 | merge-detector blind groups remaining | **64** (176 entities) |
 | `canonical_name` drift / invisible to `ensureEntityLink` | **0 / 0** — N15c+N15e complete, all 62,368 keyed |
@@ -121,18 +123,38 @@ cron **241 at 06:55 UTC**. The GET is an ungated dry run and writes nothing.
 12. **`lcc_name_has_spe_marker` is named backwards** — it detects a PORTFOLIO/sponsor marker
     and returns **FALSE for every name containing the literal string "SPE"**. Read the
     function, never its name. *(P198)*
+14. **⚠️ A shared helper's signature drifted at exactly one call site, and nobody wrote a guard
+    for it.** `flagEnabled(envName, flagRow)` takes TWO arguments; `tier0-auto-attach-tick.js:208`
+    called `flagEnabled(await fetchFeatureFlag(FLAG))` — ONE. The fetch result landed in the
+    `envName` slot (`process.env[rowObject]` never matches an ON/OFF string) and `flagRow` was
+    `undefined`, so the function fell through to its own hardcoded `false` on every call —
+    **regardless of what `feature_flags_registry.state` said.** Confirmed live 2026-09-12: the
+    tick's own run log shows `flag_enabled=false, skipped_reason='flag_off'` on **all 17 runs from
+    2026-08-27 through 2026-09-12**, even though the registry has read `state='on'` since
+    2026-08-28 21:51 UTC. Every OTHER caller of `flagEnabled` in this repo (7 of them) passes both
+    arguments correctly — this was the one drifted copy. **Fixed 2026-09-12 (Cowork):** the call
+    now reads `flagEnabled(FLAG, await fetchFeatureFlag(FLAG))`, matching every sibling tick;
+    guard `test/tier0-auto-attach-flag-arity.test.mjs` source-checks the call shape so this exact
+    drift can't silently reappear. *(Cowork, 2026-09-12)*
 
 ## 6. Open — and what is merely PENDING vs genuinely open
 
-**⏳ Pending verification, not failure:**
+**✅ Actually resolved 2026-09-12 (was wrongly marked resolved on 2026-08-28):**
 - ~~**`TIER0_AUTO_ATTACH`** … registry flips to `on` only after a tick reports `writes > 0`.~~
-  ⚠️ **RESOLVED 2026-08-28 — and that policy was a DEADLOCK I wrote.** The handler gates on the
-  **`feature_flags_registry` table** (`fetchFeatureFlag`), not the Railway env var Scott set, so
-  *"flip the registry only after a tick writes"* could never be satisfied: **the registry IS the
-  gate.** Two runs proved it — 08-27 and 08-28 both logged **`flag_enabled=false`,
-  `auto_candidates=9`, `planned=9`, `attached=0`**. The tick found and planned every card and was
-  refused by the flag. **Registry flipped to `on` 2026-08-28; the next 06:55 run is the real test**
-  (expect `active_source='tier0_auto'` 0 → 9).
+  The 2026-08-28 entry below this line correctly diagnosed the DEADLOCK (registry IS the gate,
+  not the Railway env var) and flipped the registry `on` — **but the "next 06:55 run is the real
+  test" verification was never actually done.** It stayed broken for a SECOND, different reason:
+  see §5 trap 14 — a call-site arity bug meant the tick could never see the registry as `on` no
+  matter what the row said. **Both bugs are now fixed** (registry flip 08-28 + call-site fix
+  09-12); the next 06:55 UTC run is the real test this time (expect `attached` > 0, not just
+  `planned`).
+  **2026-08-28 entry, kept verbatim for the record:** *"RESOLVED 2026-08-28 — and that policy was
+  a DEADLOCK I wrote. The handler gates on the `feature_flags_registry` table (`fetchFeatureFlag`),
+  not the Railway env var Scott set, so 'flip the registry only after a tick writes' could never be
+  satisfied: the registry IS the gate. Two runs proved it — 08-27 and 08-28 both logged
+  `flag_enabled=false`, `auto_candidates=9`, `planned=9`, `attached=0`. The tick found and planned
+  every card and was refused by the flag. Registry flipped to `on` 2026-08-28; the next 06:55 run
+  is the real test (expect `active_source='tier0_auto'` 0 → 9)."*
   **Durable lesson: a green cron proves the POST, not the write — read the handler's OWN run log**
   (`lcc_tier0_auto_attach_run_log`), because `net._http_response` prunes to ~6 hours and
   `cron.job_run_details` only ever says the POST succeeded.
