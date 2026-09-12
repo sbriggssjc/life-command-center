@@ -1,3 +1,56 @@
+# Claude Code queue — STATUS
+
+## 2026-09-12 — HP1-P1a CORRECTED: the opportunity feed never STOPPED — its upsert has never UPDATED a row, since the day it was built
+
+Six hours ago I filed *"the feed ran once and stopped."* **That was wrong in a way that understated
+it.** The flow is healthy and delivers **608 records every 30 minutes**. What has never worked is the
+WRITE. Prompt filed: `prompts/HP1-P1a-fix-opportunity-upsert-never-updated.md`.
+
+**Measured end to end, 2026-09-12 06:00 UTC.** PA run **Succeeded**; `Get records` → **608 rows**;
+POST `/api/pipeline/ingest-opportunities` → **HTTP 200**; body
+`{"ok":true,"total":608,"succeeded":0,"failed":608}`, every `errors[].error` = `upsert_failed` /
+`status 502`. Postgres logs at `06:00:43`–`44Z`, **608 times**:
+`duplicate key value violates unique constraint "bd_opportunities_workspace_id_sf_opp_id_key"`.
+**PostgREST is running a plain INSERT — `Prefer: resolution=merge-duplicates` never takes effect.**
+
+**Ruled out live, do not re-walk:** the constraint exists and is a plain two-column btree (so NOT the
+documented partial/expression-index case); **direct SQL `ON CONFLICT … DO UPDATE` succeeds** (probed in
+a rolled-back transaction); the upsert call is unchanged since `83cd873f` (2026-07-27) and the
+constraint since 2026-05, so **nothing regressed**; `deal_name`/`property_address` were added 07-28 and
+wrote fine on 08-03, so not a stale PostgREST schema cache; and a duplicate-key error proves the INSERT
+reached the table, so not auth and not RLS.
+
+**Why 2026-08-03 looked like a start date: it is the day the table was POPULATED.** Empty table → 590
+inserts, no conflicts; 15 more on 08-04. Every run since collides. The only writes that have landed are
+**5 brand-new `sf_opp_id`s**, and **all five have `created_at == last_synced_at` to the second — all
+five are INSERTs. Zero UPDATEs have ever succeeded on this path.**
+
+🚨 **So no stage change and no close has EVER propagated from Salesforce into LCC.** The backbone learns
+a deal at creation and is frozen at that instant permanently. **This is the single root cause under all
+of HP1 Finding 2** — the 22 open deals past their close date (ECU Physicians MOB **746 days**, ATEK
+Brainerd 683, GSA-MSHA Oakwood 515), the frozen stages, 57 of 66 overdue `action_items`, the My Work
+graveyard. Not task hygiene. Not Salesforce hygiene. One unexecuted `ON CONFLICT`.
+⚠️ **`closed_at` on all 569 closed rows is the Aug 3/4 insert timestamp, not the real close date** —
+never captured, not recoverable from LCC.
+
+⚠️ **And the reason six weeks of 100% failure was invisible from BOTH ends:** `ingestBatch` ends
+`return res.status(200).json({ ok: true, ...summary })` **unconditionally**. It answered **`ok: true`
+with `failed: 608`**. Power Automate reads the status code, sees 200, reports Succeeded — while
+`summary.errors[]` carried the truth nobody was reading. **A batch endpoint that cannot fail its caller
+is not instrumented, whatever its summary says.** Unit 3 of the fix.
+
+**Method note worth keeping.** Three successive readings of this feed were wrong, each from reading a
+convenient column instead of the honest one: `max(updated_at)` said the pipe was alive (LCC-side writers
+move it); `last_synced_at`'s history said it stopped (only INSERTs ever stamped it); the truth needed
+`created_at == last_synced_at` to prove no row had ever been UPDATED. **Each reading was plausible, and
+only the one that could distinguish an insert from an update was decisive.**
+
+**Next:** `HP1-P1a-fix` — RPC-first write (the repo's own standing conclusion about PostgREST's write
+surface), a non-2xx on a fully-failed batch, and `closed_at` preservation. **Verify on
+`UPDATED_not_inserted` in the hour after a run — a number that has been 0 for this feed's entire life —
+never on a 200.** ⚠️ Snapshot `bd_opportunities` first: 608 rows and six weeks of stage drift land in
+one batch, and a large `deal_next_step` auto-retire follows.
+
 ## 2026-09-12 — Sized the 40-property residual from B2: a small, named slice of C2g (Cowork)
 
 Continuing after B2's retirement, sized the 40-property residual flagged there (gov properties with a
@@ -53,8 +106,6 @@ look on its own rather than folding into the T2b decision.
 
 **No build taken** — T2b remains explicitly Scott's call, and this session did not override that.
 Docs updated: `PLANNED-BACKLOG.md` (`B2` row retired/redirected to `C2e-T2b`).
-
-# Claude Code queue — STATUS
 
 ## 2026-09-12 — HP1-P1a ANSWERED read-only: it is NOT a Salesforce hygiene gap. The opportunity feed has written 5 rows in 36 days.
 
