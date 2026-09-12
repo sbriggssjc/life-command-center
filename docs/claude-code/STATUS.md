@@ -1,5 +1,39 @@
 # Claude Code queue — STATUS
 
+## 2026-09-11 -- RO5 sized: joined the 761 gov disputes to the reconciled store; Scott decided RO3
+
+Scott answered the RO3 design question directly: repoint `resolve_ownership` at the reconciled
+store (merge into OWN-T0's conflict lane), not build it as a separate door. Before touching a live
+financial-write lane, did RO5's sizing first -- read the full current `resolve_ownership` GET/apply
+contract in `api/admin.js` (GET ~line 8757, apply ~line 12386), then pulled `v_ownership_resolution`'s
+761 genuine-dispute gov properties from the gov project and `v_lcc_property_ownership_reconciled`'s
+gov-domain current/primary rows (9,717 properties) from LCC Opps, and joined them locally in Python
+(cross-project SQL join isn't possible -- separate Postgres instances).
+
+Result: 742 of 761 (97.5%) disputed properties are present in the reconciled store; 19 absent
+(mostly person-name-format mismatches, e.g. `LIDDELL ANDY` / `Andy Liddell`). Of the 742 present:
+169 (23%) match the lane's `proposed_owner_name`, 198 (26%) match only `current_recorded_owner_name`
+(reconciled store rejected the lane's proposal), 253 (33%) match only `true_owner_name` (reconciled
+store already agrees with gov's own true-owner field), and 122 (16%) are hard disagreements where
+the reconciled store's primary owner matches none of the lane's three names -- 88 of those still
+carry the reconciled store's own `conflict_class` (mostly `unclassified_rival`, largely the Boyd
+Watterson/Easterly/Gardner Tanenbaum sponsor-family SPE shapes OWN-T0e already handles), 57 are
+`is_domain_true_owner=true` (high confidence) vs 65 not.
+
+This means repointing the lane isn't a narrow fix: the reconciled store's gov `conflict` population
+is 1,752 properties today, not 761 -- a larger, different population (it carries lessor/
+relationship-graph disagreements the deed-only lane never saw, and drops the 253 that already agree
+with true_owner). Documented the migration scope in RO3's row rather than writing code: the four
+write-verdict paths (`keep`/`update_owner`/`confirm_sale`/`research`) call real gov RPCs behind
+existing guards (`DECISION_GOV_WRITEBACK`, $50k floor) and should be preserved as-is; only the
+source population/context query needs repointing, with a field mapping from the reconciled store's
+ranked-candidate shape onto the card's recorded/proposed/true-owner fields (not a 1:1 rename).
+Recommended a written field-mapping design before any code change, given this lane's live write
+actions.
+
+Updated `docs/os/PLANNED-BACKLOG.md`'s RO5 row (closed, sized) and RO3 row (decision recorded,
+migration scope documented, not built).
+
 ## 2026-09-11 -- RO4 root-caused: the missing deed dates are genuinely unknown, not lost
 
 Picked up RO4 next (why 391 of 598 deed-arm properties carry no `latest_deed_date`, and whether
