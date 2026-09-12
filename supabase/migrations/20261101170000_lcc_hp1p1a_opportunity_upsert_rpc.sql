@@ -40,6 +40,13 @@
 -- Reverse a stage/close-date regression by comparing against
 -- `_hp1_p1a_bd_opportunities_pre_fix_backup` (never auto-restored — read,
 -- diff, and hand-repair any row that regressed).
+-- 
+-- ⚠️ SUPERSEDED IN PART by 20261101170100_..._fix_out_param_ambiguity.sql.
+-- The function below declares OUT params `sf_opp_id` and `entity_id`, which
+-- collide with columns of the same name and raise 42702 at RUNTIME (a plpgsql
+-- body is not parsed at CREATE time). This migration applies cleanly and the
+-- function then fails on every call. The next migration drops and recreates it.
+-- Do not copy this function definition forward.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS public._hp1_p1a_bd_opportunities_pre_fix_backup AS
