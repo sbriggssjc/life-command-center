@@ -62,6 +62,41 @@ review-lane rows (`gov_owner_merge_review_log`); Stage 3's remaining `OWN-T0b/c/
 `duplicate_entity` merges) and Stage 4's contact-linkage gaps are the next candidates in this pipeline,
 not yet started.
 
+## 2026-09-12 — HP1-P2f-urgent: `contact_writeback` moved off Today's Urgent lane, not hidden (Claude Code)
+
+**Shipped.** Urgent's ranked union (`buildUrgentSection`, `api/_shared/today-sections.js`) no longer
+admits `v_lcc_bd_worklist`'s `contact_writeback` rows — CRM plumbing (push an already-resolved contact
+to Salesforce), measured at 96% of the lane's HP1-badge population against 66 real `action_items` of
+deal correspondence. `owner_source_conflict` and `action_items` are untouched. `getTodaySections`
+(`api/operations.js`) drops the signal from `urgentTrueCount`'s sum (now three producers, not four) and
+threads the SAME exact `v_lcc_bd_worklist` count probe it already ran into a new `urgent.pointer` field
+— `{source_type, count, label, surface}`, `null` (never `0`, P180) on a failed probe — mirroring
+HP1-P2a's `inboxHygienePointer`. `app.js::_renderUrgentHygienePointer` renders it as a persistent row
+below Urgent's items, linking to `renderBdWorklist('contact_writeback')` — the BD worklist's own
+pre-existing "Push to CRM" chip (`ops.js:3785/3803`) and handler (`api/_handlers/contact-writeback.js`),
+**neither of which was touched** — the destination was reachable before this change and is reachable
+identically after it.
+
+**Live population, re-measured via Supabase MCP at ship time** (`select count(*) from
+v_lcc_bd_worklist where signal_type='contact_writeback'`): **1,603** — it moves (1,664 → 1,730 → 1,669
+→ 1,603 across four reads inside one day; quoted at read time, never a stale prior figure).
+
+**Gate:** (1) `test/uxt1a-today.test.mjs` proves `contact_writeback` rows never reach `items` or
+`total_open` regardless of `rank_value`, that `pointer` carries a distinct true count, `null` when
+unsupplied, and a genuine `0` (never conflated with "unknown"); (2) `test/hp1-badge-today-total-open.test.mjs`
+proves the handler sums only the three remaining producers into `total_open` (excluding the stubbed
+1,598 contact_writeback rows) and passes that same 1,598 through as `pointer.count`; (3) a failed
+count-probe path (existing coverage) still renders `null`, never `0`; (4) Significant/Important and
+their `total_open` are byte-identical — untouched code paths. Full suite: **6,167 pass / 0 fail / 6
+skipped.**
+
+⚠️ **Not yet observed end-to-end on the deployed app.** `main` is protected (branch → PR → CI green →
+merge → Railway redeploy); this sandbox has Supabase MCP access (used for the population read above)
+but no route to the live Railway app. The DB-side count and the pure-function/handler-test behaviour
+are verified; the rendered Today page is confirmed only after the next redeploy.
+
+**Docs:** `PLANNED-BACKLOG.md` (`HP1-P2f-urgent` → ✅), `CURRENT-STATE.md` (new HP1-P2f-urgent row + the
+BD-ranking paragraph's stale "filed, not routed off yet" corrected).
 
 ## 2026-09-12 — FEED1 landed; reconciling it found the feed monitor itself was broken (Cowork)
 

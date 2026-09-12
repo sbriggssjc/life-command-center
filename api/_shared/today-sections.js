@@ -124,26 +124,35 @@ export function buildImportantSection(bdOppRows, entityById = new Map(), opts = 
 }
 
 /**
- * URGENT — pipeline management, deal correspondence (~90 days). Two named
- * producers, merged and ranked together:
+ * URGENT — pipeline management, deal correspondence (~90 days). One named
+ * producer feeds actual deal work here:
  *   1. `action_items` open/in_progress rows tied to a deal (deal_next_step,
  *      reply_overdue, review_response, seller_follow_up, send_info,
  *      schedule_call, follow_up, advance_to_contract, offer_review) — the deal
  *      CORRESPONDENCE half.
- *   2. `v_lcc_bd_worklist`'s `contact_writeback` + the domain
- *      `owner_source_conflict` (auto_fixable) rows — the pipeline-HYGIENE half
- *      named explicitly by the prompt. `loan_maturity` and `ownership_chain`
- *      are deliberately EXCLUDED here: loan_maturity's own ≤24-month window does
- *      not express the canon's ~90-day Urgent boundary (no sub-slice exists to
- *      test it against), and ownership_chain is now A2's automated apply lane,
- *      not a human task (B1/A2 — its consumer is a cron, not an operator).
+ *   2. the domain `owner_source_conflict` (auto_fixable) rows — a
+ *      data-integrity block on the deal moving, so it stays in Urgent.
+ *
+ * ⚠️ HP1-P2f-urgent (2026-09-12): `v_lcc_bd_worklist`'s `contact_writeback`
+ * rows are CRM plumbing (push an already-resolved contact to Salesforce),
+ * measured at 96% of this lane's pre-fix population — not deal work an
+ * operator has to judge. They are EXCLUDED from the union here and instead
+ * surfaced as `pointer`: excluding is not hiding (P159a) — the pointer
+ * carries the TRUE, uncapped count (never a page length) and a link to the
+ * BD worklist's own `contact_writeback` chip, which already renders a
+ * "Push to CRM" action for every one of them. `loan_maturity` and
+ * `ownership_chain` remain excluded for the reasons already established:
+ * loan_maturity's own ≤24-month window does not express the canon's ~90-day
+ * Urgent boundary (no sub-slice exists to test it against), and
+ * ownership_chain is now A2's automated apply lane, not a human task
+ * (B1/A2 — its consumer is a cron, not an operator).
  *
  * Ranking: an OVERDUE action item (due_date in the past) always outranks a
  * value-only row — that is what "keeps Urgent from crowding out Significant"
  * means operationally: a task actually late beats a task merely valuable. Ties
  * within "overdue" and within "not overdue" break on value.
  */
-export function buildUrgentSection({ actionItems, bdWorklistRows } = {}, entityById = new Map(), opts = {}) {
+export function buildUrgentSection({ actionItems, bdWorklistRows, contactWritebackCount } = {}, entityById = new Map(), opts = {}) {
   const { limit = TODAY_SECTION_LIMIT, today, actionItemsError = null, bdWorklistError = null } = opts;
   const now = today instanceof Date ? today : new Date();
   const todayIso = now.toISOString().slice(0, 10);
@@ -167,24 +176,28 @@ export function buildUrgentSection({ actionItems, bdWorklistRows } = {}, entityB
     };
   });
 
-  const bwRows = (Array.isArray(bdWorklistRows) ? bdWorklistRows : []).map((r) => ({
-    kind: r.signal_type,
-    section: 'urgent',
-    id: null,
-    entity_id: r.entity_id || null,
-    domain: r.domain || null,
-    property_id: r.property_id || null,
-    who: r.who || null,
-    what: r.what || r.signal_type,
-    action_type: r.signal_type,
-    value: money(r.rank_value) || 0,
-    due_date: null,
-    overdue: false,
-    basis: r.signal_type === 'contact_writeback' ? 'push contact to CRM — pipeline hygiene'
-      : r.signal_type === 'owner_source_conflict' ? 'reconcile owner conflict — blocks the deal moving'
-      : (r.signal_type || 'pipeline hygiene'),
-    deep_link: r.deep_link || null,
-  }));
+  // HP1-P2f-urgent: contact_writeback is CRM plumbing, not deal work — it
+  // never enters the ranked union. Every other bd_worklist signal type this
+  // section admits (today: owner_source_conflict) still flows through.
+  const bwRows = (Array.isArray(bdWorklistRows) ? bdWorklistRows : [])
+    .filter((r) => r.signal_type !== 'contact_writeback')
+    .map((r) => ({
+      kind: r.signal_type,
+      section: 'urgent',
+      id: null,
+      entity_id: r.entity_id || null,
+      domain: r.domain || null,
+      property_id: r.property_id || null,
+      who: r.who || null,
+      what: r.what || r.signal_type,
+      action_type: r.signal_type,
+      value: money(r.rank_value) || 0,
+      due_date: null,
+      overdue: false,
+      basis: r.signal_type === 'owner_source_conflict' ? 'reconcile owner conflict — blocks the deal moving'
+        : (r.signal_type || 'pipeline hygiene'),
+      deep_link: r.deep_link || null,
+    }));
 
   const all = [...aiRows, ...bwRows];
   all.sort((a, b) => {
@@ -200,7 +213,24 @@ export function buildUrgentSection({ actionItems, bdWorklistRows } = {}, entityB
     ? `deal correspondence: ${actionItemsError}; pipeline hygiene: ${bdWorklistError}`
     : (actionItemsError ? `deal correspondence: ${actionItemsError}`
       : (bdWorklistError ? `pipeline hygiene: ${bdWorklistError}` : null));
-  return { items, count: items.length, total_open: resolveTotalOpen(opts, all), source_error: urgentSourceError };
+
+  // HP1-P2f-urgent — the excluded contact_writeback population's TRUE count
+  // (an exact, uncapped probe the caller took off v_lcc_bd_worklist directly,
+  // never the page this section itself fetched). `null` means the probe
+  // failed THIS request — render "unknown", never a fabricated 0 (P180).
+  const pointer = Number.isFinite(contactWritebackCount)
+    ? {
+      source_type: 'contact_writeback',
+      count: contactWritebackCount,
+      label: 'Pipeline hygiene — contacts to push to CRM',
+      surface: 'bd_worklist_contact_writeback',
+    }
+    : null;
+
+  return {
+    items, count: items.length, total_open: resolveTotalOpen(opts, all),
+    source_error: urgentSourceError, pointer,
+  };
 }
 
 /**
@@ -219,7 +249,7 @@ export function buildUrgentSection({ actionItems, bdWorklistRows } = {}, entityB
  * string|null describing that source's failure THIS request.
  */
 export function assembleTodaySections({
-  significantRows, bdOppRows, actionItems, bdWorklistRows, entityById,
+  significantRows, bdOppRows, actionItems, bdWorklistRows, entityById, contactWritebackCount,
 } = {}, opts = {}) {
   const em = entityById instanceof Map ? entityById : new Map();
   const se = (opts && opts.sourceErrors) || {};
@@ -241,7 +271,7 @@ export function assembleTodaySections({
 
   const significant = buildSignificantSection(significantRows, withTrueTotal({ ...baseOpts, sourceError: se.significant || null }, 'significant'));
   const important = buildImportantSection(bdOppRows, em, withTrueTotal({ ...baseOpts, sourceError: se.important || null }, 'important'));
-  const urgent = buildUrgentSection({ actionItems, bdWorklistRows }, em, withTrueTotal({
+  const urgent = buildUrgentSection({ actionItems, bdWorklistRows, contactWritebackCount }, em, withTrueTotal({
     ...baseOpts, actionItemsError: se.actionItems || null, bdWorklistError: se.bdWorklist || null,
   }, 'urgent'));
 

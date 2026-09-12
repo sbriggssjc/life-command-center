@@ -76,6 +76,9 @@ describe('HP1-badge — total_open is the true population, never the capped page
     ];
     const bdOppRows = [{ id: 'o1', entity_id: 'ent-1', type: 'buyer', stage: 'Prospecting', amount: 900000 }];
     const aiRows = [{ id: 'ai1', entity_id: 'ent-2', action_type: 'reply_overdue', title: 'Reply overdue', due_date: '2020-01-01', status: 'open' }];
+    // HP1-P2f-urgent: the row fetch still targets v_lcc_bd_worklist filtered
+    // to contact_writeback (its TRUE count still feeds the pointer), but the
+    // rows themselves no longer reach Urgent's ranked union.
     const bwRows = [{ signal_type: 'contact_writeback', entity_id: 'ent-3', what: 'Push contact', rank_value: 999 }];
 
     globalThis.fetch = async (input) => {
@@ -128,16 +131,26 @@ describe('HP1-badge — total_open is the true population, never the capped page
     assert.equal(jsonBody.important.items.length, 1);
     assert.equal(jsonBody.important.total_open, 46, 'important total_open must be the true count, not rows.length (1)');
 
-    // Urgent's true total is the SUM of its four producers (action_items +
-    // contact_writeback + gov conflict + dia conflict): 66 + 1598 + 33 + 33.
-    assert.equal(jsonBody.urgent.items.length, 2);
-    assert.equal(jsonBody.urgent.total_open, 66 + 1598 + 33 + 33, 'urgent total_open must sum the four TRUE producer counts, not rows.length (2)');
+    // HP1-P2f-urgent: contact_writeback no longer feeds Urgent's union or its
+    // total_open — Urgent's true total is now the SUM of its THREE remaining
+    // producers (action_items + gov conflict + dia conflict): 66 + 33 + 33.
+    // The excluded contact_writeback population (1,598) surfaces separately
+    // as `urgent.pointer`, never silently folded into either count.
+    assert.equal(jsonBody.urgent.items.length, 1);
+    assert.equal(jsonBody.urgent.total_open, 66 + 33 + 33, 'urgent total_open must sum the THREE true producer counts (contact_writeback excluded), not rows.length');
+
+    assert.deepEqual(jsonBody.urgent.pointer, {
+      source_type: 'contact_writeback',
+      count: 1598,
+      label: 'Pipeline hygiene — contacts to push to CRM',
+      surface: 'bd_worklist_contact_writeback',
+    }, 'the excluded contact_writeback population surfaces as a pointer with its TRUE count');
 
     // Ordering/content of the rendered items is untouched by any of this —
-    // overdue action item still outranks the value-only worklist row.
+    // the overdue action item is the only Urgent row (contact_writeback
+    // never enters the union to be ranked against it).
     assert.equal(jsonBody.urgent.items[0].kind, 'deal_correspondence');
     assert.equal(jsonBody.urgent.items[0].overdue, true);
-    assert.equal(jsonBody.urgent.items[1].kind, 'contact_writeback');
     assert.equal(jsonBody.significant.items[0].entity_id, 'e1');
     assert.equal(jsonBody.important.items[0].who, 'Acme LLC');
   });
