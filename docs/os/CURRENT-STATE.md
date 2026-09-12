@@ -15,6 +15,19 @@
 
 ---
 
+## 2026-09-12 ASC frozen-50 review boundary
+
+The ASC source-collection pass is complete (50/50 resolved; 44 licensed-source captures and six governed
+source exceptions), but commercial review is not. A governed workbench is implemented at `/asc-review.html`
+with an operator-authenticated `/api/asc-research-review` boundary. It reads the frozen CMS identity and newest
+licensed-source capture, stores the exact six-class property scorecard, and preserves separate primary and
+second-review identities, timestamps, and disagreement.
+
+This tooling does not pre-populate a human conclusion and cannot write canonical properties, Salesforce,
+outreach, production opportunities, or IDTF activation. Current review completion remains **0/50 primary** and
+**0/22 initially required second reviews** until production deployment and actual independent review. See the
+capture checkpoint and `PLANNED-BACKLOG.md` ASC50-R1–R3.
+
 ## 1. Runtime truth — where the app actually runs
 
 | Thing | Truth | Canonical doc |
@@ -196,12 +209,22 @@ name + `dba_names`); `dia_resolve_operator(text)` is the one resolver, fails clo
 (`dia_operator_write_guard`) refuses an unresolved write and routes classifications to the new
 `properties.operator_class` column instead of the human review queue. `dia_operator_write_review`:
 **71 open** (genuinely unregistered operator names), 142 resolved, 807 dismissed as classifications.
-Orphan-registry-gap detector reads 0. **Nothing downstream reads `operator_id`/`operator_class` yet**
-— the CM exhibits, `rpc_query_comps`, the market brief, the dossier and MCP tools all still read
-`dia.properties.operator` free text exactly as before; that consumer switch is ID2b, unblocked but
-not started.
+Orphan-registry-gap detector reads 0. **ID2b (2026-09-12) started the consumer switch — one surface
+shipped, most still read raw text.** Shipped: `v_market_brief_cms_operator_counts` (the market
+brief's CMS-operator-count source) now groups on `properties.operator_id` (survivor-resolved),
+measured row-count-parity (6,695→6,695), Satellite Healthcare(54)+Satellite Dialysis(14)→69;
+`market-brief-facts.js` unblocked with zero code change. **Still reading raw operator text, measured
+and deferred, not started:** `rpc_query_comps`/`mcp/comps-tools.js` (fuzzy comp SELECTION —
+switching risks changing which comps are chosen, needs Scott's call on a live 5-subject diff, filed
+ID2b-c), the `cm_dialysis_*` CM exhibits (`cm_dialysis_operator_unit_economics` already ILIKE-
+bucket-normalizes via `dia_operator_bucket()`, a heuristic not the registry; `cm_dialysis_available_
+by_tenant[_q]`/`cm_dialysis_industry_participants` still raw — ID2b-cm), the dossier, and MCP tools
+generally (ID2b-mods). The true population measured this round is **96 views** referencing operator
+text (not the 45 first estimated), most correctly excluded as review/audit queues where raw text is
+the deliverable.
 → `CLAUDE.md` (ID2a's Dialysis-repo mirror doc, if any), `docs/os/PLANNED-BACKLOG.md` §P0d
-(ID2a / ID2a-cleanup / ID2b / ID2c / ID2c-payer), `docs/audits/ID1_OPERATOR_IDENTITY_AUDIT_2026-09.md`.
+(ID2a / ID2a-cleanup / ID2b / ID2c / ID2c-payer), `docs/audits/ID1_OPERATOR_IDENTITY_AUDIT_2026-09.md`,
+`docs/audits/ID2b_OPERATOR_ID_CONSUMER_SWITCH_2026-09-12.md`.
 
 ### CoStar sidebar capture — the largest producer, and five defect arcs in one place
 The extension → `sidebar-pipeline.js` path writes `properties`, `sales_transactions`,

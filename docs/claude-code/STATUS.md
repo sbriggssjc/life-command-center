@@ -31,6 +31,29 @@ covers. As PR-scanner-1/2's capture writers get adopted (still 0 rows on either 
 2026-09-12 research-workbench.md §7c note), the mirror needs a periodic re-sync to stay current.
 Docs updated in the same change: `PLANNED-BACKLOG.md` (row `PR-scanner-3`), `research-workbench.md`
 §7d, `ownership-history-lane.md` §5.
+## 2026-09-12 — ID2b partially shipped: market brief's operator-count source switched to `operator_id`; comps/CM/dossier measured and deferred
+
+Executed `prompts/ID2b-consumer-switch-to-operator-id.md`. **Re-measured the population first: the real grep hit is
+96 views, not 45** — most are review/audit queues where raw operator text IS the deliverable (switching would hide
+the ambiguity they surface), correctly left alone. **Shipped:** `v_market_brief_cms_operator_counts` (the market
+brief's only CMS-operator-count source) now groups on `properties.operator_id` (survivor-resolved via
+`dia_operator_survivor`), fill-blanks fallback to raw text for the 14.7% of clinics with no resolved operator.
+Measured live: row-count parity 6,695→6,695, `Satellite Healthcare`(54)+`Satellite Dialysis`(14)→one bucket of 69.
+`market-brief-facts.js` needed no code change — it was already agnostic to the grouping key, so it is unblocked.
+Migration `supabase/migrations/dialysis/20260912120000_dia_id2b_market_brief_operator_id.sql`; guard
+`test/id2b-consumer-operator-id.test.mjs` (6 tests, incl. a repo-wide class guard against a NEW module grouping on
+raw operator text). Full suite 6,017/0/6-skipped.
+
+**Deferred, named, not silently declared done** (per the prompt's own "ship the highest-value subset, name the
+rest" instruction): `mcp/comps-tools.js` fuzzy comp SELECTION (`operatorTier`/`tenantMatches`) was read — its
+substring filter already tolerates most alias variance, but the required 5-subject live comp-set before/after diff
+was NOT run (needs a live MCP tick invocation this session's budget didn't reach) — filed **ID2b-c**, Scott's call.
+`cm_dialysis_operator_unit_economics`/`v_dia_econ_operator_benchmark` already ILIKE-bucket via `dia_operator_bucket()`
+(so the exact Fresenius/DaVita string split mostly doesn't occur there today, but it's a heuristic, not the
+registry); `cm_dialysis_available_by_tenant[_q]` and `cm_dialysis_industry_participants` still group on raw/
+precomputed text — filed **ID2b-cm**. `dossier-generator.js`/`rent-projection.js`/`team-context.js`/
+`sidebar-pipeline.js` and the ~85 remaining views not read this round — filed **ID2b-remaining**/**ID2b-mods**.
+Full report: `docs/audits/ID2b_OPERATOR_ID_CONSUMER_SWITCH_2026-09-12.md`. Branch `claude/dreamy-pascal-i97j44`.
 
 ## 2026-09-12 — ID2b scoped: the identity fix is stored but unread — 45 views + 12 modules still group on operator text
 
@@ -810,6 +833,22 @@ access) -- named as an operator-verification item, not assumed either way.
 
 See `docs/os/PLANNED-BACKLOG.md` §P18 row MB1d and `docs/architecture/EXEC-BRIEFS-SPEC.md` §9
 "MB-a3" addendum for full detail.
+## 2026-09-12 — ASC50 governed review workbench built and locally verified; publication pending
+
+The completed 50-property source pass exposed two execution gaps: only the six source exceptions had review
+rows, and their legacy property-form vocabulary did not match `healthcare_property_review:1.0`. Implemented an
+authenticated `/asc-review.html` workbench plus `/api/asc-research-review`, exact request validation, and two
+invoker RPCs for primary and independent second review. The migration maps persisted legacy forms to the
+aggregate contract, retains `unresolved` only as a pre-scorecard exception sentinel for compatibility, stores
+the two reviewer identities/timestamps separately, rejects self-second-review, and preserves disagreement.
+Existing `final_disposition` values are never overwritten by primary scorecards. No candidate judgment or
+production row-level review was made.
+
+Verification: focused ASC/property-review suite **37/37 passed**; full suite **5,933 total / 5,927 passed /
+0 failed / 6 skipped**; app boot passed after lockfile dependency install; changed files pass syntax and whitespace checks. Repository-wide lint remains red on pre-existing,
+unrelated errors in `sidebar-pipeline.js`, `bridge-handlers-outlook.js`, and other files; this change introduced
+no lint error in its API files. Protected-PR checks remain to run.
+
 ## 2026-09-11 — BUY0 Phase 0 complete: Geller Round 1 client deliverable + email draft; build handoff written (spec §9) and backlog rows BUY1a/1b + BUY-G1…G6 filed
 
 Cowork. Round 1 for Jordan Geller is client-ready in `Team Briggs - Documents/Clients/Jordan Geller/2026 Industrial Search/Deliverables/Round 1 - Sep 2026/`

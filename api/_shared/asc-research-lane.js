@@ -2,6 +2,57 @@ import { createHash } from 'node:crypto';
 
 export const ASC_RESEARCH_LANE_VERSION = 'healthcare_asc_research_lane:1.0';
 export const ASC_RESEARCH_SAMPLE_SIZE = 50;
+export const ASC_PROPERTY_FORMS = Object.freeze([
+  'stnl', 'dominant_user', 'minority_mob', 'campus', 'operator_owned', 'unknown',
+]);
+const ASC_REVIEW_CONFIDENCE = new Set(['high', 'medium', 'low']);
+
+function reviewBoolean(value, field, nullable = false) {
+  if (value === true || value === false || (nullable && value === null)) return value;
+  throw new Error(`${field} must be ${nullable ? 'boolean or null' : 'boolean'}`);
+}
+
+export function assertAscPropertyReview(input, mode = 'primary') {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('review body is required');
+  if (!['primary', 'second'].includes(mode)) throw new Error('review mode is invalid');
+  const allowed = mode === 'primary'
+    ? new Set(['run_id', 'candidate_fingerprint', 'mode', 'clinical_verified', 'property_form',
+      'landlord_owner', 'ownership_evidence', 'landlord_addressable', 'economics_bounded',
+      'reviewer_confidence', 'second_review_required', 'research_minutes', 'evidence_citations', 'notes'])
+    : new Set(['run_id', 'candidate_fingerprint', 'mode', 'verdict', 'notes']);
+  const extra = Object.keys(input).filter((key) => !allowed.has(key));
+  if (extra.length) throw new Error(`unsupported review fields: ${extra.join(', ')}`);
+  if (!/^[0-9a-f-]{36}$/i.test(String(input.run_id || ''))) throw new Error('run_id is required');
+  if (!/^[a-f0-9]{64}$/.test(String(input.candidate_fingerprint || ''))) throw new Error('candidate_fingerprint is required');
+  if (mode === 'second') {
+    if (!['agree', 'disagree'].includes(input.verdict)) throw new Error('second-review verdict must be agree or disagree');
+    return { verdict: input.verdict, notes: String(input.notes || '').trim() || null };
+  }
+  if (!ASC_PROPERTY_FORMS.includes(input.property_form)) throw new Error('property_form is invalid');
+  if (!ASC_REVIEW_CONFIDENCE.has(input.reviewer_confidence)) throw new Error('reviewer_confidence is invalid');
+  const minuteKeys = ['clinical', 'property', 'ownership', 'economics', 'contact'];
+  const minutes = Object.fromEntries(minuteKeys.map((key) => {
+    const value = Number(input.research_minutes?.[key]);
+    if (!Number.isFinite(value) || value < 0) throw new Error(`research_minutes.${key} must be nonnegative`);
+    return [key, value];
+  }));
+  if (!Array.isArray(input.ownership_evidence) || !Array.isArray(input.evidence_citations)) {
+    throw new Error('ownership_evidence and evidence_citations must be arrays');
+  }
+  return {
+    clinical_verified: reviewBoolean(input.clinical_verified, 'clinical_verified'),
+    property_form: input.property_form,
+    landlord_owner: String(input.landlord_owner || '').trim() || null,
+    ownership_evidence: input.ownership_evidence,
+    landlord_addressable: reviewBoolean(input.landlord_addressable, 'landlord_addressable', true),
+    economics_bounded: reviewBoolean(input.economics_bounded, 'economics_bounded', true),
+    reviewer_confidence: input.reviewer_confidence,
+    second_review_required: input.second_review_required === true,
+    research_minutes: minutes,
+    evidence_citations: input.evidence_citations,
+    notes: String(input.notes || '').trim() || null,
+  };
+}
 
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const ALLOWED_SOURCES = new Set(['costar', 'rca', 'public_records', 'salesforce']);
