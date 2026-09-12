@@ -1,3 +1,18 @@
+## 2026-09-12 — P1a/C2g dual-top-priority contradiction resolved by measurement, not judgment call (Cowork)
+
+The XB2 audit pass earlier today flagged that `PLANNED-BACKLOG.md` had two rows independently claiming
+to be THE top priority: `C2g` (⭐ NEXT, 2026-09-11) and the `P1a` section header (⭐ THE TOP PRIORITY,
+2026-08-27). Rather than asking Scott to arbitrate, tallied every sub-item under P1a (C1-C19, DOC1-DOC18,
+OCR1-OCR6, EXT1-EXT2a, BROKER1/BROKER1-sf) against its own status markers: the overwhelming majority are
+already ✅ shipped, ⛔ refuted/superseded, or 👤 awaiting Scott's decision on file. This makes it a factual
+staleness fix, not a subjective priority call — retitled the P1a header to drop its "top priority" claim,
+named `C2g` as the current top priority, and explicitly listed the handful of genuinely still-open
+sub-items so they aren't lost in the retitle: `C4d`, `C9b`, `C13h`, `DOC2`-`DOC6`, `C15` (the last
+deliberately left open by design). Nothing under P1a was deleted or re-parented — REGISTRY.md's
+never-delete/keep-canonical rule applied to a section header, not just a file.
+
+Docs updated: `PLANNED-BACKLOG.md` (P1a header retitled + reconciliation note added).
+
 ## 2026-09-12 — First real run of XB2's audit rules (manual, not the automated system) — four findings, one fixed live (Cowork)
 
 Scott asked for the repo's docs/files to be cleaned and consolidated by topic so future threads aren't
