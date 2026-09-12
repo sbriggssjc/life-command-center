@@ -272,6 +272,30 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-12 — Continuing planned-vs-completed-vs-gaps: re-verified the "CMS ingestion repaired" claim live and it does not hold (Cowork)
+
+Following the FRED/CMS thread `CONSOLIDATE3` left open, re-measured both live rather than trusting the
+2026-09-01/02 doc claims. **FRED is genuinely fine** — `economic_indicators` max observation date is
+2026-09-10, writing daily, no action needed. **CMS ingestion is not.** `v_dia_producer_health` self-reports
+`cms_ingestion` as `status='failing'`: 34 of 36 runs failed in the last 30 days, `last_success_at`
+2026-04-04 (five months, not the 67 days the "repaired" narrative was about). `medicare_clinics
+.source_last_seen` has been frozen at 2026-08-31 — 249 of 8,547 rows (2.9%) — for 12 days, exactly the
+stall-at-249 risk `B6d-cms-step` flagged on 2026-09-01 as "the only thing left on this thread." No run
+fired at all today against the `0 6 * * *` schedule.
+
+**The failure signature has also changed** since the doc was last touched: no longer silent
+`abandoned`/NULL-error kills, but `"Reclaimed by ingestion_lock (force) after 0.0h in 'started'"` and
+`"Reclaimed by reclaim_stale_started_runs…"` — `PRI5`'s own reclaim mechanism (shipped 2026-09-11) is now
+the thing terminating most of these runs, several within the same second they start. Whether PRI5 is
+correctly killing something already broken, or itself killing runs that would otherwise finish, is not
+determined from this session — flagged as further evidence for the already-open `PRI6` thread (the two
+17.9-hour locks on this same producer), not a new defect.
+
+Corrected `DATA-PROCESS-AUDIT-HANDOFF.md`'s "CMS ingestion repaired" line to point at the backlog row
+instead of asserting current state; appended the live finding to `B6d-cms-restart` (never deleted its
+prior text). Needs Railway deploy logs no agent here can reach — same blocker the row already named.
+
+
 ## 2026-09-12 — DOC-CONTRA #2 found a live bug, not just a stale doc: TIER0_AUTO_ATTACH silently off for 16 days (Cowork)
 
 Re-verifying `tier0-owner-contact-system.md` against reality (CONSOLIDATE2's 2nd flagged
