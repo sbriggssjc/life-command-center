@@ -464,3 +464,87 @@ verdicts ever. ✅ **RO1 (same day) filters the 836 at the source** (`proposal_i
 operator opens from its card reads this view and will disagree. Backlog **RO1–RO5**; the
 family-shaped deed rows (≥124) belong to **OWN-T0e**. Full measurement:
 `docs/audits/UX_T1c_DECISION_CENTER_BUCKET_AUDIT_2026-09-08.md` §10.
+
+**RO5 (2026-09-11) — sized the overlap between the two stores, on the 761-row post-RO1 population.**
+Joined `v_ownership_resolution`'s 761 genuine-dispute gov properties against
+`v_lcc_property_ownership_reconciled` (gov domain, current, primary) — pulled live from both Supabase
+projects and joined locally in Python, since a direct SQL join isn't possible across two separate
+Postgres instances. **742 of 761 (97.5%) are present in the reconciled store; 19 absent** (mostly
+person-name-format mismatches the reconciled store never linked, e.g. `LIDDELL ANDY` / `Andy Liddell`).
+Of the 742 present, comparing the reconciled store's primary `owner_name` against the lane's three
+names: **169 (23%) agree with `proposed_owner_name`** (the deed/lessor signal the lane already shows),
+**198 (26%) agree only with `current_recorded_owner_name`** (the reconciled store rejected the lane's
+proposal and kept the recorded owner), **253 (33%) agree only with `true_owner_name`** (the reconciled
+store already matches gov's own true-owner field, which the lane's card doesn't compare against), and
+**122 (16%) are hard disagreements** — the reconciled store's primary owner matches none of the three.
+Of those 122: 88 still carry the reconciled store's own `conflict_class` (mostly `unclassified_rival`,
+largely the Boyd Watterson/Easterly/Gardner Tanenbaum sponsor-family SPE shapes `OWN-T0e` already
+handles), 57 are `is_domain_true_owner=true` (high confidence) vs 65 not.
+
+**RO3 decision (Scott, 2026-09-11): repoint `resolve_ownership` at the reconciled store — merge into
+this store's conflict lane, don't keep it a separate door.** RO5's numbers set the migration's real
+scope: the reconciled store's gov `conflict` population is **1,752 properties today, not 761** — a
+larger, *different* population (it surfaces lessor/relationship-graph-shaped disagreements the
+deed-only lane never saw, and drops the 253 cases that already agree with `true_owner_name`). The
+card's `context` needs a field mapping from the reconciled store's ranked-owner-candidate shape
+(`owner_entity_id, owner_name, is_primary, primary_reason, conflict_class, evidence_level,
+resolver_rung, is_domain_true_owner`) onto the existing recorded/proposed/true-owner card fields — not
+a 1:1 rename, since the reconciled store has no single proposed-vs-recorded pair. The four
+write-verdict paths (`keep` / `update_owner` / `confirm_sale` / `research`) call real gov RPCs behind
+existing guards (`DECISION_GOV_WRITEBACK` env gate, $50k sale-price floor, never-fabricated dates) and
+are not reconciled-store-specific — recommended to preserve them as-is and repoint only the source
+population/context query. **Not built yet** — this is a live financial-write lane; a written
+field-mapping design is the recommended next step before any code change. `docs/os/PLANNED-BACKLOG.md`
+rows `RO3`/`RO5`; `docs/claude-code/STATUS.md` 2026-09-11.
+
+**RO3 migration design (2026-09-11) — field mapping, not yet built.**
+
+*Population query.* Replace `v_ownership_resolution?proposal_is_recorded=eq.false` (761 rows) with
+`v_lcc_property_ownership_reconciled?source_domain=eq.gov&is_current=eq.true&property_state=eq.conflict`
+(1,752 properties today, `is_primary=eq.true` for the one row per property the card anchors on — the
+other current candidate rows for that property are read alongside it, the same way the property panel
+already shows multiple claimants). `annual_rent` for the existing rank/sort column already exists on
+the reconciled store row — no change needed there.
+
+*Fields that move as-is* (still read from gov's own tables, unchanged by this migration, because the
+reconciled store doesn't carry them): `recorded_owner_name` / `true_owner_name` (gov `recorded_owners`
+/ `true_owners`, joined by property_id as today), `address` / `city` / `state` / `agency`.
+
+*Fields that map from the reconciled store's shape, not renamed 1:1:*
+- `proposed_owner_name` ← the primary row's `owner_name` (the resolver's top-ranked current candidate)
+- `primary_signal` ← `resolver_rung` (`domain_true_owner` / `relationship_graph` / `supersession` /
+  etc.) — a different vocabulary than today's `deed_grantee` / `gsa_lessor_change` /
+  `state_lessor_change` / `discrepancy`, so the card's signal badge needs new copy, not a value swap
+- `evidence` ← assembled from `link_source` + `evidence_level` + `resolver_rung` (today's `evidence`
+  jsonb array has no reconciled-store equivalent; this is new code, not a rename)
+- `recommended_action` ← derived, not carried: `conflict_class = 'sponsor_family_confirmed'` → treat
+  as already-resolved (arguably shouldn't even surface as a card, since `OWN-T0e` already confirmed
+  it — **open question for Scott**: does RO3's lane exclude `sponsor_family_confirmed` properties
+  entirely, or show them as a lower-priority "confirmed, FYI" tier?); `is_domain_true_owner = true` →
+  `confirm`-shaped; `conflict_class = 'unclassified_rival'` and no domain true owner → `research`;
+  everything else → needs a rule, not yet written
+- `is_newer_than_recorded` / `latest_deed_date` / `deed_conflict_kind` / `deed_auto_fixable` /
+  `suspected_grantor` / `suspected_grantee` / `suspected_sale_date` / `discrepancy_source` /
+  `discrepancy_proposed` / `has_deed_signal` / `has_lessor_signal` / `has_discrepancy_signal` — these
+  are all `v_ownership_resolution`-specific (deed/lessor/discrepancy CTE provenance) and have **no
+  reconciled-store equivalent at all**. They either get dropped from the card (the reconciled store
+  doesn't distinguish signal type the same way) or the migration keeps reading `v_ownership_resolution`
+  *alongside* the reconciled store just to backfill these fields when they exist — **open question for
+  Scott**, since carrying both sources forever defeats the "one door" point of doing this migration.
+- `owner_guards_pass` ← re-run `granteePassesOwnerGuards` (or the reconciled store's own
+  `is_brokerage`/`is_placeholder`/`is_operator` flags, which already encode most of the same guard
+  logic on the candidate row) against the primary row's `owner_name` — the reconciled store's flags are
+  likely the better source here, since they're already computed and available on every row.
+
+*Write side — recommended unchanged.* The four verdict handlers (`keep` / `update_owner` /
+`confirm_sale` / `research`) call real gov RPCs (`propagateDeedGranteeToOwner`,
+`reconcileSaleAndOwnershipForNewOwner`, `gov_apply_manual_true_owner`, `gov_confirm_suspected_sale`,
+`createResearchTask`) behind existing guards and never touch `v_lcc_property_ownership_reconciled`
+directly — they write to gov's own tables, which the reconciled store then re-reads on its own refresh
+cycle. No reason to change these; only the GET-side population/context query needs to move.
+
+**Not started.** The two open questions above (whether `sponsor_family_confirmed` properties surface
+at all, and whether deed/lessor/discrepancy-specific fields get dropped or double-sourced) are real
+design calls, not implementation details — recommend resolving them with Scott before writing any
+code, since this lane's `update_owner`/`confirm_sale` verdicts make real, live writes to gov's
+ownership tables.

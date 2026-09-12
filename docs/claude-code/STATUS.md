@@ -1,5 +1,52 @@
 # Claude Code queue — STATUS
 
+## 2026-09-12 -- checked the response queue (both already merged), then wrote RO3's field-mapping design
+
+Two pasted Claude Code responses were waiting in docs/claude-code/responses/: ID2a (the operator
+registry backfill, including its live schema-mismatch fix, multi-tenant write-bug fix, and parity
+fan-out fix) and ID4 (the identity-integrity baseline measurement + resolver framework design). Traced
+both through git history rather than assuming -- ID2a's full branch (`claude/affectionate-feynman-ozqb87`,
+all three follow-up commits) is merged via PR #2333, and ID4's docs-only PR #2329 is merged via
+`c3f10537`. Nothing to reconcile; moved both .docx files to responses/done/ (gitignored, no commit
+needed for the move itself).
+
+Then did the RO3 next step I'd recommended in the last PR: wrote the field-mapping design rather than
+touching code. Added a new section to `docs/architecture/ownership-history-lane.md` (the canonical
+page for this whole thread) covering: the population query (`v_ownership_resolution`'s 761-row
+filter -> the reconciled store's gov `conflict`-state properties, 1,752 today), which card fields move
+unchanged (still read from gov's own `recorded_owners`/`true_owners`), which fields map from the
+reconciled store's shape but aren't a 1:1 rename (`proposed_owner_name`, `primary_signal`, `evidence`,
+`recommended_action`, `owner_guards_pass`), and which fields have no reconciled-store equivalent at all
+(the deed/lessor/discrepancy-specific columns -- `latest_deed_date`, `deed_conflict_kind`,
+`suspected_grantor/grantee`, etc.). Flagged two real design calls for Scott rather than guessing:
+whether `sponsor_family_confirmed` properties should surface on the card at all (OWN-T0e already
+confirmed them), and whether to drop the deed/lessor/discrepancy-only fields or keep reading
+`v_ownership_resolution` alongside the reconciled store just to backfill them (which would undercut the
+whole point of the migration). The write side (`keep`/`update_owner`/`confirm_sale`/`research`) needs
+no changes -- it already writes to gov's own tables, not the reconciled store.
+
+Updated `docs/os/PLANNED-BACKLOG.md`'s RO3 row to point at the design section. No code changed --
+still waiting on Scott's answer to the two open questions before writing the actual repoint.
+
+## 2026-09-12 — ID2a + ID4 reconciled: operator FK live (9,307/11,804); the CMS 2,450 tie is OUR dedup, not CMS; ID3 order set
+
+Filed both responses → `done/`. **ID2a (merged):** registry gained `kind`/`parent_operator_id`/`merged_into_operator_id`,
+`dia_operator_aliases` (42) and `dia_operator_write_review` shipped, **hard write guards live on `properties` and `leases`**,
+backfill applied (9,309 auto / 1,018 review). It also self-caught two defects while verifying: the DaVita regex matching the
+first token of the piped multi-tenant artifacts, and a parity-view fan-out — both fixed in SQL and the JS mirror in lock-step.
+**Cowork verified live:** `operator_id` 9,307/11,804; review 1,020 open; parity DaVita 4,435 · **Fresenius Medical Care 3,769
+(= 3,733 + 36, the approved merge)** · US Renal Care 465 · DCI 301 · ARA 244 · Satellite 92 · DaVita at Home 1.
+**Two corrections to ID4's baseline:** (1) it read `operators` as 14 rows — live it is **67**, and inside `kind='company'` the
+duplicates, clinic-level rows (BMA/Knickerbocker = Fresenius subsidiaries) and person/junk rows survive unmerged, with only 1
+parent link → new row **ID2a-cleanup**, which also records that **683 `Independent` + 84 `Other` of the 1,020 review rows are
+categories, not review work**, and that the remaining ~253 are known operators absent from the 42-row alias table because the
+resolver still knows only 6 families. (2) Its I15 retraction was half right: raw counts are 2,796/2,768, but on eligible rows
+both are **exactly 2,450** — cut by **our own dedup pass, 2026-07-22 16:01:22**, which demoted 346 + 318 rows → new row
+**B6d-cms-dedup**. ID4's framework lesson stands and is stronger than the original plan: **per-class comparators, never one
+shared normalizer** (broker surnames collide). ID4's duplicate backlog section merged into §P0d. **Scott decided:** ID3a
+(gov agency wiring) first, then ID3e (county vocabulary), then ID3b/ID3d; **ID3c holds for BR1–BR5**; detectors prove out on
+the agency class before generalizing. **Next:** ID2a-cleanup + ID3a.
+
 ## 2026-09-11 -- RO5 sized: joined the 761 gov disputes to the reconciled store; Scott decided RO3
 
 Scott answered the RO3 design question directly: repoint `resolve_ownership` at the reconciled
