@@ -12,6 +12,48 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-12 — Repo sweep done by the filed method; a duplicate SEC row folded; HP1-P1b's hold lifted (Cowork)
+
+Scott asked again for the repo to be cleaned and consolidated by topic so a future chat picks up without
+misdirection. Did the **REPO1-root-clutter** sweep using the method filed earlier today — grep every candidate
+first, move only the unreferenced, document the rest — rather than a bulk move.
+
+**Moved (12, all verified unreferenced outside `STATUS.md`/`docs/history`)** → `_superseded/scratch-2026-09-12/`,
+with a manifest row in the graveyard README: `err.txt` (0 bytes), `draft1/draft2/draftsave.json`, `harvest.json`,
+`twin.json`, `seed-apply/seed-dryrun.json`, `acq-dryrun.json`, `fix-allother-pagination.patch`, `_commit.bat`,
+`_deploy_hardening.bat`.
+
+**Deliberately NOT moved — and this is the point of the sweep, not a shortfall.** Three groups are referenced by
+name from live docs, code comments or a guard test, so moving them converts accurate references into stale ones,
+which is worse than an untidy root. Recorded under `_superseded/README.md`'s own *"left in place — documented
+instead"* convention:
+
+- **The 15 `flow-*.json`** — cited in `CLAUDE.md`, `.env.example`, `api/_shared/outlook-draft.js`,
+  `api/draft-assist.js` and ~10 docs. **Consolidated by TOPIC in documentation instead: new
+  `docs/flows/README.md`** names every flow, what it does, and the write-up to read — find the flow there, open
+  the JSON at the root.
+- **The ~10 loose `.docx`/`.xlsx`** — cited from `audit/ROUND_2_FINDINGS_2026-05-19.md` and several
+  `audit/patches/*/COMMIT_MSG.txt`. Historical; nothing live reads them, and none should be cited as current state.
+- 🔐 **`wave0-config-values.txt`** — `test/retired-identifiers-guard.test.mjs` allowlists it **BY PATH**, so a move
+  breaks that guard. `ACTIVATE_unit4.sql` likewise (cited in `document-capture-ocr-and-deeds.md`).
+
+⛔ **The sweep caught me duplicating an existing row — exactly the misdirection it was meant to find.** I filed
+`HP1-P1a-sec` this morning as a new escalation on discovering the committed `LCC_API_KEY`. **`SEC2` had already
+recorded precisely that on 2026-08-28**, with a better remediation order than mine (rotate → update Railway →
+`git rm --cached` → *only then* consider history) and a warning I did not have: **do not reach for
+`filter-branch`** — this repo nearly lost a 475 MB mailbox that way. My row is now a pointer at SEC2, and the one
+fact worth keeping moved onto SEC2: the committed value is **byte-identical to the live Bearer token in the
+Salesforce flow**, so it is the live key, and a rotation must update every `flow-*.json` header carrying it in the
+same change — a flow left on the old key fails silently under an HTTP 200, which is exactly how HP1-P1a hid a
+six-week outage. `OPERATOR-ACTIONS.md` already carries SEC2 as ⏸️ DEFERRED, consistent with Scott's decision today.
+
+✅ **HP1-P1b's hold is lifted — a held row whose condition has cleared is stale documentation.** It said *"build
+after the feed is restored and P1d is watching it."* Both happened today. Two stale figures inside it corrected
+while there: the feared mass auto-retire **did not happen** (six weeks of drift was 10 stage changes, not the
+569+37 the row was written on — re-measure live), and **there is no `deal_next_step` table** —
+`lcc_generate_deal_next_steps()` writes into `action_items`. Also cross-linked to **HP1-P1a-orphan**: decide the
+`sf_absent` rule first, or P1b will ask Scott to confirm deals Salesforce no longer has.
+
 ## 2026-09-12 — HP1-P2misparse: the 117 Inbox rows are the guard saying "I blocked it", not work (Cowork)
 
 Drafted the next prompt — and the measurement changed what it is. **I filed this row yesterday-ish as *"117 rows
@@ -293,7 +335,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | thread | backlog rows | last entry | state (one line) |
 |---|---|---|---|
 | **Identity / operator canonicalization (ID-series)** | ID0–ID4, ID2a-cleanup, ID2b, ID2b-caps, ID2b-caps-2, ID3a–ID3e, ID3a-d | 2026-09-12 | ID2b-caps-2 shipped + live-verified (3rd comp source fixed at source); ID3a-d retired LCC's stale gov migration copy; ID2b's remaining 45 views/12 modules still group on operator text |
-| **Market briefs (MB/EB)** | MB1d, MB-a2, MB-a3, EB1, P18 | 2026-09-11/12 | ID2b partially wired operator_id into the market-brief operator count; P18 swimlane spec + EB1 design-only; MB-a2 fixes confirmed live, MB1d (false-fresh CMS facts) is the open blocker |
+| **Market briefs (MB/EB)** | MB1d, MB2a, MB3, MB4, MB5, MB6, MB7, EB1b, P18 | 2026-09-12 | **LIVE**: `MARKET_BRIEF_PSQL` + `MARKET_BRIEF_RENDER` on; the daily email carries the Lane Briefs block (cap-rate bands, on-market, honest CMS staleness gaps, link to `#/briefs/dialysis`), the tab serves live facts, first `market_brief_issues` row frozen. Next: MB2a (the 3 new dialysis RSS URLs all fail 403/404), MB5 P-WEB (blocked on EB1b Anthropic credit), MB6 weekly long-form, MB7 MCP recall |
 | **Operator funnel (OC / HP1)** | HP1, HP1-P1a, HP1-P1a-fix, HP1-P1a-dup | 2026-09-12 | HP1-P1a-fix CLOSED live (608 rows UPDATED, first-ever Salesforce UPDATE to `bd_opportunities`); HP1 P0 (Today 500 badge) fixed+deployed+verified |
 | **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI5 | 2026-09-12 | PR-scanner-3 shipped (`county_records_needed` action); PRI5 merged+deployed, awaiting another live CMS ingestion test run to confirm the hang is actually cleared |
@@ -310,6 +352,18 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-12 — MB-b reconciled and TURNED ON: the market brief is live in the daily email and on the homepage tab
+
+Cowork applied MB-b's two unapplied migrations (`MARKET_BRIEF_RENDER` registration, `lcc-market-brief-rss` cron),
+flipped `MARKET_BRIEF_PSQL` on, ran the producer once (**15 facts written, run `completed`**, 31 live facts), then
+flipped `MARKET_BRIEF_RENDER` on and verified both surfaces on deployed `6b28835f28ac`: `GET /api/market-brief-tab`
+returns `enabled:true, has_facts:true` with sourced facts, and `/api/briefing-email` (117 KB) now contains the **Lane
+Briefs block** — cap-rate band, on-market count, the CMS staleness gap rendered honestly, and the link to
+`#/briefs/dialysis` — with the first `market_brief_issues` row frozen. Three clean operator bands (DaVita, Fresenius
+Medical Care, US Renal Care), no duplicates. **One defect found:** MB-b's three new dialysis RSS URLs all fail —
+Renal & Urology News **403**, Nephrology News **404**, CMS Newsroom **404** — so `MARKET_BRIEF_PRSS` stays **off** and
+the stream would yield nothing; filed as **MB2a**. MB-b's own note said the URLs were never egress-verified.
 
 ## 2026-09-12 — Continuing planned-vs-completed-vs-gaps: re-verified the "CMS ingestion repaired" claim live and it does not hold (Cowork)
 

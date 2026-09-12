@@ -347,3 +347,11 @@ the trades supersede chain clears the old date-suffixed fragments (any live
 `trades_since_last_run:<date>` fact should read `status='superseded'` after the first post-fix run),
 render the email with a preview and load `#/briefs/dialysis`, verify each new RSS feed URL actually
 parses, THEN flip `MARKET_BRIEF_RENDER`.
+
+**Addendum 2026-09-12 "MB-b live" (Cowork):** §4's first two surfaces are LIVE. `MARKET_BRIEF_PSQL` and
+`MARKET_BRIEF_RENDER` are on; the daily email carries the Lane Briefs block and `#/briefs/dialysis` serves live facts,
+both reading `market_brief_facts`/`market_brief_issues` only. Design rules 1–5 are all now observable in production: the
+brief shows three canonical operator bands (rule 4, via ID2a/ID2b-caps-2), renders the CMS census as a dated gap rather
+than a stale number (rules 3 and 5), and recomputes nothing. **`MARKET_BRIEF_PRSS` remains off** — the dialysis RSS URLs
+added with MB-b all fail (403/404, backlog **MB2a**), a reminder that a feed URL is not a source until it has been
+fetched once and parsed.
