@@ -1,3 +1,46 @@
+## 2026-09-12 — Live-checked the "still running, redeploy interrupted it" run: pipeline is genuinely alive, but `PRI5`'s reclaim mechanism has a real gap this run exposes; `PRI6` drafted
+
+Scott reported the CMS ingestion run as ~10 hours in, interrupted by a `Dialysis` redeploy, and the
+resumed run now ~7 hours in on its own — asking whether it's on track. Checked live against Supabase
+rather than trusting the uploaded log excerpts (both uploads this round were 19–22 second snippets of the
+same healthy repetitive pattern, not proof of overall health on their own — same method used for the prior
+"8 hours in" check).
+
+**Good news, confirmed live: the pipeline is genuinely alive and writing right now, not hung.**
+`properties.estimated_annual_revenue` shows a newest `updated_at` of essentially "now" (0.4 seconds old at
+query time) with **1,923 rows updated in the preceding 15 minutes**. This is real, ongoing, healthy write
+throughput — the strongest possible signal against a hang, independent of anything in the log excerpt.
+
+**Also good, confirmed live: `PRI5`'s reclaim mechanism is working.** The exact orphaned `ingestion_tracker`
+rows this arc flagged in `PRI4` (`c6975255…`) and `PRI5` (`c817274e…`) are now both closed out
+(`run_status='failed'`, `finished_at` populated) — consistent with `reclaim_stale_started_runs()` running
+and sweeping them once they crossed the 2-hour safety window.
+
+**A real gap, not previously seen, found by this live check — recommend a `PRI6` prompt:** two
+`ingestion_lock` rows (`cms_medicare_clinics` and `facility_patient_counts`) are still open
+(`run_status='started'`, `finished_at=null`) at **17.9 hours old** — both acquired at
+2026-09-11 19:45:55 UTC, right after the last batch of tracker rows got reclaimed. That is nearly 10× past
+the "well past the pipeline's own 90-minute wall-clock cap" assumption `PRI5`'s response used to justify
+its 2-hour reclaim safety window, and this run is real evidence that assumption doesn't hold — a run can
+legitimately still be in flight at 17.9+ hours. No `ingestion_tracker` or `run_log` row of any kind has
+been created since that same timestamp (19:45:55 UTC on 9/11), despite Scott's redeploy — meaning either
+(a) the redeploy restarted a different Railway service than the one holding this lock, or (b) the resumed
+process reused the pre-existing lock/row instead of re-acquiring it and re-logging, which would itself be
+worth knowing. **The arithmetic lines up with Scott's own report**: 10h (first stretch) + 7h+ (post-redeploy
+stretch) ≈ 17h, close to the lock's actual 17.9h age — consistent with one continuous lock held since
+before the redeploy, never released, rather than two genuinely separate runs.
+
+**Net read for Scott, stated plainly**: the run is not hung and is producing real output right now — no
+action needed there. But two back-to-back very-long stretches (10h, then 7h+) on top of a lock that's been
+open for 17.9 hours without a fresh tracker/lock/log row is worth a real look, not just individual
+reassurance each time it's asked about — both because the reclaim window's safety assumption needs
+revisiting given a real run now exceeds it by an order of magnitude, and because it's not yet established
+whether a redeploy is supposed to release and re-acquire this lock or not.
+
+`PRI6` prompt drafted: `docs/claude-code/prompts/PRI6-ingestion-lock-survives-redeploy-and-reclaim-safety-window.md`.
+No `STATUS`/`PLANNED-BACKLOG` closure yet — pending Scott's read on whether to send this to `Dialysis` now
+or let the current run finish first.
+
 ## 2026-09-12 — CONSOLIDATE2's first flagged contradiction resolved: the stale "FINAL STATE" box defused (Cowork)
 
 Continuing the doc-consolidation work after CONSOLIDATE2 (round 2) flagged three canonical-doc
