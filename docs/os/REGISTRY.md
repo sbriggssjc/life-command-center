@@ -32,6 +32,7 @@ or *historical* (kept for history; never edit/wire).
 | Write governance | `WRITE_SURFACE_POLICY.md` |
 | Infra topology | `docs/architecture/infrastructure-topology.md` |
 | Database ownership (which repo owns which Supabase project's migrations) | `CLAUDE.md` → "ONE REPO OWNS EACH DATABASE'S OBJECTS" (ID3a-d, 2026-09-12) |
+| BD pipeline funnel: property → owner → ownership-chain → developer → contact (the audit/build lane, not a single feature) | `docs/architecture/ownership-history-lane.md` (the `establish_ownership_history` task/lane itself — action split, human-value floor, "what is left" table); `docs/architecture/connectivity-and-open-threads.md` (topic index for every route in the chain — read §0 first); `docs/architecture/public-records-source-lane.md` (assessor/recorder/SOS manual-research capture, PR-scanner family); `docs/architecture/research-workbench.md` (task-surface sizing notes, numbered §7x); `docs/architecture/account-based-contact-intelligence.md` (contact-side design). Backlog tracking lives in `docs/os/PLANNED-BACKLOG.md` §P0b ("BD PIPELINE FUNNEL") — B-, C2-, D1-series rows — kept distinct from §P0d's entity-identity sprint, a separate concurrent thread over the same tables. |
 
 ## B. Reference (stable context; not a rule source)
 - `docs/architecture/lcc_intelligent_operating_system_v2.md` — the founding OS vision (informs the canon).

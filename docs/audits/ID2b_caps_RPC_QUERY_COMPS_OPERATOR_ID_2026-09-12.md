@@ -124,3 +124,30 @@ after the write loop, `retireStaleFact` is exported). Full suite: 6,044 pass / 0
 | `dossier-generator.js` | read whether it renders a per-operator rollup at all; if so, same additive pass-through pattern as `rpc_query_comps` | 1 read + possibly 1 small JS change |
 | `sidebar-pipeline.js`, `rent-projection.js`, `team-context.js` | named in ID2b as unread; grep for any operator-text GROUP BY / dedup key in each before assuming a change is needed | 3 reads, likely 0 changes (none of the three obviously groups by operator) |
 | the ~85 remaining views ID2b's audit counted (`docs/audits/ID2b_OPERATOR_ID_CONSUMER_SWITCH_2026-09-12.md`) | most are review/audit surfaces where raw text is the deliverable by design (named in that audit) — enumerate the minority that actually GROUP BY operator text before scoping further work | 1 targeted re-read of that audit's own list, filtering to `GROUP BY`/`DISTINCT` on an operator column |
+
+## Addendum — Cowork live re-check, 2026-09-12 (read-only, deployed `c5fc261f`)
+
+**The gate did not hold, and the failure mode is worse than the original defect.** A dry run of the P-SQL tick against
+the deployed build returns FIVE per-operator bands, two pairs of which now carry the **same display name**:
+
+| fact key | label | n |
+|---|---|---|
+| `cap_rate_ttm_band:5` | Fresenius Medical Care | 63 |
+| `cap_rate_ttm_band:fresenius_medical_care` | **Fresenius Medical Care** | 12 |
+| `cap_rate_ttm_band:4` | DaVita | 68 |
+| `cap_rate_ttm_band:davita_dialysis` | DaVita Dialysis | 10 |
+| `cap_rate_ttm_band:73` | US Renal Care | 6 |
+
+**Root cause: a third comp source the passthrough never reached.** The migration added `operator_id` to
+`rpc_query_comps`'s sale and listing arms — both of which read dia `properties`, where coverage is good (every TTM
+DaVita/Fresenius sale row resolves: DaVita 49, Fresenius 39, Fresenius Medical Care 1, all with `operator_id`). The
+leftover comps come from **`sf_comp_staging`** — the Salesforce-staged comps, i.e. **Team Briggs' own closed deals** —
+which has no property link and therefore no `operator_id`. It carries **196 `DaVita Dialysis`** and **179 `Fresenius
+Medical Care`** rows, spelled exactly as the alias table already maps them (`DaVita Dialysis` → 4, `Fresenius Medical
+Care` → 5). The tick's text fallback never consults `dia_operator_aliases`, so those comps mint a second band under a
+canonical-looking label.
+
+**Two fixes, both small:** (1) resolve the SF-staged arm's tenant through `dia_operator_aliases` (or give
+`sf_comp_staging` its own resolved `operator_id`, guarded like the others); (2) a rendering-level invariant — **two
+live band facts may never share a display label** — as a test, so this class cannot ship again. Tracked as
+**ID2b-caps-2**.
