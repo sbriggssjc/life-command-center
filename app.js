@@ -7640,8 +7640,14 @@ function _renderTodaySection(contentId, section, viewAllLabel, viewAllOnclick) {
       + (meta.length ? '<div class="nba-item-sub">' + meta.join(' · ') + '</div>' : '')
       + '</div>';
   });
-  const total = section.total_open || items.length;
-  if (viewAllLabel && total > items.length) {
+  // HP1-badge (2026-09-12): `section.total_open || items.length` silently
+  // turned BOTH "count unknown" (null) and "count is genuinely 0" (falsy)
+  // into the capped page length — the exact badge-that-lies failure this
+  // fix exists to close. A number renders only when the server actually
+  // measured it; unknown or not-yet-measured renders the plain arrow with
+  // no count, never a fabricated one.
+  const total = Number.isFinite(section.total_open) ? section.total_open : null;
+  if (viewAllLabel && total !== null && total > items.length) {
     html += '<button type="button" class="nba-viewall" onclick="' + viewAllOnclick + '">'
       + esc(viewAllLabel) + ' (' + total + ') →</button>';
   } else if (viewAllLabel) {
