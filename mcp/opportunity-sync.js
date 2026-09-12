@@ -217,11 +217,24 @@ async function processDeal(raw, deps) {
     owner_user_id, vertical, last_synced_at: new Date().toISOString(),
     metadata: meta,
   };
-  const up = await opsQuery('POST',
-    'bd_opportunities?on_conflict=workspace_id,sf_opp_id', row,
-    { Prefer: 'resolution=merge-duplicates,return=representation' });
+  // HP1-P1a-fix: this used to be a PostgREST upsert
+  // (`bd_opportunities?on_conflict=...` + `Prefer: resolution=merge-duplicates`).
+  // That Prefer header never took effect on the standalone MCP deploy — its
+  // opsQuery(method, path, body, prefer) signature expects `prefer` as a
+  // plain STRING, and was being handed an OBJECT, which undici's Headers
+  // coerces to the literal "[object Object]". PostgREST cannot parse that as
+  // a Prefer directive, so it silently fell back to a plain INSERT with no
+  // ON CONFLICT handling — every re-sync of an already-seen sf_opp_id 502'd
+  // on the unique key, and no stage/close ever propagated. Routed through an
+  // RPC instead: one INSERT ... ON CONFLICT DO UPDATE, no header to mangle,
+  // and an honest per-row inserted/updated/skipped outcome.
+  const up = await opsQuery('POST', 'rpc/lcc_upsert_bd_opportunities', { p_deals: [row] });
   if (up.ok === false) return { status: 502, body: { ok: false, error: 'upsert_failed', detail: up.data, sf_opp_id: b.sf_opp_id } };
-  const saved = Array.isArray(up.data) ? up.data[0] : up.data;
+  const result = Array.isArray(up.data) ? up.data[0] : up.data;
+  if (!result || result.outcome === 'skipped') {
+    return { status: 502, body: { ok: false, error: 'upsert_skipped', detail: result?.reason || 'no_result_row', sf_opp_id: b.sf_opp_id } };
+  }
+  const saved = { id: result.bd_opportunity_id };
 
   return { status: 200, body: {
     ok: true, entity_id: rec.entity_id, created_entity: rec.created,
@@ -273,19 +286,31 @@ export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
             } else {
               summary.failed++;
               if (summary.errors.length < 50) {
-                summary.errors.push({ sf_opp_id: r.body.sf_opp_id ?? (d && (d.Id || d.sf_opp_id)) ?? null, status: r.status, error: r.body.error || 'unknown' });
+                // Unit 3: carry `detail` through, not just the label — `upsert_failed`
+                // alone cost a whole diagnosis cycle that the PostgREST/DB detail
+                // would have ended immediately.
+                summary.errors.push({ sf_opp_id: r.body.sf_opp_id ?? (d && (d.Id || d.sf_opp_id)) ?? null, status: r.status, error: r.body.error || 'unknown', detail: r.body.detail ?? null });
               }
             }
           } catch (e) {
             summary.failed++;
             if (summary.errors.length < 50) {
-              summary.errors.push({ sf_opp_id: (d && (d.Id || d.sf_opp_id)) ?? null, error: String(e?.message || e) });
+              summary.errors.push({ sf_opp_id: (d && (d.Id || d.sf_opp_id)) ?? null, error: String(e?.message || e), detail: null });
             }
           }
         }
       }
       await Promise.all(Array.from({ length: Math.min(CONC, deals.length) }, worker));
-      return res.status(200).json({ ok: true, ...summary });
+      // Unit 3: a batch endpoint must not return 200 when it wrote nothing.
+      // `ingestBatch` used to end here unconditionally, so 608/608 failures
+      // still reported `{"ok":true,"total":608,"succeeded":0,...}` and Power
+      // Automate read the 200 status code and marked the run Succeeded — that
+      // is why six weeks of total failure was invisible from both ends. A
+      // fully-failed batch is loud (502, ok:false); a partial one stays 200
+      // but is flagged so `succeeded`/`failed` are never the only signal.
+      const allFailed = summary.total > 0 && summary.failed === summary.total;
+      const partial = summary.failed > 0 && summary.succeeded > 0;
+      return res.status(allFailed ? 502 : 200).json({ ok: !allFailed, partial, ...summary });
     },
   };
 }
