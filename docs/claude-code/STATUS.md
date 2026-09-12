@@ -29,6 +29,45 @@ spoofed UA was refused, per the task. Handled Google News's redirect-URL + broad
 auto-resolves on a real item). `MARKET_BRIEF_PRSS` left OFF — no live egress this session to confirm
 facts actually flow; Cowork's prior fetch predates this code. Suite 6,130/0/6-skipped. Backlog
 `docs/os/PLANNED-BACKLOG.md` §P18 MB2a; spec addendum in `EXEC-BRIEFS-SPEC.md`.
+## 2026-09-12 🚨 — 26 backlog IDs are used twice, and `SEC2` is two different issues. One of them bit me today. (Cowork)
+
+Two prompts are already queued for CC (**HP1-P2misparse**, **HP1-badge**), so rather than deepen the queue I took
+stock of the HP1 block — and found the misdirection Scott has been asking me to remove, partly of my own making.
+
+**`PLANNED-BACKLOG.md` has 26 IDs appearing on more than one row**, and they split into two classes needing
+**opposite** fixes:
+
+**Class A — COLLISION, one ID on two unrelated issues.** **`SEC2` is `wave0-config-values.txt` is tracked in git**
+(§P0s, line 263) **and** **rotate the Supabase `service_role` key** (§P9, line 624). Same shape on `SEC1`/`SEC3`/
+`SEC4`, `A5d`/`A5e`, `D1`. 🚨 **This already misfired: I folded `HP1-P1a-sec` into "the pre-existing SEC2" without
+knowing there were two.** The reference is now pinned to §P0s by hand, but it was ambiguous when written, and
+anything else citing SEC2 — `OPERATOR-ACTIONS.md` does — still is.
+
+**Class B — RESTATEMENT, the same issue written repeatedly:** `MB3`×4, `MB4`×4, `MB2a`×3, `B6d-cms-restart`×3 and
+others, accumulated exactly the way `PR5c-enforce`'s four copies did before today's consolidation — sessions
+restating a row instead of editing it.
+
+**Fixed in place now, because all three were provably mine:** three **byte-identical** `HP1-P1a-sec` rows → one;
+two `HP1-P1a-fix` rows → the richer (the shorter predated the parallel-session note); and `| HP1-P1b |✅`'s missing
+pipe space, which had been hiding the row from ID greps entirely. 28 → 26.
+
+**The remaining 26 are NOT a bulk edit and I did not treat them as one.** A collision that gets "collapsed"
+destroys one of two real issues; a restatement that gets "renamed" mints a second ID for one problem. Classifying
+each pair is judgment against citation counts. Written up as **`prompts/BACKLOG-ids-collisions-and-restatements.md`**,
+which requires: rename collisions (keeping the ID on whichever row more citations already point at, counted not
+guessed) with a pointer left on the renamed row so old references still resolve — the never-delete rule applied to
+an identifier; collapse restatements keeping **every** distinct fact, and **report rather than silently pick**
+where two copies disagree on a number.
+
+✅ **And the durable fix: a CI guard.** A duplicate ID should fail the build, the way
+`test/status-header-integrity.test.mjs` now catches a STATUS H1 burial — written today after a prose convention
+note failed five times to stop the same mistake. The prompt specifies the two things that guard must get right or
+it will be disabled by the first person it annoys: deliberate cross-references are not duplicates, and an
+unresolvable duplicate is allowlisted **by ID with a reason and a re-measure date**, with a stale entry itself a
+failure.
+
+⚠️ Flagged explicitly in the prompt: §P0s `SEC2` carries Scott's ⏸️ deferral decision and its trigger condition —
+**carry it across intact, do not restate it.**
 
 ## 2026-09-12 — HP1-badge prompt: the count lies, and fixing it honestly exposes that Urgent is 96% hygiene (Cowork)
 
