@@ -39,6 +39,24 @@ const money = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
+// HP1-badge (2026-09-12) — `total_open` MUST be the true population, never
+// `rows.length` (the query's own LIMIT/page cap). The caller (the handler)
+// separately measures the true count and passes it as `opts.trueTotalOpen`;
+// a KEY that is present (even carrying `null`, meaning "the count probe
+// failed this request") always wins over the capped array length. Only when
+// the key is entirely ABSENT — this module's own unit tests calling a
+// builder directly with an uncapped fixture array — does total_open fall
+// back to `all.length`, which in that case genuinely IS the population.
+// Never silently substitute a page length for an unknown count (P180: a
+// failed count is "unknown", not "0" and not "however many rows the render
+// path happened to fetch").
+function resolveTotalOpen(opts, all) {
+  if (opts && Object.prototype.hasOwnProperty.call(opts, 'trueTotalOpen')) {
+    return Number.isFinite(opts.trueTotalOpen) ? opts.trueTotalOpen : null;
+  }
+  return all.length;
+}
+
 /**
  * SIGNIFICANT — new-client research, first outreach, follow-ups.
  * Source: v_lcc_seller_prospect_queue (UX-T1a-queue), already ranked
@@ -51,7 +69,8 @@ const money = (v) => {
  * `years_into_term` are never collapsed to 0/false when unknown (P180) — they
  * ride as `null` and the caller renders "value unknown" / "term unknown".
  */
-export function buildSignificantSection(rows, { limit = TODAY_SECTION_LIMIT } = {}) {
+export function buildSignificantSection(rows, opts = {}) {
+  const { limit = TODAY_SECTION_LIMIT, sourceError = null } = opts;
   const all = Array.isArray(rows) ? rows : [];
   const items = all.slice(0, limit).map((r) => {
     const reasons = [];
@@ -76,7 +95,7 @@ export function buildSignificantSection(rows, { limit = TODAY_SECTION_LIMIT } = 
       deep_link: { surface: 'entity', entity_id: r.entity_id || null },
     };
   });
-  return { items, count: items.length, total_open: all.length };
+  return { items, count: items.length, total_open: resolveTotalOpen(opts, all), source_error: sourceError || null };
 }
 
 /**
@@ -85,7 +104,8 @@ export function buildSignificantSection(rows, { limit = TODAY_SECTION_LIMIT } = 
  * recorded producer measured for this bucket — see the module header for the
  * two named gaps this does NOT cover).
  */
-export function buildImportantSection(bdOppRows, entityById = new Map(), { limit = TODAY_SECTION_LIMIT } = {}) {
+export function buildImportantSection(bdOppRows, entityById = new Map(), opts = {}) {
+  const { limit = TODAY_SECTION_LIMIT, sourceError = null } = opts;
   const all = Array.isArray(bdOppRows) ? bdOppRows : [];
   const items = all.slice(0, limit).map((r) => ({
     kind: 'bd_opportunity',
@@ -100,30 +120,40 @@ export function buildImportantSection(bdOppRows, entityById = new Map(), { limit
     type: r.type || null,
     deep_link: { surface: 'entity', entity_id: r.entity_id || null },
   }));
-  return { items, count: items.length, total_open: all.length };
+  return { items, count: items.length, total_open: resolveTotalOpen(opts, all), source_error: sourceError || null };
 }
 
 /**
- * URGENT — pipeline management, deal correspondence (~90 days). Two named
- * producers, merged and ranked together:
+ * URGENT — pipeline management, deal correspondence (~90 days). One named
+ * producer feeds actual deal work here:
  *   1. `action_items` open/in_progress rows tied to a deal (deal_next_step,
  *      reply_overdue, review_response, seller_follow_up, send_info,
  *      schedule_call, follow_up, advance_to_contract, offer_review) — the deal
  *      CORRESPONDENCE half.
- *   2. `v_lcc_bd_worklist`'s `contact_writeback` + the domain
- *      `owner_source_conflict` (auto_fixable) rows — the pipeline-HYGIENE half
- *      named explicitly by the prompt. `loan_maturity` and `ownership_chain`
- *      are deliberately EXCLUDED here: loan_maturity's own ≤24-month window does
- *      not express the canon's ~90-day Urgent boundary (no sub-slice exists to
- *      test it against), and ownership_chain is now A2's automated apply lane,
- *      not a human task (B1/A2 — its consumer is a cron, not an operator).
+ *   2. the domain `owner_source_conflict` (auto_fixable) rows — a
+ *      data-integrity block on the deal moving, so it stays in Urgent.
+ *
+ * ⚠️ HP1-P2f-urgent (2026-09-12): `v_lcc_bd_worklist`'s `contact_writeback`
+ * rows are CRM plumbing (push an already-resolved contact to Salesforce),
+ * measured at 96% of this lane's pre-fix population — not deal work an
+ * operator has to judge. They are EXCLUDED from the union here and instead
+ * surfaced as `pointer`: excluding is not hiding (P159a) — the pointer
+ * carries the TRUE, uncapped count (never a page length) and a link to the
+ * BD worklist's own `contact_writeback` chip, which already renders a
+ * "Push to CRM" action for every one of them. `loan_maturity` and
+ * `ownership_chain` remain excluded for the reasons already established:
+ * loan_maturity's own ≤24-month window does not express the canon's ~90-day
+ * Urgent boundary (no sub-slice exists to test it against), and
+ * ownership_chain is now A2's automated apply lane, not a human task
+ * (B1/A2 — its consumer is a cron, not an operator).
  *
  * Ranking: an OVERDUE action item (due_date in the past) always outranks a
  * value-only row — that is what "keeps Urgent from crowding out Significant"
  * means operationally: a task actually late beats a task merely valuable. Ties
  * within "overdue" and within "not overdue" break on value.
  */
-export function buildUrgentSection({ actionItems, bdWorklistRows } = {}, entityById = new Map(), { limit = TODAY_SECTION_LIMIT, today } = {}) {
+export function buildUrgentSection({ actionItems, bdWorklistRows, contactWritebackCount } = {}, entityById = new Map(), opts = {}) {
+  const { limit = TODAY_SECTION_LIMIT, today, actionItemsError = null, bdWorklistError = null } = opts;
   const now = today instanceof Date ? today : new Date();
   const todayIso = now.toISOString().slice(0, 10);
 
@@ -146,24 +176,28 @@ export function buildUrgentSection({ actionItems, bdWorklistRows } = {}, entityB
     };
   });
 
-  const bwRows = (Array.isArray(bdWorklistRows) ? bdWorklistRows : []).map((r) => ({
-    kind: r.signal_type,
-    section: 'urgent',
-    id: null,
-    entity_id: r.entity_id || null,
-    domain: r.domain || null,
-    property_id: r.property_id || null,
-    who: r.who || null,
-    what: r.what || r.signal_type,
-    action_type: r.signal_type,
-    value: money(r.rank_value) || 0,
-    due_date: null,
-    overdue: false,
-    basis: r.signal_type === 'contact_writeback' ? 'push contact to CRM — pipeline hygiene'
-      : r.signal_type === 'owner_source_conflict' ? 'reconcile owner conflict — blocks the deal moving'
-      : (r.signal_type || 'pipeline hygiene'),
-    deep_link: r.deep_link || null,
-  }));
+  // HP1-P2f-urgent: contact_writeback is CRM plumbing, not deal work — it
+  // never enters the ranked union. Every other bd_worklist signal type this
+  // section admits (today: owner_source_conflict) still flows through.
+  const bwRows = (Array.isArray(bdWorklistRows) ? bdWorklistRows : [])
+    .filter((r) => r.signal_type !== 'contact_writeback')
+    .map((r) => ({
+      kind: r.signal_type,
+      section: 'urgent',
+      id: null,
+      entity_id: r.entity_id || null,
+      domain: r.domain || null,
+      property_id: r.property_id || null,
+      who: r.who || null,
+      what: r.what || r.signal_type,
+      action_type: r.signal_type,
+      value: money(r.rank_value) || 0,
+      due_date: null,
+      overdue: false,
+      basis: r.signal_type === 'owner_source_conflict' ? 'reconcile owner conflict — blocks the deal moving'
+        : (r.signal_type || 'pipeline hygiene'),
+      deep_link: r.deep_link || null,
+    }));
 
   const all = [...aiRows, ...bwRows];
   all.sort((a, b) => {
@@ -172,25 +206,83 @@ export function buildUrgentSection({ actionItems, bdWorklistRows } = {}, entityB
   });
 
   const items = all.slice(0, limit);
-  return { items, count: items.length, total_open: all.length };
+  // Urgent has TWO independent producers (§ module header) — either can fail
+  // on its own without the other, so the section's source_error names whichever
+  // (or both) degraded rather than collapsing to one undifferentiated flag.
+  const urgentSourceError = (actionItemsError && bdWorklistError)
+    ? `deal correspondence: ${actionItemsError}; pipeline hygiene: ${bdWorklistError}`
+    : (actionItemsError ? `deal correspondence: ${actionItemsError}`
+      : (bdWorklistError ? `pipeline hygiene: ${bdWorklistError}` : null));
+
+  // HP1-P2f-urgent — the excluded contact_writeback population's TRUE count
+  // (an exact, uncapped probe the caller took off v_lcc_bd_worklist directly,
+  // never the page this section itself fetched). `null` means the probe
+  // failed THIS request — render "unknown", never a fabricated 0 (P180).
+  const pointer = Number.isFinite(contactWritebackCount)
+    ? {
+      source_type: 'contact_writeback',
+      count: contactWritebackCount,
+      label: 'Pipeline hygiene — contacts to push to CRM',
+      surface: 'bd_worklist_contact_writeback',
+    }
+    : null;
+
+  return {
+    items, count: items.length, total_open: resolveTotalOpen(opts, all),
+    source_error: urgentSourceError, pointer,
+  };
 }
 
 /**
  * Assemble the whole Today recut. `named_gaps` is a list of strings describing
  * a canon-named example with no producer today — filed, never fabricated.
+ *
+ * `sourceErrors` (HP1 Finding 1, P0) — when a source query for one lane threw
+ * or 5xx'd this request (a timeout, a dead connection), the CALLER (the
+ * handler) empties that lane's rows and passes the reason here instead of
+ * letting the whole endpoint 500. Each section then carries `source_error`
+ * (null when healthy) AND the reason is folded into `named_gaps` under the
+ * SAME contract as a permanent design gap — a degraded lane this request is
+ * exactly the kind of thing P131 says must be named, never silently swallowed
+ * as "nothing here" (which would read as a false all-clear on an owner queue).
+ * Shape: { significant, important, actionItems, bdWorklist } — each a
+ * string|null describing that source's failure THIS request.
  */
 export function assembleTodaySections({
-  significantRows, bdOppRows, actionItems, bdWorklistRows, entityById,
+  significantRows, bdOppRows, actionItems, bdWorklistRows, entityById, contactWritebackCount,
 } = {}, opts = {}) {
   const em = entityById instanceof Map ? entityById : new Map();
-  return {
-    significant: buildSignificantSection(significantRows, opts),
-    important: buildImportantSection(bdOppRows, em, opts),
-    urgent: buildUrgentSection({ actionItems, bdWorklistRows }, em, opts),
-    named_gaps: [
-      'Important: no DB row anywhere records "a BOV was generated" or "one is due" — bd_opportunities open rows are the closest recorded producer, not a BOV-specific one.',
-      'Important: no discrete producer exists for "marketing a live listing" as a task (lcc_listing_events is a SALE-event feed, not a marketing-touch queue).',
-      'Urgent: loan_maturity has no sub-slice expressible for the canon\'s ~90-day window, so it is surfaced elsewhere (Priority Queue / BD worklist), not here.',
-    ],
+  const se = (opts && opts.sourceErrors) || {};
+  // `opts.trueTotalOpen`, when supplied, is a MAP of the three sections' true
+  // counts (each a number or null — HP1-badge). Strip it off before spreading
+  // `opts` into a section's own opts, or the whole map would leak down as
+  // that section's scalar `trueTotalOpen`; re-attach only the ONE number (or
+  // explicit null) that section owns, and only when the caller actually
+  // measured it — a caller that never asked (no top-level `trueTotalOpen` at
+  // all) leaves every section falling back to its own array length, exactly
+  // as before this change (the pure-function unit-test contract).
+  const ttMap = (opts && opts.trueTotalOpen && typeof opts.trueTotalOpen === 'object') ? opts.trueTotalOpen : null;
+  const baseOpts = { ...opts };
+  delete baseOpts.trueTotalOpen;
+  const withTrueTotal = (sectionOpts, key) => {
+    if (ttMap && Object.prototype.hasOwnProperty.call(ttMap, key)) sectionOpts.trueTotalOpen = ttMap[key];
+    return sectionOpts;
   };
+
+  const significant = buildSignificantSection(significantRows, withTrueTotal({ ...baseOpts, sourceError: se.significant || null }, 'significant'));
+  const important = buildImportantSection(bdOppRows, em, withTrueTotal({ ...baseOpts, sourceError: se.important || null }, 'important'));
+  const urgent = buildUrgentSection({ actionItems, bdWorklistRows, contactWritebackCount }, em, withTrueTotal({
+    ...baseOpts, actionItemsError: se.actionItems || null, bdWorklistError: se.bdWorklist || null,
+  }, 'urgent'));
+
+  const named_gaps = [
+    'Important: no DB row anywhere records "a BOV was generated" or "one is due" — bd_opportunities open rows are the closest recorded producer, not a BOV-specific one.',
+    'Important: no discrete producer exists for "marketing a live listing" as a task (lcc_listing_events is a SALE-event feed, not a marketing-touch queue).',
+    'Urgent: loan_maturity has no sub-slice expressible for the canon\'s ~90-day window, so it is surfaced elsewhere (Priority Queue / BD worklist), not here.',
+  ];
+  if (significant.source_error) named_gaps.push(`Significant: source degraded this request — ${significant.source_error}. Section shown empty, not exhausted.`);
+  if (important.source_error) named_gaps.push(`Important: source degraded this request — ${important.source_error}. Section shown empty, not exhausted.`);
+  if (urgent.source_error) named_gaps.push(`Urgent: source degraded this request — ${urgent.source_error}. Section partially or fully empty, not exhausted.`);
+
+  return { significant, important, urgent, named_gaps };
 }

@@ -6,7 +6,20 @@
 > the traps already paid for.
 >
 > **Nothing here replaces the per-round audits — they are the evidence and they stay.** This page
-> tells you which one to open. Last measured **2026-08-27 22:25 UTC**.
+> tells you which one to open. Last measured **2026-08-27 22:25 UTC**; §2's headline numbers
+> re-measured live and §5/§6 corrected **2026-09-12 (Cowork)** — a real bug was found keeping
+> `TIER0_AUTO_ATTACH` silently off for 16 days despite the registry saying `on`.
+>
+> ✅ **2026-09-14 (Cowork): the 09-12 fix VERIFIED live, closing the one thing §6 explicitly said
+> was never actually done.** `lcc_tier0_auto_attach_run_log` shows `attached=0` on 09-12 06:55
+> (fix landed mid-day, after that run), then **`attached=9` on 09-13 06:55** — the first tier0_auto
+> writes ever (`lcc_tier0_confirm_log.actor` was NULL/system, verdict `attach`, 9 rows, none before
+> 09-13). 09-14 06:55 correctly shows `auto_candidates=0` — the easy pool cleared. Owner-to-person
+> linkage re-measured the same day: **13.5% (1,377 of 10,187)**, essentially unchanged in ratio from
+> the 08-27 audit's 13% (847/6,480) even after the fix started writing — both the linked count and
+> the universe grew (universe growth partly explained by OWN-T0b/c's still-open 1,183
+> `duplicate_entity` residue inflating the owner count with un-merged duplicates). The fix works;
+> the gap it closes per day (9) is tiny next to the gap's size.
 >
 > 📇 **Topic index for the whole ownership→contact chain (~20 files, and two that are named
 > misleadingly): [`connectivity-and-open-threads.md`](connectivity-and-open-threads.md) §0.**
@@ -33,13 +46,13 @@ separate, standing decision** (`account-based-contact-intelligence.md`).
 
 | | |
 |---|---|
-| candidate pairs | **684** |
-| lane cards shown to the operator | **91** (ask 82 + auto 9) |
-| parked, not shown | **141** — +4 are Montecito Medical, newly visible after N19 consolidated its rent onto the entity carrying its candidates |
-| human attaches recorded | **27** |
-| owner merges logged (all reversible) | **66** |
-| `tier0_auto` writes | **0** — see §6, this is a pending verification, not a failure |
-| curated sponsor entries | **8** |
+| candidate pairs | **735** (was 742 earlier 09-14, 758 on 09-12, 684 on 08-27) — 9-13 auto-attach batch (-16) then the N3c bank/trustee exclusion (-7) |
+| lane cards shown to the operator | **70** (was 72 earlier 09-14, 83 on 09-12, 91 on 08-27) |
+| parked, not shown | 141 as of 08-27 — not re-measured this pass |
+| human attaches recorded | **27**, unchanged since 08-27 (all human attaches predate the fix; see `tier0_auto` writes below for the newer channel) |
+| owner merges logged (all reversible) | **176** (was 66 on 08-27) — real growth, unrelated to auto-attach |
+| `tier0_auto` writes | ✅ **9 — the fix VERIFIED live 2026-09-14 (Cowork)**, all dated 09-13 06:55 (the first ever; see §5 trap 14 / §6). 09-14's run correctly found 0 new auto candidates — the easy pool cleared, not a regression. |
+| curated sponsor entries | 8 as of 08-27 — not re-measured this pass |
 | `TIER0_AUTO_ATTACH` | ✅ **`on` since 2026-08-28.** ⚠️ **THE GATE IS THE `feature_flags_registry` TABLE, NOT A RAILWAY ENV VAR** — `tier0-auto-attach-tick.js:208` calls `flagEnabled(await fetchFeatureFlag(FLAG))`. Setting the env var on 08-27 had **no effect**: cron 241 logged `flag_enabled=false, planned=9, attached=0` on both 08-27 and 08-28 |
 | merge-detector blind groups remaining | **64** (176 entities) |
 | `canonical_name` drift / invisible to `ensureEntityLink` | **0 / 0** — N15c+N15e complete, all 62,368 keyed |
@@ -75,6 +88,7 @@ cron **241 at 06:55 UTC**. The GET is an ungated dry run and writes nothing.
 | **Only the strongest candidates are shown** | Scott 2026-08-26 | 255 → 96 cards |
 | **Sponsor map: 8 confirmed** | Scott 2026-08-26/27 | ngp, uirc, hpi, jbg, gardner, salus, oxford, savlan. **fcp and tmg deliberately held** |
 | **Rejected sponsors** | Scott 2026-08-27 | `royal` (common word), `maple` (the Mapletree place-word trap) |
+| **Banks and CMBS trustees excluded from prospecting** | Scott 2026-09-14 | Same category as public bodies/universities, `lcc_owner_name_is_bank_or_trustee`. Explicitly revisitable if lender prospecting via Northmarq debt-side coordination is decided later |
 | **A confirm lane, not an unattended promoter** | measured | link precision ~91% only above ~$16M, ~60–70% in the $2M SPE band |
 | **DST / Trust / LLC variants of one sponsor stay ONE entity — the TRUE OWNER** | Scott 2026-08-27 | Answers N15b §6 decision 1. `Rainier Rockford DST Trust` = `Rainier Rockford Llc`; `SE VALPO LLC` = `Se Valpo Dst`; `Chiapelone` = `Chiapelone Trust`. **So `lcc_owner_domain_core`'s `trust\|dst\|reit` strip is CORRECT and is the adopted rule** — what N15b listed as its "named residue" is the desired behaviour. ⚠️ **The aspirational future (individual investors as direct owners, and knowing they hold fractional positions in a DST/TIC/JV on similar deals) is a SEPARATE model and must NOT be built by splitting this dedup key** — see backlog **N17** |
 
@@ -121,27 +135,68 @@ cron **241 at 06:55 UTC**. The GET is an ungated dry run and writes nothing.
 12. **`lcc_name_has_spe_marker` is named backwards** — it detects a PORTFOLIO/sponsor marker
     and returns **FALSE for every name containing the literal string "SPE"**. Read the
     function, never its name. *(P198)*
+14. **⚠️ A shared helper's signature drifted at exactly one call site, and nobody wrote a guard
+    for it.** `flagEnabled(envName, flagRow)` takes TWO arguments; `tier0-auto-attach-tick.js:208`
+    called `flagEnabled(await fetchFeatureFlag(FLAG))` — ONE. The fetch result landed in the
+    `envName` slot (`process.env[rowObject]` never matches an ON/OFF string) and `flagRow` was
+    `undefined`, so the function fell through to its own hardcoded `false` on every call —
+    **regardless of what `feature_flags_registry.state` said.** Confirmed live 2026-09-12: the
+    tick's own run log shows `flag_enabled=false, skipped_reason='flag_off'` on **all 17 runs from
+    2026-08-27 through 2026-09-12**, even though the registry has read `state='on'` since
+    2026-08-28 21:51 UTC. Every OTHER caller of `flagEnabled` in this repo (7 of them) passes both
+    arguments correctly — this was the one drifted copy. **Fixed 2026-09-12 (Cowork):** the call
+    now reads `flagEnabled(FLAG, await fetchFeatureFlag(FLAG))`, matching every sibling tick;
+    guard `test/tier0-auto-attach-flag-arity.test.mjs` source-checks the call shape so this exact
+    drift can't silently reappear. *(Cowork, 2026-09-12)*
 
 ## 6. Open — and what is merely PENDING vs genuinely open
 
-**⏳ Pending verification, not failure:**
+**✅ Actually resolved 2026-09-12 (was wrongly marked resolved on 2026-08-28):**
 - ~~**`TIER0_AUTO_ATTACH`** … registry flips to `on` only after a tick reports `writes > 0`.~~
-  ⚠️ **RESOLVED 2026-08-28 — and that policy was a DEADLOCK I wrote.** The handler gates on the
-  **`feature_flags_registry` table** (`fetchFeatureFlag`), not the Railway env var Scott set, so
-  *"flip the registry only after a tick writes"* could never be satisfied: **the registry IS the
-  gate.** Two runs proved it — 08-27 and 08-28 both logged **`flag_enabled=false`,
-  `auto_candidates=9`, `planned=9`, `attached=0`**. The tick found and planned every card and was
-  refused by the flag. **Registry flipped to `on` 2026-08-28; the next 06:55 run is the real test**
-  (expect `active_source='tier0_auto'` 0 → 9).
+  The 2026-08-28 entry below this line correctly diagnosed the DEADLOCK (registry IS the gate,
+  not the Railway env var) and flipped the registry `on` — **but the "next 06:55 run is the real
+  test" verification was never actually done.** It stayed broken for a SECOND, different reason:
+  see §5 trap 14 — a call-site arity bug meant the tick could never see the registry as `on` no
+  matter what the row said. **Both bugs are now fixed** (registry flip 08-28 + call-site fix
+  09-12). ✅ **VERIFIED 2026-09-14 (Cowork)** — read `lcc_tier0_auto_attach_run_log` directly rather
+  than trusting the cron's green status: 09-13 06:55 shows `flag_enabled=true, auto_candidates=9,
+  planned=9, attached=9` — the first non-zero `attached` in the log's history. `lcc_tier0_confirm_log`
+  confirms it independently: 9 rows with `actor` NULL (system) and `verdict='attach'`, all dated
+  09-13, none before. 09-14 06:55 shows `auto_candidates=0` (pool cleared), which is the expected
+  steady state, not a regression.
+  **2026-08-28 entry, kept verbatim for the record:** *"RESOLVED 2026-08-28 — and that policy was
+  a DEADLOCK I wrote. The handler gates on the `feature_flags_registry` table (`fetchFeatureFlag`),
+  not the Railway env var Scott set, so 'flip the registry only after a tick writes' could never be
+  satisfied: the registry IS the gate. Two runs proved it — 08-27 and 08-28 both logged
+  `flag_enabled=false`, `auto_candidates=9`, `planned=9`, `attached=0`. The tick found and planned
+  every card and was refused by the flag. Registry flipped to `on` 2026-08-28; the next 06:55 run
+  is the real test (expect `active_source='tier0_auto'` 0 → 9)."*
   **Durable lesson: a green cron proves the POST, not the write — read the handler's OWN run log**
   (`lcc_tier0_auto_attach_run_log`), because `net._http_response` prunes to ~6 hours and
   `cron.job_run_details` only ever says the POST succeeded.
 - **Sidebar `_provider` stamp rate** — 0%, but the newest row predates the extension reload. One
   CoStar capture settles it.
 
-**👤 Needs Scott:** `fcp→fcpdc.com` and `tmg→tmgdc.com`; **N3c** bank/trustee scope (Truist $6.2M /
-15 candidates, Wells Fargo, the JP Morgan CMBS trust); **N15** whether the 1,475 Salesforce-campaign
-orphans get hub rows.
+✅ **N3c decided and shipped 2026-09-14 (Scott + Cowork):** banks and CMBS trustees excluded from
+prospecting permanently for now, as their own category (same mechanism as public bodies and
+universities) -- `lcc_owner_name_is_bank_or_trustee`, wired into `lcc_owner_name_is_not_prospected`
+so it reaches all seven consuming views. Sized before shipping: 11 owner names match live (10 national
+banks + 1 JPMorgan CMBS trust), 0 false positives against individual/family trustees, 0 credit unions
+swept in (deliberately -- they can be legitimate owner-occupant prospects). Truist and the 15
+candidates named in the original sizing are no longer live in the open lane (population moved since);
+what's excluded now is Wells Fargo Bank NA ($3,622,447 rent) and the JP Morgan CMBS trust ($2,377,718
+rent), verified gone from `v_lcc_tier0_owner_contact_lane_open`. **Explicitly revisitable** — Scott's
+words: "that might be a decision we reevaluate in the future if we decide to start prospecting
+lenders directly and work some coordinated capacity with the Northmarq debt side... for now, nothing
+though." Migration: `supabase/migrations/20261102150000_lcc_own_t0_bank_cmbs_trustee_exclusion.sql`.
+
+⚠️ **`fcp`/`tmg` sponsor-domain proposals are now STALE, re-checked 2026-09-14** — both have
+disappeared entirely from `v_lcc_tier0_sponsor_map_proposals` live (were present when this page was
+last measured 08-27/08-28). Whatever candidates generated them were resolved, merged, or reclassified
+since. Not re-raising a decision that no longer has a live population behind it; if the underlying
+owners resurface, re-measure before asking again.
+
+**👤 Still needs Scott:** **N15** whether the 1,475 Salesforce-campaign orphans get hub rows.
 
 **✅ Done 2026-08-27 16:28 UTC (P198 §5):** Scott approved and all three merges landed — Easterly,
 Cambridge, Gardner. Six cards became three; **Easterly is now ONE card at $114,864,150 / 89 assets /

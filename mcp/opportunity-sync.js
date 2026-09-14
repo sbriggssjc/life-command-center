@@ -217,18 +217,75 @@ async function processDeal(raw, deps) {
     owner_user_id, vertical, last_synced_at: new Date().toISOString(),
     metadata: meta,
   };
-  const up = await opsQuery('POST',
-    'bd_opportunities?on_conflict=workspace_id,sf_opp_id', row,
-    { Prefer: 'resolution=merge-duplicates,return=representation' });
+  // HP1-P1a-fix: this used to be a PostgREST upsert
+  // (`bd_opportunities?on_conflict=...` + `Prefer: resolution=merge-duplicates`).
+  // That Prefer header never took effect on the standalone MCP deploy — its
+  // opsQuery(method, path, body, prefer) signature expects `prefer` as a
+  // plain STRING, and was being handed an OBJECT, which undici's Headers
+  // coerces to the literal "[object Object]". PostgREST cannot parse that as
+  // a Prefer directive, so it silently fell back to a plain INSERT with no
+  // ON CONFLICT handling — every re-sync of an already-seen sf_opp_id 502'd
+  // on the unique key, and no stage/close ever propagated. Routed through an
+  // RPC instead: one INSERT ... ON CONFLICT DO UPDATE, no header to mangle,
+  // and an honest per-row inserted/updated/skipped outcome.
+  const up = await opsQuery('POST', 'rpc/lcc_upsert_bd_opportunities', { p_deals: [row] });
   if (up.ok === false) return { status: 502, body: { ok: false, error: 'upsert_failed', detail: up.data, sf_opp_id: b.sf_opp_id } };
-  const saved = Array.isArray(up.data) ? up.data[0] : up.data;
+  const result = Array.isArray(up.data) ? up.data[0] : up.data;
+  if (!result || result.outcome === 'skipped') {
+    return { status: 502, body: { ok: false, error: 'upsert_skipped', detail: result?.reason || 'no_result_row', sf_opp_id: b.sf_opp_id } };
+  }
+  const saved = { id: result.bd_opportunity_id };
 
   return { status: 200, body: {
     ok: true, entity_id: rec.entity_id, created_entity: rec.created,
     bd_opportunity_id: saved?.id || null, stage, unmapped_stage: unmappedStage,
     ambiguous_resolution: !!rec.ambiguous, closed: isClosed, regime: stageRegime(stage),
     needs_psa_timeline: CONTRACTUAL.has(stage), sf_opp_id: b.sf_opp_id,
+    // HP1-P1d: the RPC's own write outcome (inserted/updated), read straight
+    // through so ingestBatch can log a real facts_written delta to
+    // producer_runs instead of the "succeeded" tally, which counts entity
+    // resolution + write success together and is not itself the write delta.
+    outcome: result.outcome,
   } };
+}
+
+// HP1-P1d — producer_runs lifecycle for this feed. `ingestBatch` runs the
+// whole batch synchronously inside one request (unlike the tick-style
+// producers, which open a row before a long-running background pass), so
+// ONE row is written at the end carrying started_at/finished_at/duration
+// together, rather than open-then-PATCH-by-run_id. This deliberately avoids
+// re-reading the RPC's own OUT/`Prefer: return=representation` id back
+// through opsQuery: that "read the id back" shape is exactly what the
+// standalone MCP's positional opsQuery(method, path, body, prefer) mangled
+// (P1a-fix's own root cause). Every opsQuery call in this file stays 3-arg.
+const PRODUCER_SF_OPPORTUNITY_SYNC = 'sf_opportunity_sync';
+
+async function logIngestRun(deps, { summary, allFailed, startedAt, finishedAt }) {
+  const durationMs = finishedAt - startedAt;
+  const status = summary.total === 0 ? 'skipped' : (allFailed ? 'failed' : 'completed');
+  const payload = {
+    producer: PRODUCER_SF_OPPORTUNITY_SYNC,
+    lane: null,
+    started_at: new Date(startedAt).toISOString(),
+    finished_at: new Date(finishedAt).toISOString(),
+    duration_ms: durationMs,
+    status,
+    skip_reason: summary.total === 0 ? 'empty_batch' : null,
+    trigger_source: 'ingest',
+    // The state delta the RPC itself reports (inserted+updated), never the
+    // "succeeded" tally, which also counts entity-resolution work that made
+    // no write (P159a: judge a worker by the delta, not its own tally).
+    facts_written: (summary.inserted || 0) + (summary.updated || 0),
+    facts_superseded: 0,
+    facts_expired: 0,
+    error_count: summary.failed || 0,
+    detail: summary,
+  };
+  try {
+    await deps.opsQuery('POST', 'producer_runs', payload);
+  } catch (_e) {
+    // Logging must never break the response the caller (Power Automate) reads.
+  }
 }
 
 export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
@@ -248,6 +305,7 @@ export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
     // loops server-side with bounded concurrency and per-deal timeouts, so no single
     // record can stall the run (the failure mode of the PA Apply-to-each loop).
     ingestBatch: async (req, res) => {
+      const startedAt = Date.now();
       const body = req.body || {};
       const deals = Array.isArray(body) ? body : (body.deals || body.value || []);
       if (!Array.isArray(deals)) {
@@ -255,7 +313,11 @@ export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
       }
       const summary = {
         total: deals.length, succeeded: 0, created: 0, resolved: 0,
-        ambiguous: 0, closed: 0, unmapped_stage: 0, failed: 0, errors: [],
+        ambiguous: 0, closed: 0, unmapped_stage: 0, failed: 0,
+        // HP1-P1d: the RPC's own per-row write outcome, tallied separately
+        // from `succeeded` (which also counts a row that resolved an entity
+        // but made no DB write). This is what producer_runs.facts_written reads.
+        inserted: 0, updated: 0, errors: [],
       };
       const CONC = 8;
       let i = 0;
@@ -270,22 +332,41 @@ export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
               if (r.body.ambiguous_resolution) summary.ambiguous++;
               if (r.body.closed) summary.closed++;
               if (r.body.unmapped_stage) summary.unmapped_stage++;
+              if (r.body.outcome === 'inserted') summary.inserted++;
+              else if (r.body.outcome === 'updated') summary.updated++;
             } else {
               summary.failed++;
               if (summary.errors.length < 50) {
-                summary.errors.push({ sf_opp_id: r.body.sf_opp_id ?? (d && (d.Id || d.sf_opp_id)) ?? null, status: r.status, error: r.body.error || 'unknown' });
+                // Unit 3: carry `detail` through, not just the label — `upsert_failed`
+                // alone cost a whole diagnosis cycle that the PostgREST/DB detail
+                // would have ended immediately.
+                summary.errors.push({ sf_opp_id: r.body.sf_opp_id ?? (d && (d.Id || d.sf_opp_id)) ?? null, status: r.status, error: r.body.error || 'unknown', detail: r.body.detail ?? null });
               }
             }
           } catch (e) {
             summary.failed++;
             if (summary.errors.length < 50) {
-              summary.errors.push({ sf_opp_id: (d && (d.Id || d.sf_opp_id)) ?? null, error: String(e?.message || e) });
+              summary.errors.push({ sf_opp_id: (d && (d.Id || d.sf_opp_id)) ?? null, error: String(e?.message || e), detail: null });
             }
           }
         }
       }
       await Promise.all(Array.from({ length: Math.min(CONC, deals.length) }, worker));
-      return res.status(200).json({ ok: true, ...summary });
+      // Unit 3: a batch endpoint must not return 200 when it wrote nothing.
+      // `ingestBatch` used to end here unconditionally, so 608/608 failures
+      // still reported `{"ok":true,"total":608,"succeeded":0,...}` and Power
+      // Automate read the 200 status code and marked the run Succeeded — that
+      // is why six weeks of total failure was invisible from both ends. A
+      // fully-failed batch is loud (502, ok:false); a partial one stays 200
+      // but is flagged so `succeeded`/`failed` are never the only signal.
+      const allFailed = summary.total > 0 && summary.failed === summary.total;
+      const partial = summary.failed > 0 && summary.succeeded > 0;
+      // HP1-P1d: log the run regardless of outcome (completed/failed/skipped)
+      // so producer_runs carries an honest record of every batch this feed
+      // ever ran — never awaited into the response path, so a logging hiccup
+      // cannot turn a real sync into a 500 for Power Automate.
+      logIngestRun(deps, { summary, allFailed, startedAt, finishedAt: Date.now() });
+      return res.status(allFailed ? 502 : 200).json({ ok: !allFailed, partial, ...summary });
     },
   };
 }

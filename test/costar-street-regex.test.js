@@ -50,6 +50,14 @@ describe('costar.js STREET_RE address-suffix coverage', () => {
     '3428 Interstate 20',
     '3428 I-20',
     '3428 IH-20',
+    // 2026-09-12: named-development addresses with no street suffix at all —
+    // "483 Gateway Industrial Park" (Jenkins, KY, a DaVita Dialysis clinic)
+    // parsed to null because "park" wasn't a known street type, dropping the
+    // sidebar into its empty "unsupported site" state.
+    '483 Gateway Industrial Park',
+    '100 Enterprise Commons',
+    '200 Riverwalk Center',
+    '50 Lakeview Pointe',
   ];
 
   // Plain text / non-addresses must still be rejected by both patterns.

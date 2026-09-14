@@ -38,7 +38,10 @@ const MIGRATION = readdirSync('supabase/migrations')
               // B1 (2026-08-28) re-issued the WHOLE split-view body again to add
               // the human value gate. A guard pinned to the older files keeps
               // passing while the shipped view drifts away from it (P197).
-              || f.includes('b1_split_chain_value_floor'))
+              || f.includes('b1_split_chain_value_floor')
+              // PR-scanner-3 (2026-09-12) re-issued the WHOLE split-view body
+              // again to add the county_records_needed reclassification.
+              || f.includes('pr_scanner3_county_records_needed'))
   .map((f) => readFileSync(`supabase/migrations/${f}`, 'utf8'))
   .join('\n');
 
@@ -84,11 +87,12 @@ test('it LEFT JOINs, so an undrafted task is visible rather than dropped', () =>
   assert.match(VIEW_SQL, /'unrecognised_payload'/);
 });
 
-test('exactly five actions, and awaiting/unrecognised are NOT among them', () => {
-  // A3 added `sponsor_spe`. It is an ACTION (a bucket the operator can filter
-  // to and the rollup counts), never a pending state.
+test('exactly six actions, and awaiting/unrecognised are NOT among them', () => {
+  // A3 added `sponsor_spe`; PR-scanner-3 added `county_records_needed`. Both
+  // are ACTIONS (a bucket the operator can filter to and the rollup counts),
+  // never a pending state.
   assert.deepEqual([...OWNERSHIP_LANE_ACTIONS].sort(),
-    ['agrees', 'all_guarded', 'mismatch', 'no_records', 'sponsor_spe']);
+    ['agrees', 'all_guarded', 'county_records_needed', 'mismatch', 'no_records', 'sponsor_spe']);
   for (const p of OWNERSHIP_LANE_PENDING_STATES) {
     assert.equal(isOwnershipLaneAction(p), false, `${p} is a split_state, not an action`);
     assert.equal(isOwnershipLaneBucket(p), true, `${p} must still be selectable/countable`);
@@ -104,8 +108,9 @@ test('no_records and all_guarded are distinct buckets (P181)', () => {
   );
 });
 
-test('only mismatch + all_guarded count as human work', () => {
-  assert.deepEqual([...OWNERSHIP_LANE_HUMAN_ACTIONS].sort(), ['all_guarded', 'mismatch']);
+test('mismatch + all_guarded + county_records_needed count as human work', () => {
+  assert.deepEqual([...OWNERSHIP_LANE_HUMAN_ACTIONS].sort(),
+    ['all_guarded', 'county_records_needed', 'mismatch']);
   // agrees is a confirmation (A2 applies it); no_records is unanswerable (A4
   // retires it). A badge counting either is the badge-that-is-noise failure.
   assert.equal(OWNERSHIP_LANE_HUMAN_ACTIONS.includes('agrees'), false);
@@ -115,6 +120,49 @@ test('only mismatch + all_guarded count as human work', () => {
   assert.equal(OWNERSHIP_LANE_HUMAN_ACTIONS.includes('sponsor_spe'), false);
   assert.match(VIEW_SQL, /human_actionable/,
     'the view must expose the honest badge count, not leave it to the client');
+});
+
+// ---------------------------------------------------------------------------
+// PR-scanner-3 — county_records_needed reclassification (structural guards on
+// the migration text; the live behaviour was verified against real gov data
+// 2026-09-12: 68 human_actionable mismatch/all_guarded -> 27 reclassify,
+// matching the PLANNED-BACKLOG figure exactly).
+// ---------------------------------------------------------------------------
+
+test('county_records_needed reclassifies ONLY mismatch/all_guarded, never agrees/sponsor_spe/no_records', () => {
+  assert.match(VIEW_SQL, /county_records_needed/,
+    'the view must define the reclassification action');
+  // The reclassification's own guard must be scoped by an IN-list naming
+  // exactly the two disputed-chain actions.
+  assert.match(VIEW_SQL, /base_action\s+IN\s*\(\s*'mismatch'\s*,\s*'all_guarded'\s*\)/i,
+    'county_records_needed must be scoped to mismatch/all_guarded only');
+});
+
+test('the reclassification requires a POSITIVE no-record signal, never an absence (unsynced != no record)', () => {
+  // `IS FALSE` (never `= false`) is the whole point: a NULL from the LEFT
+  // JOIN (property not yet synced into the coverage mirror) must leave the
+  // base action alone, never guess it into county_records_needed.
+  assert.match(VIEW_SQL, /has_trustworthy_record\s+IS\s+FALSE/i,
+    'the coverage check must use IS FALSE so an unsynced (NULL) row is left alone');
+  assert.doesNotMatch(VIEW_SQL, /has_trustworthy_record\s*=\s*false/i,
+    '`= false` would also be false for NULL in some contexts — IS FALSE is the safe form');
+});
+
+test('the reclassification is gov-only, by construction', () => {
+  assert.match(VIEW_SQL, /c\.domain\s*=\s*'gov'/,
+    'county_records_needed must be scoped to domain=gov (the lane itself is gov-only, per B1)');
+});
+
+test('no_records is never touched by the reclassification — it stays A4-retired, distinct from county_records_needed', () => {
+  // The CASE that produces county_records_needed only ever fires on
+  // base_action IN ('mismatch','all_guarded') — no_records/agrees/sponsor_spe
+  // pass through unchanged. Regression check against A4's retirement: the
+  // literal 'no_records' must never appear inside the county_records_needed
+  // CASE's own condition.
+  const reclassBlock = VIEW_SQL.match(/CASE\s+WHEN\s+c\.base_action[\s\S]{0,300}?END AS action/i);
+  assert.ok(reclassBlock, 'could not locate the action-reclassification CASE');
+  assert.doesNotMatch(reclassBlock[0], /'no_records'/,
+    'no_records must never be reachable from the county_records_needed reclassification');
 });
 
 test('a pending bucket filters on action IS NULL *and* the split_state', () => {

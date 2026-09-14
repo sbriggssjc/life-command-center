@@ -1111,7 +1111,20 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // was never recognized. The i-\d+/ih-\d+ alternates require a trailing
     // route number (so a bare "I" / "IH" can't false-match) and everything is
     // still gated by the leading street-number guard in parseAddress.
-    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|interstate\s+\d+|i-\d+|ih-\d+|pkwy|parkway|pky|pike|tpke|turnpike|byp|bypass|xing|crossing|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|speedway|spdwy|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz|route|rt|us\s+route|state\s+route|sr|fm|cr|camino|paseo|calle|alameda|avenida|arroyo|rancho|mesa|vista)\b/i;
+    // 2026-09-12: added park/commons/center/centre/corners/crossing(s)/village/
+    // pointe/point/landing/junction/gateway/campus/complex. "483 Gateway
+    // Industrial Park" (a dialysis clinic in Jenkins, KY) parsed to null —
+    // the property's mailing address names its industrial/business park
+    // ("… Park", "… Commons", "… Business Center") rather than a numbered
+    // street, and none of those words was a known street type, so the
+    // sidebar fell back to the empty "unsupported site" state and the
+    // property could never be captured. These are common on rural/suburban
+    // CRE addresses (industrial parks, office parks, shopping centers) and
+    // are gated the same way as every other entry here — a leading street
+    // number is required, so a bare "Park Ave" style false-match on a
+    // broker line is not a new risk (that case already matches via
+    // "ave"/"pl"/etc regardless).
+    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|interstate\s+\d+|i-\d+|ih-\d+|pkwy|parkway|pky|pike|tpke|turnpike|byp|bypass|xing|crossing|crossings|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|speedway|spdwy|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz|route|rt|us\s+route|state\s+route|sr|fm|cr|camino|paseo|calle|alameda|avenida|arroyo|rancho|mesa|vista|park|commons|center|centre|corners|village|pointe|point|landing|junction|gateway|campus|complex)\b/i;
     // Salt Lake City-style grid addresses have no street-type word.
     // Form: <building#> <dir> <grid#> <dir> — e.g. "3854 W 5400 S",
     // "3000 E 7800 S". Without this branch, Taylorsville/SLC properties
@@ -1208,7 +1221,11 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // 2026-07-29: added California/Spanish street types (Camino/Paseo/Calle/
     // Alameda/Avenida/Arroyo/Rancho/Mesa/Vista) to mirror parseAddress so
     // "1055 El Camino Real"-style subjects pair with their city line here too.
-    const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Pky|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Speedway|Spdwy|Sq|Square|Ter|Terrace|Loop|Tpke|Turnpike|Byp|Bypass|Xing|Crossing|Camino|Paseo|Calle|Alameda|Avenida|Arroyo|Rancho|Mesa|Vista)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR|Interstate|I|IH)[\s-]+\d+|(?:N|S|E|W|NE|NW|SE|SW)\s+\d+\s+(?:N|S|E|W|NE|NW|SE|SW))\b\.?/i;
+    // 2026-09-12: added Park/Commons/Center/Centre/Corners/Crossings/Village/
+    // Pointe/Point/Landing/Junction/Gateway/Campus/Complex to mirror
+    // parseAddress's STREET_RE fix for "483 Gateway Industrial Park" (Jenkins,
+    // KY) — see that regex's comment for the full incident.
+    const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Pky|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Speedway|Spdwy|Sq|Square|Ter|Terrace|Loop|Tpke|Turnpike|Byp|Bypass|Xing|Crossing|Crossings|Camino|Paseo|Calle|Alameda|Avenida|Arroyo|Rancho|Mesa|Vista|Park|Commons|Center|Centre|Corners|Village|Pointe|Point|Landing|Junction|Gateway|Campus|Complex)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR|Interstate|I|IH)[\s-]+\d+|(?:N|S|E|W|NE|NW|SE|SW)\s+\d+\s+(?:N|S|E|W|NE|NW|SE|SW))\b\.?/i;
     const CITY_RE = /^[A-Z][A-Za-z.\- ]{1,40},\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$/;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];

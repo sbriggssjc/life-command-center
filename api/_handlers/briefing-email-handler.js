@@ -64,6 +64,15 @@ import {
   fetchLccHealthSnapshot,
   normalizePersonalContext,
 } from '../_shared/briefing-data.js';
+import { fetchFeatureFlag, flagEnabled } from '../_shared/feature-flag.js';
+import { buildAllLaneBriefContexts, freezeDailyIssue, LANE_LABELS } from '../_shared/market-brief-render.js';
+
+// MB-b — new surfaces (this email block + the homepage tab) ship flag-gated
+// per spec §7 build order ("each step flag-gated OFF until verified live").
+// Off by default: registered in the MB-b migration (feature_flags_registry),
+// flipped only after §5's live verify step (P-SQL tick run, block rendered
+// and reviewed, homepage tab loaded).
+export const MARKET_BRIEF_RENDER_FLAG = 'MARKET_BRIEF_RENDER';
 
 // ---------------------------------------------------------------------------
 // Brand tokens (mirror of public/reports/cm_brand_tokens.json)
@@ -899,6 +908,73 @@ function renderNewOnMarket({ newIntakes, newListings }) {
 }
 
 // ---------------------------------------------------------------------------
+// 7b. Lane Briefs — MB-b (spec §1/MB3). Sits above Sector Watch, which stays
+// below it (§1: "upgrades §8 Sector Watch; keep the news list beneath it").
+//
+// EVERY NUMBER HERE COMES VERBATIM FROM A FACT OBJECT (`fact.value` /
+// `fact.claim_text`, both written by a producer, never computed here — see
+// market-brief-render.js's own header comment). A lane with no live facts
+// is OMITTED entirely, never rendered as an empty section (spec §1 + the
+// payload contract's "the empty state is honest").
+// ---------------------------------------------------------------------------
+
+/** Freshness badge text for one fact — plain, never silently re-asserted (spec §1 "freshness badges"). */
+function laneFactAsOf(fact) {
+  const asOf = fact.source_date ? fmtMonthDay(fact.source_date) : null;
+  if (!asOf) return '';
+  return fact.is_stale
+    ? ` <span style="color:${BRAND.bad};">(stale — as of ${asOf})</span>`
+    : ` <span style="color:${BRAND.axis};">(as of ${asOf})</span>`;
+}
+
+function renderMarketBriefLanes({ marketBriefLanes, readFullBriefBaseUrl }) {
+  const lanes = Array.isArray(marketBriefLanes) ? marketBriefLanes : [];
+  if (!lanes.length) return ''; // every lane omitted (no live facts anywhere) — not an empty section
+
+  const laneBlock = (l) => {
+    const laneLabel = LANE_LABELS[l.lane] || l.lane;
+    const readMore = `${readFullBriefBaseUrl || ''}#/briefs/${encodeURIComponent(l.lane)}`;
+
+    const changedLine = (l.changedSinceYesterday || []).length
+      ? `<div style="${FONT}color:${BRAND.textMuted};font-size:11.5px;margin:2px 0 6px 0;">` +
+        `<strong style="color:${BRAND.text};">Changed since yesterday:</strong> ` +
+        `${(l.changedSinceYesterday || []).slice(0, 3).map((c) =>
+          `${c.action === 'added' ? 'New' : 'Updated'} — ${escapeHtml(truncate(c.claim_text, 90))}`).join('; ')}` +
+        `</div>`
+      : '';
+
+    const topFactRows = (l.topFacts || []).map((f) => (
+      `<tr><td style="${FONT}padding:5px 0;border-bottom:1px solid ${BRAND.bgAlt};` +
+      `font-size:12.5px;color:${BRAND.text};">` +
+      `${escapeHtml(f.claim_text)}${laneFactAsOf(f)}` +
+      `</td></tr>`
+    )).join('');
+
+    const gapRows = (l.gapFacts || []).map((f) => (
+      `<tr><td style="${FONT}padding:5px 0;font-size:12px;color:${BRAND.axis};font-style:italic;">` +
+      `${escapeHtml(f.claim_text)}` +
+      `</td></tr>`
+    )).join('');
+
+    return (
+      `<div style="margin-top:12px;">` +
+      `<div style="${FONT}font-size:12px;color:${BRAND.navy};font-weight:700;` +
+      `text-transform:uppercase;letter-spacing:0.5px;padding-bottom:3px;">${escapeHtml(laneLabel)}</div>` +
+      changedLine +
+      `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">` +
+      topFactRows + gapRows + `</table>` +
+      `<div style="margin-top:4px;"><a href="${escapeHtml(readMore)}" ` +
+      `style="${FONT}color:${BRAND.navy};font-size:11.5px;font-weight:600;text-decoration:none;">` +
+      `Read the full brief &rarr;</a></div>` +
+      `</div>`
+    );
+  };
+
+  return sectionHeader('Lane Briefs', 'What changed today, by swimlane — live, cited facts') +
+    bodyCell(`<div style="padding:6px 0 14px 0;">${lanes.map(laneBlock).join('')}</div>`);
+}
+
+// ---------------------------------------------------------------------------
 // 8. Sector Watch — news grouped by stream
 // ---------------------------------------------------------------------------
 
@@ -1236,6 +1312,7 @@ function renderHtml(ctx) {
     renderWeeklyChanges(ctx) +
     renderDealPropagationDelta(ctx) +
     renderResearchProgress(ctx) +
+    renderMarketBriefLanes(ctx) +
     renderSectorWatch(ctx) +
     renderReadingList(ctx) +
     renderOpsAndQueue(ctx) +
@@ -1337,6 +1414,19 @@ function renderText(ctx) {
     intakes.slice(0, 6).forEach((it) => {
       const loc = [it.city, it.state].filter(Boolean).join(', ');
       lines.push(`  - ${it.address || it.tenant_agency || 'untitled'}  ${loc}`);
+    });
+    lines.push('');
+  }
+
+  const laneBriefs = Array.isArray(ctx.marketBriefLanes) ? ctx.marketBriefLanes : [];
+  if (laneBriefs.length) {
+    lines.push('LANE BRIEFS');
+    laneBriefs.forEach((l) => {
+      lines.push(`  ${LANE_LABELS[l.lane] || l.lane}`);
+      (l.changedSinceYesterday || []).slice(0, 3).forEach((c) =>
+        lines.push(`    changed: ${c.claim_text}`));
+      (l.topFacts || []).forEach((f) => lines.push(`    - ${f.claim_text}`));
+      (l.gapFacts || []).forEach((f) => lines.push(`    - ${f.claim_text}`));
     });
     lines.push('');
   }
@@ -1544,7 +1634,7 @@ export async function briefingEmailHandler(req, res) {
     sfActivity, hotContacts, diaPipeline, newIntakes,
     intelSnapshot, salesComps, expirations, newListings, pipelineRollup,
     marketStats, researchProgress, processingSummary, dormantCapabilities,
-    lccHealth, dealPropagationDelta,
+    lccHealth, dealPropagationDelta, marketBriefRenderEnabled,
   ] = await Promise.all([
     safe(() => fetchWorkCounts(workspaceId, userId), defaultWorkCounts, 'fetchWorkCounts'),
     safe(() => fetchMyWork(workspaceId, userId, 15), [], 'fetchMyWork'),
@@ -1577,7 +1667,26 @@ export async function briefingEmailHandler(req, res) {
     safe(fetchLccHealthSnapshot, defaultLccHealth, 'fetchLccHealthSnapshot'),
     safe(() => fetchDealPropagationDelta(24),
       { window_hours: 24, count: 0, items: [] }, 'fetchDealPropagationDelta'),
+    safe(async () => flagEnabled(MARKET_BRIEF_RENDER_FLAG, await fetchFeatureFlag(MARKET_BRIEF_RENDER_FLAG)),
+      false, 'fetchMarketBriefRenderFlag'),
   ]);
+
+  // MB-b: the Lane Briefs block ships flag-gated (spec §7). When off, the
+  // block is simply absent from the render — no gap message, no fabricated
+  // section — matching the same "new surface flagged off is invisible until
+  // verified" contract every other MB producer follows.
+  const marketBriefLanes = marketBriefRenderEnabled
+    ? await safe(() => buildAllLaneBriefContexts(ctNow().toISOString().slice(0, 10)), [], 'buildAllLaneBriefContexts')
+    : [];
+  if (marketBriefRenderEnabled && marketBriefLanes.length) {
+    // Freeze one issue row per lane, per day (idempotent — the unique index
+    // on (lane, issue_type, issue_date) means a same-day re-render upserts
+    // the SAME row rather than accumulating). Fire-and-forget-safe: a freeze
+    // failure must never block the email itself from rendering.
+    const issueDate = ctNow().toISOString().slice(0, 10);
+    await Promise.all(marketBriefLanes.map((l) =>
+      freezeDailyIssue({ lane: l.lane, issueDate, factIds: l.factIds }).catch(() => null)));
+  }
 
   let priorities;
   try {
@@ -1635,6 +1744,7 @@ export async function briefingEmailHandler(req, res) {
     salesComps, expirations, newListings, pipelineRollup,
     marketStats, researchProgress, processingSummary, dormantCapabilities,
     lccHealth, dealPropagationDelta,
+    marketBriefLanes, readFullBriefBaseUrl: process.env.LCC_BASE_URL || '',
     weather: personalContext.weather,
   };
 
@@ -1670,3 +1780,9 @@ export async function briefingEmailHandler(req, res) {
     _cache: { hit: false, ttl_seconds: RENDER_CACHE_TTL_MS / 1000 },
   });
 }
+
+// MB-b — pure-render internals exposed for the snapshot test (test/market-
+// brief-lane-briefs-email.test.mjs). No DB, no network — mirrors the
+// `__internal` export pattern already used by market-brief-psql-tick.js /
+// market-brief-rss-tick.js.
+export const __internal = { renderMarketBriefLanes, renderHtml, renderText };

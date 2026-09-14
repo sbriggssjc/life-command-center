@@ -1,3 +1,9 @@
+-- ⚠️ HISTORICAL — DO NOT RE-APPLY. This directory does not own the government database;
+-- `government-lease` does (see supabase/migrations/government/README.md, 2026-09-12).
+-- This file is kept as a record of what this repo applied in the past. The live, correct
+-- copy of any object it defines may have since diverged -- read the deployed database or
+-- government-lease's committed source, never this file, before trusting its content.
+
 -- ADDR1 (2026-09-03), gov mirror. See dia migration
 -- 20260903200000_dia_addr1_contact_office_address_bleed_review_and_repair.sql
 -- for the full mechanism + writeup. gov has the identical shape live:

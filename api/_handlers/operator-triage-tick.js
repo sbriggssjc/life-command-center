@@ -137,9 +137,15 @@ export async function handleOperatorTriageTick(req, res) {
       let classification = classifyDeterministic(note.raw_text, note.context);
       let source = 'deterministic';
       if (!classification) {
-        const modelResult = isApply || truthy(q.generate)
-          ? await classifyWithOllama(note)
-          : null;
+        // OC-v2: a GET dry run never writes, so it is safe (and was the
+        // reported bug) to attempt the on-box model on a preview too —
+        // previously only POST (apply) or an explicit ?generate=1 reached
+        // Ollama at all, so a plain dry-run miss read "model declined" when
+        // the model was never actually invoked. ?skip_model=1 opts out for
+        // a cheap deterministic-only probe.
+        const modelResult = truthy(q.skip_model)
+          ? null
+          : await classifyWithOllama(note);
         if (modelResult) {
           classification = modelResult;
           source = modelResult.source;

@@ -1,6 +1,6 @@
 import { authenticate, requireRole } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
-import { buildAscImportRpcBody, buildAscStructuredCapture, diagnoseAscIdentityMatch, normalizeAscAddressToken } from '../_shared/asc-research-lane.js';
+import { assertAscPropertyReview, buildAscImportRpcBody, buildAscStructuredCapture, diagnoseAscIdentityMatch, normalizeAscAddressToken } from '../_shared/asc-research-lane.js';
 
 function workspaceFor(req, user) {
   return req.headers['x-lcc-workspace'] || user.memberships?.[0]?.workspace_id || process.env.LCC_DEFAULT_WORKSPACE_ID;
@@ -60,6 +60,91 @@ export async function handleAscResearchTarget(req, res) {
     target: candidate ? { ...run, ...candidate, capture_count: captureCount, lane: 'asc', controls: { canonical_write_authorized: false, salesforce_write_authorized: false, outreach_authorized: false } } : null,
     reason: candidate ? null : 'sample_capture_complete',
   });
+}
+
+export async function handleAscResearchReview(req, res) {
+  const auth = await operator(req, res); if (!auth) return;
+  if (req.method === 'POST') {
+    const mode = req.body?.mode || 'primary';
+    let review;
+    try { review = assertAscPropertyReview(req.body || {}, mode); }
+    catch (error) { return fail(res, 400, 'invalid_asc_property_review', error.message); }
+    const rpc = mode === 'second' ? 'lcc_save_asc_second_review' : 'lcc_save_asc_primary_review';
+    const params = mode === 'second' ? {
+      p_run_id: req.body.run_id,
+      p_candidate_fingerprint: req.body.candidate_fingerprint,
+      p_reviewer: auth.user.user_id || auth.user.id,
+      p_verdict: review.verdict,
+      p_notes: review.notes,
+    } : {
+      p_run_id: req.body.run_id,
+      p_candidate_fingerprint: req.body.candidate_fingerprint,
+      p_reviewer: auth.user.user_id || auth.user.id,
+      p_review: review,
+    };
+    const saved = await opsQuery('POST', `rpc/${rpc}`, params, { countMode: 'none' });
+    if (!saved.ok) return fail(res, saved.status || 500, 'asc_property_review_failed', saved.data);
+    return res.status(200).json({
+      ok: true,
+      review: Array.isArray(saved.data) ? saved.data[0] : saved.data,
+      controls: { canonical_write_performed: false, salesforce_write_performed: false, outreach_performed: false },
+    });
+  }
+  if (req.method !== 'GET') return fail(res, 405, `Method ${req.method} not allowed`);
+  const runs = await opsQuery('GET',
+    `healthcare_research_runs?workspace_id=eq.${pgFilterVal(auth.workspaceId)}` +
+    '&lane=eq.asc&select=run_id,release_id,selection_fingerprint,status&order=created_at.desc&limit=1',
+    null, { countMode: 'none' });
+  if (!runs.ok) return fail(res, runs.status || 500, 'asc_property_review_failed', runs.data);
+  const run = runs.data?.[0];
+  if (!run) return res.status(200).json({ ok: true, run: null, target: null, progress: null });
+  const [candidates, reviews, captureFlags] = await Promise.all([
+    opsQuery('GET', `healthcare_research_candidates?run_id=eq.${pgFilterVal(run.run_id)}` +
+      '&select=candidate_fingerprint,sample_ordinal,sampling_cell,cms_identity,cms_evidence,status&order=sample_ordinal.asc',
+    null, { countMode: 'none' }),
+    opsQuery('GET', `healthcare_research_reviews?run_id=eq.${pgFilterVal(run.run_id)}` +
+      '&select=run_id,candidate_fingerprint,clinical_verified,property_form,landlord_owner,ownership_evidence,' +
+      'landlord_addressable,economics_bounded,reviewer_confidence,second_review_required,final_disposition,' +
+      'research_minutes,evidence_citations,notes,primary_reviewer,primary_reviewed_at,second_reviewer,' +
+      'second_reviewed_at,second_review_verdict,second_review_notes', null, { countMode: 'none' }),
+    opsQuery('GET', `healthcare_research_captures?run_id=eq.${pgFilterVal(run.run_id)}` +
+      '&select=candidate_fingerprint,reconciliation&order=captured_at.desc', null, { countMode: 'none' }),
+  ]);
+  if (!candidates.ok || !reviews.ok || !captureFlags.ok) {
+    return fail(res, 500, 'asc_property_review_failed',
+      !candidates.ok ? candidates.data : !reviews.ok ? reviews.data : captureFlags.data);
+  }
+  const byFingerprint = new Map((reviews.data || []).map((row) => [row.candidate_fingerprint, row]));
+  const collectionFlags = new Map();
+  for (const capture of captureFlags.data || []) {
+    if (!collectionFlags.has(capture.candidate_fingerprint)) {
+      collectionFlags.set(capture.candidate_fingerprint,
+        capture.reconciliation?.asc_identity_match?.second_review_required === true);
+    }
+  }
+  const requestedOrdinal = Number(req.query?.ordinal);
+  const rows = (candidates.data || []).map((candidate) => ({ ...candidate,
+    collection_second_review_required: collectionFlags.get(candidate.candidate_fingerprint) === true,
+    review: byFingerprint.get(candidate.candidate_fingerprint) || null }));
+  const target = (Number.isInteger(requestedOrdinal) && requestedOrdinal >= 1 && requestedOrdinal <= 50
+    ? rows.find((row) => row.sample_ordinal === requestedOrdinal)
+    : rows.find((row) => !row.review?.primary_reviewed_at)
+      || rows.find((row) => row.review?.second_review_required && !row.review?.second_reviewed_at)
+      || rows[0]) || null;
+  let captures = [];
+  if (target) {
+    const found = await opsQuery('GET', `healthcare_research_captures?run_id=eq.${pgFilterVal(run.run_id)}` +
+      `&candidate_fingerprint=eq.${pgFilterVal(target.candidate_fingerprint)}` +
+      '&select=capture_id,source,source_url,captured_at,address,city,state,zip,structured_payload,reconciliation' +
+      '&order=captured_at.desc', null, { countMode: 'none' });
+    if (!found.ok) return fail(res, found.status || 500, 'asc_property_review_failed', found.data);
+    captures = found.data || [];
+  }
+  const primaryDone = rows.filter((row) => row.review?.primary_reviewed_at).length;
+  const secondRequired = rows.filter((row) => row.review?.second_review_required || row.collection_second_review_required).length;
+  const secondDone = rows.filter((row) => row.review?.second_reviewed_at).length;
+  return res.status(200).json({ ok: true, run, target: target ? { run_id: run.run_id, ...target, captures } : null,
+    progress: { total: rows.length, primary_done: primaryDone, second_required: secondRequired, second_done: secondDone } });
 }
 
 async function readOnlyReconciliation(context, workspaceId) {

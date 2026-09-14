@@ -63,3 +63,9 @@ email_export/
 
 # OCR1 bake-off inputs — client lease text, never committed
 bakeoff/
+
+# Claude Code agent worktrees — local scratch checkouts, never committed
+# (see Dialysis repo CLAUDE.md B6e-worktree-gitlinks: a committed worktree
+# gitlink points at a commit that doesn't exist in this repo and breaks
+# every git invocation in CI).
+.claude/worktrees/

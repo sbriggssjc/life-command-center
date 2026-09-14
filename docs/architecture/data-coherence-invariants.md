@@ -360,6 +360,99 @@ Four things the fix turned up that the invariant should carry:
   its own outcome class (`lost`) — *ask what happens to a request that is neither answered nor
   answerable.*
 
+### I13 — One real-world entity, one canonical row; group and join on its id, never on a display string (2026-09-11)
+
+Operators, agencies, owners, brokers, guarantors, tenants, properties. Aliases live in an alias table with
+provenance; legal entities LINK to parents rather than merge into them (a guarantor's legal identity is a credit
+fact). A `canonical_name`/`normalized_name` column that detects duplicates but has no merge consumer is an I6
+violation. **Found by:** ID1 (dialysis operator split), ID0 probe (gov agency split, owner/broker duplicate groups).
+
+### I14 — Low-cardinality attribute domains are controlled vocabularies, enforced at write (2026-09-11)
+
+County, city, state, property_type, status, source. A reference list per domain, with the write path resolving to
+it (or failing to a review status). **Found by:** ID0 probe — gov `properties.county` has 832 county/state pairs split by
+case alone; dia `medicare_clinics.city` has 766 collapsed values; dia `property_type` has 96 values.
+
+### I15 — A bulk load reconciles its row count to the source; truncation fails the load (2026-09-11)
+
+Round-number caps, or tied counts across partitions loaded together, are truncation signatures. **Found by:** MB-a3 —
+DaVita = Fresenius = 2,450 CMS rows, one batch, 17 s apart (B6d-cms).
+
+### I16 — The DEPLOYED object must match its committed source; drift is invisible and outlives the fix (2026-09-12)
+
+A function, view, trigger or policy edited by hand in the database and never committed reads, to every later session,
+as if the repo were the source of truth. **Found by ID3a-b:** the live `canonicalize_agency()` had already diverged
+from `gov_round_76bg_agency_canonicalizer.sql` — its regexes carried word boundaries the committed file lacked — so a
+fix written against the committed source would have been written for a function that no longer existed. The inverse of
+the "MERGED is not RUNNING" doctrine: *running is not committed*. **Second instance, 2026-09-12 (repo-level, worse):** the government DB is written by migrations in **two** repos — `life-command-center` (213 `migrations/government/*`) and `government-lease` — and ID3a-c's fix landed in the latter, so LCC's committed copy of the same function is now **older than live and still applicable**: re-running it would restore the state-agency contamination and the ICE/CBP conflation. **Rule (Scott, 2026-09-12): one repo owns each database's objects — `government-lease` owns the government DB; `life-command-center` owns Dialysis_DB and LCC Opps (the Dialysis repo owns CMS/NPI ingestion rows, not schema).** Blast radius measured 2026-09-12: **188 of the 194 objects LCC's retired gov migrations define are live**, so this is not a tidy-up — it is a live-overwrite hazard. A migration directory in a non-owning repo is historical, and must say so. **Detector:** hash every routine/view definition in each DB against the definition the OWNING repo's migrations produce, and alert on any difference. Until it exists, a session that
+touches a DB object reads the DEPLOYED definition first and says so.
+
+✅ **ID3a-d (2026-09-12) named the owner of all three databases and retired the government copy.**
+`government-lease` owns **government** (settled by Scott); `life-command-center`'s own
+`supabase/migrations/government/*` (213 files) is now marked historical with a
+`README.md` + a per-file header comment (never re-applied, never added to;
+`test/gov-migrations-directory-retired.test.mjs` guards it), explicitly naming both defects
+re-applying the stale `canonicalize_agency()` copy would restore. `Dialysis` owns **Dialysis_DB**
+and `life-command-center` owns **LCC Opps** — both proposed from evidence (migration counts,
+CLAUDE.md self-description), 👤 Dialysis is not yet Scott-confirmed. Full ownership table:
+`CLAUDE.md` → "ONE REPO OWNS EACH DATABASE'S OBJECTS". **The detector is designed and documented,
+not yet run** — `scripts/db-drift/gov-deployed-vs-committed-drift.sql` computes the live half of
+the hash comparison against government (the database where drift has already bitten twice); the
+"expected" half (replaying `government-lease`'s migrations) and the final diff are specified
+inline but require real Supabase credentials this sandbox does not have. Do not fabricate a
+result — run it for real, record what it finds, and only then schedule it on I11.
+
+**I16 is not only about DB objects — 2026-09-12 (Cowork), MB2a.** The same invariant was found
+broken on an **edge function**, where it is worse: `briefing-intel-snapshot` is deployed at **v21
+with no `dialysis` key in `RSS_FEEDS` at all**, read from the DEPLOYED body. MB-b committed three
+dialysis feeds on 2026-09-12 and MB2a replaced them the same day; **neither has ever run**. What
+makes this class distinct from a drifted DB object is that nothing anywhere reports it: this repo
+has **no workflow that deploys `supabase/functions/**`** (`.github/workflows/` has none), so a
+merged change to an edge function deploys nothing AND fails nothing — the build stays green while
+the live behaviour is unchanged. A DB migration at least fails loudly when it is not applied.
+So the I16 detector must cover BOTH halves: committed-vs-deployed for DB objects, and
+committed-vs-deployed for every `supabase/functions/*/index.ts`. Note also that DRIFT1's census
+(2026-09-07) listed this exact function as "committed, not in scope" — accurate on that date and
+stale five days later, which is the general lesson: **a one-time census cannot hold a drift
+invariant; only a repeated check can.** → backlog `MB2a-deploy`.
+
+**I11 can fail INVERTED — 2026-09-12 (Cowork), FEED2.** I11 says a monitor must alert on its own
+blindness. The MB2a feed monitor failed the other way: it attributed its own blindness to the thing it
+watched. Its staleness measure was `checked_date - (last date with items)` — **calendar days** — but the
+producer writing those rows runs **weekdays only** (`0 10 * * 1-5`) while the check runs **daily**
+(`15 11 * * *`). So Monday minus Friday is 3 days and a feed that answered perfectly on both checks read
+as 3 days stale. A second bug compounded it: with no prior row the expression fell back to a **9999
+sentinel** meaning "unknown", so the monitor's FIRST run would have alerted on all 16 feeds. Both were
+caught before the cron ever fired, and fixed by counting **checks rather than days**
+(`zero_item_streak_checks`, migration `20260912190000`).
+
+Two general lessons worth carrying into any I11 detector:
+
+- **A gap in the DATA is not a fault in the SOURCE.** Whenever a detector measures elapsed time, check
+  the cadence of the thing that writes the rows. If the writer's schedule is sparser than the checker's,
+  calendar arithmetic converts every gap into a false fault. Count observations, not dates.
+- **"No history" is not "maximally bad".** A sentinel like 9999 makes an unknown indistinguishable from
+  the worst case, which is precisely the confident-wrong-answer this document exists to prevent. An
+  unseen feed should read as unknown and stay silent until it has actually been observed failing.
+
+A false alarm is not a harmless failure mode: a monitor that cries wolf every Monday is one nobody reads
+by the third week, which returns the system to exactly the silence I11 was written to end.
+
+**FEED2's twin lives in the CUTOFF, not the STALENESS CHECK — MB2e, 2026-09-14.** A fixed calendar
+window (`maxAgeHours`) applied to a source whose publication cadence is slower than that window is
+empty by construction on some days, for the identical reason FEED2's streak was: the checker's clock and
+the producer's clock disagree. Where FEED2's disagreement was *weekday cron vs daily check*, MB2e's is
+*a 72h news cutoff vs a feed that publishes a few times a week* — Federal Register (GSA) and Tax
+Foundation both parsed real items and contributed **zero** on a Monday check (newest item 82h / 92h
+old), because Monday-minus-72h excludes everything published before Friday morning. Fixed the same way
+twice already worked: size the window from the source's own measured cadence (168h/7d, not a global
+widening of the 72h news default — MB2b's ESRD fix is the precedent), and give the MONITOR a way to see
+the class itself (`v_market_brief_feed_health_no_contribution`, a DISTINCT alert from `market_brief_
+feed_stale`, counting consecutive CHECKS never calendar days, with `items_after_cutoff IS NULL` rows
+never counting toward the streak in either direction). **The general rule: whenever a fixed window is
+compared against a producer's cadence — a staleness check OR a content cutoff — ask what the window
+looks like on the worst day of that producer's cycle, not the best.**
+
 ### I10 — A one-shot backfill is not a producer
 
 If the mechanism that filled a store was a migration or a script, the store **decays from the moment
@@ -400,7 +493,28 @@ Supabase project"; it is a new set of connections that must be asserted on day o
 | I6 | divergence consumer | ⚠️ `parcel_owner_xref.diverges` has none → **B6h** (renamed from B6d 2026-08-29) |
 | I1 | producer/consumer registry | ❌ **none** — still the biggest hole. ⚠️ **B6c-dup (2026-08-29) shows the sub-class a registry would have to catch: TWO STORES FOR ONE FACT, each naming itself canonical.** `detail.js` vs 77 gov views. A registry keyed on *tables* would not have caught it — both tables had real consumers; it needs to record **which store is authoritative for a FACT**. Partially guarded now by `test/b6cdup-sale-store-canonical.test.mjs`, which is a one-instance pin, not a detector. | ⚠️ **OWN-T0 (2026-09-02) is the same class at the FACT grain, and it is live: four stores name the owner of a property and nothing reconciles them.** The panel printed the resolved owner in the headline and the domain true_owner two lines below — they disagree on **1,260 of 7,678 (16.4%)** — while **756 properties carry two CURRENT owners** in one store, because every writer of `lcc_entity_portfolio_facts` asks *does THIS OWNER already have a fact* and none asks *does this PROPERTY already have a current owner*. `v_lcc_property_ownership_reconciled` is the reconciled read; `v_lcc_property_multi_current` is the detector (the standing one read **0**). **The registry a full I1 would need has to record the GRAIN a fill-blanks predicate is asked at, not just which store is authoritative** — here both stores were authoritative for different levels of the same fact (sponsor and SPE) and neither was wrong.
 | I8 | fill-forward trigger audit | ❌ **none** — one instance fixed (B5), others unaudited |
+| **I13** | identity: normalized-collapse probe + identical-canonical groups | ⚠️ **manual, 2026-09-11** (`docs/audits/ID0_IDENTITY_VALUE_DOMAIN_PROBE_2026-09-11.md`) → standing detector in **ID4** |
+| **I14** | controlled-vocabulary drift | ⚠️ **manual, 2026-09-11** (same probe) → **ID4** |
+| **I15** | import count reconciliation / truncation signature | ❌ **none** → **ID4** |
+| **I16** | deployed-vs-committed definition drift | ⚠️ **designed 2026-09-12 (ID3a-d), not yet run.** `scripts/db-drift/gov-deployed-vs-committed-drift.sql` computes the live-side hash for government (the database drift has bitten twice); the expected-side replay + diff are specified but unexecuted — no Supabase network access from this sandbox. Two instances found so far (ID3a-b's `canonicalize_agency()`; ID3a-d's two-repo copy of the same function). Until a run exists, read the deployed definition before editing any DB object, and know which repo owns it (see `CLAUDE.md` ownership table). **Third instance 2026-09-12 (Cowork, MB2a): the `briefing-intel-snapshot` EDGE FUNCTION is deployed at v21 without the `dialysis` stream two commits after it was added — and no workflow deploys `supabase/functions/**` at all, so the drift is both unfixed and unreported.** The detector must therefore cover edge-function bodies, not just DB object definitions. |
 | I9 | fact stores lacking `created_at` | ❌ **none** |
+| **I13** | identity collapse (byte-identical entity under case/punctuation/format variants) | ⚠️ **PARTIAL — one class now has a standing detector.** ✅ **gov AGENCY (ID3a, 2026-09-12):** `v_gov_agency_identity_detector` over `properties.agency_id` + `property_agencies.agency_id`, using an AGENCY-SPECIFIC comparator (`gov_agency_alias_key` — word boundaries preserved, deliberately NOT a shared alnum key), reporting collapse, orphans and `rows_no_raw_text` as a SEPARATE state (blank ≠ unresolvable, P180). First live run: properties 7,369 resolved / 10,143 orphan / 179 strings collapsed onto 44 agencies; bridge 119,361 / 12,882 / 110 onto 45. Run once, **not scheduled** (ID3a-detector-schedule). Registry wired 0% → 35.9% and 0.12% → **90.3%**. ⚠️ **And ID3a proves the per-class rule from the other direction:** gov already had a 45-code normalizer (`agency_canonical`) and it was **unsafe to wire from** — it conflates federal agencies with same-named state bodies and commercial lookalikes (`NAVY` = Navy Federal Credit Union ×145; `ICE` includes an ice-cream shop). **A column named for the answer is not the answer.** Audit `docs/audits/ID3a_GOV_AGENCY_IDENTITY_WIRING_2026-09-12.md`.
+    ✅ **ID3a-b (2026-09-12) fixed the display column itself** — `canonicalize_agency()`
+    (`supabase/migrations/government/20260912030000_gov_id3ab_agency_canonicalizer_contamination_fix.sql`)
+    now excludes `*federal credit union` / `ice cream`/`frozen yogurt` collisions before any
+    keyword branch runs, resolves STATE via a closed allowlist instead of a bare `\mstate\M`
+    word match (213→9 properties), drops bare `DOC`/RICHMOND-style trailing `"(XX)"` state
+    suffixes to review instead of auto-linking, and adds a second `using_agency_canonical`
+    column for the `GSA - <occupant>` compound shape (ID3a-gsa-compound, closed). **Still
+    live and NOT fixed:** the same shape on DOJ/EPA/DOL/ED/DOT (filed **ID3a-c**) — this
+    invariant's "column named for the answer" lesson generalises past the three codes ID3a
+    named, and a full sweep of every code in the CASE, not just the ones already flagged,
+    is what a standing detector for this invariant would need to do that a one-time fix
+    cannot. ❌ **Every other class: none — baseline measured, not shipped.** `docs/audits/ID4_IDENTITY_INTEGRITY_BASELINE_2026-09.md`: gov `true_owners` 991 groups/2,004 rows collapse on a naive key; gov agency FK is 0%/0.12% wired against an already-working 45-code normalizer; dia `operators` — **ID4 read 14 rows; live it is 67** (59 `kind='company'`, 4 `category`, 2 `non_operator`, 2 `payer` after ID2a). Inside `company` the duplicates and junk survive: `Us Renal Care Inc` ×2 + `US Renal Care`, `Dialysis Clinic Inc` + `Dialysis Clinic, Inc.`, `DaVita Dialysis`, `Satellite Dialysis`, clinic-level rows (`BMA Quincy`, `DCI East Gainesville`, `KNICKERBOCKER DIALYSIS, INC` — BMA/Knickerbocker are Fresenius subsidiaries needing a parent link), and person/junk rows (`Family Video`, `Robert Young`, `Cheryl Ann Cunnings`). All carry 0 properties today, so no report is wrong — but they are selectable and will be re-minted against without ID2a-cleanup; dia `brokers.broker_name` (147 alnum-strip groups) is a **measured negative result** — the discovery key is unsafe on this population (bare surnames/brands collide) and must not become a detector until BR1–BR5's composite-field comparator lands. **The lesson this baseline adds to I13's design: no shared normalizer across entity kinds — a per-(table,column) registered comparator, proven on named rows, or the detector manufactures false duplicates on exactly the columns it was meant to protect.** |
+| **I14** | attribute-vocabulary format drift (case/whitespace splits, no identity question) | ❌ **none — one instance measured.** gov county/state pairs: 834 of 2,445 (34%) collapse on `lower(trim())` alone — cheapest class in the identity program, no review lane needed. |
+| **I13** | identity collapse (byte-identical entity under case/punctuation/format variants) | ⚠️ **PARTIAL — one class now has a standing detector.** ✅ **gov AGENCY (ID3a, 2026-09-12):** `v_gov_agency_identity_detector` over `properties.agency_id` + `property_agencies.agency_id`, using an AGENCY-SPECIFIC comparator (`gov_agency_alias_key` — word boundaries preserved, deliberately NOT a shared alnum key), reporting collapse, orphans and `rows_no_raw_text` as a SEPARATE state (blank ≠ unresolvable, P180). First live run: properties 7,369 resolved / 10,143 orphan / 179 strings collapsed onto 44 agencies; bridge 119,361 / 12,882 / 110 onto 45. Run once, **not scheduled** (ID3a-detector-schedule). Registry wired 0% → 35.9% and 0.12% → **90.3%**. ⚠️ **And ID3a proves the per-class rule from the other direction:** gov already had a 45-code normalizer (`agency_canonical`) and it was **unsafe to wire from** — it conflates federal agencies with same-named state bodies and commercial lookalikes (`NAVY` = Navy Federal Credit Union ×145; `ICE` includes an ice-cream shop). **A column named for the answer is not the answer.** Audit `docs/audits/ID3a_GOV_AGENCY_IDENTITY_WIRING_2026-09-12.md`. ❌ **Every other class: none — baseline measured, not shipped.** `docs/audits/ID4_IDENTITY_INTEGRITY_BASELINE_2026-09.md`: gov `true_owners` 991 groups/2,004 rows collapse on a naive key; gov agency FK is 0%/0.12% wired against an already-working 45-code normalizer; dia `operators` — **ID4 read 14 rows; live it is 67** (59 `kind='company'`, 4 `category`, 2 `non_operator`, 2 `payer` after ID2a). Inside `company` the duplicates and junk survive: `Us Renal Care Inc` ×2 + `US Renal Care`, `Dialysis Clinic Inc` + `Dialysis Clinic, Inc.`, `DaVita Dialysis`, `Satellite Dialysis`, clinic-level rows (`BMA Quincy`, `DCI East Gainesville`, `KNICKERBOCKER DIALYSIS, INC` — BMA/Knickerbocker are Fresenius subsidiaries needing a parent link), and person/junk rows (`Family Video`, `Robert Young`, `Cheryl Ann Cunnings`). All carry 0 properties today, so no report is wrong — but they are selectable and will be re-minted against without ID2a-cleanup; dia `brokers.broker_name` (147 alnum-strip groups) is a **measured negative result** — the discovery key is unsafe on this population (bare surnames/brands collide) and must not become a detector until BR1–BR5's composite-field comparator lands. **The lesson this baseline adds to I13's design: no shared normalizer across entity kinds — a per-(table,column) registered comparator, proven on named rows, or the detector manufactures false duplicates on exactly the columns it was meant to protect.** |
+| **I14** | attribute-vocabulary format drift (case/whitespace splits, no identity question) | ✅ **PARTIAL — first class SHIPPED (ID3e, 2026-09-12).** gov `properties.{county,city}` + dia `medicare_clinics.city`, keyed on `(normalized_name, lower(trim(state)))` as a PAIR — the comparator is per-class, per ID4's rule, and **county alone is never sufficient**: cross-state same-name counties are real, separate jurisdictions (`St Louis` MN vs MO, `LaSalle` IL vs TX, `DeSoto` FL vs MS), confirmed live to carry distinct fold keys. Punctuation normalizes to a SPACE, never deleted, so a VA independent city's `(city)`/`city` token survives — `RICHMOND (CITY)` and `Richmond city` fold to one key, and never collide with a same-named county. Two corrupted-state rows route to a review view (`v_gov_place_vocab_state_review`), never auto-repaired. Mechanism: one IMMUTABLE normalizer function + STORED generated columns (`county_norm`/`city_norm`) + parity views (`v_{gov,dia}_{county,city}_fold_groups`) — additive, no rewrite of the source columns. `docs/os/PLANNED-BACKLOG.md` §ID3e; migrations `supabase/migrations/{government,dialysis}/20260912120000_*_id3e_*_vocab_fold.sql`; guard `test/id3e-migration-shape.test.mjs`. Live re-measure 2026-09-12: gov county/state 2,445→1,611 (834 collapse, 34%), gov city/state 3,454→3,225 (229 collapse), dia city/state 4,367→3,635 (732 collapse). ⚠️ **No consumer repointed yet** — this ships the normalized form only; a consumer migration is a separate, later decision. dia `properties.property_type` (96 values, only 9 collapse) is explicitly **NOT** this class — it's a semantic taxonomy/rollup question, filed `ID3e-property-type-taxonomy`. |
+| **I15** | bulk-import completeness (rows-written vs source, truncation signature) | ❌ **none — one claimed instance RETRACTED on re-measurement.** dia `medicare_clinics.chain_organization` was cited (ID1) as a "2,450/2,450, 17-seconds-apart" truncated-import signature; re-measured 2026-09-11 it is 2,796/2,768 — not equal, not the claimed shape. **The underlying fact survives independently** (both series dead since 2026-01-22, matching B6d-cms) — only the truncation MECHANISM was wrong. **Worked example for I15's own design: a plausible truncation signature must be re-run against current data before it becomes an alert, never carried forward as a narrative.**|
 
 **The honest state: FOUR of eleven invariants have a standing detector** — I5 (pre-existing),
 **I4 and I11 both shipped 2026-08-28**, and I11 was *added* that same day **because it was found

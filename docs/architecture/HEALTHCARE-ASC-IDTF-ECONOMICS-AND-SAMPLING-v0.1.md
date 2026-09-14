@@ -1,6 +1,7 @@
 # Healthcare ASC and IDTF Economics and Sampling Plan v0.1
 
-**Status:** Synthetic sampling and aggregate-review contract implemented; no real row-level sample or financial conclusion yet
+**Status:** ASC 50-property source collection complete; row-level scorecards, second reviews, aggregate gates,
+and financial/lane conclusion remain outstanding. IDTF remains unactivated.
 
 **Date:** 2026-08-11
 
@@ -164,6 +165,14 @@ only the aggregate receipt is eligible for architectural review or later governe
 Current acceptance is synthetic only. A real 50-property run still requires separate authorization for the
 frozen private release, source acquisition, reviewer access, and any database persistence.
 
+> **ASC checkpoint (measured 2026-09-11):** the authorized frozen sample now has all 50 candidates resolved
+> for source collection: 44 licensed-source captures and 6 reviewed source exceptions, with 0 pending.
+> Twenty-two candidates require second review (16 captured identity resolutions plus all 6 exceptions), and
+> 0 currently have a second reviewer recorded. This completes collection, not the governed review. The
+> property-classification, qualifying-share, addressability, economics, research-time, and lane-decision gates
+> below remain unscored. Aggregate evidence and the exact next sequence are recorded in
+> `docs/audits/HEALTHCARE_ASC_50_PROPERTY_CAPTURE_CHECKPOINT_2026-09-11.md`.
+
 ### Official ASC candidate-pack checkpoint
 
 `healthcare:asc:candidate-pack` converts an authorized official ASC release into three private artifacts: a
@@ -205,3 +214,12 @@ insufficient cell quota, duplicate candidates or existing output. It does not do
 form, populate scorecards, select replacements, write a database or authorize production promotion. The official
 candidate-pack command additionally requires the authorized packet and matching authorization receipt, and its
 outputs do not broaden that approval.
+
+## 10. Current ASC next step after collection close
+
+The next action is the governed review pass, not another source-collection round and not expansion to IDTF.
+Complete the 22 mandatory second reviews, populate exactly one scorecard for each of the 50 frozen candidate
+fingerprints, then run the implemented aggregate-review contract. Repeated licensed captures are retained as
+history but the review uses the latest capture per candidate. Historical missing identity-mode metadata remains
+explicit missingness. Only the resulting privacy-safe aggregate receipt may be used to apply §7's gates and
+choose a lane disposition.

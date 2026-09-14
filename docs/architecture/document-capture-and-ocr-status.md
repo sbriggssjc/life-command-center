@@ -6,10 +6,13 @@
 
 # Document capture-at-ingest & OCR — status + the one open loop
 
-> # ✅ FINAL STATE 2026-08-12 — THE WHOLE OCR LOOP IS CLOSED AND LIVE. READ THIS, DON'T REBUILD.
+> # ⚠️ HISTORICAL — FINAL STATE AS OF 2026-08-12 ONLY. This box is now SUPERSEDED by the canonical
+> entry point linked above (`document-capture-ocr-and-deeds.md`, current through DOC17/DOC18,
+> 2026-09-02). Flagged stale by CONSOLIDATE2 (2026-09-12): its imperative wording below reads as a
+> present-tense instruction and can be mistaken for current guidance. It is not — it is a snapshot.
 >
-> Everything below this box is the historical narrative of how it got here. The durable
-> operating state (also in `CLAUDE.md` → "OCR / document-text foundation"):
+> Everything below this box is the historical narrative of how it got here. The operating state
+> AS OF 2026-08-12 (also in `CLAUDE.md` → "OCR / document-text foundation" at that time):
 >
 > - **Google Document AI is the live cheap OCR tier, end-to-end verified.** Chain:
 >   `ocrPdfToTextTiered` (`api/_shared/document-text.js`) → `ocrCloudCheap` → **`docai-ocr`
