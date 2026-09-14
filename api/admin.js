@@ -247,6 +247,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'review-counts':              return handleReviewCounts(req, res);
     case 'news-alerts':                return handleNewsAlerts(req, res);
     case 'ops-health':                 return handleOpsHealth(req, res);
+    case 'build-brief-latest':         return handleBuildBriefLatest(req, res);
     case 'ollama-clean-assist-tick':   return handleOllamaCleanAssistTick(req, res);
     case 'junk-prescreen-tick':        return handleJunkPrescreenTick(req, res);
     case 'tm-misparse-seed':           return handleTmMisparseSeed(req, res);
@@ -1010,6 +1011,32 @@ async function buildLccHealthDigest(lccHealth) {
 //   console still renders. Counts use ?select=..&limit=1 + count=exact header,
 //   read from result.count (content-range), never pulling row bodies.
 // ============================================================================
+// ----------------------------------------------------------------------------
+// XB1 — the CTO/CDO build-brief read endpoint. Returns the LATEST snapshot the
+// collector (scripts/build-brief-collector.mjs, GH Action) wrote to
+// build_brief_snapshots. No dashboard renders this yet (#/exec is XB3) — this
+// is the plain JSON surface the spec (§5) calls for as the first read path.
+// Scott-only per spec; gated the same way every other admin.js route is
+// (authenticate() + requireOps() at the top of the file) rather than a new
+// role check, matching the neighbouring-route convention noted on the
+// build_brief_snapshots table (EB1 migration comment).
+// ----------------------------------------------------------------------------
+async function handleBuildBriefLatest(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const r = await opsQuery('GET', 'build_brief_snapshots?select=*&order=generated_at.desc&limit=1');
+  if (!r.ok) {
+    return res.status(502).json({ error: 'build_brief_snapshots read failed', detail: r.error || null });
+  }
+  const row = Array.isArray(r.data) ? r.data[0] : null;
+  if (!row) {
+    return res.status(200).json({ snapshot: null, note: 'no snapshot yet — the collector has not run' });
+  }
+  return res.status(200).json({ snapshot: row });
+}
+
 async function handleReviewCounts(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
   const user = await authenticate(req, res);

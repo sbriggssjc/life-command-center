@@ -1,0 +1,51 @@
+name: Build Brief Collector
+
+# XB1 — docs/architecture/EXEC-BRIEFS-SPEC.md §5,
+# prompts/XB1-XB2-build-brief-collector-and-audit-rules.md. Runs the deterministic collector
+# (scripts/build-brief-collector.mjs) on every push to `main` and nightly, writing one row into
+# `build_brief_snapshots` (EB1). NO dashboard here (#/exec is XB3), NO Ollama narrative (XB4) —
+# per the CLAUDE.md "a NEW CI job is not shipped until it has been green once on `main`" doctrine
+# and the "a surface with nothing behind it" lesson this program keeps re-learning, this workflow
+# ONLY runs the collector; it does not gate anything and never fails the run on a finding — a
+# finding is data for the brief, not a build failure. It DOES fail if the collector itself errors
+# (a real defect in the collector, distinct from what the collector reports).
+#
+# Required secrets (Settings → Environments → Production), same convention as daily-db-checks.yml:
+#   LCC_SUPABASE_URL / LCC_SERVICE_ROLE_KEY
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '30 11 * * *'   # 11:30 UTC nightly — after the market-brief feed-health check (11:15)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    name: Run the build-brief collector
+    runs-on: ubuntu-latest
+    environment: Production
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # needs full history + all remote branch refs for the branch-debt rule
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Run collector (writes one build_brief_snapshots row)
+        env:
+          LCC_SUPABASE_URL: ${{ secrets.LCC_SUPABASE_URL }}
+          LCC_SERVICE_ROLE_KEY: ${{ secrets.LCC_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${LCC_SUPABASE_URL:-}" || -z "${LCC_SERVICE_ROLE_KEY:-}" ]]; then
+            echo "::error::LCC_SUPABASE_URL / LCC_SERVICE_ROLE_KEY not set (Settings -> Environments -> Production)"
+            exit 1
+          fi
+          node scripts/build-brief-collector.mjs --write
