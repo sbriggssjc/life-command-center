@@ -17,6 +17,32 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — OWN-T0f reviewed (no action needed), OWN-T0g sized and deferred pending a decision (Cowork)
+
+Continued the OWN-T0 residue after OWN-T0d shipped. Reviewed existing machinery before building, per the
+OWN-T0c lesson.
+
+**OWN-T0f (closed, no build)**: the per-row UUID on `county_deed:<uuid>`/`gov_ownership_chain:<uuid>` in
+`ownership_source` looked like producer noise in the audit, but reading `lcc_a2_apply_ownership_chains`
+showed it is deliberate citation back to the specific source chain-link record. The one live consumer that
+groups on it, `v_lcc_property_ownership_reconciled` via `lcc_ownership_evidence_level()`, already
+prefix-matches both patterns correctly -- verified live, `evidence_level` grouping has 0 rows in `other`
+across all 27,421 rows. Nothing to build; would have been solving an already-solved problem.
+
+**OWN-T0g (sized, not shipped)**: `lcc_finalize_entity_portfolios` is live, `SECURITY DEFINER`, cron-driven,
+and runs both domains' portfolio syncs -- a different risk class from OWN-T0d's one-time data cleanup.
+Confirmed by reading its body: gov's supersession window is computed only across the current inflight
+request's rows, so a property whose owner history is split across sync calls never gets end-dated across
+that split; dia has no supersession logic at all. Real, confirmed gap. Did not build a fix -- the correct
+repair needs a decision first (should supersession compare against all historical facts, not just the
+current payload; is "new current owner supersedes old" even a safe assumption here, given gov/1708 has two
+genuinely-current co-owners from OWN-T0d's investigation). Recommend sizing the live blast radius against
+the 747 `multi_current_distinct_parties` population before writing anything.
+
+Both findings documented in `PLANNED-BACKLOG.md`'s OWN-T0b/c/d/f/g row and
+`docs/architecture/ownership-truth-pipeline-state.md`.
+
+Housekeeping: MB2e desktop response reconciled (already-merged PR #2433, moved to responses/done/).
 ## 2026-09-14 — OC-v2 shipped: lane detection + GET-never-calls-the-model bug fixed, flag registered, cron scheduled
 
 Root-caused the two triage findings from the measurement pass below. `lane: null` was structural —
