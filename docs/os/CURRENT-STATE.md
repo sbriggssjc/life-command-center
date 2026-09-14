@@ -15,6 +15,32 @@
 
 ---
 
+## 2026-09-14 OWNERGAP1 — fabricated owner-name quarantine (Dialysis_DB)
+
+**LIVE.** Migration `20260914150000_dia_ownergap1_fabricated_owner_quarantine.sql`, applied to
+Dialysis_DB (`zqzrriwuavgrquhisnoa`). `tax_records.raw_payload->>'mailing_owner'`,
+`entity_registry_records.entity_name`, `recorded_owners.name` and `true_owners.name` were carrying
+model-hallucinated placeholder owner names (`ABC`/`XYZ Dialysis Centers …`) and the literal
+`"Unknown"`, produced by `Dialysis/src/public_record_ingest.py::write_tax_record` (a `gpt-4o` call
+seeded with the property's own owner and no county fetch — the fourth instance of the
+`docs/architecture/public-records-source-lane.md` §2a mechanism, see PR1/PR1a/PR1b). New objects:
+`dia_is_fabricated_placeholder_owner(text)` (the single detector), the reversible append-only
+`dia_ownergap1_fabrication_quarantine` log, write-time guard triggers on all four source tables,
+and `trg_dia_ownergap1_property_owner_link_guard` (nulls `properties.recorded_owner_id`/
+`true_owner_id` if either points at a row flagged `fabrication_quarantine_reason =
+'fabricated_placeholder'` — scoped to that reason only, never the milder `'unstated_placeholder'`,
+after live testing found a genuine `recorded_owners` row named `"Unknown"` that 23 real properties
+still reference). `dia_ownergap1_restore_quarantine(batch_tag)` reverses a batch in full.
+**Not fixed here:** the Python producer itself keeps asking `gpt-4o` for `mailing_owner` — SQL-side
+containment stops every future write from reaching a curated table, but the wasted call and the
+fabrication-by-construction pattern remain (backlog `OWNERGAP1-producer`, cross-repo).
+Related, same investigation: **4,021 dia properties (34% of the book) have no recoverable owner in
+any table LCC or Dialysis_DB holds** — re-measured live 2026-09-14, confirmed not an extraction
+gap. See `docs/audits/OWNERGAP1_FABRICATED_OWNER_AND_UNRECOVERABLE_GAP_2026-09-14.md` and
+`PLANNED-BACKLOG.md` rows `OWNERGAP1`, `OWNERGAP1-producer`, `PDR2-noowner`.
+
+---
+
 ## 2026-09-12 ASC frozen-50 review boundary
 
 **Live and deployment-verified:** PR #2384 merged as `3f60666055892616648b2348f952d1d53fbefd42` and
