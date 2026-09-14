@@ -345,3 +345,65 @@ select count(*) as props_with_fab_true_owner from properties p
 
 Full repo suite: **6,231 passed / 0 failed / 6 skipped** (pre-existing skips, unrelated to this
 change) after this migration and test landed.
+
+
+---
+
+## 6. PILOT RESULT — run live 2026-09-14 (Cowork, in the browser)
+
+§4's recommendation was a **bounded manual check** of Cook IL / Los Angeles CA / Harris TX (177 properties) to
+learn whether Option A's yield is nearer 40% or 5% **before** committing money or a build. It was run. It took
+minutes, not an hour, and **it refutes the single-number framing of the question.**
+
+⚠️ **A constraint §4 did not weight.** These properties carry essentially **no APNs** — Cook **0 of 73**, Harris
+**0 of 50**, Los Angeles **1 of 54**. Every lookup must therefore work from a **street address alone**, which is
+the harder path on most portals and is what the pilot actually tested.
+
+### The three counties failed — or succeeded — for three *different* reasons
+
+| county | properties | free? | address search? | owner shown? | verdict |
+|---|---:|---|---|---|---|
+| **Harris, TX** | 50 | yes | yes | **yes** | ✅ **works, and looks automatable** |
+| **Cook, IL** | 73 | yes | yes | (gated) | ⚠️ **human-only — CAPTCHA on every search** |
+| **Los Angeles, CA** | 54 | yes | yes | **no** | ⛔ **yields nothing at any effort** |
+
+**Harris (`search.hcad.org`).** One-time Cloudflare check, then clear. Searching `5040 Crenshaw` returned three
+accounts at 5040 CRENSHAW RD, PASADENA TX — and the county draws **exactly the distinction PDR2 is about**:
+
+| account | name | type |
+|---|---|---|
+| 2354592 | FRESENIUS MEDICAL CARE GREATER SOUTHEAST HOUSTON LLC | Personal |
+| 2372349 | FUSA MARKETING | Personal |
+| **1274060000005** | **CRENSHAW MOB LLC** — 16,915 SF, $1,903,507 | **Commercial** |
+
+The owner is **Crenshaw MOB LLC**, a single-asset LLC — precisely the party a net-lease broker calls, and a
+property LCC currently reports as "owner unknown". The results grid also exposes **CSV / XLS / PDF export**, so
+bulk extraction looks feasible rather than click-by-click.
+
+**Cook (`cookcountyassessoril.gov/address-search`).** A real free address search exists (house number, direction,
+street name, city — it even warns not to include the street designation). **But every search form carries a
+CAPTCHA.** That makes it usable by a person and **not automatable**, and it is not something an agent may bypass.
+
+**Los Angeles (`portal.assessor.lacounty.gov`).** Free, no CAPTCHA, address search works. **The portal does not
+publish owner names at all.** Read in full: parcel detail for AIN 2350012065 carries situs address, use code,
+building characteristics, a 25-row assessment history, and an ownership *events* table with recording dates,
+document numbers and sale prices — **and no owner name anywhere on the page.** This is not a scraping difficulty;
+the datum is not published.
+
+### What this changes about the decision
+
+**There is no "Option A yield."** There are **1,266 distinct (state, county) combinations** behind the 4,021, and
+the three largest divide three ways: one automatable, one manual, one impossible. A national county-portal build
+would be sized against the worst case while delivering only the Harris-shaped subset.
+
+**Revised options for 👤 Scott:**
+
+- **(a) Build for Harris-shaped counties only.** Real yield, bounded effort, coverage unknown until more counties
+  are sampled. ⚠️ **Sample 5–10 more counties first** — three proves the shapes differ, not how they split.
+- **(b) A paid bulk provider** (Regrid / CoreLogic / ATTOM). The **only** path that reaches LA-shaped counties,
+  because it does not depend on what a county chooses to publish. Needs a real per-record quote against ~4,021.
+- **(c) Accept "owner unknown"** and rank those properties last. Still legitimate, and now a measured choice
+  rather than a default.
+
+The cheapest informative next step is **more sampling, not a build** — the same logic that made this pilot worth
+running.
