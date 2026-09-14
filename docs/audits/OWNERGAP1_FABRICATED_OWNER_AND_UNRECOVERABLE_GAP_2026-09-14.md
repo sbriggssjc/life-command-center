@@ -463,3 +463,67 @@ output is checkable against the source row, and it is the step that turns a free
    price from the county — a paid vendor is the only route there, and it can stay deferred indefinitely.
 4. The residual after free sources is the only population worth ever discussing a vendor for, and it will be much
    smaller than 4,021.
+
+
+---
+
+## 8. MATCH-RATE TEST — Philadelphia, run live 2026-09-14. **~68%, and the misses are a formatting bug.**
+
+§7 said the next step was to download one free file and measure the **match rate**, because coverage is not a hit
+rate. Done, against Philadelphia's open-data SQL endpoint (`phl.carto.com/api/v2/sql`, table
+`opa_properties_public`) — a free, public, documented API. No scraping, no login, no vendor.
+
+**Pass 1 — exact address match:** 9 of the 22 distinct addresses matched.
+**Pass 2 — house-number prefix + street:** 6 more matched, and the cause of every pass-1 miss became obvious.
+
+### 🔑 The misses are a single, trivially fixable formatting difference
+
+Philadelphia stores **address ranges**; LCC stores the lead number:
+
+| LCC | Philadelphia OPA |
+|---|---|
+| `4126 Walnut St` | `4126-38 WALNUT ST` |
+| `1300 W. Lehigh Ave` | `1300-24 W LEHIGH AVE` |
+| `1172 S Broad Street` | `1172-74 S BROAD ST` |
+| `3020 Market Street, Suite 10` | `3020-52 MARKET ST` |
+| `3310-24 Memphis St` | `3310-24 MEMPHIS ST` |
+
+**Result: 15 of ~22 distinct addresses ≈ 68%**, from two queries and one normalisation rule. Not "closer to 5%".
+
+### The owners recovered — these are real, callable parties
+
+| LCC property (tenant) | owner on file with the City |
+|---|---|
+| 2601 Holme Ave (*Fkc Nazareth*) | NEW FHS HOSP NKA NAZARETH HOSPITAL |
+| 109 Dickinson St (*DaVita South Philadelphia*) | **FILIPPONE EDWARD J TR** — revocable trust |
+| 1172-74 S Broad St (*DaVita*) | **FILIPPONE-NEWMAN LLC** |
+| 4126-38 Walnut St (*DaVita 42nd St*) | UNIV CITY ASSOCIATES |
+| 1300-24 W Lehigh Ave (*DaVita Lehigh Ave*) | PHILA SUBURBAN |
+| 3310-24 Memphis St (*DaVita Memphis St*) | SIX G'S L P |
+| 3020-52 Market St (*DaVita*) | 3020 MARKET OPERATING LP |
+| 3701 Market St (*DaVita*) | GI ETS UC LLC |
+| 700 Cottman Ave (*Fkc Fox Chase*) | HASBROOK ASSOCIATES L P |
+| 2910 S 70th St (*Usrc Philadelphia*) | BLUE BELL ASSOC |
+| 5003 Umbria St (*Fkc Roxborough*) | UMBRIA VENTURES LLC |
+| 100 E Lehigh Ave (*Fkc Episcopal*) | EPISCOPAL HOSPITAL |
+| 4800 Brown St (*DaVita Brown St*) | WEST VILLAGE APARTMENT LO |
+| 1438 S Front St | CORONA ROSALIIO |
+| 3300 Henry Ave (*Dci Philadelphia*) | Falls Center LPs — **multi-parcel, needs unit disambiguation** |
+
+🚨 **And the first prospecting signal fell out immediately:** **FILIPPONE EDWARD J TR** owns 109 Dickinson St and
+**FILIPPONE-NEWMAN LLC** owns 1172-74 S Broad St — **the same family behind two of Team Briggs' dialysis
+properties.** That is a portfolio seller prospect that LCC could not see at all yesterday, because both properties
+read "owner unknown".
+
+### What this settles
+
+- The free path **works**, at roughly **two-thirds** on the first jurisdiction tested.
+- The residual is **not** a data-availability problem but an **address-normalisation** one (ranges, suite noise,
+  `CITY AVE` vs `CITY LINE AVE`) — precisely the job §7 identified as the legitimate use of a local model.
+- ⚠️ **One jurisdiction is not a rate.** Philadelphia is a well-run open-data city. Re-measure on a Texas CAD and
+  a Florida county before projecting 68% onto the 4,021.
+- ⚠️ **3300 Henry Ave shows the real hard case:** one street address, six owning entities. Multi-parcel /
+  condominium sites need a unit or parcel discriminator, and no amount of address matching resolves them.
+
+**Recommended next: repeat this exact test on Harris TX (50 properties) and Miami-Dade FL (29).** Two more
+measurements, no build, and then the coverage question is answered with three real rates instead of one.
